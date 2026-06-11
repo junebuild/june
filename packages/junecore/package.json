@@ -1,0 +1,30 @@
+{
+  "name": "junecore",
+  "version": "0.0.0",
+  "description": "June — the agent-native React framework. Contract layer (pure, host-free).",
+  "type": "module",
+  "license": "MIT",
+  "homepage": "https://june.build",
+  "exports": {
+    ".": "./src/index.ts",
+    "./route": "./src/route.ts",
+    "./config": "./src/config.ts",
+    "./document": "./src/document.tsx",
+    "./agent": "./src/agent.ts",
+    "./mcp": "./src/mcp.ts",
+    "./discovery": "./src/discovery.ts",
+    "./cache": "./src/cache.ts",
+    "./instrumentation": "./src/instrumentation.ts"
+  },
+  "files": ["src"],
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "react": "^19.2.0"
+  },
+  "peerDependenciesMeta": {
+    "react": { "optional": true }
+  }
+}

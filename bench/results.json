@@ -1,0 +1,30 @@
+{
+  "_": "The named-run registry (#33): every published number lives HERE with its script and date. The site (page rows + .md projection) renders from this file — never hand-copy numbers into pages. Update an entry only by re-running its script.",
+  "machine": "Apple Si dev machine, 10 physical cores — ratios and shapes, not absolutes",
+  "sections": [
+    {
+      "title": "Dev experience",
+      "rows": [
+        { "metric": "dev cold start (hello-world)", "value": "59ms", "context": "median; next dev: seconds; Vite-class", "script": "scripts/bench-dev-start.ts", "measured": "2026-06-10" },
+        { "metric": "HMR save → flight pushed", "value": "73ms", "context": "median 8/8, healthy at 400ms rapid-save cadence; browser apply +≈10ms; the push loop IS production live-RSC", "script": "scripts/bench-hmr.ts", "measured": "2026-06-10" }
+      ]
+    },
+    {
+      "title": "Runtime",
+      "rows": [
+        { "metric": "V8 isolate boot (snapshot)", "value": "11.9ms", "context": "10× vs no snapshot", "script": "PROBE=1 runtime-next/target/release/june-runtime", "measured": "2026-06-10" },
+        { "metric": "bundled+snapshot first render", "value": "21.8ms", "context": "the M3 target proof", "script": "PROBE=1 runtime-next/target/release/june-runtime", "measured": "2026-06-10" },
+        { "metric": "cold start vs bare workerd", "value": "82ms vs 78ms", "context": "spawn→first-200, same React-SSR hello fixture — par; warm trivial-page p50 3.1ms vs 0.35ms (pool-hop overhead = next lever)", "script": "bench/workerd-waterfall/measure.ts", "measured": "2026-06-10" },
+        { "metric": "SSR load curve (POOL=8)", "value": "4.7k rps peak", "context": "knee c≈16-32, p99 10ms at knee; ~470 rps/core whole-machine", "script": "bench/sweep.ts", "measured": "2026-06-10" }
+      ]
+    },
+    {
+      "title": "Data layer",
+      "rows": [
+        { "metric": "native sqlite point lookup (Rust op in V8)", "value": "0.77µs", "context": "≈ 1.1× bun:sqlite, 29× WASM", "script": "experiments/orm-bench (deno-sqlite-op)", "measured": "2026-06-10" },
+        { "metric": "render-level auto-batch on Cloudflare D1", "value": "8.8×", "context": "vs concurrent per-component queries (11.5× vs sequential)", "script": "experiments/orm-bench/edge-d1 /render-bench", "measured": "2026-06-10" },
+        { "metric": "Postgres pipelining", "value": "48k ops/s", "context": "3.9× sequential (12.2k), batch=50, single connection", "script": "experiments/orm-bench/pg-rust-pipeline", "measured": "2026-06-10" }
+      ]
+    }
+  ]
+}

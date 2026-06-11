@@ -1,0 +1,15 @@
+# The native June runtime — a SEPARATE Cargo workspace (not part of any other
+# crate graph), so its deno_core / v8 pins stay isolated (docs/rebuild-plan.md
+# Phase 0: "keep deno_core pins away from other crates").
+#
+# Phase 4 brings runtime-next's proven pieces under the Phase-1 semantics:
+#   - V8 snapshot with vendors in the snapshot module map (june://vendor/*)
+#   - the dual-React-graph loader (one isolate, react-server + client)
+#   - the ONE transpile funnel (React Compiler pre-pass lives here)
+#   - the live-RSC push HMR loop; listen-early
+# Until then this is an empty workspace placeholder. The reference lives in the
+# frozen PoC repo at ../../runtime-next (deno_core 0.403, ~2.8k lines Rust).
+
+[workspace]
+resolver = "2"
+members = []

@@ -1,0 +1,12 @@
+{
+  "name": "create-june",
+  "version": "0.0.0",
+  "description": "Scaffold a new June app — `npm create june my-app`.",
+  "type": "module",
+  "license": "MIT",
+  "homepage": "https://june.build",
+  "bin": {
+    "create-june": "./bin.mjs"
+  },
+  "files": ["bin.mjs", "template"]
+}
