@@ -1,15 +1,64 @@
 # The native June runtime — a SEPARATE Cargo workspace (not part of any other
-# crate graph), so its deno_core / v8 pins stay isolated (docs/rebuild-plan.md
-# Phase 0: "keep deno_core pins away from other crates").
+# crate graph), so its deno_core / v8 pins stay isolated (rebuild-plan Phase 0:
+# "keep deno_core pins away from other crates"). Ported from the proven PoC
+# reference (runtime-next): deno_core 0.403 + real WHATWG fetch, V8 snapshot,
+# the two-React-graphs-in-one-isolate loader, the live-RSC push HMR loop.
 #
-# Phase 4 brings runtime-next's proven pieces under the Phase-1 semantics:
-#   - V8 snapshot with vendors in the snapshot module map (june://vendor/*)
-#   - the dual-React-graph loader (one isolate, react-server + client)
-#   - the ONE transpile funnel (React Compiler pre-pass lives here)
-#   - the live-RSC push HMR loop; listen-early
-# Until then this is an empty workspace placeholder. The reference lives in the
-# frozen PoC repo at ../../runtime-next (deno_core 0.403, ~2.8k lines Rust).
+# Two binaries:
+#   apploader     -- the real module-loader runtime (dev/smoke.sh)
+#   june-runtime  -- the bundled + V8-snapshot binary (build.rs bakes the
+#                    loadExtScript bootstrap; snapshot-safe because it's sync)
+#
+# Build chain: `bun build.ts` (emits dist/* the snapshot bakes) → `cargo build`.
 
+[package]
+name = "june-runtime"
+version = "0.0.0"
+edition = "2021"
+
+# This crate is its own workspace root — isolates the deno_core/v8 pin set.
 [workspace]
-resolver = "2"
-members = []
+
+[[bin]]
+name = "apploader"
+path = "src/bin/apploader.rs"
+
+[[bin]]
+name = "june-runtime"
+path = "src/main.rs"
+
+[dependencies]
+# React Compiler (facebook/react#36173, merged 2026-06-09; not on crates.io —
+# pinned to the merge commit). Coexists with deno_ast across the swc 18/21 boundary.
+react_compiler_swc = { git = "https://github.com/facebook/react.git", rev = "03e775554a34e1508fcf0e82d13ea8d41ee271d7" }
+react_compiler = { git = "https://github.com/facebook/react.git", rev = "03e775554a34e1508fcf0e82d13ea8d41ee271d7" }
+deno_core = "=0.403.0"
+deno_web = "=0.281.0"
+deno_webidl = "=0.250.0"
+deno_fetch = "=0.274.0"            # real WHATWG fetch / Request / Response / Headers / FormData
+deno_permissions = "=0.109.0"     # PermissionsContainer required by deno_fetch's ops
+# real + libc: RealSys needs both to impl EnvHomeDir/WhichSys on unix.
+sys_traits = { version = "=0.1.28", features = ["real", "libc"] }
+
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+axum = { version = "0.7", features = ["ws"] } # + WebSocket for the (丙) live-RSC push
+crossbeam-channel = "0.5"
+futures-core = "0.3"
+deno_error = "=0.7.1" # ModuleLoaderError = deno_error::JsErrorBox (apploader bin)
+deno_ast = { version = "=0.52.0", features = ["transpiling"] } # TSX transpile in the loader
+notify = "6"                                              # dev HMR: watch app for changes
+tokio-stream = { version = "0.1", features = ["sync"] }   # dev HMR: broadcast -> SSE stream
+regex = "1"                                               # dev: rewrite client-module import specifiers
+getrandom = "0.4"                                         # crypto.getRandomValues (OS CSPRNG)
+
+# build.rs bakes the V8 snapshot for the june-runtime bin; it inits the same
+# extension set, so it needs the same deno crates.
+[build-dependencies]
+deno_core = "=0.403.0"
+deno_web = "=0.281.0"
+deno_webidl = "=0.250.0"
+deno_fetch = "=0.274.0"
+
+[profile.release]
+opt-level = 3

@@ -1,17 +1,33 @@
 # runtime/ — the native June runtime (Phase 4)
 
-A standalone Cargo workspace, deliberately isolated from any other crate graph
-so its `deno_core` / `v8` version pins never leak (rebuild-plan Phase 0).
+A standalone Cargo workspace (deno_core 0.403 + V8), isolated from every other
+crate graph so its `deno_core`/`v8` pins never leak (rebuild-plan Phase 0).
+Ported from the proven PoC reference (`runtime-next`) and made self-contained in
+the monorepo (vendors load from this crate's local `dist/`).
 
-**Status:** placeholder. Real work is Phase 4 — the only phase with genuine
-unknowns; everything before it is porting.
+## Binaries
 
-**Reference implementation (frozen PoC):** `runtime-next/` in the PoC repo —
-deno_core 0.403 + real WHATWG fetch, V8 snapshot (~12ms cold vs ~123ms),
-the two-React-graphs-in-one-isolate `JuneLoader`, `june://vendor/*` snapshot
-module map, one transpile funnel with the React Compiler pre-pass, and the
-live-RSC push HMR loop. ~2.8k lines of Rust, working binary.
+- **`apploader`** (`src/bin/apploader.rs`) — the real module-loader runtime: the
+  custom `JuneLoader` (two React graphs in one isolate via `june://vendor/*`
+  resolution), the one transpile funnel (type-strip-keep-JSX + the React
+  Compiler pre-pass), file-routed RSC + Flight, and the live-RSC push HMR loop.
+- **`june-runtime`** (`src/main.rs`) — the bundled + V8-snapshot binary;
+  `build.rs` bakes the `loadExtScript` bootstrap and the vendor module map into
+  the snapshot (~12ms cold isolate boot vs ~123ms).
 
-**Convergence target:** `june dev` IS this native binary; the Bun dev server
-(Phase 2) demotes to a fallback. The same Phase-1 contract layer (`junecore`)
-defines the semantics both runtimes serve.
+## Build chain
+
+```sh
+bun runtime/build.ts     # emits dist/* (server/ssr/vendor bundles the snapshot bakes)
+cargo build --release    # produces target/release/{apploader,june-runtime}
+```
+
+`dist/` and `target/` are generated (gitignored); `bun build.ts` regenerates the
+snapshot inputs `build.rs` reads.
+
+## Status
+
+The runtime renders its OWN ported file-routed RSC demo today. Bringing it under
+the junecore Phase-1 semantics — so `june dev` IS this binary and it passes the
+golden `parity.test.ts` as a third renderer — is the convergence frontier.
+The concrete plan: **[docs/runtime-convergence.md](../docs/runtime-convergence.md)**.
