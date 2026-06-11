@@ -1,0 +1,23 @@
+{
+  "name": "@junejs/cli",
+  "version": "0.0.0",
+  "description": "The `june` CLI — dev / build / deploy / gen / info. A thin bin over @junejs/server.",
+  "type": "module",
+  "license": "MIT",
+  "homepage": "https://june.build",
+  "bin": {
+    "june": "./src/june.ts"
+  },
+  "exports": {
+    ".": "./src/cli.ts"
+  },
+  "files": ["src"],
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "junecore": "workspace:*",
+    "@junejs/server": "workspace:*"
+  }
+}

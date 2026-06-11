@@ -30,6 +30,17 @@
         "@junejs/server": "workspace:*",
       },
     },
+    "packages/cli": {
+      "name": "@junejs/cli",
+      "version": "0.0.0",
+      "bin": {
+        "june": "./src/june.ts",
+      },
+      "dependencies": {
+        "@junejs/server": "workspace:*",
+        "junecore": "workspace:*",
+      },
+    },
     "packages/create-june": {
       "name": "create-june",
       "version": "0.0.0",
@@ -81,6 +92,8 @@
     "@emnapi/wasi-threads": ["@emnapi/wasi-threads@1.2.2", "", { "dependencies": { "tslib": "^2.4.0" } }, "sha512-c95qOXkHdydNKhscBTebqEC1CVAZpyqOfVfBzQ1qgzyl3gfeldUjIggDbIZgDKsHLgnsM+igH7TJ/eAasaVuMA=="],
 
     "@june-examples/basic": ["@june-examples/basic@workspace:examples/basic"],
+
+    "@junejs/cli": ["@junejs/cli@workspace:packages/cli"],
 
     "@junejs/juno": ["@junejs/juno@workspace:packages/juno"],
 
