@@ -1,5 +1,6 @@
 node_modules/
 dist/
+.june/
 *.tsbuildinfo
 .DS_Store
 

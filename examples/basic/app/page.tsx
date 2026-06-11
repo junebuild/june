@@ -1,6 +1,9 @@
 import { route } from "junecore/route";
 
 export default route({
+  // Prerendered at build: renders through the worker to a static index.html the
+  // assets layer serves at 0ms (rebuild-plan Phase 3).
+  prerender: true,
   load: () => ({ greeting: "Hello from June" }),
   view: (data) => (
     <main>

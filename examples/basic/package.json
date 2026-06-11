@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "junecore": "workspace:*",
+    "junecore": "workspace:*"
+  },
+  "devDependencies": {
     "@junejs/server": "workspace:*"
   }
 }

@@ -12,6 +12,10 @@
     "./content": "./src/content.ts",
     "./router": "./src/router.ts",
     "./instrumentation": "./src/instrumentation.ts",
+    "./pipeline": "./src/pipeline.ts",
+    "./worker": "./src/worker.ts",
+    "./build": "./src/build.ts",
+    "./deploy": "./src/deploy.ts",
     "./dev": "./src/dev.ts"
   },
   "files": ["src"],
@@ -26,5 +30,8 @@
   "peerDependencies": {
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "rolldown": "^1.1.0"
   }
 }

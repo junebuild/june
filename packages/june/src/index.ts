@@ -16,5 +16,23 @@ export {
 } from "./router";
 export { installAsyncContext } from "./instrumentation";
 export { negotiate, type Negotiated } from "./negotiate";
+export {
+  createPipeline,
+  type Pipeline,
+  type PipelineConfig,
+  type RouteResolver,
+  type Resolved,
+  type LayoutComponent,
+} from "./pipeline";
 export { createApp, type JuneApp, type CreateAppOptions } from "./app";
+export { createWorker, type WorkerManifest } from "./worker";
+export {
+  juneBuild,
+  buildManifest,
+  scanRoutes,
+  generateContent,
+  freezeConfig,
+  type BuildResult,
+} from "./build";
+export { juneDeploy, type DeployResult } from "./deploy";
 export { startDevServer, type DevServer, type DevServerOptions } from "./dev";
