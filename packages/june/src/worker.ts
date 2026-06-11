@@ -14,6 +14,7 @@ import type React from "react";
 import type { BrandedRoute } from "junecore/route";
 import type { AgentConfig } from "junecore/config";
 import type { DocumentConfig } from "junecore/document";
+import type { Resources } from "junecore/resources";
 
 import { createPipeline, type LayoutComponent, type Resolved } from "./pipeline";
 
@@ -31,6 +32,9 @@ export type WorkerManifest = {
   earlyHints?: string[];
   htmlCacheControl?: string;
   notFound?: React.ComponentType<{ pathname: string }>;
+  // Opened data resources (db/kv/blob) injected onto ctx. On workerd the D1/KV/R2
+  // bindings come from env per request, so the generated entry passes a provider.
+  resources?: () => Promise<Resources> | Resources;
 };
 
 type Compiled = { regex: RegExp; names: string[]; def: BrandedRoute; pattern: string };
@@ -77,6 +81,7 @@ export function createWorker(manifest: WorkerManifest): { fetch(request: Request
     earlyHints: manifest.earlyHints,
     htmlCacheControl: manifest.htmlCacheControl,
     notFoundComponent: manifest.notFound,
+    resources: manifest.resources,
     resolve: async (pathname): Promise<Resolved | null> => {
       const staticDef = manifest.routes[pathname];
       if (staticDef) return { def: staticDef, params: {}, chain: chainFor(pathname) };

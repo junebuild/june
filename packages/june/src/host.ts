@@ -19,6 +19,12 @@ import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { Readable } from "node:stream";
 
+// The JuneDb / RunResult CONTRACT now lives in the pure junecore layer
+// (junecore/resources) so any ORM can target it. Re-exported here for callers
+// that still import from the host.
+import type { JuneDb, RunResult } from "junecore/resources";
+export type { JuneDb, RunResult };
+
 export type ServeHandle = { port: number; stop(force?: boolean): void };
 
 export type SpawnedModule = {
@@ -26,20 +32,6 @@ export type SpawnedModule = {
   stderrText(): Promise<string>;
   exited: Promise<number>;
 };
-
-export type RunResult = { changes: number; lastInsertRowid: number | bigint };
-
-// The async database surface. SELECT → query()/get(); writes → run(); DDL or
-// multi-statement scripts → exec(). transaction() passes a tx handle (the same
-// connection for the sync drivers; a real nested scope for async backends).
-export interface JuneDb {
-  query<T = unknown>(sql: string, params?: unknown[]): Promise<T[]>;
-  get<T = unknown>(sql: string, params?: unknown[]): Promise<T | undefined>;
-  run(sql: string, params?: unknown[]): Promise<RunResult>;
-  exec(sql: string): Promise<void>;
-  transaction<T>(fn: (tx: JuneDb) => Promise<T>): Promise<T>;
-  close(): Promise<void>;
-}
 
 export interface JuneHost {
   readonly name: "bun" | "node";
@@ -51,7 +43,9 @@ export interface JuneHost {
   // must run under a different module-resolution condition). Phase 4 supersedes
   // this with the in-isolate dual-graph loader; the seam stays for the fallback.
   spawnModule(entry: string, args: string[], opts: { conditions?: string[] }): SpawnedModule;
-  // Open a database. Async open + async surface — see the JuneDb note above.
+  // Open a LOCAL SQLite database — the internal primitive the `sqlite()` db
+  // adapter builds on (docs/data-layer-boundary.md: openDb is demoted from the
+  // user-facing API to a host primitive; apps declare `resources.db` instead).
   openDb(path: string): Promise<JuneDb>;
 }
 

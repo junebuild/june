@@ -12,6 +12,7 @@
 // Phase 1: "zero node:*/Bun.* in this layer").
 
 import type { CacheStoreFactory } from "./cache";
+import type { ResourceConfig } from "./resources";
 
 export type AgentConfig = {
   enabled: boolean; // master switch
@@ -38,6 +39,10 @@ export type SpeculationConfig = {
 export type JuneConfig = {
   agent?: Partial<AgentConfig>;
   cache?: CacheStoreFactory; // memory() (default) | redis({ url }) | custom
+  // Data resources (db / blob / kv), declared = enabled. Generic names, not
+  // Cloudflare-branded; each has a zero-config local default and deploy
+  // adapters. Omit one and it never exists. See docs/data-layer-boundary.md.
+  resources?: ResourceConfig;
   speculation?: SpeculationConfig | false; // false = no speculation rules at all
   // Cross-document View Transitions (@view-transition CSS): MPA navigations
   // animate (default cross-fade) with ZERO JS; browsers without support (or

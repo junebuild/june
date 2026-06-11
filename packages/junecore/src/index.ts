@@ -32,6 +32,19 @@ export {
   type JuneConfig,
 } from "./config";
 
+// The data resource contract (the seam the framework depends on, not an ORM)
+export type {
+  JuneDb,
+  JuneKv,
+  JuneBlob,
+  RunResult,
+  DbFactory,
+  KvFactory,
+  BlobFactory,
+  ResourceConfig,
+  Resources,
+} from "./resources";
+
 // The shared document shell
 export {
   Document,

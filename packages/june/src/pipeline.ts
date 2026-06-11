@@ -36,6 +36,7 @@ import {
 } from "junecore/discovery";
 import { mcpHandler } from "junecore/mcp";
 import type { AgentConfig } from "junecore/config";
+import type { Resources } from "junecore/resources";
 
 import { negotiate } from "./negotiate";
 
@@ -60,6 +61,9 @@ export type PipelineConfig = {
   // re-scan the filesystem; the worker returns a frozen array.
   routeList: () => Promise<string[]> | string[];
   resolve: RouteResolver;
+  // Opened data resources (db/kv/blob) injected onto ctx before load(). A
+  // provider so opening is lazy/memoized; absent → no resources on ctx.
+  resources?: () => Promise<Resources> | Resources;
   earlyHints?: string[];
   htmlCacheControl?: string;
   notFoundComponent?: React.ComponentType<{ pathname: string }>;
@@ -199,7 +203,17 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
       const resolved = await cfg.resolve(pathname);
       if (!resolved) return notFoundResponse(target, pathname);
 
-      const ctx: RouteContext = { request, url, params: resolved.params, target, speculative };
+      const res = cfg.resources ? await cfg.resources() : undefined;
+      const ctx: RouteContext = {
+        request,
+        url,
+        params: resolved.params,
+        target,
+        speculative,
+        db: res?.db,
+        kv: res?.kv,
+        blob: res?.blob,
+      };
       let data: unknown;
       try {
         data = resolved.def.load ? await resolved.def.load(ctx) : undefined;

@@ -18,6 +18,7 @@ import { runWithTrace, type RequestTrace } from "junecore/instrumentation";
 
 import { listRoutes, matchRouteTree, routeFiles, type SegmentMatch } from "./router";
 import { createPipeline, type LayoutComponent, type Resolved } from "./pipeline";
+import { memoizeResources } from "./resources";
 
 export type CreateAppOptions = {
   appDir: string;
@@ -66,11 +67,14 @@ export function createApp({ appDir, config = {} }: CreateAppOptions): JuneApp {
 
   const routePaths = () => listRoutes(appDir, { pageConvention: true });
 
+  const resources = memoizeResources(config.resources);
+
   const pipeline = createPipeline({
     docConfig,
     agent,
     routeList: routePaths,
     earlyHints: config.earlyHints,
+    resources,
     resolve: async (pathname): Promise<Resolved | null> => {
       const match = await matchRouteTree(appDir, pathname, { pageConvention: true });
       if (!match) return null;

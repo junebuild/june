@@ -13,6 +13,8 @@
 // HTML-SSR vs RSC Flight by negotiation). `json` is the plain data API. `agent`
 // is the capability-described resource for agent clients.
 
+import type { JuneDb, JuneKv, JuneBlob } from "./resources";
+
 export type RenderTarget = "view" | "json" | "agent" | "md";
 
 // Per-route document metadata. Static metadata keeps the streaming shell;
@@ -44,6 +46,12 @@ export type RouteContext<
   // rate-limit consumption. (Client-side twin: defer pageviews until
   // !document.prerendering.)
   speculative?: boolean;
+  // Resource handles injected by the host (the binding model), present only when
+  // declared in june.config.ts `resources`. The framework depends on these
+  // contracts, never on a specific ORM — see docs/data-layer-boundary.md.
+  db?: JuneDb;
+  kv?: JuneKv;
+  blob?: JuneBlob;
 };
 
 export type RouteCache = {

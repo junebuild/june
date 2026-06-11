@@ -8,6 +8,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./host": "./src/host.ts",
+    "./db": "./src/db.ts",
     "./config": "./src/config-loader.ts",
     "./content": "./src/content.ts",
     "./router": "./src/router.ts",

@@ -9,6 +9,7 @@
     ".": "./src/index.ts",
     "./route": "./src/route.ts",
     "./config": "./src/config.ts",
+    "./resources": "./src/resources.ts",
     "./document": "./src/document.tsx",
     "./agent": "./src/agent.ts",
     "./mcp": "./src/mcp.ts",
