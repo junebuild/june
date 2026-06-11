@@ -13,7 +13,7 @@
 // are async; an API that returns rows synchronously cannot be implemented on
 // them without blocking or buffering hacks. So `JuneDb` is async from day one;
 // the Bun/Node SQLite drivers (which happen to be sync) are wrapped, and D1
-// (Phase 5) implements the same interface natively. See docs/rebuild-plan.md.
+// (Phase 5) implements the same interface natively.
 
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";

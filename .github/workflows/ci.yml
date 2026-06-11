@@ -1,8 +1,8 @@
 name: CI
 
-# Green from commit #1. The PoC let typecheck drift because nothing enforced it
-# (docs/rebuild-plan.md Phase 0) — this job is the enforcement. The `june build`
-# of the site (Phase 3) and the dev/built parity check join here as they land.
+# Green from commit #1: typecheck must not drift because nothing enforces it.
+# This job is the enforcement. The `june build` of the site and the dev/built
+# parity check join here as they land.
 
 on:
   push:

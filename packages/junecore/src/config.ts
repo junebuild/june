@@ -8,8 +8,7 @@
 // PURITY: this module is the config SCHEMA and its pure resolvers only. The
 // `loadJuneConfig(appDir)` reader (node:fs / node:path / dynamic import of the
 // user's june.config.ts) is a HOST concern and lives in the Phase-2 host layer
-// — keeping the contract layer free of `node:*` (see docs/rebuild-plan.md
-// Phase 1: "zero node:*/Bun.* in this layer").
+// — keeping the contract layer free of `node:*` (zero node:*/Bun.* in this layer).
 
 import type { CacheStoreFactory } from "./cache";
 import type { ResourceConfig } from "./resources";

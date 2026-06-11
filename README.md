@@ -5,11 +5,6 @@ clients (`.json`), and agents (`.agent`, `/mcp`, `.md`) without the surfaces
 drifting. Server-reactive live RSC where **dev HMR is the production live path**,
 on an owned Rust + V8 runtime.
 
-> This is the **convergence rebuild** — one product codebase where the Rust
-> runtime and the framework semantics are the same system. It ports from a
-> frozen PoC; the rebuild order and the hard-won reminders live in
-> [`docs/rebuild-plan.md`](docs/rebuild-plan.md).
-
 ## Layout
 
 ```txt

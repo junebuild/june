@@ -8,7 +8,7 @@
 // (In the PoC this module did a top-level `await import("node:async_hooks")`,
 // which forced every bundle reaching it to register a node:* specifier — the
 // exact failure mode that breaks workerd assets-mode. Inverting the dependency
-// keeps the layer host-free; see docs/rebuild-plan.md reminders #1 and #4.)
+// keeps the layer host-free.)
 
 // The minimal slice of AsyncLocalStorage the trace machinery needs. A host
 // installs a concrete implementation; the type stays structural so this layer

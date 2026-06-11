@@ -2,7 +2,7 @@
 // no statically-resolvable host import anywhere the worker graph can reach. The
 // PoC learned this the hard way (a stray `node:async_hooks` broke workerd
 // assets-mode chunk registration). These tests make the invariant a CI gate
-// instead of a code-review hope. See docs/rebuild-plan.md reminders #1 and #4.
+// instead of a code-review hope.
 
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
