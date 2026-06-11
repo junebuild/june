@@ -6,6 +6,7 @@ import {
   manifest,
   type JsonSchema,
 } from "@junejs/core/agent";
+import type { ActionContext } from "@junejs/core/context";
 
 const schema: JsonSchema = {
   type: "object",
@@ -24,6 +25,35 @@ describe("defineAction()", () => {
       run: (input: { name: string }) => ({ created: input.name }),
     });
     expect(ACTION_REGISTRY.get("createUser")).toBe(action);
+  });
+});
+
+describe("ActionContext (run(input, ctx) — the principal + resources)", () => {
+  test("invokeAction threads the principal and resources to run()", async () => {
+    let seen: ActionContext | undefined;
+    const fakeDb = {} as ActionContext["db"];
+    defineAction({
+      id: "whoami",
+      description: "Who am I",
+      input: { type: "object", properties: {} },
+      run: (_input, ctx) => {
+        seen = ctx;
+        return { userId: ctx.user?.id ?? null };
+      },
+    });
+    const result = await invokeAction("whoami", {}, { user: { id: "u1" }, db: fakeDb });
+    expect(result).toEqual({ userId: "u1" });
+    expect(seen?.db).toBe(fakeDb);
+  });
+
+  test("an action that ignores ctx (one-param run) still works", async () => {
+    defineAction({
+      id: "ping",
+      description: "Ping",
+      input: { type: "object", properties: {} },
+      run: () => ({ ok: true }),
+    });
+    expect(await invokeAction("ping", {})).toEqual({ ok: true });
   });
 });
 

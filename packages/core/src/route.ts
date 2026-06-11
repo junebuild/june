@@ -14,6 +14,7 @@
 // is the capability-described resource for agent clients.
 
 import type { JuneDb, JuneKv, JuneBlob } from "./resources";
+import type { Principal, Session } from "./context";
 
 export type RenderTarget = "view" | "json" | "agent" | "md";
 
@@ -52,6 +53,11 @@ export type RouteContext<
   db?: JuneDb;
   kv?: JuneKv;
   blob?: JuneBlob;
+  // The authenticated principal, populated by the auth integration off the
+  // request (undefined until @junejs/auth is wired). Routes gate on ctx.user;
+  // the SAME principal reaches actions via ActionContext.
+  user?: Principal;
+  session?: Session;
 };
 
 export type RouteCache = {

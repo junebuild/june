@@ -13,6 +13,7 @@
 //      Flight dispatch resolves the same registry.
 
 import { currentTrace } from "./instrumentation";
+import type { ActionContext } from "./context";
 
 export type JsonSchema = {
   type: "object";
@@ -24,7 +25,10 @@ export type ActionDefinition<I = unknown, O = unknown> = {
   id: string;
   description: string;
   input: JsonSchema;
-  run: (input: I) => O | Promise<O>;
+  // run() receives the request-scoped context (principal + resources) as its
+  // second arg, so the SAME authorization runs on the UI and /mcp paths. An
+  // action that ignores ctx (one-param run) is still assignable here.
+  run: (input: I, ctx: ActionContext) => O | Promise<O>;
 };
 
 // `ActionDefinition` is invariant in its input type (the `run` param), so a
@@ -57,11 +61,17 @@ export function defineAction<I, O>(
   return def;
 }
 
-// JSON dispatch path (agent / MCP): invoke an action by id with a single input.
-export async function invokeAction(id: string, input: unknown): Promise<unknown> {
+// JSON dispatch path (agent / MCP): invoke an action by id with a single input
+// and the request-scoped context (principal + resources). ctx defaults to {} so
+// callers that don't have one (tests, anonymous dispatch) still work.
+export async function invokeAction(
+  id: string,
+  input: unknown,
+  ctx: ActionContext = {},
+): Promise<unknown> {
   const action = ACTION_REGISTRY.get(id);
   if (!action) throw new Error(`Unknown action: ${id}`);
-  const result = await action.run(input);
+  const result = await action.run(input, ctx);
 
   // Cache coherence is a property of the ACTION, not of one dispatch path:
   // every table this action wrote invalidates its `table:<name>` tag (plus the

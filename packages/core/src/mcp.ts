@@ -10,6 +10,7 @@
 // Workers. (The SDK is still used client-side to verify spec compliance.)
 
 import { ACTION_REGISTRY, invokeAction } from "./agent";
+import type { ActionContext } from "./context";
 
 const PROTOCOL_VERSION = "2025-06-18";
 
@@ -40,7 +41,7 @@ function tools() {
     }));
 }
 
-async function handle(message: Rpc): Promise<object | null> {
+async function handle(message: Rpc, ctx: ActionContext): Promise<object | null> {
   const { id, method, params } = message;
   // Notifications (no id) get no response.
   if (id === undefined || id === null) return null;
@@ -61,7 +62,9 @@ async function handle(message: Rpc): Promise<object | null> {
       const args = (params?.arguments as Record<string, unknown>) ?? {};
       if (!name) return err(id, -32602, "Missing tool name");
       try {
-        const result = await invokeAction(name, args);
+        // The agent's tool call runs through the SAME ctx (principal + resources)
+        // the UI uses — one authorization model for both.
+        const result = await invokeAction(name, args, ctx);
         return ok(id, {
           content: [{ type: "text", text: JSON.stringify(result) }],
         });
@@ -77,7 +80,10 @@ async function handle(message: Rpc): Promise<object | null> {
   }
 }
 
-export async function mcpHandler(request: Request): Promise<Response> {
+// ctx (principal + resources) is injected by the host (the pipeline) so an
+// agent's tool call runs under the same authorization as the UI. Defaults to {}
+// for hosts/tests without one.
+export async function mcpHandler(request: Request, ctx: ActionContext = {}): Promise<Response> {
   if (request.method !== "POST") {
     return new Response("MCP endpoint — POST JSON-RPC (Streamable HTTP)", {
       status: 405,
@@ -95,7 +101,7 @@ export async function mcpHandler(request: Request): Promise<Response> {
   const headers = { "mcp-protocol-version": PROTOCOL_VERSION };
 
   if (Array.isArray(body)) {
-    const responses = (await Promise.all(body.map((m) => handle(m as Rpc)))).filter(
+    const responses = (await Promise.all(body.map((m) => handle(m as Rpc, ctx)))).filter(
       Boolean,
     );
     return responses.length
@@ -103,7 +109,7 @@ export async function mcpHandler(request: Request): Promise<Response> {
       : new Response(null, { status: 202, headers });
   }
 
-  const response = await handle(body as Rpc);
+  const response = await handle(body as Rpc, ctx);
   return response
     ? Response.json(response, { headers })
     : new Response(null, { status: 202, headers });

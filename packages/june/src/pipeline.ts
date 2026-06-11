@@ -191,7 +191,10 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
       // --- agent surface ---------------------------------------------------
       if (url.pathname === "/mcp") {
         if (!agent.mcp) return notFoundResponse("view", url.pathname);
-        return mcpHandler(request);
+        // The agent's tool calls run through the same resources (and, once auth
+        // is wired, the same principal) the UI uses.
+        const res = cfg.resources ? await cfg.resources() : undefined;
+        return mcpHandler(request, { request, db: res?.db, kv: res?.kv, blob: res?.blob });
       }
       if (request.method === "GET" && agent.discovery) {
         const d = await discovery(url);

@@ -43,6 +43,21 @@ describe("mcpHandler()", () => {
     });
   });
 
+  test("tools/call runs the action under the injected ctx (scoped principal)", async () => {
+    defineAction({
+      id: "whoami",
+      description: "Who am I",
+      input: { type: "object", properties: {} },
+      run: (_input, ctx) => ({ userId: ctx.user?.id ?? null }),
+    });
+    const res = await mcpHandler(
+      rpc({ jsonrpc: "2.0", id: 9, method: "tools/call", params: { name: "whoami", arguments: {} } }),
+      { user: { id: "u42" } }, // the host (pipeline) injects this off the request
+    );
+    const json = (await res.json()) as any;
+    expect(JSON.parse(json.result.content[0].text)).toEqual({ userId: "u42" });
+  });
+
   test("tools/call dispatches through the registry", async () => {
     defineAction({
       id: "add",

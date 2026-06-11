@@ -45,6 +45,9 @@ export type {
   Resources,
 } from "./resources";
 
+// Request-scoped context: the principal + resources routes and actions receive
+export type { Principal, Session, ActionContext } from "./context";
+
 // The shared document shell
 export {
   Document,
