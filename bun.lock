@@ -62,6 +62,16 @@
         "react",
       ],
     },
+    "packages/juno": {
+      "name": "@junejs/juno",
+      "version": "0.0.0",
+      "dependencies": {
+        "junecore": "workspace:*",
+      },
+      "devDependencies": {
+        "@junejs/server": "workspace:*",
+      },
+    },
   },
   "packages": {
     "@emnapi/core": ["@emnapi/core@1.11.0", "", { "dependencies": { "@emnapi/wasi-threads": "1.2.2", "tslib": "^2.4.0" } }, "sha512-l9Oo58x0HOP5znGzVhYW9U3e5wVuA4LAZU2AGezTmkhO1CgQRFDhDg4nneHsu/t3WniXg9QrG2nIXL/ZS8ln8Q=="],
@@ -71,6 +81,8 @@
     "@emnapi/wasi-threads": ["@emnapi/wasi-threads@1.2.2", "", { "dependencies": { "tslib": "^2.4.0" } }, "sha512-c95qOXkHdydNKhscBTebqEC1CVAZpyqOfVfBzQ1qgzyl3gfeldUjIggDbIZgDKsHLgnsM+igH7TJ/eAasaVuMA=="],
 
     "@june-examples/basic": ["@june-examples/basic@workspace:examples/basic"],
+
+    "@junejs/juno": ["@junejs/juno@workspace:packages/juno"],
 
     "@junejs/server": ["@junejs/server@workspace:packages/june"],
 
