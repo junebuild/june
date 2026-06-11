@@ -3,6 +3,8 @@
 
 export { host, type JuneHost, type JuneDb, type RunResult, type ServeHandle, type SpawnedModule } from "./host";
 export { sqlite, d1, type D1Database } from "./db";
+export { memoryKv, redisKv } from "./kv";
+export { localBlob, r2, type R2Bucket } from "./blob";
 export { memoizeResources } from "./resources";
 export { loadJuneConfig } from "./config-loader";
 export { collection, entry, type ContentEntry } from "./content";
