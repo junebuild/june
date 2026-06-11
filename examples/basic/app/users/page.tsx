@@ -1,5 +1,5 @@
-import { route } from "junecore/route";
-import { defineAction, manifest } from "junecore/agent";
+import { route } from "@junejs/core/route";
+import { defineAction, manifest } from "@junejs/core/agent";
 
 type User = { id: number; name: string };
 const users: User[] = [

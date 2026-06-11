@@ -82,7 +82,7 @@ describe("agent discovery surface", () => {
   test("/llms.txt carries the canonical-names stanza, routes, and the tool", async () => {
     const txt = await (await get("/llms.txt")).text();
     expect(txt).toContain("# June Basic");
-    expect(txt).toContain("`junecore`");
+    expect(txt).toContain("`@junejs/core`");
     expect(txt).toContain("- [/users](/users)");
     expect(txt).toContain("- tool: createUser");
   });

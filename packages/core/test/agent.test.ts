@@ -5,7 +5,7 @@ import {
   invokeAction,
   manifest,
   type JsonSchema,
-} from "junecore/agent";
+} from "@junejs/core/agent";
 
 const schema: JsonSchema = {
   type: "object",

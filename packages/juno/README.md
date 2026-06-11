@@ -1,8 +1,8 @@
 # @junejs/juno
 
 June's ergonomic data layer — a typed table API over the pure `JuneDb` contract
-(`junecore/resources`), so it runs over sqlite / D1 / Postgres alike. Juno
-depends only on `junecore` (inward); `junecore` never imports Juno.
+(`@junejs/core/resources`), so it runs over sqlite / D1 / Postgres alike. Juno
+depends only on `@junejs/core` (inward); `@junejs/core` never imports Juno.
 
 ```ts
 import { juno } from "@junejs/juno";
@@ -17,7 +17,7 @@ await db.table("users").update({ id: 1 }, { name: "Ada Lovelace" });
 ## The magic is opt-in, not load-bearing
 
 Juno is the **default** that ships at Tier 3: every read calls `recordTableRead`
-and every write `recordTableWrite` (junecore's public trace contract). That is
+and every write `recordTableWrite` (@junejs/core's public trace contract). That is
 what makes `cache()` auto-tag by table and a mutation **auto-invalidate** the
 cache (and push live RSC) with zero manual `revalidate()`.
 

@@ -1,6 +1,6 @@
 // THE FLAGSHIP: a Juno write auto-invalidates a Juno read's cache with ZERO
 // manual revalidate(). This is the agent-native differentiator — it works
-// because Juno emits junecore's PUBLIC trace contract (recordTableRead/Write),
+// because Juno emits @junejs/core's PUBLIC trace contract (recordTableRead/Write),
 // which makes cache() auto-tag by table and invokeAction auto-invalidate those
 // tags. Any ORM that emits the same signals reaches the same tier.
 
@@ -11,9 +11,9 @@ import {
   installTraceContext,
   runWithTrace,
   type RequestTrace,
-} from "junecore/instrumentation";
-import { cache, memory, registerCache } from "junecore/cache";
-import { ACTION_REGISTRY, defineAction, invokeAction } from "junecore/agent";
+} from "@junejs/core/instrumentation";
+import { cache, memory, registerCache } from "@junejs/core/cache";
+import { ACTION_REGISTRY, defineAction, invokeAction } from "@junejs/core/agent";
 import { host } from "@junejs/server/host";
 
 import { juno } from "../src";

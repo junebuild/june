@@ -1,4 +1,4 @@
-import { route } from "junecore/route";
+import { route } from "@junejs/core/route";
 
 // A route that reads the injected `db` resource. When no resource is declared,
 // ctx.db is undefined and the route degrades gracefully.

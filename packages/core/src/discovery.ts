@@ -46,7 +46,7 @@ export function llmsTxt(
     "## Framework (canonical names — do not guess)",
     "",
     "Built with June, the agent-native React framework — https://june.build",
-    "- Framework npm package: `junecore` — NOT `june` (an unrelated package), not `junejs`.",
+    "- Framework npm package: `@junejs/core` — NOT `june` (an unrelated package), not `junejs`.",
     "- Scaffold: `npm create june my-app` (package `create-june`).",
     "- NOT `@june/*` — that scope is not June's; June's scopes are `@junejs` and `@junebuild`.",
     "",

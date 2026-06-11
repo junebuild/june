@@ -5,7 +5,7 @@
 // them. Here both callers delegate to the same code, so byte-equivalence is
 // structural — the golden parity test (test/parity.test.ts) proves it.
 //
-// Worker-safe: junecore (pure) + react + react-dom/server only. No node:*, no
+// Worker-safe: @junejs/core (pure) + react + react-dom/server only. No node:*, no
 // Bun.* — the dev-only and worker-only concerns (fs route discovery vs frozen
 // manifest) are injected as a RouteResolver, not branched on here.
 
@@ -23,9 +23,9 @@ import {
   type Metadata,
   type RenderTarget,
   type RouteContext,
-} from "junecore/route";
-import { Document, type DocumentConfig } from "junecore/document";
-import { isResourceManifest } from "junecore/agent";
+} from "@junejs/core/route";
+import { Document, type DocumentConfig } from "@junejs/core/document";
+import { isResourceManifest } from "@junejs/core/agent";
 import {
   apiCatalog,
   buildLinkHeader,
@@ -33,10 +33,10 @@ import {
   mcpServerCard,
   robotsTxt,
   sitemapXml,
-} from "junecore/discovery";
-import { mcpHandler } from "junecore/mcp";
-import type { AgentConfig } from "junecore/config";
-import type { Resources } from "junecore/resources";
+} from "@junejs/core/discovery";
+import { mcpHandler } from "@junejs/core/mcp";
+import type { AgentConfig } from "@junejs/core/config";
+import type { Resources } from "@junejs/core/resources";
 
 import { negotiate } from "./negotiate";
 

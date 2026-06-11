@@ -90,7 +90,7 @@ Auth is "opinionated default (Better Auth) + open seam", exactly like data
 coupled to Better Auth's trajectory — a deliberate bet on a fetch-shaped,
 framework-agnostic, ascendant library. The seam stays open: another auth library
 can target the same `db`/`kv` resources; it just doesn't get the blessed
-integration. junecore never imports an auth library — the bridge reads an
+integration. @junejs/core never imports an auth library — the bridge reads an
 abstract principal off `ctx`, the host (the Better Auth integration package,
 e.g. `@junejs/auth`) populates it.
 

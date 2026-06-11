@@ -32,13 +32,13 @@ work; the bin runs under any package runner.
 
 ## Where the `june` bin lives (dependency direction)
 
-`junecore` stays PURE — no bin, no host import. So the CLI bin lives in a thin
+`@junejs/core` stays PURE — no bin, no host import. So the CLI bin lives in a thin
 **`@junejs/cli`** package that depends on `@junejs/server` (where dev/build/deploy
 already are). The scaffolded project's manifest:
 
 ```jsonc
 {
-  "dependencies":    { "junecore": "^0.1" },     // authoring API (route, agent, …)
+  "dependencies":    { "@junejs/core": "^0.1" },     // authoring API (route, agent, …)
   "devDependencies": { "@junejs/cli": "^0.1" },  // provides the `june` command
   "scripts": {
     "dev":    "june dev",
@@ -49,8 +49,8 @@ already are). The scaffolded project's manifest:
 }
 ```
 
-Dependency direction stays inward: `@junejs/cli` → `@junejs/server` → `junecore`.
-junecore never learns the CLI exists.
+Dependency direction stays inward: `@junejs/cli` → `@junejs/server` → `@junejs/core`.
+@junejs/core never learns the CLI exists.
 
 ## Verbs (v0.1)
 
@@ -81,7 +81,7 @@ a bundle of JS"; June's endgame is "one native binary, Node optional".
 
 ## Design rules
 
-1. junecore has no bin and no host dependency (purity invariant).
+1. @junejs/core has no bin and no host dependency (purity invariant).
 2. The CLI is a local dep bin; global install is optional, never required.
 3. One template, runtime-agnostic (npm / pnpm / bun).
 4. Keep the verb set tight; resist adding verbs until a real need appears.

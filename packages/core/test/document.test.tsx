@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { Document, documentTitle, type DocumentConfig } from "junecore/document";
+import { Document, documentTitle, type DocumentConfig } from "@junejs/core/document";
 
 const baseConfig: DocumentConfig = {
   site: { name: "Acme", titleTemplate: "%s — Acme", description: "Acme site" },

@@ -4,8 +4,8 @@
 // coalesces them within a microtask tick into a SINGLE `where key in (...)`
 // query: N+1 → 1. Per-request so keys never leak across requests.
 
-import type { JuneDb } from "junecore/resources";
-import { recordTableRead } from "junecore/instrumentation";
+import type { JuneDb } from "@junejs/core/resources";
+import { recordTableRead } from "@junejs/core/instrumentation";
 
 import type { Row } from "./index";
 

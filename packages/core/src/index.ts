@@ -1,8 +1,8 @@
-// junecore — the agent-native React framework.
+// @junejs/core — the agent-native React framework.
 //
 // This barrel re-exports the PURE, host-free contract layer (Phase 1). Each
-// concern is also importable by subpath (`junecore/route`, `junecore/agent`,
-// `junecore/mcp`, ...) so apps and host adapters pull in exactly what they need
+// concern is also importable by subpath (`@junejs/core/route`, `@junejs/core/agent`,
+// `@junejs/core/mcp`, ...) so apps and host adapters pull in exactly what they need
 // without dragging the whole surface into a Workers bundle.
 //
 // Host-coupled pieces (the dev server, build/deploy, the fs config loader, the

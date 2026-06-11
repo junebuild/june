@@ -1,4 +1,4 @@
-import { route } from "junecore/route";
+import { route } from "@junejs/core/route";
 
 export default route({
   load: () => ({ message: "Welcome to June" }),

@@ -28,6 +28,6 @@ snapshot inputs `build.rs` reads.
 ## Status
 
 The runtime renders its OWN ported file-routed RSC demo today. Bringing it under
-the junecore Phase-1 semantics — so `june dev` IS this binary and it passes the
+the @junejs/core Phase-1 semantics — so `june dev` IS this binary and it passes the
 golden `parity.test.ts` as a third renderer — is the convergence frontier.
 The concrete plan: **[docs/runtime-convergence.md](../docs/runtime-convergence.md)**.

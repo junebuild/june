@@ -1,5 +1,5 @@
 {
-  "name": "junecore",
+  "name": "@junejs/core",
   "version": "0.0.0",
   "description": "June — the agent-native React framework. Contract layer (pure, host-free).",
   "type": "module",

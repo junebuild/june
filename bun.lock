@@ -17,14 +17,14 @@
       "name": "june.build",
       "version": "0.0.0",
       "dependencies": {
-        "junecore": "workspace:*",
+        "@junejs/core": "workspace:*",
       },
     },
     "examples/basic": {
       "name": "@june-examples/basic",
       "version": "0.0.0",
       "dependencies": {
-        "junecore": "workspace:*",
+        "@junejs/core": "workspace:*",
       },
       "devDependencies": {
         "@junejs/server": "workspace:*",
@@ -37,9 +37,19 @@
         "june": "./src/june.ts",
       },
       "dependencies": {
+        "@junejs/core": "workspace:*",
         "@junejs/server": "workspace:*",
-        "junecore": "workspace:*",
       },
+    },
+    "packages/core": {
+      "name": "@junejs/core",
+      "version": "0.0.0",
+      "peerDependencies": {
+        "react": "^19.2.0",
+      },
+      "optionalPeers": [
+        "react",
+      ],
     },
     "packages/create-june": {
       "name": "create-june",
@@ -52,7 +62,7 @@
       "name": "@junejs/server",
       "version": "0.0.0",
       "dependencies": {
-        "junecore": "workspace:*",
+        "@junejs/core": "workspace:*",
         "marked": "^18.0.5",
       },
       "devDependencies": {
@@ -63,21 +73,11 @@
         "react-dom": "^19.2.0",
       },
     },
-    "packages/junecore": {
-      "name": "junecore",
-      "version": "0.0.0",
-      "peerDependencies": {
-        "react": "^19.2.0",
-      },
-      "optionalPeers": [
-        "react",
-      ],
-    },
     "packages/juno": {
       "name": "@junejs/juno",
       "version": "0.0.0",
       "dependencies": {
-        "junecore": "workspace:*",
+        "@junejs/core": "workspace:*",
       },
       "devDependencies": {
         "@junejs/server": "workspace:*",
@@ -94,6 +94,8 @@
     "@june-examples/basic": ["@june-examples/basic@workspace:examples/basic"],
 
     "@junejs/cli": ["@junejs/cli@workspace:packages/cli"],
+
+    "@junejs/core": ["@junejs/core@workspace:packages/core"],
 
     "@junejs/juno": ["@junejs/juno@workspace:packages/juno"],
 
@@ -152,8 +154,6 @@
     "csstype": ["csstype@3.2.3", "", {}, "sha512-z1HGKcYy2xA8AGQfwrn0PAy+PB7X/GSj3UVJW9qKyn43xWa+gl5nXmU4qqLMRzWVLFC8KusUX8T/0kCiOYpAIQ=="],
 
     "june.build": ["june.build@workspace:apps/june.build"],
-
-    "junecore": ["junecore@workspace:packages/junecore"],
 
     "marked": ["marked@18.0.5", "", { "bin": { "marked": "bin/marked.js" } }, "sha512-S6GcvALHg6K4ohtu4E7x0a1AqhAjp6cV8KhLSyN9qVapnzJkusVBxZRcIU9AeYsbe6P1hKDusSbEOzGyyuce6w=="],
 

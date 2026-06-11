@@ -5,6 +5,6 @@
   "description": "june.build — the framework site, dogfooded on June itself.",
   "type": "module",
   "dependencies": {
-    "junecore": "workspace:*"
+    "@junejs/core": "workspace:*"
   }
 }

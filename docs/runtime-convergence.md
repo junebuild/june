@@ -1,20 +1,20 @@
 # Phase 4 — native runtime convergence
 
 > The only phase with real unknowns; everything before it was porting. This doc
-> is the engineering plan: what the native runtime is, how it renders junecore
+> is the engineering plan: what the native runtime is, how it renders @junejs/core
 > semantics, what landed, and what remains.
 
 ## The goal
 
 `june dev` IS the native binary. The Bun dev server (Phase 2) demotes to a
-fallback. The native runtime (`runtime/`, deno_core 0.403 + V8) hosts a junecore
+fallback. The native runtime (`runtime/`, deno_core 0.403 + V8) hosts a @junejs/core
 app and serves the SAME surfaces the dev server and built worker serve — the
 golden parity contract (Phase 3) extends to a third renderer.
 
 ## Why convergence is cheap at the SSR layer (and where it is not)
 
 Phase 3 already did the load-bearing work: the request pipeline
-(`@junejs/server/pipeline`) is **worker-safe** — junecore (pure) + react only,
+(`@junejs/server/pipeline`) is **worker-safe** — @junejs/core (pure) + react only,
 no `node:*`, no `Bun.*`. `createWorker(manifest)` is a Web-standard
 `fetch(Request) => Response` built from a frozen manifest. That is exactly the
 shape a V8 isolate wants:
@@ -27,7 +27,7 @@ NATIVE runtime  ──manifest─────┘   (renderToReadableStream — p
         └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
-So the **baseline convergence** is: the native runtime loads the junecore
+So the **baseline convergence** is: the native runtime loads the @junejs/core
 pipeline JS into its isolate and calls `createWorker(manifest).fetch(request)`
 per HTTP request. No re-implementation, so native SSR surfaces are
 byte-equivalent to dev/worker by construction. The Rust side is plumbing:
@@ -65,11 +65,11 @@ ON TOP, which our pipeline does not have yet (it is SSR-only today):
 ## What remains (the convergence frontier)
 
 The native runtime today renders its OWN file-routed RSC demo (ported `js/` +
-`app/`), not junecore `route()` definitions. Bringing it under Phase-1 semantics:
+`app/`), not @junejs/core `route()` definitions. Bringing it under Phase-1 semantics:
 
-1. **junecore render entry.** Replace the runtime's `entry-server`/`entry-ssr`
-   with an entry that imports the junecore pipeline + the app's frozen manifest
-   (the Phase-3 `buildManifest` output) and exposes `fetch`. Bundle junecore +
+1. **@junejs/core render entry.** Replace the runtime's `entry-server`/`entry-ssr`
+   with an entry that imports the @junejs/core pipeline + the app's frozen manifest
+   (the Phase-3 `buildManifest` output) and exposes `fetch`. Bundle @junejs/core +
    `@junejs/server/pipeline` into the runtime's vendor set (build.ts) so the
    isolate resolves them. **Acceptance: the native binary passes
    `parity.test.ts` as a third renderer.**
@@ -77,10 +77,10 @@ The native runtime today renders its OWN file-routed RSC demo (ported `js/` +
    view/json/agent/md) that renders RSC through the server graph. This is where
    the `JuneLoader` dual-graph resolution plugs in — `route().view` becomes a
    server component; `"use client"` islands hydrate.
-3. **Live-RSC HMR over the junecore route table.** Reuse the proven watcher +
-   epoch + push loop, keyed by junecore's active routes.
-4. **Transpile funnel under junecore.** The loader already type-strips + runs
-   the React Compiler pre-pass; point it at the junecore app dir; keep ONE funnel.
+3. **Live-RSC HMR over the @junejs/core route table.** Reuse the proven watcher +
+   epoch + push loop, keyed by @junejs/core's active routes.
+4. **Transpile funnel under @junejs/core.** The loader already type-strips + runs
+   the React Compiler pre-pass; point it at the @junejs/core app dir; keep ONE funnel.
 5. **Demote the Bun dev server.** `june dev` dispatches to the native binary when
    present, falling back to `@junejs/server`'s `startDevServer`.
 

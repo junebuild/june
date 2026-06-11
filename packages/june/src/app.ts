@@ -11,10 +11,10 @@
 
 import { pathToFileURL } from "node:url";
 
-import { isRouteDefinition } from "junecore/route";
-import { resolveAgent, resolveSpeculationRules, type JuneConfig } from "junecore/config";
-import type { DocumentConfig } from "junecore/document";
-import { runWithTrace, type RequestTrace } from "junecore/instrumentation";
+import { isRouteDefinition } from "@junejs/core/route";
+import { resolveAgent, resolveSpeculationRules, type JuneConfig } from "@junejs/core/config";
+import type { DocumentConfig } from "@junejs/core/document";
+import { runWithTrace, type RequestTrace } from "@junejs/core/instrumentation";
 
 import { listRoutes, matchRouteTree, routeFiles, type SegmentMatch } from "./router";
 import { createPipeline, type LayoutComponent, type Resolved } from "./pipeline";

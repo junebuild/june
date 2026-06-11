@@ -9,7 +9,7 @@ on an owned Rust + V8 runtime.
 
 ```txt
 packages/
-  junecore/        The framework. Phase 1: the PURE, host-free contract layer
+  @junejs/core/        The framework. Phase 1: the PURE, host-free contract layer
                    (route · config · document · agent · discovery · mcp · cache).
   create-june/     Scaffolder — `npm create june my-app`.
 apps/
@@ -22,14 +22,14 @@ docs/              Architecture + the rebuild plan.
 
 ## The contract layer (Phase 1, here today)
 
-`packages/junecore` is pure: **zero `node:*` / `Bun.*`**, enforced by a CI guard
+`packages/@junejs/core` is pure: **zero `node:*` / `Bun.*`**, enforced by a CI guard
 (`test/purity.test.ts`). Host concerns — the fs config loader, the content
 pipeline, the dev server, build/deploy, the data layer — layer on top in later
 phases and never reach into this package.
 
 ```ts
-import { route, manifest } from "junecore";
-import { defineAction } from "junecore/agent";
+import { route, manifest } from "@junejs/core";
+import { defineAction } from "@junejs/core/agent";
 
 const createUser = defineAction({
   id: "createUser",

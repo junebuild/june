@@ -11,7 +11,7 @@ The framework depends on a **seam**, never on a query builder. Three layers,
 dependency direction always inward:
 
 ```
-  junecore (pure)        knows NOTHING about data — only the abstract
+  @junejs/core (pure)        knows NOTHING about data — only the abstract
         ▲                table-touch trace contract (recordTableRead/Write)
         │ depends on
   resource seam          db · blob · kv  — async contracts + binding model
@@ -20,9 +20,9 @@ dependency direction always inward:
   Juno / Drizzle / Prisma / raw   ← swappable. Juno is the default; not load-bearing.
 ```
 
-junecore must stay `node:*`-free, so it never imports a driver. Resource handles
+@junejs/core must stay `node:*`-free, so it never imports a driver. Resource handles
 are **injected by the host** into `RouteContext` (the Cloudflare `env` model);
-junecore declares only the abstract type.
+@junejs/core declares only the abstract type.
 
 ## Resources, not `openDb(path)`
 
@@ -120,4 +120,4 @@ the resource seam. `ctx.db` (raw) is always usable without Juno.
 4. `db`'s D1 adapter is the third `openDb` impl (rebuild-plan Phase 5).
 5. Juno is its own package on top of `db`; dependency direction always inward;
    the trace contract (`recordTableRead/Write`) stays public so any ORM can reach
-   Tier 3. junecore never imports a driver.
+   Tier 3. @junejs/core never imports a driver.

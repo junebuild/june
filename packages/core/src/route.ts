@@ -68,7 +68,7 @@ export type RouteDefinition<TData = unknown> = {
   // Markdown projection. If absent, the `md` target is auto-derived from `json`.
   md?: (data: TData, ctx: RouteContext) => string | Promise<string>;
   // Response cache: cache the rendered output of GET requests, keyed by
-  // target+URL, dropped by tag invalidation. Uses junecore/cache.
+  // target+URL, dropped by tag invalidation. Uses @junejs/core/cache.
   cache?: RouteCache;
   // `june build` renders this route's projections (html/md/json) to static
   // files served by the Workers assets layer BEFORE the worker runs (0ms).

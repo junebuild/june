@@ -6,7 +6,7 @@
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import type { BlobFactory, JuneBlob } from "junecore/resources";
+import type { BlobFactory, JuneBlob } from "@junejs/core/resources";
 
 // Keys come from app code (often user input) — reject path traversal / absolute
 // paths so a blob key can never escape the store directory.

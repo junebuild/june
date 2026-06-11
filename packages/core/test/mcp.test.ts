@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { ACTION_REGISTRY, defineAction } from "junecore/agent";
-import { mcpHandler } from "junecore/mcp";
+import { ACTION_REGISTRY, defineAction } from "@junejs/core/agent";
+import { mcpHandler } from "@junejs/core/mcp";
 
 afterEach(() => ACTION_REGISTRY.clear());
 

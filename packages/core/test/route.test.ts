@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { route, isRouteDefinition, resolveProjection } from "junecore/route";
+import { route, isRouteDefinition, resolveProjection } from "@junejs/core/route";
 
 describe("route()", () => {
   test("brands a definition so isRouteDefinition recognizes it", () => {

@@ -6,7 +6,7 @@
 // A new deploy target (Workers, creekd, Vercel) is a new implementation of this
 // interface, not a change to the framework. This package is the HOST layer —
 // static `node:*` imports are fine here (Bun implements the node: builtins too);
-// it is the pure `junecore` package, never this one, that must stay node-free.
+// it is the pure `@junejs/core` package, never this one, that must stay node-free.
 //
 // ASYNC-FIRST DB (the deliberate redesign): the PoC shipped a SYNCHRONOUS
 // SqliteDb surface — and that was the one dead end. D1 and every edge database
@@ -19,10 +19,10 @@ import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { Readable } from "node:stream";
 
-// The JuneDb / RunResult CONTRACT now lives in the pure junecore layer
-// (junecore/resources) so any ORM can target it. Re-exported here for callers
+// The JuneDb / RunResult CONTRACT now lives in the pure @junejs/core layer
+// (@junejs/core/resources) so any ORM can target it. Re-exported here for callers
 // that still import from the host.
-import type { JuneDb, RunResult } from "junecore/resources";
+import type { JuneDb, RunResult } from "@junejs/core/resources";
 export type { JuneDb, RunResult };
 
 export type ServeHandle = { port: number; stop(force?: boolean): void };

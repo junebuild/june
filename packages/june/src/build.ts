@@ -23,9 +23,9 @@ import { basename, dirname, join, relative, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { loadJuneConfig } from "./config-loader";
-import { resolveAgent, resolveSpeculationRules } from "junecore/config";
-import { isRouteDefinition, type BrandedRoute } from "junecore/route";
-import type { DocumentConfig } from "junecore/document";
+import { resolveAgent, resolveSpeculationRules } from "@junejs/core/config";
+import { isRouteDefinition, type BrandedRoute } from "@junejs/core/route";
+import type { DocumentConfig } from "@junejs/core/document";
 import { collection } from "./content";
 import { createWorker, type WorkerManifest } from "./worker";
 import type { LayoutComponent } from "./pipeline";

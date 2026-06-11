@@ -18,7 +18,7 @@ describe("create-june scaffolder", () => {
     expect(pkg.name).toBe("my-cool-app"); // derived from dir, lowercased
     expect(pkg.scripts.dev).toBe("june dev");
     expect(pkg.devDependencies["@junejs/cli"]).toBeDefined();
-    expect(pkg.dependencies.junecore).toBeDefined();
+    expect(pkg.dependencies["@junejs/core"]).toBeDefined();
 
     for (const f of [
       "june.config.ts",

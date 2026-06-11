@@ -3,7 +3,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { host } from "@junejs/server/host";
-import type { JuneDb } from "junecore/resources";
+import type { JuneDb } from "@junejs/core/resources";
 
 import { juno } from "../src";
 

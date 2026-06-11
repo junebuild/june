@@ -3,7 +3,7 @@
 // ctx.kv / ctx.blob). A resource not declared is never opened (and, for static
 // apps, tree-shaken out — the build freeze knows which routes touch resources).
 
-import type { ResourceConfig, Resources } from "junecore/resources";
+import type { ResourceConfig, Resources } from "@junejs/core/resources";
 
 // Open every declared resource once. Returns a memoized provider so the same
 // long-lived handles are reused across requests (one SQLite connection, etc.).

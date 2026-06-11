@@ -1,9 +1,9 @@
-// `db` resource adapters — implementations of the junecore JuneDb contract.
+// `db` resource adapters — implementations of the @junejs/core JuneDb contract.
 // Declared in june.config.ts (`resources.db: sqlite(...)` / `d1(...)`), opened
 // by the host, injected onto RouteContext as `ctx.db`. The framework depends on
 // the JuneDb contract; these adapters (and Juno on top) are swappable.
 
-import type { DbFactory, JuneDb, RunResult } from "junecore/resources";
+import type { DbFactory, JuneDb, RunResult } from "@junejs/core/resources";
 
 import { host } from "./host";
 

@@ -1,4 +1,4 @@
-// The host side of request tracing. junecore's instrumentation is pure and
+// The host side of request tracing. @junejs/core's instrumentation is pure and
 // host-free — it exposes `installTraceContext(provider)` and otherwise no-ops.
 // This module supplies the provider: node:async_hooks' AsyncLocalStorage,
 // loaded LAZILY through a non-literal specifier so no bundler resolves `node:*`
@@ -6,10 +6,10 @@
 // module registration even on a path that never runs there). See rebuild-plan
 // reminders #1 and #4.
 //
-// Hosts that lack async_hooks simply never call this; junecore then runs
+// Hosts that lack async_hooks simply never call this; @junejs/core then runs
 // untraced and every recorder degrades to a no-op — requests still serve.
 
-import { installTraceContext, type RequestTrace } from "junecore/instrumentation";
+import { installTraceContext, type RequestTrace } from "@junejs/core/instrumentation";
 
 let installed = false;
 

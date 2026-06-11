@@ -1,5 +1,5 @@
 // The fs side of config: load the user's june.config.{ts,js} from the app root.
-// junecore/config owns the SCHEMA and the pure resolvers (defineJune,
+// @junejs/core/config owns the SCHEMA and the pure resolvers (defineJune,
 // resolveAgent, resolveSpeculationRules); this host module is the only place
 // that touches the filesystem — keeping node:* out of the pure layer.
 //
@@ -11,7 +11,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import type { JuneConfig } from "junecore/config";
+import type { JuneConfig } from "@junejs/core/config";
 
 // Probe the given dir AND its parent: callers pass either the app root
 // (build/deploy) or the routes dir `app/` (serve) — the config file lives at

@@ -1,15 +1,15 @@
-// Juno — June's ergonomic data layer. A typed table API over the junecore
+// Juno — June's ergonomic data layer. A typed table API over the @junejs/core
 // JuneDb contract (so it works over sqlite / D1 / Postgres alike), depending ONLY
-// on junecore (inward; junecore never imports Juno). docs/data-layer-boundary.md.
+// on @junejs/core (inward; @junejs/core never imports Juno). docs/data-layer-boundary.md.
 //
 // THE MAGIC (Tier 3): every read calls recordTableRead, every write
-// recordTableWrite — junecore's PUBLIC trace contract. That is what makes cache
+// recordTableWrite — @junejs/core's PUBLIC trace contract. That is what makes cache
 // auto-tag by table and a mutation auto-invalidate + push live RSC, with zero
 // manual revalidate(). Juno emits these natively; Drizzle/Prisma reach the same
 // tier with a thin shim. The framework depends on the trace contract, not on Juno.
 
-import type { JuneDb, RunResult } from "junecore/resources";
-import { recordTableRead, recordTableWrite } from "junecore/instrumentation";
+import type { JuneDb, RunResult } from "@junejs/core/resources";
+import { recordTableRead, recordTableWrite } from "@junejs/core/instrumentation";
 
 import { tableLoader, type Loader } from "./batch";
 

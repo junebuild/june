@@ -1,4 +1,4 @@
-import { route } from "junecore/route";
+import { route } from "@junejs/core/route";
 
 export default route({
   // Prerendered at build: renders through the worker to a static index.html the

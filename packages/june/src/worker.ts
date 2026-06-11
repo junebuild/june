@@ -5,16 +5,16 @@
 // render core the dev server uses (pipeline.ts) — so the built surfaces are
 // byte-equivalent to dev (test/parity.test.ts proves it), not a re-implementation.
 //
-// Worker-safe by construction: this file + pipeline.ts touch only junecore +
+// Worker-safe by construction: this file + pipeline.ts touch only @junejs/core +
 // react. The content pipeline's fs reads are frozen into the manifest at build,
 // never run here.
 
 import type React from "react";
 
-import type { BrandedRoute } from "junecore/route";
-import type { AgentConfig } from "junecore/config";
-import type { DocumentConfig } from "junecore/document";
-import type { Resources } from "junecore/resources";
+import type { BrandedRoute } from "@junejs/core/route";
+import type { AgentConfig } from "@junejs/core/config";
+import type { DocumentConfig } from "@junejs/core/document";
+import type { Resources } from "@junejs/core/resources";
 
 import { createPipeline, type LayoutComponent, type Resolved } from "./pipeline";
 

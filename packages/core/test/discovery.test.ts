@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { ACTION_REGISTRY, defineAction } from "junecore/agent";
-import { resolveAgent } from "junecore/config";
+import { ACTION_REGISTRY, defineAction } from "@junejs/core/agent";
+import { resolveAgent } from "@junejs/core/config";
 import {
   apiCatalog,
   buildLinkHeader,
@@ -8,7 +8,7 @@ import {
   mcpServerCard,
   robotsTxt,
   sitemapXml,
-} from "junecore/discovery";
+} from "@junejs/core/discovery";
 
 const ORIGIN = "https://example.com";
 
@@ -33,7 +33,7 @@ describe("llmsTxt()", () => {
   test("always ships the canonical-names stanza (reminder #6)", () => {
     const txt = llmsTxt(ORIGIN, ["/", "/posts"], resolveAgent(), { name: "Blog" });
     expect(txt).toContain("canonical names — do not guess");
-    expect(txt).toContain("`junecore`");
+    expect(txt).toContain("`@junejs/core`");
     expect(txt).toContain("NOT `june`");
     expect(txt).toContain("@junejs");
   });

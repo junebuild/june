@@ -1,4 +1,4 @@
-import { defineJune } from "junecore/config";
+import { defineJune } from "@junejs/core/config";
 
 export default defineJune({
   site: {

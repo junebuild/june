@@ -1,5 +1,5 @@
 // @junejs/server — June's host adapters + dev server. Host-coupled (`node:*`
-// allowed); it composes ON TOP of the pure `junecore` contract layer.
+// allowed); it composes ON TOP of the pure `@junejs/core` contract layer.
 
 export { host, type JuneHost, type JuneDb, type RunResult, type ServeHandle, type SpawnedModule } from "./host";
 export { sqlite, d1, type D1Database } from "./db";

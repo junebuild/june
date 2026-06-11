@@ -54,8 +54,8 @@ function appRoot(positional: string[]): string {
 
 async function info(root: string): Promise<number> {
   const { createApp, loadJuneConfig } = await import("@junejs/server");
-  const { resolveAgent } = await import("junecore/config");
-  const { ACTION_REGISTRY } = await import("junecore/agent");
+  const { resolveAgent } = await import("@junejs/core/config");
+  const { ACTION_REGISTRY } = await import("@junejs/core/agent");
 
   const config = await loadJuneConfig(root);
   const app = createApp({ appDir: join(root, "app"), config });

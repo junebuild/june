@@ -6,7 +6,7 @@
 // header — a link is unambiguous; Accept is a hint. The clean pathname (with
 // the projection extension stripped) is what the router matches.
 
-import type { RenderTarget } from "junecore/route";
+import type { RenderTarget } from "@junejs/core/route";
 
 const EXT_TARGET: Record<string, RenderTarget> = {
   ".json": "json",

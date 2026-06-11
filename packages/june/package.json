@@ -1,7 +1,7 @@
 {
   "name": "@junejs/server",
   "version": "0.0.0",
-  "description": "June host adapters + dev server. Host-coupled; depends on the pure junecore contract layer.",
+  "description": "June host adapters + dev server. Host-coupled; depends on the pure @junejs/core contract layer.",
   "type": "module",
   "license": "MIT",
   "homepage": "https://june.build",
@@ -27,7 +27,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "junecore": "workspace:*",
+    "@junejs/core": "workspace:*",
     "marked": "^18.0.5"
   },
   "peerDependencies": {

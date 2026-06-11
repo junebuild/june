@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { cache, invalidate, memory, registerCache } from "junecore/cache";
+import { cache, invalidate, memory, registerCache } from "@junejs/core/cache";
 
 // Each test starts on a fresh in-memory store so keys/tags don't leak across tests.
 beforeEach(async () => {

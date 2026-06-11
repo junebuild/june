@@ -45,21 +45,21 @@ describe("contract layer purity", () => {
 
 describe("package resolution (reminder #1: real names + subpath exports)", () => {
   const subpaths = [
-    "junecore",
-    "junecore/route",
-    "junecore/config",
-    "junecore/document",
-    "junecore/agent",
-    "junecore/mcp",
-    "junecore/discovery",
-    "junecore/cache",
-    "junecore/instrumentation",
+    "@junejs/core",
+    "@junejs/core/route",
+    "@junejs/core/config",
+    "@junejs/core/document",
+    "@junejs/core/agent",
+    "@junejs/core/mcp",
+    "@junejs/core/discovery",
+    "@junejs/core/cache",
+    "@junejs/core/instrumentation",
   ];
 
   for (const spec of subpaths) {
-    test(`import.meta.resolve("${spec}") resolves to a junecore source file`, () => {
+    test(`import.meta.resolve("${spec}") resolves to a @junejs/core source file`, () => {
       const resolved = import.meta.resolve(spec);
-      expect(resolved).toContain("/junecore/src/");
+      expect(resolved).toContain("/core/src/");
       expect(resolved).toMatch(/\.tsx?$/);
     });
   }
