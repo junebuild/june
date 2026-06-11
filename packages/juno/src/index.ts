@@ -11,6 +11,10 @@
 import type { JuneDb, RunResult } from "junecore/resources";
 import { recordTableRead, recordTableWrite } from "junecore/instrumentation";
 
+import { tableLoader, type Loader } from "./batch";
+
+export { createLoader, tableLoader, type Loader } from "./batch";
+
 export type Row = Record<string, unknown>;
 
 // Guard table/column names (identifiers can't be parameterized). Values always
@@ -62,6 +66,13 @@ export class Table<T extends Row = Row> {
     recordTableWrite(this.name);
     const cond = Object.keys(where).map((k) => `${ident(k)} = ?`).join(" and ");
     return this.db.run(`delete from ${ident(this.name)} where ${cond}`, Object.values(where));
+  }
+
+  // A per-request by-key loader: concurrent .load(key) calls during one render
+  // pass coalesce into a single `where key in (...)` query (N+1 → 1). Build one
+  // per request so keys never leak across requests.
+  loader(key = "id"): Loader<string | number, T> {
+    return tableLoader<T>(this.db, this.name, key);
   }
 }
 
