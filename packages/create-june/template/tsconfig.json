@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "jsxImportSource": "react",
+    "types": ["react"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": ["app", "june.config.ts"]
+}

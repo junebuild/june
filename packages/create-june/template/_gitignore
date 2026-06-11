@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.june/
+app/_content.ts
+*.tsbuildinfo
+.DS_Store
+.env
+.env.*
