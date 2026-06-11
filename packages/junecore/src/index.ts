@@ -1,0 +1,99 @@
+// junecore — the agent-native React framework.
+//
+// This barrel re-exports the PURE, host-free contract layer (Phase 1). Each
+// concern is also importable by subpath (`junecore/route`, `junecore/agent`,
+// `junecore/mcp`, ...) so apps and host adapters pull in exactly what they need
+// without dragging the whole surface into a Workers bundle.
+//
+// Host-coupled pieces (the dev server, build/deploy, the fs config loader, the
+// content pipeline, the data layer) layer ON TOP of this in later phases — they
+// never live here, because nothing in this file may touch `node:*` or `Bun.*`.
+
+// Routing + content negotiation
+export {
+  route,
+  isRouteDefinition,
+  resolveProjection,
+  type RenderTarget,
+  type Metadata,
+  type RouteContext,
+  type RouteCache,
+  type RouteDefinition,
+  type BrandedRoute,
+} from "./route";
+
+// Config schema + pure resolvers
+export {
+  defineJune,
+  resolveAgent,
+  resolveSpeculationRules,
+  type AgentConfig,
+  type SpeculationConfig,
+  type JuneConfig,
+} from "./config";
+
+// The shared document shell
+export {
+  Document,
+  documentTitle,
+  VIEW_TRANSITION_CSS,
+  PREFETCH_FALLBACK,
+  type DocumentConfig,
+} from "./document";
+
+// The unified action registry (UI action == agent tool == MCP tool)
+export {
+  defineAction,
+  invokeAction,
+  manifest,
+  ResourceManifest,
+  isResourceManifest,
+  setServerReferenceRegistrar,
+  ACTION_REGISTRY,
+  type ActionDefinition,
+  type AnyAction,
+  type JsonSchema,
+  type ResourceManifestJson,
+} from "./agent";
+
+// Agent discovery emitters
+export {
+  buildLinkHeader,
+  llmsTxt,
+  robotsTxt,
+  sitemapXml,
+  apiCatalog,
+  mcpServerCard,
+} from "./discovery";
+
+// The Web-standard MCP endpoint
+export { mcpHandler } from "./mcp";
+
+// Cache primitives + the CacheStore seam
+export {
+  cache,
+  invalidate,
+  memory,
+  redis,
+  registerCache,
+  configureCache,
+  type CacheEntry,
+  type CacheStore,
+  type CacheStoreFactory,
+  type CacheOptions,
+} from "./cache";
+
+// Request tracing (host installs the async-context provider)
+export {
+  installTraceContext,
+  tracingEnabled,
+  currentTrace,
+  runWithTrace,
+  recordTableRead,
+  recordTableWrite,
+  recordTiming,
+  measure,
+  type RequestTrace,
+  type AsyncContext,
+  type TimingKind,
+} from "./instrumentation";
