@@ -1,0 +1,30 @@
+{
+  "name": "@junejs/server",
+  "version": "0.0.0",
+  "description": "June host adapters + dev server. Host-coupled; depends on the pure junecore contract layer.",
+  "type": "module",
+  "license": "MIT",
+  "homepage": "https://june.build",
+  "exports": {
+    ".": "./src/index.ts",
+    "./host": "./src/host.ts",
+    "./config": "./src/config-loader.ts",
+    "./content": "./src/content.ts",
+    "./router": "./src/router.ts",
+    "./instrumentation": "./src/instrumentation.ts",
+    "./dev": "./src/dev.ts"
+  },
+  "files": ["src"],
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "junecore": "workspace:*",
+    "marked": "^18.0.5"
+  },
+  "peerDependencies": {
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  }
+}

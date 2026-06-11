@@ -24,6 +24,7 @@
       "name": "@june-examples/basic",
       "version": "0.0.0",
       "dependencies": {
+        "@junejs/server": "workspace:*",
         "junecore": "workspace:*",
       },
     },
@@ -32,6 +33,18 @@
       "version": "0.0.0",
       "bin": {
         "create-june": "./bin.mjs",
+      },
+    },
+    "packages/june": {
+      "name": "@junejs/server",
+      "version": "0.0.0",
+      "dependencies": {
+        "junecore": "workspace:*",
+        "marked": "^18.0.5",
+      },
+      "peerDependencies": {
+        "react": "^19.2.0",
+        "react-dom": "^19.2.0",
       },
     },
     "packages/junecore": {
@@ -47,6 +60,8 @@
   },
   "packages": {
     "@june-examples/basic": ["@june-examples/basic@workspace:examples/basic"],
+
+    "@junejs/server": ["@junejs/server@workspace:packages/june"],
 
     "@types/bun": ["@types/bun@1.3.14", "", { "dependencies": { "bun-types": "1.3.14" } }, "sha512-h1hFqFVcvAvD9j9K7ZW7vd82aSA+rTdznZa+5bwvCwqSB1jmmfLcbIWhOLx1/+boy/xmjgCs/OMUL8hRJSmnPw=="],
 
@@ -65,6 +80,8 @@
     "june.build": ["june.build@workspace:apps/june.build"],
 
     "junecore": ["junecore@workspace:packages/junecore"],
+
+    "marked": ["marked@18.0.5", "", { "bin": { "marked": "bin/marked.js" } }, "sha512-S6GcvALHg6K4ohtu4E7x0a1AqhAjp6cV8KhLSyN9qVapnzJkusVBxZRcIU9AeYsbe6P1hKDusSbEOzGyyuce6w=="],
 
     "react": ["react@19.2.7", "", {}, "sha512-HNe9WslTbXmFK8o8cmwgAeJFSBvt1bPdHCVKtaaV+WlAN36mpT4hcRpwbf3fY56ar2oIXzsBpOAiIRHAdY0OlQ=="],
 
