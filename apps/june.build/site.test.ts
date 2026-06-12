@@ -115,6 +115,7 @@ describe("docs", () => {
       "features-app-router",
       "features-layouts",
       "features-islands",
+      "features-navigation",
       "features-data",
       "features-web-standards",
       "features-runtime",

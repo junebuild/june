@@ -27,9 +27,9 @@ Stated plainly, because RSC claims are easy to inflate:
 
 - **No streamed Suspense fallbacks** — pages flush fully resolved (the
   pipeline waits for `allReady`). Out-of-order streaming is on the roadmap.
-- **No Flight-payload navigation** — client-side navigations are full
-  documents made instant by Speculation-Rules prerendering, not RSC payload
-  diffs.
+- **No Flight-payload navigation** — navigations are full documents made
+  instant by Speculation-Rules prerendering
+  ([Navigation](/docs/features-navigation)), not RSC payload diffs.
 - **Live RSC (server-push re-render)** exists and is measured on the
   experimental native runtime track — its push loop is the machinery behind
   the 73ms HMR number — but it is not part of the v0.1 host.

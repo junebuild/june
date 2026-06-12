@@ -50,6 +50,6 @@ what's tested is what deploys.
 
 ## Why it matters
 
-Hover-prerendering (Speculation Rules) and View Transitions already make
-navigation feel instant with no client code. Islands keep the budget at
-zero until a specific subtree earns it.
+Hover-prerendering and View Transitions already make navigation feel
+instant with no client code ([Navigation](/docs/features-navigation)).
+Islands keep the budget at zero until a specific subtree earns it.

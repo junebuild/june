@@ -4,7 +4,7 @@ nav: "DX"
 description: Zero-config dev, dev/built parity by construction, an oracle for every artifact — and push-based HMR on the experimental runtime track.
 date: 2026-06-12
 section: Features
-order: "12"
+order: "13"
 ---
 ## Bun-first toolchain, runtime-agnostic core
 
