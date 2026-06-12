@@ -40,12 +40,18 @@ Conventions a coding agent can't misread are conventions a human can't
 misread either: file-system routing, plain SQL migrations, one config file
 that exists to turn things off.
 
-## Reload on save
+## Reload on save — server and browser
 
 `june dev` watches your app and restarts the server on change — content
 edits regenerate the frozen manifest first, so the next request is fresh.
 A restart is the *honest* reload on a JS host (a module cache can't be
 selectively invalidated without lying about state); `--no-watch` opts out.
+
+The browser follows by itself: every dev page holds an SSE connection to the
+dev server, and the restart *is* the signal — the connection drops, the page
+reconnects, and reloads on success. Dev-only by construction (injected by
+the dev server wrapper, never the render pipeline), so it cannot leak into a
+build or skew dev/built parity.
 
 Push-based HMR belongs to the experimental Rust+V8 runtime track: on save,
 the server re-renders and pushes the RSC diff over the live channel —

@@ -7,6 +7,7 @@
 import { loadJuneConfig } from "./config-loader";
 import { installAsyncContext } from "./instrumentation";
 import { createApp } from "./app";
+import { withLiveReload } from "./dev-reload";
 import { host as defaultHost, type JuneHost, type ServeHandle } from "./host";
 
 export type DevServerOptions = {
@@ -27,7 +28,9 @@ export async function startDevServer({
   const app = createApp({ appDir, config });
   await app.warmup();
 
-  const handle = host.serve((req) => app.fetch(req), {
+  // Live reload wraps the DEV SERVER only — the pipeline (and therefore
+  // dev/built parity) never sees it. See dev-reload.ts.
+  const handle = host.serve(withLiveReload((req) => app.fetch(req)), {
     port,
     earlyHints: () => app.earlyHints(),
   });
