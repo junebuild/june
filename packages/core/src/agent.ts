@@ -37,9 +37,15 @@ export type ActionDefinition<I = unknown, O = unknown> = {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type AnyAction = ActionDefinition<any, any>;
 
-// The single, unified action registry — module-global so any dispatch path
-// (agent POST, MCP tools/call, RSC Flight) resolves an action by id.
-export const ACTION_REGISTRY = new Map<string, AnyAction>();
+// The single, unified action registry — keyed on globalThis so any dispatch
+// path (agent POST, MCP tools/call, RSC Flight) resolves an action by id even
+// when the resolver loads this module twice (workspace symlinks can give the
+// app and the framework different @junejs/core paths; a module-level Map would
+// then split registrations across two instances).
+const REGISTRY_KEY = Symbol.for("june.actionRegistry");
+export const ACTION_REGISTRY: Map<string, AnyAction> = ((
+  globalThis as Record<symbol, Map<string, AnyAction> | undefined>
+)[REGISTRY_KEY] ??= new Map());
 
 // The RSC runtime (which owns the `react-server` condition) injects how to mark
 // a run() as a React server reference, so the SAME action is passable as a UI
