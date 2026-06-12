@@ -11,14 +11,15 @@
 
 import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import type { ComponentType } from "react";
 
 import { isRouteDefinition } from "@junejs/core/route";
 import { resolveAgent, resolveSpeculationRules, type JuneConfig } from "@junejs/core/config";
 import type { DocumentConfig } from "@junejs/core/document";
 import { runWithTrace, type RequestTrace } from "@junejs/core/instrumentation";
 
-import { listRoutes, matchRouteTree, routeFiles, type SegmentMatch } from "./router";
-import { createPipeline, type LayoutComponent, type Resolved } from "./pipeline";
+import { listRoutes, matchRouteTree, resolveNotFound, routeFiles, type SegmentMatch } from "./router";
+import { createPipeline, type LayoutComponent, type Pipeline, type Resolved } from "./pipeline";
 import { memoizeResources } from "./resources";
 import { findClientEntry, bundleClientToString, CLIENT_SCRIPT_URL } from "./client-bundle";
 
@@ -85,20 +86,36 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
 
   const resources = memoizeResources(config.resources);
 
-  const pipeline = createPipeline({
-    docConfig,
-    agent,
-    routeList: routePaths,
-    earlyHints: config.earlyHints,
-    resources,
-    resolve: async (pathname): Promise<Resolved | null> => {
-      const match = await matchRouteTree(appDir, pathname, { pageConvention: true });
-      if (!match) return null;
-      const mod = (await import(pathToFileURL(match.file).href)) as { default?: unknown };
-      if (!isRouteDefinition(mod.default)) return null;
-      return { def: mod.default, params: match.params, chain: await loadChain(match.segments) };
-    },
-  });
+  // The app's not-found.tsx is part of the dev surface too (the build freezes
+  // it into the manifest as `notFound`), and importing it is async — so the
+  // pipeline is built lazily on first fetch, memoized after.
+  let pipelinePromise: Promise<Pipeline> | undefined;
+  const getPipeline = (): Promise<Pipeline> => (pipelinePromise ??= buildPipeline());
+  async function buildPipeline(): Promise<Pipeline> {
+    const { notFound } = await resolveNotFound(appDir, "/");
+    let notFoundComponent: ComponentType<{ pathname: string }> | undefined;
+    if (notFound) {
+      const mod = (await import(pathToFileURL(notFound).href)) as { default?: unknown };
+      if (typeof mod.default === "function") {
+        notFoundComponent = mod.default as ComponentType<{ pathname: string }>;
+      }
+    }
+    return createPipeline({
+      docConfig,
+      agent,
+      routeList: routePaths,
+      earlyHints: config.earlyHints,
+      resources,
+      notFoundComponent,
+      resolve: async (pathname): Promise<Resolved | null> => {
+        const match = await matchRouteTree(appDir, pathname, { pageConvention: true });
+        if (!match) return null;
+        const mod = (await import(pathToFileURL(match.file).href)) as { default?: unknown };
+        if (!isRouteDefinition(mod.default)) return null;
+        return { def: mod.default, params: match.params, chain: await loadChain(match.segments) };
+      },
+    });
+  }
 
   function newTrace(): RequestTrace {
     return { id: crypto.randomUUID(), startedAt: performance.now(), events: [] };
@@ -116,7 +133,7 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
             }),
         );
       }
-      return runWithTrace(newTrace(), () => pipeline.fetch(request));
+      return runWithTrace(newTrace(), async () => (await getPipeline()).fetch(request));
     },
     async warmup() {
       for (const file of await routeFiles(appDir, { pageConvention: true })) {
