@@ -10,7 +10,7 @@ export default route({
   view: () => (
     <main>
       <h1>Why June</h1>
-      <h2>The bet</h2>
+      <h2>Vision</h2>
       <p>
         Software now has two audiences — people and agents — and two authors: people and agents.
         June is designed for that world end to end.
@@ -28,16 +28,16 @@ export default route({
         </li>
         <li>
           <strong>Built by agents:</strong> conventions a coding agent can&apos;t misread, plain
-          SQL migrations, scaffolds that ship an AGENTS.md, and an oracle for every artifact.
+          SQL migrations, and an oracle for every artifact.
         </li>
       </ul>
-      <h2>The wedge</h2>
+      <h2>Core design philosophy</h2>
       <p>
         No glue layer. Declare <code>auth</code>, <code>resources</code>, and your actions in one
         model; June wires the adapter, mounts the endpoints, and bridges identity into the agent
         surface.
       </p>
-      <h2>The honest part</h2>
+      <h2>Where we are</h2>
       <p>
         Pre-1.0. Benchmarks are dev-machine numbers with published methodology. The owned Rust+V8
         runtime and server-reactive live RSC are experimental roadmap items — today&apos;s host is

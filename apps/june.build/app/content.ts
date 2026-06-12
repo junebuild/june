@@ -58,7 +58,7 @@ export const PAGES: Page[] = [
       "Agents are becoming half your traffic and most of your code authors. Frameworks that only render pixels are answering yesterday's question.",
     md: `# Why June
 
-## The bet
+## Vision
 
 Software now has two audiences — people and agents — and two authors: people
 and agents. June is designed for that world end to end:
@@ -71,17 +71,17 @@ and agents. June is designed for that world end to end:
   credential and hits the SAME authorization check the UI does —
   \`defineAction.run(input, ctx)\` is one gate for both.
 - **Built by agents**: conventions a coding agent can't misread — file-system
-  routing, plain SQL migrations (the SQL you read is the SQL that runs),
-  scaffolds that ship an AGENTS.md, and an oracle for every artifact.
+  routing, plain SQL migrations (the SQL you read is the SQL that runs), and
+  an oracle for every artifact.
 
-## The wedge
+## Core design philosophy
 
 No glue layer. Declare \`auth\`, \`resources\`, and your actions in one model;
 June wires the adapter, mounts the endpoints, and bridges identity into the
 agent surface. The framework's job is to make "an agent can safely operate my
 app" a default, not a weekend of adapter code.
 
-## The honest part
+## Where we are
 
 June is pre-1.0. Benchmarks are dev-machine numbers with published
 methodology. The owned Rust+V8 runtime and server-reactive live RSC are

@@ -32,7 +32,7 @@ describe("human surface", () => {
   test("landing, why, benchmarks render in the layout", async () => {
     for (const [path, marker] of [
       ["/", "One definition, five surfaces"],
-      ["/why", "The wedge"],
+      ["/why", "Core design philosophy"],
       ["/benchmarks", "48k ops/s"],
     ] as const) {
       const html = await (await get(path)).text();
@@ -107,11 +107,14 @@ describe("docs", () => {
     expect(indexMd).toContain("## Features");
 
     for (const slug of [
-      "features-projections",
-      "features-actions",
+      "features-mcp",
+      "features-llms-txt",
+      "features-markdown",
+      "features-og-image",
       "features-islands",
       "features-data",
-      "features-content",
+      "features-dx",
+      "features-cli",
     ]) {
       const html = await (await get(`/docs/${slug}`)).text();
       expect(html).toContain('data-layout="docs"'); // nested under the docs sidebar
@@ -119,9 +122,15 @@ describe("docs", () => {
       expect(html).toContain("<code");
     }
 
-    // the verbatim guarantee features-content.md demos holds for itself
-    const served = await (await get("/docs/features-content.md")).text();
-    const authored = await Bun.file(join(ROOT, "content/docs/features-content.md")).text();
+    // the sidebar shows the short nav label, not the full page title
+    const anyDoc = await (await get("/docs/features-mcp")).text();
+    expect(anyDoc).toContain(">MCP</a>");
+    expect(anyDoc).toContain(">OG Image</a>");
+    expect(anyDoc).toContain(">Data magic</a>");
+
+    // the verbatim guarantee features-markdown.md demos holds for itself
+    const served = await (await get("/docs/features-markdown.md")).text();
+    const authored = await Bun.file(join(ROOT, "content/docs/features-markdown.md")).text();
     expect(served).toBe(authored);
   });
 });
@@ -154,6 +163,6 @@ describe("agent surface", () => {
       params: { name: "get_page", arguments: { slug: "why" } },
     });
     const why = JSON.parse(page.result.content[0].text);
-    expect(why.markdown).toContain("## The bet");
+    expect(why.markdown).toContain("## Vision");
   });
 });

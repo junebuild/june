@@ -1,9 +1,10 @@
 ---
 title: "Data: resources + cache magic"
+nav: "Data magic"
 description: Declare db/kv/blob once; a write auto-invalidates cached reads and N component reads auto-batch — zero manual revalidate().
 date: 2026-06-12
 section: Features
-order: "4"
+order: "6"
 ---
 ## The feature
 

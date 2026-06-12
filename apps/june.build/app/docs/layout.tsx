@@ -19,7 +19,8 @@ export default function DocsLayout({ children }: { children: React.ReactNode }) 
             <ul style={{ listStyle: "none", padding: 0, lineHeight: 2, marginTop: 0 }}>
               {section.docs.map((d) => (
                 <li key={d.slug}>
-                  <a href={`/docs/${d.slug}`} style={{ fontSize: 14 }}>{String(d.data.title)}</a>
+                  {/* nav: the short sidebar label; pages keep their full title */}
+                  <a href={`/docs/${d.slug}`} style={{ fontSize: 14 }}>{String(d.data.nav ?? d.data.title)}</a>
                 </li>
               ))}
             </ul>

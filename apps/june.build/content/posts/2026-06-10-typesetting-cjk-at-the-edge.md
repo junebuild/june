@@ -1,11 +1,14 @@
 ---
 title: "Typesetting CJK at the edge: og:image and font subsetting"
 date: 2026-06-10
-description: This post's social card is typeset live on Cloudflare Workers — CJK titles included.
+description: Designing live og:image typesetting on Cloudflare Workers — CJK titles included.
 tags: [og-image, fonts, edge, cjk]
 ---
 
-The og:image for a post here is not a pre-generated file — it's a route that
+*(The og:image pipeline is part of the asset-pipeline track — this post
+documents its design ahead of it landing on this site.)*
+
+An og:image should not be a pre-generated file — it should be a route that
 returns a PNG: satori lays out JSX inside a V8 isolate, resvg (Rust compiled
 to WASM) rasterizes it, and no browser is involved anywhere.
 
