@@ -4,7 +4,22 @@
   "private": true,
   "description": "june.build — the framework site, dogfooded on June itself.",
   "type": "module",
+  "scripts": {
+    "dev": "june dev",
+    "build": "june build",
+    "deploy": "june deploy",
+    "gen": "june gen",
+    "test": "bun test"
+  },
   "dependencies": {
-    "@junejs/core": "workspace:*"
+    "@junejs/core": "workspace:*",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@junejs/cli": "workspace:*",
+    "@junejs/server": "workspace:*",
+    "@types/react": "^19.2.0",
+    "typescript": "^5.9.0"
   }
 }

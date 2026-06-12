@@ -19,6 +19,14 @@
       "version": "0.0.0",
       "dependencies": {
         "@junejs/core": "workspace:*",
+        "react": "^19.2.0",
+        "react-dom": "^19.2.0",
+      },
+      "devDependencies": {
+        "@junejs/cli": "workspace:*",
+        "@junejs/server": "workspace:*",
+        "@types/react": "^19.2.0",
+        "typescript": "^5.9.0",
       },
     },
     "examples/basic": {

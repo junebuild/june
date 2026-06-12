@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "resolveJsonModule": true,
+    "types": ["react"]
+  },
+  "include": ["app", "june.config.ts", "site.test.ts"]
+}

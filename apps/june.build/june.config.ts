@@ -1,0 +1,16 @@
+import { defineJune } from "@junejs/core/config";
+
+// Dual-audience is ON by default — this file exists to turn things off, not on.
+//   agent.discovery  llms.txt, sitemap.xml, robots.txt, api-catalog, Link header
+//   agent.mcp        the /mcp endpoint (your defineAction()s as tools)
+export default defineJune({
+  agent: { enabled: true, discovery: true, mcp: true, webmcp: true },
+  site: {
+    name: "June — the agent-ready React framework",
+    titleTemplate: "%s · June",
+    description:
+      "One route() is a page, a JSON API, an MCP server, and an llms.txt entry. " +
+      "Auth, data, and agent capabilities are one coherent model — point an agent " +
+      "at /mcp and it acts as a scoped user.",
+  },
+});
