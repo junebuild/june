@@ -76,10 +76,12 @@ describe("blog (content pipeline)", () => {
     expect(served).toBe(authored);
   });
 
-  test("CJK post renders with lang attribute (the typesetting showcase)", async () => {
-    const html = await (await get("/blog/2026-06-10-typesetting-chinese-at-the-edge")).text();
-    expect(html).toContain('lang="zh-Hant"');
-    expect(html).toContain("字型子集化");
+  test("CJK typesetting showcase renders all three scripts", async () => {
+    const html = await (await get("/blog/2026-06-10-typesetting-cjk-at-the-edge")).text();
+    expect(html).toContain("<title>Typesetting CJK at the edge: og:image and font subsetting · June</title>");
+    expect(html).toContain("邊緣排版與字型子集化");
+    expect(html).toContain("フォントのサブセット化");
+    expect(html).toContain("글꼴 서브셋");
   });
 });
 
