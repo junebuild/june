@@ -44,6 +44,15 @@ jobs:
       - name: Pack and publish
         run: |
           set -euo pipefail
+          # Idempotent: a partially-failed release (one package's trusted
+          # publisher misconfigured) is fixed on npmjs and re-run — already
+          # published versions are skipped, not errors.
           for p in core june juno cli create-june; do
+            name=$(python3 -c "import json; print(json.load(open('packages/$p/package.json'))['name'])")
+            v=$(python3 -c "import json; print(json.load(open('packages/$p/package.json'))['version'])")
+            if [ "$(npm view "$name@$v" version 2>/dev/null)" = "$v" ]; then
+              echo "$name@$v already on the registry — skipping"
+              continue
+            fi
             (cd "packages/$p" && bun pm pack && npm publish ./*.tgz --access public)
           done
