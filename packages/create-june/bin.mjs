@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // create-june — scaffold a new June app. `npm create june my-app`.
 // Non-interactive + CI-friendly: copy the template, replace __APP_NAME__, done.
+import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
@@ -26,6 +27,18 @@ async function copyTemplate(src, dest, appName) {
   }
 }
 
+// Which package manager invoked us — npm/bun/pnpm/yarn set this, so the
+// next-steps we print match the tool the user already chose.
+function packageManager() {
+  const ua = process.env.npm_config_user_agent ?? "";
+  const name = ua.split("/")[0];
+  return ["npm", "bun", "pnpm", "yarn"].includes(name) ? name : "npm";
+}
+
+function hasBun() {
+  return spawnSync("bun", ["--version"], { stdio: "ignore", shell: false }).status === 0;
+}
+
 async function main() {
   const target = process.argv[2];
   if (!target) {
@@ -41,9 +54,19 @@ async function main() {
 
   await copyTemplate(TEMPLATE, dest, appName);
 
+  const pm = packageManager();
+  const run = pm === "npm" ? "npm run dev" : `${pm} dev`;
+  const adhoc = pm === "bun" ? "bunx june info" : "npx june info";
   console.log(
-    `\n✓ Scaffolded ${appName}\n\nNext steps:\n  cd ${target}\n  npm install\n  npm run dev      # → http://localhost:3000\n`,
+    `\n✓ Scaffolded ${appName}\n\nNext steps:\n  cd ${target}\n  ${pm} install\n  ${run}      # → http://localhost:3000\n\nThe CLI is local to the project (no global install): ${adhoc}\n`,
   );
+  if (!hasBun()) {
+    console.log(
+      `note: the june CLI runs on Bun, which wasn't found on your PATH.\n` +
+        `  install it first:  curl -fsSL https://bun.sh/install | bash\n` +
+        `  (or: brew install oven-sh/bun/bun · https://bun.sh)\n`,
+    );
+  }
 }
 
 main().catch((err) => {

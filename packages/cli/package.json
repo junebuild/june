@@ -1,18 +1,19 @@
 {
   "name": "@junejs/cli",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "The `june` CLI \u2014 dev / build / deploy / gen / info. A thin bin over @junejs/server.",
   "type": "module",
   "license": "MIT",
   "homepage": "https://june.build",
   "bin": {
-    "june": "./src/june.ts"
+    "june": "./bin.mjs"
   },
   "exports": {
     ".": "./src/cli.ts"
   },
   "files": [
-    "src"
+    "src",
+    "bin.mjs"
   ],
   "scripts": {
     "test": "bun test",

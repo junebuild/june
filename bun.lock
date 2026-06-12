@@ -45,9 +45,9 @@
     },
     "packages/cli": {
       "name": "@junejs/cli",
-      "version": "0.0.3",
+      "version": "0.0.4",
       "bin": {
-        "june": "./src/june.ts",
+        "june": "./bin.mjs",
       },
       "dependencies": {
         "@junejs/core": "workspace:*",
@@ -56,7 +56,7 @@
     },
     "packages/core": {
       "name": "@junejs/core",
-      "version": "0.0.3",
+      "version": "0.0.4",
       "peerDependencies": {
         "react": "^19.2.0",
       },
@@ -66,14 +66,14 @@
     },
     "packages/create-june": {
       "name": "create-june",
-      "version": "0.0.3",
+      "version": "0.0.4",
       "bin": {
         "create-june": "./bin.mjs",
       },
     },
     "packages/june": {
       "name": "@junejs/server",
-      "version": "0.0.3",
+      "version": "0.0.4",
       "dependencies": {
         "@junejs/core": "workspace:*",
         "marked": "^18.0.5",
@@ -88,7 +88,7 @@
     },
     "packages/juno": {
       "name": "@junejs/juno",
-      "version": "0.0.3",
+      "version": "0.0.4",
       "dependencies": {
         "@junejs/core": "workspace:*",
       },
@@ -156,7 +156,7 @@
 
     "@esbuild/win32-x64": ["@esbuild/win32-x64@0.28.1", "", { "os": "win32", "cpu": "x64" }, "sha512-bm4Mowrv+GXMlpWX++EcXw/iLyd1o3+bJkC2DkWXYVvgZCqD/bSj9ctZeAMC3cIxgjRVR2Dufaiu4YPxr5gW1A=="],
 
-    "@happy-dom/global-registrator": ["@happy-dom/global-registrator@20.10.2", "", { "dependencies": { "@types/node": ">=20.0.0", "happy-dom": "^20.10.2" } }, "sha512-/DC0hluanNJDVPUu69cidD46sGwzt8MJATiGx7WgCScn+ZH48fJQ0fvTfMPXY82/ASXWxnNo8P4BdHyU/dI/EA=="],
+    "@happy-dom/global-registrator": ["@happy-dom/global-registrator@20.10.3", "", { "dependencies": { "@types/node": ">=20.0.0", "happy-dom": "^20.10.3" } }, "sha512-rw10ox5gAdKT5UScrrhLRE8y9t2xzvRx2lUNwbXlPogJixYGciElqywuLlcmX+Rgcif0sF2wWUwqUEob1BKZTA=="],
 
     "@june-examples/basic": ["@june-examples/basic@workspace:examples/basic"],
 
@@ -284,7 +284,7 @@
 
     "fsevents": ["fsevents@2.3.3", "", { "os": "darwin" }, "sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw=="],
 
-    "happy-dom": ["happy-dom@20.10.2", "", { "dependencies": { "@types/node": ">=20.0.0", "@types/whatwg-mimetype": "^3.0.2", "@types/ws": "^8.18.1", "buffer-image-size": "^0.6.4", "entities": "^7.0.1", "whatwg-mimetype": "^3.0.0", "ws": "^8.21.0" } }, "sha512-5p9Sxis3eowDJKqx90QCsgbNA02XXqJ59NOHvD4V6cxp+rP4d/xOyVx7uY3hS8hiUbY1VeiFH8lbJ81AyuDVLQ=="],
+    "happy-dom": ["happy-dom@20.10.3", "", { "dependencies": { "@types/node": ">=20.0.0", "@types/whatwg-mimetype": "^3.0.2", "@types/ws": "^8.18.1", "buffer-image-size": "^0.6.4", "entities": "^7.0.1", "whatwg-mimetype": "^3.0.0", "ws": "^8.21.0" } }, "sha512-Hjdiy8RziuCcn5z04QI/rlsNuQoG8P0xxjgvsSMpi89cvIXIOcucQtiHS1yHSShxoBcSCeYqAskINmTiy/mlfw=="],
 
     "hex-rgb": ["hex-rgb@4.3.0", "", {}, "sha512-Ox1pJVrDCyGHMG9CFg1tmrRUMRPRsAWYc/PinY0XzJU4K7y7vjNoLKIQ7BR5UJMCxNN8EM1MNDmHWA/B3aZUuw=="],
 
