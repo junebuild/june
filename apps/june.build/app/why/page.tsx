@@ -35,9 +35,21 @@ export default route({
       <p>
         No glue layer. Declare <code>auth</code>, <code>resources</code>, and your actions in one
         model; June wires the adapter, mounts the endpoints, and bridges identity into the agent
-        surface. And June is opinionated on purpose — these choices are made for you:
+        surface. June is opinionated on purpose. The first two principles are an homage to
+        Rails and DHH — they are load-bearing here too; the rest are our own:
       </p>
       <ul style={{ lineHeight: 1.8 }}>
+        <li>
+          <strong>Convention over configuration.</strong> Presence is the API: a{" "}
+          <code>page.tsx</code> is a route, an <code>app/_client.ts</code> enables hydration, a{" "}
+          <code>content/*.md</code> joins the manifest. Nothing asks to be wired.
+        </li>
+        <li>
+          <strong>Don&apos;t repeat yourself.</strong> One <code>route()</code> is five surfaces;
+          one <code>defineAction()</code> is a UI action, an MCP tool, and a manifest entry; one
+          render core serves dev and prod. Nothing drifts because nothing is duplicated — even
+          our benchmark numbers render from a single registry.
+        </li>
         <li>
           <strong>Defaults you remove, not assemble.</strong> The agent surface ships ON;{" "}
           <code>june.config.ts</code> exists to turn things off. An undeclared resource

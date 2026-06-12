@@ -81,8 +81,16 @@ June wires the adapter, mounts the endpoints, and bridges identity into the
 agent surface. The framework's job is to make "an agent can safely operate my
 app" a default, not a weekend of adapter code.
 
-June is opinionated on purpose — these choices are made for you:
+June is opinionated on purpose. The first two principles are an homage to
+Rails and DHH — they are load-bearing here too; the rest are our own:
 
+- **Convention over configuration.** Presence is the API: a \`page.tsx\` is a
+  route, an \`app/_client.ts\` enables hydration, a \`content/*.md\` joins the
+  manifest. Nothing asks to be wired.
+- **Don't repeat yourself.** One \`route()\` is five surfaces; one
+  \`defineAction()\` is a UI action, an MCP tool, and a manifest entry; one
+  render core serves dev and prod. Nothing drifts because nothing is
+  duplicated — even our benchmark numbers render from a single registry.
 - **Defaults you remove, not assemble.** The agent surface ships ON;
   \`june.config.ts\` exists to turn things off. An undeclared resource doesn't
   exist; an unused one compiles away.
