@@ -29,6 +29,7 @@ import type { DocumentConfig } from "@junejs/core/document";
 import { collection } from "./content";
 import { createWorker, type WorkerManifest } from "./worker";
 import type { LayoutComponent } from "./pipeline";
+import { findClientEntry, bundleClientToFile, CLIENT_SCRIPT_URL } from "./client-bundle";
 
 export type BuildResult = {
   outFile: string;
@@ -120,12 +121,18 @@ export async function freezeConfig(appRoot: string): Promise<{
   earlyHints: string[];
 }> {
   const cfg = await loadJuneConfig(appRoot);
+  // An app with a client entry gets the islands runtime URL frozen into its
+  // document. Detected HERE (not just in juneBuild) so the prerender path —
+  // which re-freezes through buildManifest — sets the SAME clientScript, keeping
+  // prerendered pages byte-equivalent to the live worker (parity).
+  const hasClient = findClientEntry(join(appRoot, "app")) !== undefined;
   return {
     document: {
       site: cfg.site ?? {},
       speculationRules: resolveSpeculationRules(cfg.speculation ?? undefined),
       speculationDelivery: "inline",
       viewTransitions: cfg.viewTransitions ?? true,
+      clientScript: hasClient ? CLIENT_SCRIPT_URL : null,
     },
     agent: resolveAgent(cfg.agent),
     earlyHints: cfg.earlyHints ?? [],
@@ -298,6 +305,15 @@ ${chains.join("\n")}
       await writeFile(dest, Buffer.from(await res.arrayBuffer()));
     }
     prerendered.push(r.path);
+    hasAssets = true;
+  }
+
+  // ---- client islands bundle: app/_client.* → assets/client.js -------------
+  // Served at /client.js by the assets binding; the frozen document (freezeConfig)
+  // already points <script src> at it. No entry → no bundle, page ships zero JS.
+  const clientEntry = findClientEntry(appDir);
+  if (clientEntry) {
+    await bundleClientToFile(clientEntry, appRoot, assetsDir);
     hasAssets = true;
   }
 

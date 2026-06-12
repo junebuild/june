@@ -12,6 +12,8 @@
     "./resources": "./src/resources.ts",
     "./context": "./src/context.ts",
     "./document": "./src/document.tsx",
+    "./islands": "./src/islands.tsx",
+    "./islands-client": "./src/islands-client.ts",
     "./agent": "./src/agent.ts",
     "./mcp": "./src/mcp.ts",
     "./discovery": "./src/discovery.ts",

@@ -57,6 +57,17 @@ export {
   type DocumentConfig,
 } from "./document";
 
+// Client islands — explicit "use client" interactivity (SSR marker + hydrate)
+export {
+  Island,
+  serializeIslandProps,
+  deserializeIslandProps,
+  ISLAND_TAG,
+  ISLAND_NAME_ATTR,
+  ISLAND_PROPS_ATTR,
+  type IslandProps,
+} from "./islands";
+
 // The unified action registry (UI action == agent tool == MCP tool)
 export {
   defineAction,

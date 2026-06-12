@@ -25,6 +25,8 @@ describe("create-june scaffolder", () => {
       "app/page.tsx",
       "app/layout.tsx",
       "app/users/page.tsx",
+      "app/Counter.tsx", // the starter island…
+      "app/_client.tsx", // …and the client entry that hydrates it
       "README.md",
       ".gitignore", // restored from _gitignore
       "tsconfig.json",

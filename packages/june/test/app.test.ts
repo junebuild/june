@@ -131,6 +131,28 @@ describe("/mcp endpoint", () => {
   });
 });
 
+describe("client islands (dev)", () => {
+  test("a page with an <Island> SSRs the marker and the document loads /client.js", async () => {
+    const res = await get("/counter");
+    const html = await res.text();
+    // The island is server-rendered (visible with zero JS)…
+    expect(html).toContain(`<june-island data-june-island="Counter"`);
+    expect(html).toContain("count: ");
+    // …and the document loads the hydration runtime because app/_client.tsx exists.
+    expect(html).toContain(`<script type="module" src="/client.js">`);
+  });
+
+  test("dev serves /client.js — the bundled registry + hydration runtime", async () => {
+    const res = await get("/client.js");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("text/javascript; charset=utf-8");
+    const code = await res.text();
+    expect(code).toContain("june-island"); // the marker contract made it into the bundle
+    // The browser has no `process` — NODE_ENV must be baked at bundle time.
+    expect(code).not.toContain("process.env.NODE_ENV");
+  });
+});
+
 describe("not found", () => {
   test("an unmatched route renders the 404 document with a 404 status", async () => {
     const res = await get("/does/not/exist");

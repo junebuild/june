@@ -12,6 +12,11 @@ export type DocumentConfig = {
   speculationRules: string | null;
   speculationDelivery: "inline" | "header";
   viewTransitions: boolean;
+  // URL of the client islands runtime bundle. Set by the host (dev serves it,
+  // build freezes its hashed path) when the app has islands; the document then
+  // loads it as a deferred module so `"use client"` islands hydrate. Absent /
+  // null → the page ships zero client JS.
+  clientScript?: string | null;
 };
 
 // Cross-document View Transitions: same-origin MPA navigations cross-fade
@@ -99,7 +104,12 @@ export function Document({
           }
         `}</style>
       </head>
-      <body>{children}</body>
+      <body>
+        {children}
+        {/* type="module" defers automatically: the island runtime runs after the
+            markup is parsed, so markers exist when it scans for them. */}
+        {config.clientScript ? <script type="module" src={config.clientScript} /> : null}
+      </body>
     </html>
   );
 }

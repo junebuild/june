@@ -9,6 +9,7 @@
 // all change observable output (test/config-output.test.ts) — the PoC shipped a
 // dev server that silently ignored june.config.ts for days.
 
+import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { isRouteDefinition } from "@junejs/core/route";
@@ -19,6 +20,7 @@ import { runWithTrace, type RequestTrace } from "@junejs/core/instrumentation";
 import { listRoutes, matchRouteTree, routeFiles, type SegmentMatch } from "./router";
 import { createPipeline, type LayoutComponent, type Resolved } from "./pipeline";
 import { memoizeResources } from "./resources";
+import { findClientEntry, bundleClientToString, CLIENT_SCRIPT_URL } from "./client-bundle";
 
 export type CreateAppOptions = {
   appDir: string;
@@ -55,15 +57,29 @@ async function loadChain(segments: SegmentMatch[]): Promise<LayoutComponent[]> {
   return chain;
 }
 
-export function createApp({ appDir, config = {} }: CreateAppOptions): JuneApp {
+export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions): JuneApp {
+  // Normalize once: rolldown resolves the client entry against an absolute cwd,
+  // so a relative appDir would double the path. Absolute from here on.
+  const appDir = resolve(appDirInput);
   const agent = resolveAgent(config.agent);
   const speculation = config.speculation;
+  // app/_client.* present → the dev document loads /client.js and we serve it
+  // (bundled lazily, memoized). Detected the same way the build freezes it, so
+  // dev and built surfaces agree.
+  const clientEntry = findClientEntry(appDir);
   const docConfig: DocumentConfig = {
     site: config.site ?? {},
     speculationRules: resolveSpeculationRules(speculation ?? undefined),
     speculationDelivery: speculation ? speculation.delivery ?? "inline" : "inline",
     viewTransitions: config.viewTransitions ?? true,
+    clientScript: clientEntry ? CLIENT_SCRIPT_URL : null,
   };
+
+  let clientBundle: Promise<string> | undefined;
+  const serveClient = (): Promise<string> =>
+    // cwd = the app ROOT (appDir's parent) so rolldown resolves node_modules
+    // from the project, exactly like the build does.
+    (clientBundle ??= bundleClientToString(clientEntry!, dirname(appDir)));
 
   const routePaths = () => listRoutes(appDir, { pageConvention: true });
 
@@ -90,6 +106,16 @@ export function createApp({ appDir, config = {} }: CreateAppOptions): JuneApp {
 
   return {
     fetch(request) {
+      // Dev serves the islands runtime itself (build ships it as a static
+      // asset); bundled on first hit, memoized after.
+      if (clientEntry && new URL(request.url).pathname === CLIENT_SCRIPT_URL) {
+        return serveClient().then(
+          (code) =>
+            new Response(code, {
+              headers: { "content-type": "text/javascript; charset=utf-8" },
+            }),
+        );
+      }
       return runWithTrace(newTrace(), () => pipeline.fetch(request));
     },
     async warmup() {

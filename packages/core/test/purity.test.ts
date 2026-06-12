@@ -49,6 +49,7 @@ describe("package resolution (reminder #1: real names + subpath exports)", () =>
     "@junejs/core/route",
     "@junejs/core/config",
     "@junejs/core/document",
+    "@junejs/core/islands",
     "@junejs/core/agent",
     "@junejs/core/mcp",
     "@junejs/core/discovery",
