@@ -108,7 +108,10 @@ function bunHost(): JuneHost {
   return {
     name: "bun",
     serve(handler, opts) {
-      const server = Bun.serve({ port: opts.port, fetch: handler });
+      // idleTimeout 0: Bun's 10s default kills quiet long-lived responses —
+      // the dev live-reload SSE most visibly (the browser then reconnects,
+      // reads it as a server restart, and reloads the page every 10s).
+      const server = Bun.serve({ port: opts.port, fetch: handler, idleTimeout: 0 });
       return { port: server.port ?? opts.port, stop: (force) => void server.stop(force) };
     },
     spawnModule(entry, args, opts) {

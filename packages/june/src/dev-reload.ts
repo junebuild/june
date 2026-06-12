@@ -37,11 +37,24 @@ const RELOAD_JS = `// june dev live-reload: reconnect-after-drop → location.re
 `;
 
 function devEvents(): Response {
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
-      // One greeting so the browser fires `open`; then the socket just stays
-      // up until this process dies — the restart is the next event.
-      controller.enqueue(new TextEncoder().encode("retry: 300\n\ndata: connected\n\n"));
+      // One greeting so the browser fires `open`, then a comment heartbeat:
+      // a silent stream gets culled by idle timeouts (hosts, proxies), and a
+      // culled stream reads as a restart to the client — which reloads.
+      const enc = new TextEncoder();
+      controller.enqueue(enc.encode("retry: 300\n\ndata: connected\n\n"));
+      heartbeat = setInterval(() => {
+        try {
+          controller.enqueue(enc.encode(":hb\n\n"));
+        } catch {
+          clearInterval(heartbeat);
+        }
+      }, 20_000);
+    },
+    cancel() {
+      clearInterval(heartbeat);
     },
   });
   return new Response(stream, {
