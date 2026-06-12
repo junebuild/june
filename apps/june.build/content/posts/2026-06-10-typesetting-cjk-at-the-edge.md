@@ -19,10 +19,14 @@ Cache API.
 /og/<slug>.png → detect CJK → fetch font subset (text=title) → satori → resvg → PNG
 ```
 
-The same pipeline covers every CJK script with no per-language work:
+The same pipeline covers every CJK script with no per-language work — and
+the distinctions matter: Traditional and Simplified Chinese are different
+glyph sets served by different fonts (Noto Sans TC vs SC), and Japanese
+mixes kana with its own kanji forms:
 
+- エッジで日本語を組版する (Japanese — kana and kanji)
 - 邊緣排版與字型子集化 (Traditional Chinese)
-- フォントのサブセット化 (Japanese)
+- 边缘排版与字体子集化 (Simplified Chinese)
 - 글꼴 서브셋 (Korean)
 
 A common alternative is self-hosting fonts at build time (our asset pipeline
