@@ -1,6 +1,6 @@
 {
   "name": "@junejs/server",
-  "version": "0.0.0",
+  "version": "0.0.2",
   "description": "June host adapters + dev server. Host-coupled; depends on the pure @junejs/core contract layer.",
   "type": "module",
   "license": "MIT",
@@ -21,7 +21,9 @@
     "./deploy": "./src/deploy.ts",
     "./dev": "./src/dev.ts"
   },
-  "files": ["src"],
+  "files": [
+    "src"
+  ],
   "scripts": {
     "test": "bun test",
     "typecheck": "tsc --noEmit"
@@ -36,5 +38,9 @@
   },
   "devDependencies": {
     "rolldown": "^1.1.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/junebuild/june"
   }
 }
