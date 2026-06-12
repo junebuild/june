@@ -113,6 +113,7 @@ describe("docs", () => {
       "features-og-image",
       "features-islands",
       "features-data",
+      "features-runtime",
       "features-dx",
       "features-cli",
     ]) {

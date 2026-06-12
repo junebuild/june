@@ -4,8 +4,15 @@ nav: "DX"
 description: Zero-config dev, dev/built parity by construction, an oracle for every artifact — and push-based HMR on the experimental runtime track.
 date: 2026-06-12
 section: Features
-order: "7"
+order: "8"
 ---
+## Bun-first toolchain, runtime-agnostic core
+
+One tool — Bun — runs install, test, and dev; the no-glue philosophy applied
+to the toolchain. Meanwhile `@junejs/core` assumes no runtime at all, which
+is what lets the same app serve from Bun, Node, and workerd (see
+[Runtime](/docs/features-runtime)).
+
 ## Zero-config dev
 
 `june dev` runs with nothing installed around it: declared resources get

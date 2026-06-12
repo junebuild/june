@@ -28,3 +28,24 @@ jobs:
 
       - name: Test
         run: bun test
+
+  # The Node host stays a TESTED claim, not a code comment: the same
+  # startDevServer, served by node:http (no global Bun), over real HTTP.
+  node-host:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Node host smoke
+        run: node --import tsx scripts/smoke-node.ts
