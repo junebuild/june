@@ -35,8 +35,7 @@ export default route({
       <p>
         No glue layer. Declare <code>auth</code>, <code>resources</code>, and your actions in one
         model; June wires the adapter, mounts the endpoints, and bridges identity into the agent
-        surface. June is opinionated on purpose. The first two principles are an homage to
-        Rails and DHH — they are load-bearing here too; the rest are our own:
+        surface. June is opinionated on purpose — these choices are made for you:
       </p>
       <ul style={{ lineHeight: 1.8 }}>
         <li>
@@ -75,7 +74,8 @@ export default route({
       </ul>
       <h2>Where we are</h2>
       <p>
-        Pre-1.0. Benchmarks are dev-machine numbers with published methodology. The owned Rust+V8
+        June is 0.0.x — the spec is still being drafted, and APIs will change. Benchmarks are
+        dev-machine numbers with published methodology. The owned Rust+V8
         runtime and server-reactive live RSC are experimental roadmap items — today&apos;s host is
         Bun/Node, deploying to Workers.
       </p>

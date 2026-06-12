@@ -81,8 +81,7 @@ June wires the adapter, mounts the endpoints, and bridges identity into the
 agent surface. The framework's job is to make "an agent can safely operate my
 app" a default, not a weekend of adapter code.
 
-June is opinionated on purpose. The first two principles are an homage to
-Rails and DHH — they are load-bearing here too; the rest are our own:
+June is opinionated on purpose — these choices are made for you:
 
 - **Convention over configuration.** Presence is the API: a \`page.tsx\` is a
   route, an \`app/_client.ts\` enables hydration, a \`content/*.md\` joins the
@@ -106,9 +105,10 @@ Rails and DHH — they are load-bearing here too; the rest are our own:
 
 ## Where we are
 
-June is pre-1.0. Benchmarks are dev-machine numbers with published
-methodology. The owned Rust+V8 runtime and server-reactive live RSC are
-experimental roadmap items — today's host is Bun/Node, deploying to Workers.
+June is 0.0.x — the spec is still being drafted, and APIs will change.
+Benchmarks are dev-machine numbers with published methodology. The owned
+Rust+V8 runtime and server-reactive live RSC are experimental roadmap
+items — today's host is Bun/Node, deploying to Workers.
 `,
   },
   {
