@@ -2,6 +2,7 @@
 // @junejs/server. Exposed as run(argv) so it is testable without spawning a
 // process; the bin (june.ts) just forwards process.argv. See docs/cli.md.
 
+import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 export type Parsed = {
@@ -85,6 +86,19 @@ export async function run(argv: string[]): Promise<number | undefined> {
 
   switch (verb) {
     case "dev": {
+      // Validate BEFORE the supervisor: watching a directory that doesn't
+      // exist throws a raw ENOENT, and the classic mistake `npm run dev -p
+      // 3001` hands us "3001" as the app dir (npm eats the flag).
+      if (!existsSync(join(root, "app"))) {
+        console.error(`june dev: ${root} doesn't look like a June app (no app/ directory).`);
+        if (/^\d+$/.test(positional[0] ?? "")) {
+          console.error(
+            `  to choose a port, use --port:  june dev --port ${positional[0]}` +
+              `  ·  npm run dev -- --port ${positional[0]}`,
+          );
+        }
+        return 1;
+      }
       // A restart is the reload: the watch supervisor respawns the serving
       // child on file change (see watch.ts). Children carry JUNE_DEV_CHILD.
       if (!process.env.JUNE_DEV_CHILD && !flags["no-watch"]) {

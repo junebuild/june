@@ -28,6 +28,17 @@ describe("dev live reload", () => {
     expect(pipelineHtml).not.toContain("/__june/reload.js");
   });
 
+  test("a taken port walks forward instead of dying", async () => {
+    // server (beforeAll) holds 4521 — the second server must shift, not fail.
+    const second = await startDevServer({ appDir: `${ROOT}/app`, port: 4521 });
+    try {
+      expect(second.url).not.toBe(server.url);
+      expect((await fetch(`${second.url}/`)).status).toBe(200);
+    } finally {
+      second.stop(true);
+    }
+  });
+
   test("the reload endpoints answer; non-HTML responses pass through untouched", async () => {
     const js = await fetch(`${server.url}/__june/reload.js`);
     expect(js.status).toBe(200);

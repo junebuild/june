@@ -54,6 +54,20 @@ describe("june gen", () => {
   });
 });
 
+describe("june dev argument validation", () => {
+  test("a digits positional (npm run dev -p 3001 → 'dev 3001') hints at --port", async () => {
+    const code = await run(["dev", "3001"]);
+    expect(code).toBe(1);
+    expect(text()).toContain("doesn't look like a June app");
+    expect(text()).toContain("--port 3001");
+  });
+
+  test("a missing app dir fails with a sentence, not an ENOENT", async () => {
+    expect(await run(["dev", "/tmp/definitely-not-a-june-app"])).toBe(1);
+    expect(text()).toContain("no app/ directory");
+  });
+});
+
 describe("help / unknown", () => {
   test("help returns 0 and prints usage", async () => {
     expect(await run(["help"])).toBe(0);
