@@ -45,7 +45,7 @@
     },
     "packages/cli": {
       "name": "@junejs/cli",
-      "version": "0.0.5",
+      "version": "0.0.6",
       "bin": {
         "june": "./bin.mjs",
       },
@@ -56,9 +56,10 @@
     },
     "packages/core": {
       "name": "@junejs/core",
-      "version": "0.0.5",
+      "version": "0.0.6",
       "peerDependencies": {
         "react": "^19.2.0",
+        "react-dom": "^19.2.0",
       },
       "optionalPeers": [
         "react",
@@ -66,19 +67,17 @@
     },
     "packages/create-june": {
       "name": "create-june",
-      "version": "0.0.5",
+      "version": "0.0.6",
       "bin": {
         "create-june": "./bin.mjs",
       },
     },
     "packages/june": {
       "name": "@junejs/server",
-      "version": "0.0.5",
+      "version": "0.0.6",
       "dependencies": {
         "@junejs/core": "workspace:*",
         "marked": "^18.0.5",
-      },
-      "devDependencies": {
         "rolldown": "^1.1.0",
       },
       "peerDependencies": {
@@ -88,7 +87,7 @@
     },
     "packages/juno": {
       "name": "@junejs/juno",
-      "version": "0.0.5",
+      "version": "0.0.6",
       "dependencies": {
         "@junejs/core": "workspace:*",
       },

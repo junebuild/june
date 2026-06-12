@@ -1,6 +1,6 @@
 {
   "name": "@junejs/server",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "June host adapters + dev server. Host-coupled; depends on the pure @junejs/core contract layer.",
   "type": "module",
   "license": "MIT",
@@ -30,14 +30,12 @@
   },
   "dependencies": {
     "@junejs/core": "workspace:*",
-    "marked": "^18.0.5"
+    "marked": "^18.0.5",
+    "rolldown": "^1.1.0"
   },
   "peerDependencies": {
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
-  },
-  "devDependencies": {
-    "rolldown": "^1.1.0"
   },
   "repository": {
     "type": "git",

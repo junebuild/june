@@ -1,6 +1,6 @@
 {
   "name": "@junejs/core",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "June \u2014 the agent-native React framework. Contract layer (pure, host-free).",
   "type": "module",
   "license": "MIT",
@@ -28,7 +28,8 @@
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
-    "react": "^19.2.0"
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
   },
   "peerDependenciesMeta": {
     "react": {

@@ -138,6 +138,17 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
             new Response(code, {
               headers: { "content-type": "text/javascript; charset=utf-8" },
             }),
+          (err: unknown) => {
+            // A rejected bundle must answer, not hang the request (Bun.serve
+            // times the handler out) — and must not be memoized, or the error
+            // outlives its cause.
+            clientBundle = undefined;
+            console.error("[june] client bundle failed:", err);
+            return new Response(`client bundle failed: ${err instanceof Error ? err.message : String(err)}\n`, {
+              status: 500,
+              headers: { "content-type": "text/plain; charset=utf-8" },
+            });
+          },
         );
       }
       return runWithTrace(newTrace(), async () => (await getPipeline()).fetch(request));
