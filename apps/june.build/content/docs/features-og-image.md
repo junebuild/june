@@ -9,7 +9,11 @@ order: "4"
 ## The feature
 
 An og:image should not be a pre-generated file you forget to regenerate — it
-is a route. This site serves `/og/<slug>.png` from the worker:
+is a route. This site serves `/og/<slug>.png` from the worker for EVERY page
+(posts, docs, core pages), and each page's `og:image` meta tag points at its
+own card. This page's, rendered live as you read:
+
+![The social card for this very page, typeset at request time](/og/features-og-image.png)
 
 ```
 /og/<slug>.png → detect CJK → fetch font subset (text=title) → satori → resvg → PNG

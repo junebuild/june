@@ -147,6 +147,25 @@ describe("og:image route (app/_extra escape hatch)", () => {
     expect([...bytes.slice(0, 4)]).toEqual([0x89, 0x50, 0x4e, 0x47]); // PNG magic
     expect((await get("/why")).status).toBe(200); // _extra falls through cleanly
   });
+
+  test("every page kind resolves a card and points at it from its HTML", async () => {
+    // docs + core pages resolve cards too (not only posts)
+    for (const slug of ["features-mcp", "why"]) {
+      const res = await get(`/og/${slug}.png`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toBe("image/png");
+    }
+    // and the pages advertise them
+    expect(await (await get("/why")).text()).toContain(
+      '<meta property="og:image" content="https://june.build/og/why.png"/>',
+    );
+    expect(await (await get("/docs/features-og-image")).text()).toContain(
+      '<meta property="og:image" content="https://june.build/og/features-og-image.png"/>',
+    );
+    expect(await (await get("/blog/2026-06-12-built-in-og-image")).text()).toContain(
+      '<meta property="og:image" content="https://june.build/og/2026-06-12-built-in-og-image.png"/>',
+    );
+  });
 });
 
 describe("agent surface", () => {
