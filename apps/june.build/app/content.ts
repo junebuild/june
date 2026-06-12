@@ -81,6 +81,21 @@ June wires the adapter, mounts the endpoints, and bridges identity into the
 agent surface. The framework's job is to make "an agent can safely operate my
 app" a default, not a weekend of adapter code.
 
+June is opinionated on purpose — these choices are made for you:
+
+- **Defaults you remove, not assemble.** The agent surface ships ON;
+  \`june.config.ts\` exists to turn things off. An undeclared resource doesn't
+  exist; an unused one compiles away.
+- **Blessed picks over option matrices.** One recommended auth, one default
+  data layer — each swappable, none left as homework.
+- **Zero client JS until a subtree earns it.** Interactivity is an explicit
+  island; navigation belongs to the browser (Speculation Rules, View
+  Transitions), not a client router.
+- **The SQL you read is the SQL that runs.** Plain SQL migrations — no DSL
+  for a human or an agent to misread.
+- **Markdown is source, not output.** The \`.md\` surface serves your authored
+  bytes; nothing is reconstructed from rendered HTML.
+
 ## Where we are
 
 June is pre-1.0. Benchmarks are dev-machine numbers with published

@@ -35,8 +35,32 @@ export default route({
       <p>
         No glue layer. Declare <code>auth</code>, <code>resources</code>, and your actions in one
         model; June wires the adapter, mounts the endpoints, and bridges identity into the agent
-        surface.
+        surface. And June is opinionated on purpose — these choices are made for you:
       </p>
+      <ul style={{ lineHeight: 1.8 }}>
+        <li>
+          <strong>Defaults you remove, not assemble.</strong> The agent surface ships ON;{" "}
+          <code>june.config.ts</code> exists to turn things off. An undeclared resource
+          doesn&apos;t exist; an unused one compiles away.
+        </li>
+        <li>
+          <strong>Blessed picks over option matrices.</strong> One recommended auth, one default
+          data layer — each swappable, none left as homework.
+        </li>
+        <li>
+          <strong>Zero client JS until a subtree earns it.</strong> Interactivity is an explicit
+          island; navigation belongs to the browser (Speculation Rules, View Transitions), not a
+          client router.
+        </li>
+        <li>
+          <strong>The SQL you read is the SQL that runs.</strong> Plain SQL migrations — no DSL
+          for a human or an agent to misread.
+        </li>
+        <li>
+          <strong>Markdown is source, not output.</strong> The <code>.md</code> surface serves
+          your authored bytes; nothing is reconstructed from rendered HTML.
+        </li>
+      </ul>
       <h2>Where we are</h2>
       <p>
         Pre-1.0. Benchmarks are dev-machine numbers with published methodology. The owned Rust+V8
