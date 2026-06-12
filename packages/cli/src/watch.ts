@@ -51,8 +51,10 @@ export function superviseDev(root: string): undefined {
     }
     console.log(`[june] ${file} changed — restarting`);
     const c = child;
-    if (!c) {
-      // The child already died (crash state) — just bring a fresh one up.
+    if (!c || c.exitCode !== null || c.signalCode !== null) {
+      // The child is already dead (crash state) — once("exit") on an exited
+      // process never fires, which would park `restarting` forever. Just
+      // bring a fresh one up.
       restarting = false;
       start();
       return;
