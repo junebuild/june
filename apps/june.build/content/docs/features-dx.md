@@ -33,14 +33,19 @@ Conventions a coding agent can't misread are conventions a human can't
 misread either: file-system routing, plain SQL migrations, one config file
 that exists to turn things off.
 
-## HMR (experimental runtime track)
+## Reload on save
 
-v0.1's `june dev` host is Bun/Node. The owned Rust+V8 runtime — the
-experimental track — does push-based HMR: on save, the server re-renders and
-pushes the RSC diff over the live channel. Measured median **73ms** from save
-to flight pushed, with isolate rebuild at **16ms** ([benchmarks](/benchmarks),
-`scripts/bench-hmr.ts`). The push loop is the same machinery as production
-live-RSC — dev speed and the live features are one investment.
+`june dev` watches your app and restarts the server on change — content
+edits regenerate the frozen manifest first, so the next request is fresh.
+A restart is the *honest* reload on a JS host (a module cache can't be
+selectively invalidated without lying about state); `--no-watch` opts out.
+
+Push-based HMR belongs to the experimental Rust+V8 runtime track: on save,
+the server re-renders and pushes the RSC diff over the live channel —
+measured median **73ms** from save to flight pushed, isolate rebuild at
+**16ms** ([benchmarks](/benchmarks), `scripts/bench-hmr.ts`). The push loop
+is the same machinery as production live-RSC — dev speed and the live
+features are one investment.
 
 ## Why it matters
 

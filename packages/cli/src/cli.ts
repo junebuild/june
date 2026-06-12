@@ -38,7 +38,7 @@ const HELP = `june — the agent-native React framework
 Usage: june <command> [dir] [options]
 
 Commands:
-  dev      Start the dev server                 --port <n>
+  dev      Start the dev server                 --port <n> --no-watch
   build    Build a workerd-ready bundle         --out <dir>
   deploy   Build + deploy (Workers)             --dry-run
   gen      Freeze content/schema                --check
@@ -85,6 +85,12 @@ export async function run(argv: string[]): Promise<number | undefined> {
 
   switch (verb) {
     case "dev": {
+      // A restart is the reload: the watch supervisor respawns the serving
+      // child on file change (see watch.ts). Children carry JUNE_DEV_CHILD.
+      if (!process.env.JUNE_DEV_CHILD && !flags["no-watch"]) {
+        const { superviseDev } = await import("./watch");
+        return superviseDev(root);
+      }
       const { startDevServer } = await import("@junejs/server");
       await startDevServer({
         appDir: join(root, "app"),
