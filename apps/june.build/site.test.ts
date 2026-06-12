@@ -151,7 +151,7 @@ describe("og:image route (app/_extra escape hatch)", () => {
     const bytes = new Uint8Array(await og.arrayBuffer());
     expect([...bytes.slice(0, 4)]).toEqual([0x89, 0x50, 0x4e, 0x47]); // PNG magic
     expect((await get("/why")).status).toBe(200); // _extra falls through cleanly
-  });
+  }, 15_000); // cold Google-Fonts subset fetches can outlive the 5s default
 
   test("every page kind resolves a card and points at it from its HTML", async () => {
     // docs + core pages resolve cards too (not only posts)
@@ -170,6 +170,18 @@ describe("og:image route (app/_extra escape hatch)", () => {
     expect(await (await get("/blog/2026-06-12-built-in-og-image")).text()).toContain(
       '<meta property="og:image" content="https://june.build/og/2026-06-12-built-in-og-image.png"/>',
     );
+  }, 15_000);
+});
+
+describe("favicon (generated letter default)", () => {
+  test("favicon answers as SVG with the site initial; pages link it", async () => {
+    for (const path of ["/favicon.svg", "/favicon.ico"]) {
+      const res = await get(path);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toContain("image/svg+xml");
+      expect(await res.text()).toContain(">J</text>"); // June → J
+    }
+    expect(await (await get("/")).text()).toContain('<link rel="icon" href="/favicon.svg"');
   });
 });
 

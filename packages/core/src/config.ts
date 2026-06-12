@@ -54,7 +54,7 @@ export type JuneConfig = {
   earlyHints?: string[];
   // Site-wide metadata defaults: per-route metadata merges over these.
   // titleTemplate: "%s" is replaced by the route's title ("%s — Acme").
-  site?: { name?: string; titleTemplate?: string; description?: string };
+  site?: { name?: string; titleTemplate?: string; description?: string; icon?: string };
   // `june build` options. external: packages left UNBUNDLED in dist/worker.js
   // (wrangler resolves them at deploy with its own rules — needed for packages
   // that import .wasm, e.g. workers-og).

@@ -95,6 +95,23 @@ function text(body: string, contentType: string, init?: ResponseInit) {
   return new Response(body, { ...init, headers });
 }
 
+// The default favicon: the site name's first character in a rounded square —
+// a plain SVG string, so it needs no fonts, no rasterizer, and works for CJK
+// names as readily as latin ones. Served at /favicon.svg AND /favicon.ico
+// (browsers respect the svg content-type), so no June app 404s its icon.
+function letterFavicon(siteName: string | undefined): Response {
+  const first = (siteName ?? "").trim().charAt(0) || "•";
+  const letter = first.toUpperCase().replace(/[<>&"']/g, "");
+  return text(
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">` +
+      `<rect width="64" height="64" rx="12" fill="#1d1d1f"/>` +
+      `<text x="32" y="32" dy=".36em" text-anchor="middle" font-family="ui-sans-serif, system-ui, sans-serif" font-size="34" font-weight="600" fill="#fbfbf8">${letter || "•"}</text>` +
+      `</svg>\n`,
+    "image/svg+xml",
+    { headers: { "cache-control": "public, max-age=86400" } },
+  );
+}
+
 export function createPipeline(cfg: PipelineConfig): Pipeline {
   const { docConfig, agent } = cfg;
   const NotFound = cfg.notFoundComponent ?? DefaultNotFound;
@@ -217,6 +234,15 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
       if (cfg.extra) {
         const out = await cfg.extra(request, url);
         if (out) return out;
+      }
+
+      // --- default favicon (after extra so an app can override it) ----------
+      if (
+        request.method === "GET" &&
+        !docConfig.site.icon &&
+        (url.pathname === "/favicon.svg" || url.pathname === "/favicon.ico")
+      ) {
+        return letterFavicon(docConfig.site.name);
       }
 
       // --- routes ----------------------------------------------------------

@@ -8,7 +8,7 @@ import type { Metadata } from "./route";
 // The serializable slice of app config the document needs. The server feeds it
 // from AppConfig; the generated worker inlines it as literals at build time.
 export type DocumentConfig = {
-  site: { name?: string; titleTemplate?: string; description?: string };
+  site: { name?: string; titleTemplate?: string; description?: string; icon?: string };
   speculationRules: string | null;
   speculationDelivery: "inline" | "header";
   viewTransitions: boolean;
@@ -64,6 +64,13 @@ export function Document({
             pages are served by asset layers whose content-type may lack the
             charset param — without this, UTF-8 text mojibakes as windows-1252. */}
         <meta charSet="utf-8" />
+        {/* site.icon overrides; otherwise the framework's generated letter
+            favicon answers /favicon.svg, so no June app 404s its icon. */}
+        <link
+          rel="icon"
+          href={config.site.icon ?? "/favicon.svg"}
+          type={(config.site.icon ?? "/favicon.svg").endsWith(".svg") ? "image/svg+xml" : undefined}
+        />
         <title>{title}</title>
         {description ? <meta name="description" content={description} /> : null}
         {metadata?.canonical ? <link rel="canonical" href={metadata.canonical} /> : null}

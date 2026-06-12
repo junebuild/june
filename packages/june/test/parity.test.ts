@@ -42,6 +42,8 @@ const SURFACES = [
   "/.well-known/api-catalog",
   "/.well-known/mcp/server-card.json",
   "/__extra/ping",
+  "/favicon.svg",
+  "/favicon.ico",
   "/does/not/exist",
 ];
 
