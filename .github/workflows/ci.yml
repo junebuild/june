@@ -29,6 +29,28 @@ jobs:
       - name: Test
         run: bun test
 
+  # The npm user's first session, against the tarballs this tree would
+  # publish — catches what only exists outside the monorepo (phantom deps,
+  # broken bins, template wiring). scripts/smoke-packed.sh.
+  packed:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Packed E2E
+        run: bash scripts/smoke-packed.sh
+
   # The Node host stays a TESTED claim, not a code comment: the same
   # startDevServer, served by node:http (no global Bun), over real HTTP.
   node-host:

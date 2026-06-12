@@ -39,6 +39,28 @@ describe("dev live reload", () => {
     }
   });
 
+  test(
+    "the reload stream outlives Bun's default 10s idle cull",
+    async () => {
+      // 0.0.6 regression: Bun.serve's default idleTimeout killed the quiet
+      // SSE at 10s; every open page read the reconnect as a restart and
+      // reloaded itself in a loop. The stream must still be open past 12s.
+      const res = await fetch(`${server.url}/__june/events`);
+      const reader = res.body!.getReader();
+      await reader.read(); // the greeting
+      const outcome = await Promise.race([
+        reader
+          .read()
+          .then((r) => (r.done ? "closed" : "data"))
+          .catch(() => "closed"),
+        new Promise<string>((resolve) => setTimeout(() => resolve("still-open"), 12_000)),
+      ]);
+      expect(outcome).toBe("still-open");
+      await reader.cancel();
+    },
+    20_000,
+  );
+
   test("the reload endpoints answer; non-HTML responses pass through untouched", async () => {
     const js = await fetch(`${server.url}/__june/reload.js`);
     expect(js.status).toBe(200);
