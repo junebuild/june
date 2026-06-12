@@ -8,6 +8,7 @@ export default defineJune({
   // workers-og stays external: wrangler's own esbuild bundles it at deploy,
   // where its workerd-safe .wasm imports are first-class (CompiledWasm rules).
   build: { external: ["workers-og"] },
+  deploy: { domain: "june.build" },
   site: {
     name: "June — the agent-ready React framework",
     titleTemplate: "%s · June",

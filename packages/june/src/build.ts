@@ -341,15 +341,24 @@ ${chains.join("\n")}
     const pkg = existsSync(pkgPath)
       ? (JSON.parse(await Bun.file(pkgPath).text()) as { name?: string })
       : {};
+    const deployCfg = (await loadJuneConfig(appRoot)).deploy;
     await writeFile(
       join(outDir, "wrangler.jsonc"),
       JSON.stringify(
         {
-          name: (pkg.name ?? basename(appRoot)).replace(/[^a-z0-9-]/gi, "-").toLowerCase(),
+          name:
+            deployCfg?.name ??
+            (pkg.name ?? basename(appRoot)).replace(/[^a-z0-9-]/gi, "-").toLowerCase(),
           main: "./worker.js",
           compatibility_date: "2025-01-01",
           compatibility_flags: ["nodejs_compat"],
           ...(hasAssets ? { assets: { directory: "./assets" } } : {}),
+          // config deploy.domain → a Workers custom domain; without it the
+          // generated file regenerating on every build would silently drop a
+          // hand-attached domain.
+          ...(deployCfg?.domain
+            ? { routes: [{ pattern: deployCfg.domain, custom_domain: true }] }
+            : {}),
         },
         null,
         2,

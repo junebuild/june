@@ -61,8 +61,9 @@ export type JuneConfig = {
   build?: { external?: string[] };
   // `june deploy` options. The deploy VERB is fixed; the target is an adapter
   // (same seam philosophy as JuneHost) — "workers" today, "node"/"june-cloud"
-  // later. name defaults to package.json name.
-  deploy?: { target?: "workers"; name?: string };
+  // later. name defaults to package.json name. domain attaches a Workers
+  // custom domain (the zone must live in the same Cloudflare account).
+  deploy?: { target?: "workers"; name?: string; domain?: string };
 };
 
 const DEFAULT_AGENT: AgentConfig = {
