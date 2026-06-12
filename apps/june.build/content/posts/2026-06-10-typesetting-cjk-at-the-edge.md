@@ -5,12 +5,10 @@ description: Designing live og:image typesetting on Cloudflare Workers — CJK t
 tags: [og-image, fonts, edge, cjk]
 ---
 
-*(The og:image pipeline is part of the asset-pipeline track — this post
-documents its design ahead of it landing on this site.)*
-
 An og:image should not be a pre-generated file — it should be a route that
 returns a PNG: satori lays out JSX inside a V8 isolate, resvg (Rust compiled
-to WASM) rasterizes it, and no browser is involved anywhere.
+to WASM) rasterizes it, and no browser is involved anywhere. This site's
+`/og/<slug>.png` works exactly this way.
 
 CJK is the real test: a full CJK family (Noto Sans TC/JP/KR) weighs several
 MB per script — far too heavy to ship in a worker. The answer is Google

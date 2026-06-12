@@ -136,6 +136,17 @@ describe("docs", () => {
   });
 });
 
+describe("og:image route (app/_extra escape hatch)", () => {
+  test("dev host declines honestly; non-og paths fall through", async () => {
+    // workers-og's WASM is workerd-only — the JS dev host must answer 503,
+    // never crash. The real PNG is asserted against workerd (wrangler dev).
+    const og = await get("/og/2026-06-10-typesetting-cjk-at-the-edge.png");
+    expect(og.status).toBe(503);
+    expect(await og.text()).toContain("workerd");
+    expect((await get("/why")).status).toBe(200); // _extra falls through cleanly
+  });
+});
+
 describe("agent surface", () => {
   test("llms.txt + sitemap + api-catalog resolve", async () => {
     const llms = await (await get("/llms.txt")).text();

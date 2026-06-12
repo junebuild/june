@@ -1,18 +1,15 @@
 ---
 title: "OG images, typeset at the edge"
 nav: "OG Image"
-description: Social cards as a route that returns a PNG — satori + resvg in the worker, with runtime font subsetting so CJK titles work. In development.
+description: Social cards as a route that returns a PNG — satori + resvg in the worker, with runtime font subsetting so CJK titles work.
 date: 2026-06-12
 section: Features
 order: "4"
 ---
-*(Status: in development — this page documents the design, which ships with
-the asset-pipeline track. The pipeline below is not live on this site yet.)*
-
-## The design
+## The feature
 
 An og:image should not be a pre-generated file you forget to regenerate — it
-should be a route:
+is a route. This site serves `/og/<slug>.png` from the worker:
 
 ```
 /og/<slug>.png → detect CJK → fetch font subset (text=title) → satori → resvg → PNG
@@ -34,6 +31,17 @@ kana with its own kanji forms — the detection step picks per title.
 
 The full design walkthrough, with per-script samples, is in
 [Typesetting CJK at the edge](/blog/2026-06-10-typesetting-cjk-at-the-edge).
+
+## Try it
+
+```bash
+curl -o card.png https://june.build/og/2026-06-10-typesetting-cjk-at-the-edge.png
+```
+
+The route lives behind `app/_extra.tsx` — June's pre-route escape hatch for
+responses `route()` has no projection for yet (binary bodies). It renders on
+workerd (deploy or `wrangler dev`); the JS dev host answers a plain 503, since
+the WASM packaging is workerd-specific.
 
 ## Why it matters
 
