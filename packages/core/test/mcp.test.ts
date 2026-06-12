@@ -1,8 +1,19 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { ACTION_REGISTRY, defineAction } from "@junejs/core/agent";
 import { mcpHandler } from "@junejs/core/mcp";
 
-afterEach(() => ACTION_REGISTRY.clear());
+// Empty registry per test, restored after — see discovery.test.ts: a cleared
+// registry cannot be repopulated by re-import (module cache), which breaks
+// later test files.
+let preexisting = new Map(ACTION_REGISTRY);
+beforeEach(() => {
+  preexisting = new Map(ACTION_REGISTRY);
+  ACTION_REGISTRY.clear();
+});
+afterEach(() => {
+  ACTION_REGISTRY.clear();
+  for (const [id, action] of preexisting) ACTION_REGISTRY.set(id, action);
+});
 
 function rpc(body: unknown): Request {
   return new Request("https://example.com/mcp", {

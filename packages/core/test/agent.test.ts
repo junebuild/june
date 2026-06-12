@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   ACTION_REGISTRY,
   defineAction,
@@ -14,7 +14,18 @@ const schema: JsonSchema = {
   required: ["name"],
 };
 
-afterEach(() => ACTION_REGISTRY.clear());
+// Empty registry per test, restored after — see discovery.test.ts: a cleared
+// registry cannot be repopulated by re-import (module cache), which breaks
+// later test files.
+let preexisting = new Map(ACTION_REGISTRY);
+beforeEach(() => {
+  preexisting = new Map(ACTION_REGISTRY);
+  ACTION_REGISTRY.clear();
+});
+afterEach(() => {
+  ACTION_REGISTRY.clear();
+  for (const [id, action] of preexisting) ACTION_REGISTRY.set(id, action);
+});
 
 describe("defineAction()", () => {
   test("registers into the unified registry and returns the definition", () => {

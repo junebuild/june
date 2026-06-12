@@ -5,7 +5,7 @@
 // tags. Any ORM that emits the same signals reaches the same tier.
 
 import { AsyncLocalStorage } from "node:async_hooks";
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import {
   installTraceContext,
@@ -25,7 +25,18 @@ let n = 0;
 const newTrace = (): RequestTrace => ({ id: `t${n++}`, startedAt: 0, events: [] });
 const inTrace = <T>(fn: () => Promise<T>) => runWithTrace(newTrace(), fn);
 
-afterEach(() => ACTION_REGISTRY.clear());
+// Empty registry per test, restored after — see core's discovery.test.ts: a
+// cleared registry cannot be repopulated by re-import (module cache), which
+// breaks later test files.
+let preexisting = new Map(ACTION_REGISTRY);
+beforeEach(() => {
+  preexisting = new Map(ACTION_REGISTRY);
+  ACTION_REGISTRY.clear();
+});
+afterEach(() => {
+  ACTION_REGISTRY.clear();
+  for (const [id, action] of preexisting) ACTION_REGISTRY.set(id, action);
+});
 
 describe("Juno write → automatic cache invalidation", () => {
   test("no manual revalidate(): a write through Juno drops the cached read", async () => {

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { ACTION_REGISTRY, defineAction } from "@junejs/core/agent";
 import { resolveAgent } from "@junejs/core/config";
 import {
@@ -12,7 +12,20 @@ import {
 
 const ORIGIN = "https://example.com";
 
-afterEach(() => ACTION_REGISTRY.clear());
+// Each test runs against an empty registry, but the surrounding state is
+// restored after: bun caches modules across test files, so registrations other
+// files rely on (e.g. the fixture actions the CLI warmup test reads) cannot be
+// re-created by a later import — leaving the registry cleared would leak the
+// loss into every file that runs after this one.
+let preexisting = new Map(ACTION_REGISTRY);
+beforeEach(() => {
+  preexisting = new Map(ACTION_REGISTRY);
+  ACTION_REGISTRY.clear();
+});
+afterEach(() => {
+  ACTION_REGISTRY.clear();
+  for (const [id, action] of preexisting) ACTION_REGISTRY.set(id, action);
+});
 
 describe("buildLinkHeader()", () => {
   test("advertises the whole discovery tree; drops mcp-server when mcp is off", () => {
