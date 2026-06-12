@@ -67,7 +67,17 @@ export type PipelineConfig = {
   earlyHints?: string[];
   htmlCacheControl?: string;
   notFoundComponent?: React.ComponentType<{ pathname: string }>;
+  // The app's pre-route escape hatch (app/_extra.*): runs after the agent
+  // surface, before route resolution. Return null to fall through. For
+  // responses route() can't express yet (binary, custom content types) —
+  // e.g. an og:image PNG route.
+  extra?: ExtraHandler;
 };
+
+export type ExtraHandler = (
+  request: Request,
+  url: URL,
+) => Promise<Response | null> | Response | null;
 
 export type Pipeline = { fetch(request: Request): Promise<Response> };
 
@@ -199,6 +209,14 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
       if (request.method === "GET" && agent.discovery) {
         const d = await discovery(url);
         if (d) return d;
+      }
+
+      // --- app escape hatch --------------------------------------------------
+      // After the agent surface (framework-owned), before routes: the app can
+      // claim any path the route conventions can't express yet.
+      if (cfg.extra) {
+        const out = await cfg.extra(request, url);
+        if (out) return out;
       }
 
       // --- routes ----------------------------------------------------------

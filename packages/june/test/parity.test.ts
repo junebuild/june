@@ -41,6 +41,7 @@ const SURFACES = [
   "/robots.txt",
   "/.well-known/api-catalog",
   "/.well-known/mcp/server-card.json",
+  "/__extra/ping",
   "/does/not/exist",
 ];
 

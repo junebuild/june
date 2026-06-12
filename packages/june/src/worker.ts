@@ -16,7 +16,7 @@ import type { AgentConfig } from "@junejs/core/config";
 import type { DocumentConfig } from "@junejs/core/document";
 import type { Resources } from "@junejs/core/resources";
 
-import { createPipeline, type LayoutComponent, type Resolved } from "./pipeline";
+import { createPipeline, type ExtraHandler, type LayoutComponent, type Resolved } from "./pipeline";
 
 export type WorkerManifest = {
   // Static paths → route definitions ("/", "/users", ...).
@@ -32,6 +32,8 @@ export type WorkerManifest = {
   earlyHints?: string[];
   htmlCacheControl?: string;
   notFound?: React.ComponentType<{ pathname: string }>;
+  // The app/_extra.* pre-route handler, imported by the generated entry.
+  extra?: ExtraHandler;
   // Opened data resources (db/kv/blob) injected onto ctx. On workerd the D1/KV/R2
   // bindings come from env per request, so the generated entry passes a provider.
   resources?: () => Promise<Resources> | Resources;
@@ -81,6 +83,7 @@ export function createWorker(manifest: WorkerManifest): { fetch(request: Request
     earlyHints: manifest.earlyHints,
     htmlCacheControl: manifest.htmlCacheControl,
     notFoundComponent: manifest.notFound,
+    extra: manifest.extra,
     resources: manifest.resources,
     resolve: async (pathname): Promise<Resolved | null> => {
       const staticDef = manifest.routes[pathname];

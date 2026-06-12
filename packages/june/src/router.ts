@@ -2,6 +2,7 @@
 // turns a URL into (page file, params, segment chain). The SAME conventions
 // drive `june dev` and `june build` (rebuild-plan Phase 3) — one matcher, no
 // drift between what dev serves and what the build freezes.
+import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 
@@ -29,6 +30,17 @@ export type RouteTreeMatch = {
 };
 
 const routeExtensions = new Set([".tsx", ".jsx", ".ts", ".js"]);
+
+// app/_extra.* — the pre-route escape hatch (a `_` file, so never a route).
+// Dev and the build look it up through this ONE helper so the conventions
+// cannot drift.
+export function findExtraFile(appDir: string): string | null {
+  for (const ext of routeExtensions) {
+    const f = join(appDir, `_extra${ext}`);
+    if (existsSync(f)) return f;
+  }
+  return null;
+}
 
 export type MatchOptions = {
   // When true, only `page.*` and `index.*` files are routes. This lets a route

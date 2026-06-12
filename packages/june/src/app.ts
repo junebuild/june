@@ -18,8 +18,8 @@ import { resolveAgent, resolveSpeculationRules, type JuneConfig } from "@junejs/
 import type { DocumentConfig } from "@junejs/core/document";
 import { runWithTrace, type RequestTrace } from "@junejs/core/instrumentation";
 
-import { listRoutes, matchRouteTree, resolveNotFound, routeFiles, type SegmentMatch } from "./router";
-import { createPipeline, type LayoutComponent, type Pipeline, type Resolved } from "./pipeline";
+import { findExtraFile, listRoutes, matchRouteTree, resolveNotFound, routeFiles, type SegmentMatch } from "./router";
+import { createPipeline, type ExtraHandler, type LayoutComponent, type Pipeline, type Resolved } from "./pipeline";
 import { memoizeResources } from "./resources";
 import { findClientEntry, bundleClientToString, CLIENT_SCRIPT_URL } from "./client-bundle";
 
@@ -100,7 +100,14 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
         notFoundComponent = mod.default as ComponentType<{ pathname: string }>;
       }
     }
+    let extra: ExtraHandler | undefined;
+    const extraFile = findExtraFile(appDir);
+    if (extraFile) {
+      const mod = (await import(pathToFileURL(extraFile).href)) as { default?: unknown };
+      if (typeof mod.default === "function") extra = mod.default as ExtraHandler;
+    }
     return createPipeline({
+      extra,
       docConfig,
       agent,
       routeList: routePaths,
