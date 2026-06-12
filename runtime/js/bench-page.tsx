@@ -1,4 +1,4 @@
-// Network-stripped equivalent of the rari/Next.js benchmark HomePage.
+// Network-stripped version of our reference benchmark HomePage.
 //
 // The original page makes TWO external fetches per request (FetchExample ->
 // jsonplaceholder, WhatsHot -> Bluesky), so rendering it live measures the

@@ -75,7 +75,7 @@ switch off):
 The framework FUNCTIONS fully with Prisma/Drizzle; there is no point where "use
 Juno or it breaks." There are three tiers the user picks freely:
 
-**Tier 1 — BYO everything (identical to Next.js).** Import Prisma/Drizzle,
+**Tier 1 — BYO everything.** Import Prisma/Drizzle,
 instantiate it yourself, use it in `load()`. June does not care. You keep full
 data flexibility. What you DON'T get automatically: cache auto-invalidation,
 auto-batch, mutation→live-RSC — because June cannot see your reads/writes.
@@ -100,7 +100,7 @@ natively; for Drizzle/Prisma it is a thin shim (a query hook / logger that names
 the table). June can ship `@junejs/drizzle` doing exactly this, or the community
 can — the contract is public.
 
-So: **Tier 1 = Next.js parity (never worse). Tier 2 = shared infra. Tier 3 =
+So: **Tier 1 = bring your own, untouched. Tier 2 = shared infra. Tier 3 =
 the differentiator, opt-in.** Juno is just the implementation that ships at
 Tier 3 out of the box.
 

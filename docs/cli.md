@@ -13,7 +13,7 @@
 
 ## Install model — you "own" the CLI the moment you scaffold
 
-The Next/Vite/Astro pattern: the template wires the CLI as a local dep + scripts,
+The standard ecosystem pattern: the template wires the CLI as a local dep + scripts,
 so after scaffolding the project owns `june` locally — no global install, version
 pinned per project, reproducible.
 

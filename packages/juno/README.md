@@ -23,5 +23,5 @@ cache (and push live RSC) with zero manual `revalidate()`.
 
 This is a property of emitting the trace signals, **not** of using Juno. The
 framework depends on the contract, never on Juno — so Prisma/Drizzle stay
-first-class (Tier 1 = Next.js parity; Tier 2 = your ORM over `ctx.db`; Tier 3 =
-the same magic via a thin shim). See `docs/data-layer-boundary.md`.
+first-class (Tier 1 = bring your own, untouched; Tier 2 = your ORM over `ctx.db`;
+Tier 3 = the same magic via a thin shim). See `docs/data-layer-boundary.md`.
