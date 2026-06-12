@@ -120,6 +120,7 @@ export async function freezeConfig(appRoot: string): Promise<{
   document: DocumentConfig;
   agent: WorkerManifest["agent"];
   earlyHints: string[];
+  buildExternal: string[];
 }> {
   const cfg = await loadJuneConfig(appRoot);
   // An app with a client entry gets the islands runtime URL frozen into its
@@ -137,6 +138,7 @@ export async function freezeConfig(appRoot: string): Promise<{
     },
     agent: resolveAgent(cfg.agent),
     earlyHints: cfg.earlyHints ?? [],
+    buildExternal: cfg.build?.external ?? [],
   };
 }
 
@@ -278,7 +280,9 @@ ${chains.join("\n")}
     external: (id: string) => {
       // Binary assets stay external — wrangler's CompiledWasm/Data rules own them.
       if (/\.(wasm|ttf|otf|woff2?|png|jpe?g|avif|webp)$/.test(id)) return true;
-      const list = options.external ?? [];
+      // config build.external: packages wrangler must bundle itself (its own
+      // esbuild owns their .wasm/asset rules — e.g. workers-og).
+      const list = options.external ?? frozen.buildExternal;
       return list.some((e) => id === e || id.startsWith(`${e}/`));
     },
     resolve: {
