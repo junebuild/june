@@ -1,17 +1,27 @@
-// Pre-route escape hatch: the edge-rendered og:image. /og/<slug>.png returns
-// a PNG typeset by satori — via workers-og on workerd (og.tsx), via satori +
-// resvg-js on the JS dev host (og-dev.tsx). One card definition (og-card.tsx)
-// feeds both, so what you preview in dev is what deploys.
-import { POSTS } from "./_content";
+// Pre-route escape hatch: the edge-rendered og:image. EVERY page gets one —
+// /og/<slug>.png resolves posts, docs, and the core pages, each typeset live
+// by satori: via workers-og on workerd (og.tsx), via satori + resvg-js on the
+// JS dev host (og-dev.tsx). One card definition (og-card.tsx) feeds both, so
+// what you preview in dev is what deploys.
+import { DOCS, POSTS } from "./_content";
+import { PAGES } from "./content";
+import type { OgOptions } from "./og-card";
+
+function ogOptions(slug: string): OgOptions {
+  const post = POSTS.find((p) => p.slug === slug);
+  if (post) return { title: String(post.data.title), date: String(post.data.date ?? "") };
+  const doc = DOCS.find((d) => d.slug === slug);
+  if (doc) return { title: String(doc.data.title), tag: "june.build/docs" };
+  const page = PAGES.find((p) => p.slug === slug);
+  if (page) return { title: page.title, tag: "june.build" };
+  return { title: "June — the agent-ready React framework", tag: "june.build" };
+}
 
 export default async function extra(_request: Request, url: URL): Promise<Response | null> {
   const og = url.pathname.match(/^\/og\/([A-Za-z0-9._-]+)\.png$/);
   if (!og) return null;
 
-  const entry = POSTS.find((p) => p.slug === og[1]);
-  const opts = entry
-    ? { title: String(entry.data.title), date: String(entry.data.date ?? "") }
-    : { title: "June — the agent-ready React framework", tag: "june.build" };
+  const opts = ogOptions(og[1]!);
 
   // workers-og's WASM loaders only run on workerd (WebSocketPair is its
   // fingerprint); everywhere else the dev rasterizer renders the same card.

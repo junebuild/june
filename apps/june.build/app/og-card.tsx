@@ -16,6 +16,15 @@ async function loadGoogleFont(family: string, weight: number, text: string): Pro
   if (cached) return cached.arrayBuffer();
   const memo = memoryCache.get(cssUrl);
   if (memo) return memo;
+  try {
+    return await fetchFont(cssUrl, family);
+  } catch {
+    return fetchFont(cssUrl, family); // one retry — a font CDN blip shouldn't 503 the card
+  }
+}
+
+async function fetchFont(cssUrl: string, family: string): Promise<ArrayBuffer> {
+  const cache = (globalThis as unknown as { caches?: { default: Cache } }).caches?.default;
   // A legacy UA makes Google serve TTF (satori can't read woff2).
   const css = await (
     await fetch(cssUrl, {

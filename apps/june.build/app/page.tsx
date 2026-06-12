@@ -9,7 +9,11 @@ const page = bySlug("index")!;
 
 export default route({
   prerender: true,
-  metadata: { title: page.title, description: page.summary },
+  metadata: {
+    title: page.title,
+    description: page.summary,
+    openGraph: { image: "https://june.build/og/index.png" },
+  },
   view: () => (
     <main>
       <h1 style={{ fontSize: 38, marginBottom: 4 }}>June</h1>

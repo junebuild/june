@@ -14,7 +14,11 @@ const sections = RESULTS.sections as Array<{
 
 export default route({
   prerender: true,
-  metadata: { title: "Benchmarks", description: page.summary },
+  metadata: {
+    title: "Benchmarks",
+    description: page.summary,
+    openGraph: { image: "https://june.build/og/benchmarks.png" },
+  },
   view: () => (
     <main>
       <h1>Benchmarks</h1>

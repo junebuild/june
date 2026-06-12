@@ -6,7 +6,11 @@ const page = bySlug("why")!;
 
 export default route({
   prerender: true,
-  metadata: { title: "Why June", description: page.summary },
+  metadata: {
+    title: "Why June",
+    description: page.summary,
+    openGraph: { image: "https://june.build/og/why.png" },
+  },
   view: () => (
     <main>
       <h1>Why June</h1>

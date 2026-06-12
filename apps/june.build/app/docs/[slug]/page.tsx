@@ -6,6 +6,7 @@ export default route({
   metadata: ({ d }) => ({
     title: String(d.data.title ?? d.slug),
     description: String(d.data.description ?? ""),
+    openGraph: { image: `https://june.build/og/${d.slug}.png` },
   }),
   async load(ctx) {
     const d = doc(ctx.params.slug);

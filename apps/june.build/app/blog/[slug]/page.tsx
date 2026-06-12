@@ -6,7 +6,9 @@ export default route({
   metadata: ({ entry }) => ({
     title: String(entry.data.title ?? entry.slug),
     description: String(entry.data.description ?? ""),
-    openGraph: { type: "article" },
+    // Absolute URL (the OG spec wants one), constant origin so prerender stays
+    // origin-independent. The card renders live at /og/<slug>.png (app/_extra).
+    openGraph: { type: "article", image: `https://june.build/og/${entry.slug}.png` },
   }),
   async load(ctx) {
     const entry = post(ctx.params.slug);
