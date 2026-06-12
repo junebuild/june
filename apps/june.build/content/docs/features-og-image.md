@@ -39,9 +39,10 @@ curl -o card.png https://june.build/og/2026-06-10-typesetting-cjk-at-the-edge.pn
 ```
 
 The route lives behind `app/_extra.tsx` — June's pre-route escape hatch for
-responses `route()` has no projection for yet (binary bodies). It renders on
-workerd (deploy or `wrangler dev`); the JS dev host answers a plain 503, since
-the WASM packaging is workerd-specific.
+responses `route()` has no projection for yet (binary bodies). One card
+definition renders everywhere: workers-og rasterizes it on workerd, satori +
+resvg-js rasterize the same JSX on the dev host — so the social card you
+preview at `localhost:3000/og/…` is the one that deploys.
 
 ## Why it matters
 

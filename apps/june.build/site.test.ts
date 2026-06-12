@@ -137,12 +137,14 @@ describe("docs", () => {
 });
 
 describe("og:image route (app/_extra escape hatch)", () => {
-  test("dev host declines honestly; non-og paths fall through", async () => {
-    // workers-og's WASM is workerd-only — the JS dev host must answer 503,
-    // never crash. The real PNG is asserted against workerd (wrangler dev).
+  test("the dev host renders a real PNG; non-og paths fall through", async () => {
+    // Same card as production: satori + resvg-js here, workers-og on workerd.
+    // (Fetches a Google Fonts subset — the one network touch in this suite.)
     const og = await get("/og/2026-06-10-typesetting-cjk-at-the-edge.png");
-    expect(og.status).toBe(503);
-    expect(await og.text()).toContain("workerd");
+    expect(og.status).toBe(200);
+    expect(og.headers.get("content-type")).toBe("image/png");
+    const bytes = new Uint8Array(await og.arrayBuffer());
+    expect([...bytes.slice(0, 4)]).toEqual([0x89, 0x50, 0x4e, 0x47]); // PNG magic
     expect((await get("/why")).status).toBe(200); // _extra falls through cleanly
   });
 });

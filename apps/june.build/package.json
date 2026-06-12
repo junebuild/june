@@ -20,7 +20,9 @@
   "devDependencies": {
     "@junejs/cli": "workspace:*",
     "@junejs/server": "workspace:*",
+    "@resvg/resvg-js": "^2.6.2",
     "@types/react": "^19.2.0",
+    "satori": "^0.26.0",
     "typescript": "^5.9.0"
   }
 }
