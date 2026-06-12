@@ -98,6 +98,32 @@ describe("docs", () => {
     const authored = await Bun.file(join(ROOT, "content/docs/01-getting-started.md")).text();
     expect(served).toBe(authored);
   });
+
+  test("Features section: grouped in the index, each page renders with a demo", async () => {
+    const index = await (await get("/docs")).text();
+    expect(index).toContain("<h2>Features</h2>");
+
+    const indexMd = await (await get("/docs.md")).text();
+    expect(indexMd).toContain("## Features");
+
+    for (const slug of [
+      "features-projections",
+      "features-actions",
+      "features-islands",
+      "features-data",
+      "features-content",
+    ]) {
+      const html = await (await get(`/docs/${slug}`)).text();
+      expect(html).toContain('data-layout="docs"'); // nested under the docs sidebar
+      // every feature page carries a runnable demo or code sample
+      expect(html).toContain("<code");
+    }
+
+    // the verbatim guarantee features-content.md demos holds for itself
+    const served = await (await get("/docs/features-content.md")).text();
+    const authored = await Bun.file(join(ROOT, "content/docs/features-content.md")).text();
+    expect(served).toBe(authored);
+  });
 });
 
 describe("agent surface", () => {
