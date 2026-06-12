@@ -14,7 +14,8 @@
   "dependencies": {
     "@junejs/core": "workspace:*",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "react-dom": "^19.2.0",
+    "workers-og": "^0.0.27"
   },
   "devDependencies": {
     "@junejs/cli": "workspace:*",

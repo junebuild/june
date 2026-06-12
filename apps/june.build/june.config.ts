@@ -5,6 +5,9 @@ import { defineJune } from "@junejs/core/config";
 //   agent.mcp        the /mcp endpoint (your defineAction()s as tools)
 export default defineJune({
   agent: { enabled: true, discovery: true, mcp: true, webmcp: true },
+  // workers-og stays external: wrangler's own esbuild bundles it at deploy,
+  // where its workerd-safe .wasm imports are first-class (CompiledWasm rules).
+  build: { external: ["workers-og"] },
   site: {
     name: "June — the agent-ready React framework",
     titleTemplate: "%s · June",
