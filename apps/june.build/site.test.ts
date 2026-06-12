@@ -112,6 +112,8 @@ describe("docs", () => {
       "features-markdown",
       "features-og-image",
       "features-rsc",
+      "features-app-router",
+      "features-layouts",
       "features-islands",
       "features-data",
       "features-web-standards",

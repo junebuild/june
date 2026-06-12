@@ -4,7 +4,7 @@ nav: "Standards"
 description: The whole framework is one fetch handler — Request in, Response out, Web Streams in between. Standards are the portability mechanism, not a checkbox.
 date: 2026-06-12
 section: Features
-order: "8"
+order: "10"
 ---
 ## The feature
 
