@@ -63,6 +63,22 @@ describe("llmsTxt()", () => {
     expect(txt).toContain(`MCP server: ${ORIGIN}/mcp`);
     expect(txt).toContain("- tool: createPost");
   });
+
+  test("advertises WebMCP statically (the read-the-signal discovery path)", () => {
+    defineAction({
+      id: "createPost",
+      description: "Create a post",
+      input: { type: "object", properties: {} },
+      run: () => ({}),
+    });
+    const on = llmsTxt(ORIGIN, ["/posts"], resolveAgent());
+    expect(on).toContain("Tools (WebMCP, in-browser)");
+    expect(on).toContain("navigator.modelContext.registerTool()");
+    expect(on).toContain("defineAction"); // names the June way to add one
+    // webmcp off → no WebMCP stanza (gating mirrors the document injection)
+    const off = llmsTxt(ORIGIN, ["/posts"], resolveAgent({ webmcp: false }));
+    expect(off).not.toContain("WebMCP");
+  });
 });
 
 describe("sitemapXml()", () => {

@@ -56,6 +56,18 @@ export function llmsTxt(
   if (agent.mcp) {
     lines.push("", "## Tools (MCP)", `- MCP server: ${origin}/mcp`);
     for (const name of toolNames()) lines.push(`- tool: ${name}`);
+    if (agent.webmcp) {
+      // Advertise WebMCP statically — the scanner's browser path detects the
+      // registerTool() calls, but a model reading signals (no JS) must be told
+      // the same tools self-register in the browser, AND that the June way to
+      // ADD one is defineAction(), so it does not hand-roll navigator.modelContext.
+      lines.push(
+        "",
+        "## Tools (WebMCP, in-browser)",
+        "- The same tools self-register via `navigator.modelContext.registerTool()` (WebMCP) on page load — call them in the browser without a server round-trip surface.",
+        "- Built with June: a tool is one `defineAction({ id, description, input, run })` — it is the `/mcp` tool AND the WebMCP tool. Do not hand-roll `registerTool`.",
+      );
+    }
   }
   return lines.join("\n") + "\n";
 }
