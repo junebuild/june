@@ -162,9 +162,13 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
   }
 
   async function renderMarkdown(def: BrandedRoute, data: unknown, ctx: RouteContext): Promise<Response> {
-    if (def.md) return text(await def.md(data, ctx), "text/markdown; charset=utf-8");
-    const payload = def.json ? await def.json(data, ctx) : data;
-    return text("```json\n" + JSON.stringify(payload, null, 2) + "\n```\n", "text/markdown; charset=utf-8");
+    const body = def.md
+      ? await def.md(data, ctx)
+      : "```json\n" + JSON.stringify(def.json ? await def.json(data, ctx) : data, null, 2) + "\n```\n";
+    // x-markdown-tokens: a rough estimate (~4 chars/token) agents use to budget.
+    return text(body, "text/markdown; charset=utf-8", {
+      headers: { "x-markdown-tokens": String(Math.ceil(body.length / 4)) },
+    });
   }
 
   async function renderProjection(

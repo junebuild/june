@@ -125,3 +125,65 @@ export function createWorker(manifest: WorkerManifest): { fetch(request: Request
     },
   });
 }
+
+// --- the deployed worker's outermost layer (run_worker_first) ---------------
+// Prerendered pages are served as static ASSETS, which bypass the pipeline —
+// so the agent-ready signals the asset layer can't produce get added HERE:
+//   1. `Accept: text/markdown` on a page → the prerendered `.md` asset.
+//   2. a `Link` header on every HTML response (RFC 8288/9727 discovery).
+//   3. `x-markdown-tokens` on markdown responses.
+// Static assets are served by the ASSETS binding (no re-render); only genuinely
+// dynamic routes reach the pipeline. With no ASSETS binding (no prerender), this
+// is a transparent pass-through to the pipeline.
+type AssetEnv = { ASSETS?: { fetch(request: Request): Promise<Response> } };
+type FetchPipeline = { fetch(request: Request): Promise<Response> };
+
+const estimateTokens = (s: string) => String(Math.ceil(s.length / 4));
+
+export function withAssets(
+  pipeline: FetchPipeline,
+  opts: { link?: string | null } = {},
+): { fetch(request: Request, env?: AssetEnv): Promise<Response> } {
+  return {
+    async fetch(request, env) {
+      const assets = env?.ASSETS;
+      const url = new URL(request.url);
+      const isPagePath = !/\.[a-z0-9]+$/i.test(url.pathname); // no file extension
+      const accept = request.headers.get("accept") ?? "";
+
+      // 1. Markdown content negotiation on a page path → prerendered .md asset.
+      if (assets && request.method === "GET" && isPagePath && /text\/markdown/.test(accept)) {
+        const base = url.pathname === "/" ? "/index" : url.pathname.replace(/\/+$/, "");
+        const mdUrl = new URL(url);
+        mdUrl.pathname = `${base}.md`;
+        const a = await assets.fetch(new Request(mdUrl.toString(), { headers: request.headers }));
+        if (a.ok) {
+          const body = await a.text();
+          const headers = new Headers(a.headers);
+          headers.set("content-type", "text/markdown; charset=utf-8");
+          headers.set("x-markdown-tokens", estimateTokens(body));
+          if (opts.link) headers.set("link", opts.link);
+          return new Response(body, { status: 200, headers });
+        }
+        // no prerendered .md → fall through; a dynamic route renders it below.
+      }
+
+      // 2. Static assets (prerendered HTML/.md/.json, /client.js) served direct.
+      if (assets) {
+        const a = await assets.fetch(request);
+        if (a.status !== 404) {
+          const ct = a.headers.get("content-type") ?? "";
+          if (opts.link && ct.includes("text/html") && !a.headers.has("link")) {
+            const headers = new Headers(a.headers);
+            headers.set("link", opts.link);
+            return new Response(a.body, { status: a.status, headers });
+          }
+          return a;
+        }
+      }
+
+      // 3. Dynamic routes → the render pipeline (already sets Link + negotiates).
+      return pipeline.fetch(request);
+    },
+  };
+}
