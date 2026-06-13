@@ -114,6 +114,24 @@ export function isRouteDefinition(value: unknown): value is BrandedRoute {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type Loaded<L extends (ctx: any) => unknown> = Awaited<ReturnType<L>>;
 
+// CANONICAL: the view receives loader data as PROPS — `view(data)` — keeping it
+// the same shape as the other three surfaces (.json = data, md(data),
+// metadata(data)). One loader, four projections, each a pure function of data.
+//
+// ESCAPE HATCH: `useLoaderData()` reads the same data from context, for DEEP
+// child components where prop-drilling would hurt (the standard React division:
+// props by default, context for cross-cutting depth). The pipeline wraps the
+// rendered view in this provider, so any descendant — and a default-export view
+// written in the Remix `const data = useLoaderData()` muscle-memory — also works.
+// Server-render scope: it reads during SSR; client islands still take props.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const LoaderDataContext = React.createContext<any>(undefined);
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function useLoaderData<L extends (ctx: any) => unknown = () => unknown>(): Loaded<L> {
+  return React.useContext(LoaderDataContext) as Loaded<L>;
+}
+
 export type PageModule = {
   default?: React.ComponentType<Record<string, unknown>>;
   loader?: (ctx: RouteContext) => unknown;

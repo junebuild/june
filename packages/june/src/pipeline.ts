@@ -18,6 +18,7 @@ import React, { Suspense, use } from "react";
 import { renderToReadableStream } from "react-dom/server";
 
 import {
+  LoaderDataContext,
   type BrandedRoute,
   type Metadata,
   type RenderTarget,
@@ -98,6 +99,13 @@ function text(body: string, contentType: string, init?: ResponseInit) {
   return new Response(body, { ...init, headers });
 }
 
+// Make loader data available to the view's descendants via useLoaderData(). The
+// view itself receives data as PROPS (canonical); this provider is the escape
+// hatch for deep children and the Remix-style `const data = useLoaderData()`.
+function provideLoaderData(data: unknown, node: React.ReactNode): React.ReactNode {
+  return React.createElement(LoaderDataContext.Provider, { value: data }, node);
+}
+
 // The suspending leaf of a streaming route: use() the load promise, then render
 // the view. While the promise is pending the component suspends, so React emits
 // the surrounding Suspense fallback (loading.tsx) in the shell.
@@ -111,7 +119,7 @@ function StreamedView({
   ctx: RouteContext;
 }): React.ReactNode {
   const data = use(loadPromise);
-  return def.view ? def.view(data, ctx) : null;
+  return provideLoaderData(data, def.view ? def.view(data, ctx) : null);
 }
 
 // renderToReadableStream does not emit the doctype; prepend it without buffering
@@ -268,7 +276,7 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
       const payload = typeof def.json === "function" ? await def.json(data, ctx) : data;
       return Response.json(payload);
     }
-    const node = def.view ? def.view(data, ctx) : null;
+    const node = provideLoaderData(data, def.view ? def.view(data, ctx) : null);
     return renderDocument(node, resolveMeta(def, data, ctx), 200, chain);
   }
 

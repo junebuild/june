@@ -23,6 +23,12 @@ export const metadata = (post: Loaded<typeof loader>) => ({ title: post.title })
 // GET /posts/x.json → the loader data, auto-derived (no export needed)
 ```
 
+The view receives loader data as **props**, the same shape the other three
+projections take it (`md(data)`, `metadata(data)`, `.json = data`): one loader,
+four surfaces, each a pure function of the data — nothing to drift. Deep child
+components can reach the same data without prop-drilling via the escape-hatch
+hook `useLoaderData<typeof loader>()` (also catches the Remix muscle-memory).
+
 The `.md` projection serves the file you wrote, byte-for-byte — frontmatter
 included. Most frameworks reconstruct markdown from rendered HTML; June serves
 the source, so there is nothing to drift. Actions are the capability surface —
