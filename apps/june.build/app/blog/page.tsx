@@ -1,14 +1,9 @@
-import { route } from "@junejs/core/route";
-
 import { POSTS } from "../_content";
 
-export default route({
-  prerender: true,
-  metadata: {
-    title: "Blog",
-    description: "Notes from building June — rendered for humans, verbatim markdown for agents.",
-  },
-  view: () => (
+export const prerender = true;
+
+export default function Blog() {
+  return (
     <main>
       <h1>Blog</h1>
       <ul style={{ listStyle: "none", padding: 0 }}>
@@ -21,8 +16,13 @@ export default route({
         ))}
       </ul>
     </main>
-  ),
-  json: () => ({ posts: POSTS.map((p) => ({ slug: p.slug, ...p.data })) }),
-  md: () =>
-    "# Blog\n\n" + POSTS.map((p) => `- [${p.data.title}](/blog/${p.slug}) — ${p.data.date}`).join("\n") + "\n",
-});
+  );
+}
+
+export const metadata = {
+  title: "Blog",
+  description: "Notes from building June — rendered for humans, verbatim markdown for agents.",
+};
+export const json = () => ({ posts: POSTS.map((p) => ({ slug: p.slug, ...p.data })) });
+export const md = () =>
+  "# Blog\n\n" + POSTS.map((p) => `- [${p.data.title}](/blog/${p.slug}) — ${p.data.date}`).join("\n") + "\n";

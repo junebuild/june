@@ -1,17 +1,11 @@
-import { route } from "@junejs/core/route";
-
 import { bySlug } from "../content";
 
 const page = bySlug("why")!;
 
-export default route({
-  prerender: true,
-  metadata: {
-    title: "Why June",
-    description: page.summary,
-    openGraph: { image: "https://june.build/og/why.png" },
-  },
-  view: () => (
+export const prerender = true;
+
+export default function Why() {
+  return (
     <main>
       <h1>Why June</h1>
       <h2>Vision</h2>
@@ -84,10 +78,13 @@ export default route({
         Bun/Node, deploying to Workers.
       </p>
     </main>
-  ),
-  md: () => page.md,
-  json: () => ({ title: page.title, summary: page.summary }),
-});
+  );
+}
 
-
-
+export const metadata = {
+  title: "Why June",
+  description: page.summary,
+  openGraph: { image: "https://june.build/og/why.png" },
+};
+export const md = () => page.md;
+export const json = () => ({ title: page.title, summary: page.summary });

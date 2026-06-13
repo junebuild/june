@@ -1,5 +1,3 @@
-import { route } from "@junejs/core/route";
-
 import { bySlug } from "./content";
 // Side-effect import: registers search_site / get_page so warmup surfaces them
 // at /mcp (warmup loads route files; standalone modules must be reachable).
@@ -7,14 +5,10 @@ import "./actions";
 
 const page = bySlug("index")!;
 
-export default route({
-  prerender: true,
-  metadata: {
-    title: page.title,
-    description: page.summary,
-    openGraph: { image: "https://june.build/og/index.png" },
-  },
-  view: () => (
+export const prerender = true;
+
+export default function Home() {
+  return (
     <main>
       <h1 style={{ fontSize: 38, marginBottom: 4 }}>June</h1>
       <p style={{ fontSize: 19, color: "#444" }}>{page.summary}</p>
@@ -41,7 +35,13 @@ export default route({
         <a href="/why">Why June →</a> · <a href="/docs">Docs →</a> · <a href="/benchmarks">Benchmarks →</a>
       </p>
     </main>
-  ),
-  md: () => page.md,
-  json: () => ({ title: page.title, summary: page.summary }),
-});
+  );
+}
+
+export const metadata = {
+  title: page.title,
+  description: page.summary,
+  openGraph: { image: "https://june.build/og/index.png" },
+};
+export const md = () => page.md;
+export const json = () => ({ title: page.title, summary: page.summary });

@@ -1,5 +1,3 @@
-import { route } from "@junejs/core/route";
-
 import { bySlug } from "../content";
 // THE named-run registry: numbers live in bench/results.json next to the
 // scripts that produce them; this page (and the .md/.json projections via
@@ -12,14 +10,10 @@ const sections = RESULTS.sections as Array<{
   rows: Array<{ metric: string; value: string; context: string; script: string; measured: string }>;
 }>;
 
-export default route({
-  prerender: true,
-  metadata: {
-    title: "Benchmarks",
-    description: page.summary,
-    openGraph: { image: "https://june.build/og/benchmarks.png" },
-  },
-  view: () => (
+export const prerender = true;
+
+export default function Benchmarks() {
+  return (
     <main>
       <h1>Benchmarks</h1>
       <p style={{ color: "#666" }}>
@@ -55,11 +49,17 @@ export default route({
         </section>
       ))}
     </main>
-  ),
-  md: () => page.md,
-  json: () => ({
-    title: page.title,
-    machine: RESULTS.machine,
-    sections: sections.map((s) => ({ title: s.title, metrics: s.rows })),
-  }),
+  );
+}
+
+export const metadata = {
+  title: "Benchmarks",
+  description: page.summary,
+  openGraph: { image: "https://june.build/og/benchmarks.png" },
+};
+export const md = () => page.md;
+export const json = () => ({
+  title: page.title,
+  machine: RESULTS.machine,
+  sections: sections.map((s) => ({ title: s.title, metrics: s.rows })),
 });

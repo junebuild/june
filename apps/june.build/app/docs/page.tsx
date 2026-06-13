@@ -1,15 +1,13 @@
-import { route } from "@junejs/core/route";
+import type { Loaded } from "@junejs/core/route";
 
 import { docSections } from "./_sections";
 
-export default route({
-  prerender: true,
-  metadata: {
-    title: "Docs",
-    description: "June documentation — every page is also markdown (append .md).",
-  },
-  load: () => ({ sections: docSections() }),
-  view: ({ sections }) => (
+export const prerender = true;
+
+export const loader = () => ({ sections: docSections() });
+
+export default function Docs({ sections }: Loaded<typeof loader>) {
+  return (
     <main>
       <h1>Documentation</h1>
       {sections.map((section) => (
@@ -28,20 +26,23 @@ export default route({
         Agents: every doc serves its authored markdown at <code>/docs/&lt;slug&gt;.md</code>.
       </p>
     </main>
-  ),
-  json: ({ sections }) => ({
-    docs: sections.flatMap((s) =>
-      s.docs.map((d) => ({ slug: d.slug, ...d.data })),
-    ),
-  }),
-  md: ({ sections }) =>
-    "# June docs\n\n" +
-    sections
-      .map(
-        (s) =>
-          (s.title ? `## ${s.title}\n\n` : "") +
-          s.docs.map((d) => `- [${d.data.title}](/docs/${d.slug}) — ${d.data.description}`).join("\n"),
-      )
-      .join("\n\n") +
-    "\n",
+  );
+}
+
+export const metadata = {
+  title: "Docs",
+  description: "June documentation — every page is also markdown (append .md).",
+};
+export const json = ({ sections }: Loaded<typeof loader>) => ({
+  docs: sections.flatMap((s) => s.docs.map((d) => ({ slug: d.slug, ...d.data }))),
 });
+export const md = ({ sections }: Loaded<typeof loader>) =>
+  "# June docs\n\n" +
+  sections
+    .map(
+      (s) =>
+        (s.title ? `## ${s.title}\n\n` : "") +
+        s.docs.map((d) => `- [${d.data.title}](/docs/${d.slug}) — ${d.data.description}`).join("\n"),
+    )
+    .join("\n\n") +
+  "\n";
