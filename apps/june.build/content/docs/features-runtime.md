@@ -39,6 +39,17 @@ node --import tsx scripts/smoke-node.ts
 # node-host smoke: OK (serve, routes, discovery, mcp)
 ```
 
+## Local SQLite: built-in, with one version floor on Node
+
+The dev `db` uses the runtime's BUILT-IN SQLite — zero install, no native
+build: `bun:sqlite` on Bun, `node:sqlite` on Node. The one catch is Node's
+version: `node:sqlite` is flag-free only on **Node ≥ 22.13.0** (the 22 LTS line)
+or **≥ 23.4.0**. Node 22.5–22.12 / 23.0–23.3 keep it behind
+`--experimental-sqlite`, and older Node doesn't ship it at all. June detects this
+and, if the import fails, tells you exactly that — upgrade Node to 22.13+, or run
+with **Bun** (built-in `bun:sqlite`, no version floor). Bun is the always-works
+path; Node 22.13+ is the always-works Node.
+
 ## The experimental track
 
 There is also an owned Rust+V8 runtime (V8 snapshot boot ~12ms, bundled
