@@ -34,6 +34,8 @@ import {
   sitemapXml,
 } from "@junejs/core/discovery";
 import { mcpHandler, mcpTools } from "@junejs/core/mcp";
+
+import { ensureScope, runInScope } from "./scope";
 import type { AgentConfig } from "@junejs/core/config";
 import type { Resources } from "@junejs/core/resources";
 
@@ -300,17 +302,16 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
     }
   }
 
-  return {
-    async fetch(request: Request): Promise<Response> {
+  async function handleRequest(request: Request): Promise<Response> {
       const url = new URL(request.url);
 
       // --- agent surface ---------------------------------------------------
       if (url.pathname === "/mcp") {
         if (!agent.mcp) return notFoundResponse("view", url.pathname);
-        // The agent's tool calls run through the same resources (and, once auth
-        // is wired, the same principal) the UI uses.
-        const res = cfg.resources ? await cfg.resources() : undefined;
-        return mcpHandler(request, { request, db: res?.db, kv: res?.kv, blob: res?.blob });
+        // The agent's tool calls run inside the same request scope, so an action's
+        // ambient `db` is the SAME resource the UI uses (and, once auth is wired,
+        // the same principal via ctx). ctx carries identity only — not resources.
+        return mcpHandler(request, { request });
       }
       if (request.method === "GET" && agent.discovery) {
         const d = await discovery(url);
@@ -339,16 +340,14 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
       const resolved = await cfg.resolve(pathname);
       if (!resolved) return notFoundResponse(target, pathname);
 
-      const res = cfg.resources ? await cfg.resources() : undefined;
+      // ctx is identity/request only; db/kv/blob are ambient (read from the
+      // request scope this whole handler runs inside — see runInScope below).
       const ctx: RouteContext = {
         request,
         url,
         params: resolved.params,
         target,
         speculative,
-        db: res?.db,
-        kv: res?.kv,
-        blob: res?.blob,
       };
       // Streaming Suspense: a view request on a route with loading.tsx AND
       // static metadata flushes the shell + fallback before load() resolves.
@@ -368,6 +367,17 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
         return notFoundResponse(target, pathname);
       }
       return renderProjection(resolved, target, data, ctx);
+  }
+
+  return {
+    async fetch(request: Request): Promise<Response> {
+      // Open the request's resources (memoized; env-bound on workerd) and run the
+      // ENTIRE request inside the scope, so ambient db/kv/blob resolve to them in
+      // loaders, views, and /mcp actions alike. ensureScope() lazily wires the
+      // async-context provider on first request (no static node:* import).
+      await ensureScope();
+      const resources = cfg.resources ? await cfg.resources() : {};
+      return runInScope({ resources }, () => handleRequest(request));
     },
   };
 }

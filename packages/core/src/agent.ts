@@ -23,9 +23,10 @@ export type ActionDefinition<I = unknown, O = unknown> = {
   id: string;
   description: string;
   input: JsonSchema;
-  // run() receives the request-scoped context (principal + resources) as its
-  // second arg, so the SAME authorization runs on the UI and /mcp paths. An
-  // action that ignores ctx (one-param run) is still assignable here.
+  // run() receives the request-scoped IDENTITY (principal/session) as its second
+  // arg, so the SAME authorization runs on the UI and /mcp paths. Data is the
+  // ambient `db`/`kv`/`blob`, not on ctx. An action that ignores ctx (one-param
+  // run) is still assignable here.
   run: (input: I, ctx: ActionContext) => O | Promise<O>;
 };
 
@@ -66,7 +67,7 @@ export function defineAction<I, O>(
 }
 
 // JSON dispatch path (agent / MCP): invoke an action by id with a single input
-// and the request-scoped context (principal + resources). ctx defaults to {} so
+// and the request-scoped identity (principal/session). ctx defaults to {} so
 // callers that don't have one (tests, anonymous dispatch) still work.
 export async function invokeAction(
   id: string,

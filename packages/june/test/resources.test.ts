@@ -36,8 +36,8 @@ afterAll(async () => {
 const json = async (app: ReturnType<typeof createApp>, path: string) =>
   (await app.fetch(new Request(`http://june.test${path}`))).json();
 
-describe("ctx.db injection (the binding model)", () => {
-  test("a declared sqlite resource is injected and queryable", async () => {
+describe("ambient db (the binding model — decoupled from ctx)", () => {
+  test("a declared sqlite resource is reachable via ambient db and queryable", async () => {
     const app = createApp({ appDir: APP_DIR, config: { resources: { db: sqlite({ path: dbPath }) } } });
     expect(await json(app, "/.json")).toEqual({ users: [{ name: "Ada" }, { name: "Linus" }] });
   });
@@ -56,9 +56,13 @@ describe("ctx.db injection (the binding model)", () => {
     await second.close();
   });
 
-  test("no declared resource → ctx.db is undefined (route degrades, no crash)", async () => {
+  test("no declared resource → ambient db throws guidance → load boundary 404s (fail loud)", async () => {
+    // The route uses `db` but the app declares none: a misconfig should fail
+    // loud (the load boundary turns the thrown guidance into a 404), not return
+    // silent empty data the way the old optional ctx.db did.
     const app = createApp({ appDir: APP_DIR, config: {} });
-    expect(await json(app, "/.json")).toEqual({ users: [] });
+    const res = await app.fetch(new Request("http://june.test/.json"));
+    expect(res.status).toBe(404);
   });
 
   test("the same handle is reused across requests (memoized, one connection)", async () => {

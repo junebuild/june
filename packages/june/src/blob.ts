@@ -1,7 +1,7 @@
 // `blob` resource adapters — the object/file store seam (JuneBlob). The
 // zero-config dev default is a local directory; R2 (and S3-shaped backends) are
 // the deploy adapters. Same binding model as db/kv: declare `resources.blob` in
-// june.config.ts → injected as ctx.blob.
+// june.config.ts → use the ambient `blob` (decoupled from ctx).
 
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";

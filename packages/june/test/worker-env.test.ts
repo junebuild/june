@@ -36,8 +36,14 @@ const jsonAt = async (
   env?: unknown,
 ) => (await worker.fetch(new Request(ORIGIN + path), env as never)).json();
 
-describe("worker env → ctx.db", () => {
-  test("env.DB present → ctx.db is the D1 binding (production path)", async () => {
+const statusAt = async (
+  worker: ReturnType<typeof withAssets>,
+  path: string,
+  env?: unknown,
+) => (await worker.fetch(new Request(ORIGIN + path), env as never)).status;
+
+describe("worker env → ambient db", () => {
+  test("env.DB present → ambient db is the D1 binding (production path)", async () => {
     const manifest = await buildManifest(FIXTURE_ROOT);
     manifest.resources = bindWorkerResources({ db: true });
     const worker = withAssets(createWorker(manifest));
@@ -47,17 +53,17 @@ describe("worker env → ctx.db", () => {
     });
   });
 
-  test("no env binding → ctx.db undefined, route degrades (no local fs at the edge)", async () => {
+  test("no env binding → ambient db unbound → load 404s (no silent empty at the edge)", async () => {
     const manifest = await buildManifest(FIXTURE_ROOT);
     manifest.resources = bindWorkerResources({ db: true });
     const worker = withAssets(createWorker(manifest));
 
-    expect(await jsonAt(worker, "/.json")).toEqual({ users: [] });
+    expect(await statusAt(worker, "/.json")).toBe(404);
   });
 
-  test("no resources provider → ctx.db undefined, route degrades (env ignored)", async () => {
+  test("no resources provider → ambient db throws → load 404s (env ignored)", async () => {
     const manifest = await buildManifest(FIXTURE_ROOT);
     const worker = withAssets(createWorker(manifest));
-    expect(await jsonAt(worker, "/.json", { DB: fakeD1() })).toEqual({ users: [] });
+    expect(await statusAt(worker, "/.json", { DB: fakeD1() })).toBe(404);
   });
 });

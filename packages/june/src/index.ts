@@ -19,6 +19,10 @@ export {
   type WorkerEnv,
   type ResourceFlags,
 } from "./resources";
+// Ambient data resources — `import { db } from "@junejs/server"`. Decoupled from
+// ctx (which is identity only); the pipeline runs each request in a scope these
+// read. See scope.ts.
+export { db, kv, blob, runInScope, type RequestScope } from "./scope";
 export { loadJuneConfig } from "./config-loader";
 export { collection, entry, type ContentEntry } from "./content";
 export {

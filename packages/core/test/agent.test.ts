@@ -38,10 +38,9 @@ describe("defineAction()", () => {
   });
 });
 
-describe("ActionContext (run(input, ctx) — the principal + resources)", () => {
-  test("invokeAction threads the principal and resources to run()", async () => {
+describe("ActionContext (run(input, ctx) — identity; resources are ambient)", () => {
+  test("invokeAction threads the principal to run()", async () => {
     let seen: ActionContext | undefined;
-    const fakeDb = {} as ActionContext["db"];
     defineAction({
       id: "whoami",
       description: "Who am I",
@@ -51,9 +50,11 @@ describe("ActionContext (run(input, ctx) — the principal + resources)", () => 
         return { userId: ctx.user?.id ?? null };
       },
     });
-    const result = await invokeAction("whoami", {}, { user: { id: "u1" }, db: fakeDb });
+    const result = await invokeAction("whoami", {}, { user: { id: "u1" } });
     expect(result).toEqual({ userId: "u1" });
-    expect(seen?.db).toBe(fakeDb);
+    expect(seen?.user?.id).toBe("u1");
+    // ctx is identity only — db/kv/blob are NOT on it (they're ambient).
+    expect("db" in (seen ?? {})).toBe(false);
   });
 
   test("an action that ignores ctx (one-param run) still works", async () => {

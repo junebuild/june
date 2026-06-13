@@ -16,7 +16,6 @@
 
 import React from "react";
 
-import type { JuneDb, JuneKv, JuneBlob } from "./resources";
 import type { Principal, Session } from "./context";
 
 export type RenderTarget = "view" | "json" | "md";
@@ -50,15 +49,13 @@ export type RouteContext<
   // rate-limit consumption. (Client-side twin: defer pageviews until
   // !document.prerendering.)
   speculative?: boolean;
-  // Resource handles injected by the host (the binding model), present only when
-  // declared in june.config.ts `resources`. The framework depends on these
-  // contracts, never on a specific ORM — see docs/data-layer-boundary.md.
-  db?: JuneDb;
-  kv?: JuneKv;
-  blob?: JuneBlob;
   // The authenticated principal, populated by the auth integration off the
   // request (undefined until @junejs/auth is wired). Routes gate on ctx.user;
   // the SAME principal reaches actions via ActionContext.
+  //
+  // ctx is IDENTITY only — db/kv/blob are NOT here. Data resources are ambient:
+  // `import { db } from '@junejs/server'` and use it anywhere, so models/helpers
+  // never thread ctx. See @junejs/server's scope.ts (docs/data-layer-boundary.md).
   user?: Principal;
   session?: Session;
 };

@@ -1,7 +1,7 @@
 // `kv` resource adapters. The kv resource IS the cache (docs/data-layer-boundary
 // .md: "reframe cache as the kv resource — it already is one"): these wrap
 // @junejs/core/cache's CacheStore (memory / redis) as the simpler JuneKv contract,
-// so there is ONE key-value system, surfaced both as cache() and as ctx.kv.
+// so there is ONE key-value system, surfaced both as cache() and as ambient kv.
 
 import { memory, redis, type CacheStore } from "@junejs/core/cache";
 import type { JuneKv, KvFactory } from "@junejs/core/resources";
