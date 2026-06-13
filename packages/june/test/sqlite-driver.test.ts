@@ -9,6 +9,8 @@ import {
   nodeSqliteHelp,
   NODE_SQLITE_MIN_LTS,
   NODE_SQLITE_MIN_ODD,
+  isNodeSqliteExperimentalWarning,
+  makeWarningFilter,
 } from "../src/sqlite-driver";
 
 describe("openLocalSqlite", () => {
@@ -54,5 +56,28 @@ describe("nodeSqliteHelp (the version-cliff guidance)", () => {
   test("the version floor is the flag-free node:sqlite release", () => {
     expect(NODE_SQLITE_MIN_LTS).toBe("22.13.0");
     expect(NODE_SQLITE_MIN_ODD).toBe("23.4.0");
+  });
+});
+
+describe("ExperimentalWarning silencing (node:sqlite first-run noise)", () => {
+  test("matches ONLY the node:sqlite experimental warning", () => {
+    expect(isNodeSqliteExperimentalWarning("ExperimentalWarning", "SQLite is an experimental feature")).toBe(true);
+    expect(isNodeSqliteExperimentalWarning("ExperimentalWarning", "Type Stripping is experimental")).toBe(false);
+    expect(isNodeSqliteExperimentalWarning("DeprecationWarning", "SQLite something")).toBe(false);
+    expect(isNodeSqliteExperimentalWarning(undefined, "SQLite")).toBe(false);
+  });
+
+  test("filter drops the sqlite warning and forwards everything else verbatim", () => {
+    const seen: Array<[string | Error, unknown[]]> = [];
+    const filter = makeWarningFilter((w, ...rest) => seen.push([w, rest]));
+
+    filter("SQLite is an experimental feature", "ExperimentalWarning"); // dropped
+    filter("SQLite is an experimental feature", { type: "ExperimentalWarning" }); // dropped (options form)
+    filter("Some deprecation", "DeprecationWarning"); // forwarded
+    filter(new Error("other experimental"), "ExperimentalWarning"); // forwarded (not sqlite)
+
+    expect(seen).toHaveLength(2);
+    expect(seen[0]![0]).toBe("Some deprecation");
+    expect((seen[1]![0] as Error).message).toBe("other experimental");
   });
 });

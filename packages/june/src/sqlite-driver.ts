@@ -87,6 +87,33 @@ export function nodeSqliteHelp(nodeVersion: string): string {
   ].join("\n");
 }
 
+// --- silencing node:sqlite's one-time ExperimentalWarning -------------------
+// Node prints `ExperimentalWarning: SQLite is an experimental feature` the first
+// time node:sqlite loads. We guard the version, so we KNOW it works here — the
+// warning is just first-run noise. Silence ONLY that one line; every other
+// warning (deprecations, other experimentals) must still pass through.
+
+// True for exactly Node's node:sqlite ExperimentalWarning. Pure + exported so
+// the filter is unit-testable without triggering a real warning.
+export function isNodeSqliteExperimentalWarning(type: unknown, message: string): boolean {
+  return type === "ExperimentalWarning" && /sqlite/i.test(message);
+}
+
+type EmitWarning = (warning: string | Error, ...rest: unknown[]) => void;
+
+// Wrap an emitWarning impl so the node:sqlite experimental warning is dropped
+// and everything else is forwarded verbatim.
+export function makeWarningFilter(original: EmitWarning): EmitWarning {
+  return (warning, ...rest) => {
+    const message = typeof warning === "string" ? warning : (warning?.message ?? "");
+    // emitWarning(warning, type?) or emitWarning(warning, { type }) — read both.
+    const first = rest[0];
+    const type = typeof first === "string" ? first : (first as { type?: string } | undefined)?.type;
+    if (isNodeSqliteExperimentalWarning(type, message)) return;
+    original(warning, ...rest);
+  };
+}
+
 // bun-types declares the global `Bun`; on Node the binding doesn't exist at
 // runtime, which is exactly what the typeof guard checks.
 declare const Bun: unknown;
@@ -110,10 +137,18 @@ export async function openLocalSqlite(path: string): Promise<JuneDb> {
   // surface raw.
   const specifier = "node:sqlite";
   let mod: { DatabaseSync: new (p: string) => { prepare(sql: string): SyncStatement; exec(sql: string): void; close(): void } };
+  // Drop the SQLite ExperimentalWarning that fires during this import, restoring
+  // the original handler immediately after so no other warning is affected.
+  const originalEmitWarning = process.emitWarning;
+  process.emitWarning = makeWarningFilter(
+    originalEmitWarning.bind(process) as EmitWarning,
+  ) as typeof process.emitWarning;
   try {
     mod = (await import(specifier)) as typeof mod;
   } catch (cause) {
     throw new Error(nodeSqliteHelp(process.versions.node), { cause });
+  } finally {
+    process.emitWarning = originalEmitWarning;
   }
   const db = new mod.DatabaseSync(path);
   // Adapt node:sqlite (prepare()) to the query()-shaped SyncSqlite surface.
