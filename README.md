@@ -1,6 +1,6 @@
 # June
 
-**The agent-ready React framework.** One `route()` definition serves humans
+**The agent-ready React framework.** One page definition serves humans
 (streamed HTML, zero client JS) and agents (markdown, JSON, MCP) — nothing
 drifts, because nothing is duplicated.
 
@@ -22,7 +22,7 @@ You get a working app, not a blank page:
 ```txt
 my-app/
   app/
-    page.tsx          # one route() — also answers /.json and /.md
+    page.tsx          # one page — also answers /.json and /.md
     users/page.tsx    # a second route with a defineAction() → an MCP tool
     layout.tsx        # wraps every page (nested layouts compose root → leaf)
     Counter.tsx       # a client island — the ONE subtree that hydrates
@@ -43,13 +43,20 @@ npx june info                  # routes + the agent surface, at a glance
 
 ## One definition, every surface
 
+A page's default export is the view; named exports configure the other
+surfaces. `.json` auto-derives from the loader data:
+
 ```tsx
-export default route({
-  load: (ctx) => fetchPost(ctx.params.slug),
-  view: (post) => <article>…</article>,   // GET /posts/x        → streamed HTML
-  json: (post) => post,                   // GET /posts/x.json   → data API
-  md:   (post) => post.original,          // GET /posts/x.md     → authored markdown, byte-for-byte
-});
+import type { RouteContext, Loaded } from "@junejs/core/route";
+
+export const loader = (ctx: RouteContext<{ slug: string }>) => fetchPost(ctx.params.slug);
+
+export default function Post(post: Loaded<typeof loader>) {  // GET /posts/x      → streamed HTML
+  return <article>…</article>;
+}
+
+export const md = (post: Loaded<typeof loader>) => post.original;  // GET /posts/x.md → authored markdown
+// GET /posts/x.json → the loader data, auto-derived
 ```
 
 And one `defineAction()` is simultaneously a server action for your UI **and**

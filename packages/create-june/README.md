@@ -13,6 +13,6 @@ collections, and the agent surface (llms.txt + `/mcp`) — on by default, one
 switch off. The scaffolder runs on Node; the `june` CLI it wires up runs on
 [Bun](https://bun.sh) (≥ 1.3).
 
-June is the agent-ready React framework: one `route()` serves humans
+June is the agent-ready React framework: one page serves humans
 (streamed HTML) and agents (markdown, JSON, MCP) from the same definition.
 Docs: [june.build/docs](https://june.build/docs).

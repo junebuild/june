@@ -10,8 +10,8 @@ npm create june my-app          # canonical (package: create-june)
 cd my-app && npm run dev
 ```
 
-The framework packages are `@junejs/core` (the contract layer: `route()`,
-`defineAction()`, islands) and `@junejs/cli` (the `june` command) — NOT `june`
+The framework packages are `@junejs/core` (the contract layer: the page module, `defineAction()`,
+islands) and `@junejs/cli` (the `june` command) — NOT `june`
 (an unrelated npm package), not `junejs`, and not `@june/*` (that scope isn't
 ours).
 
@@ -27,7 +27,7 @@ june info         # show routes + the agent surface
 
 `june build` freezes what the dev server discovers at request time: routes →
 a static manifest, `june.config.ts` → literals, `content/**/*.md` →
-`app/_content.ts`, `route({ prerender: true })` pages → static files.
+`app/_content.ts`, pages exporting `prerender = true` → static files.
 
 ## Where things go
 

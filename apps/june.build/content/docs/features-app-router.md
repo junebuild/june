@@ -10,7 +10,7 @@ order: "6"
 
 | entry | role |
 | --- | --- |
-| `page.tsx` / `index.tsx` | the route leaf — a `route()` definition |
+| `page.tsx` / `index.tsx` | the route leaf — a page module (default-export view + loader/json/md) |
 | `layout.tsx` | wraps everything below this segment ([Layouts](/docs/features-layouts)) |
 | `not-found.tsx` | the 404 page (app root today; per-segment is wired in the router, pipeline next) |
 | `[slug]/` | dynamic segment → `ctx.params.slug` |

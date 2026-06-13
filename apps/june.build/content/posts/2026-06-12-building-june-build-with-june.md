@@ -10,7 +10,7 @@ is most of the pitch, so let's prove it instead of repeating it.
 
 ## One route, four surfaces
 
-Every page here is a single `route()` definition with projections:
+Every page here is a single page module with projections:
 
 ```
 GET /why            → streamed HTML (you, probably)

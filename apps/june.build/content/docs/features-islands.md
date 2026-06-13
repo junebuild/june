@@ -13,17 +13,17 @@ site's pages, including the one you're reading, send none. Interactivity is
 opt-in per subtree:
 
 ```tsx
-// app/page.tsx — server component
+// app/page.tsx — server component (the default export IS the view)
 import { Island } from "@junejs/core/islands";
 
-export default route({
-  view: () => (
+export default function Page() {
+  return (
     <main>
       <h1>Mostly static</h1>
       <Island name="Counter" props={{ start: 0 }} />  {/* the ONE live subtree */}
     </main>
-  ),
-});
+  );
+}
 ```
 
 ```ts

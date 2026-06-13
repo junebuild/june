@@ -12,7 +12,7 @@ Everything dynamic about dev gets frozen at build time:
 | `app/**/page.*` | static route manifest (+ nested layout chains) |
 | `june.config.ts` | inlined literals (site, speculation, agent config) |
 | `content/<dir>/*.md` | `app/_content.ts` — the manifest dev AND workerd read |
-| `route({ prerender: true })` | static html/md/json rendered THROUGH the built worker |
+| a page exporting `prerender = true` | static html/md/json rendered THROUGH the built worker |
 | `app/_client.*` | the islands bundle served at `/client.js` |
 
 The bundle is self-contained ESM (rolldown; conditions baked in — workerd has
