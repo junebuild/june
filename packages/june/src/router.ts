@@ -67,8 +67,12 @@ function isSpecialFile(file: string) {
 
 const isRouteGroup = (name: string) => /^\(.+\)$/.test(name);
 const isParamDir = (name: string) => /^\[([A-Za-z_][A-Za-z0-9_]*)\]$/.test(name);
+// [[slug]] / [[...slug]] — match like their required forms, and ALSO match the
+// segment being absent (the param is then simply missing from ctx.params).
+const isOptionalDir = (name: string) => /^\[\[([A-Za-z_][A-Za-z0-9_]*)\]\]$/.test(name);
+const isOptionalCatchAllDir = (name: string) => /^\[\[\.\.\.([A-Za-z_][A-Za-z0-9_]*)\]\]$/.test(name);
 const isCatchAllDir = (name: string) => /^\[\.\.\.([A-Za-z_][A-Za-z0-9_]*)\]$/.test(name);
-const paramName = (name: string) => name.replace(/^\[(\.\.\.)?|\]$/g, "");
+const paramName = (name: string) => name.replace(/^\[+(\.\.\.)?|\]+$/g, "");
 
 type DirEntry = { name: string; dir: boolean };
 
@@ -164,7 +168,16 @@ export async function matchRouteTree(
       if (hit) return hit;
     }
 
-    if (rest.length === 0) return null;
+    if (rest.length === 0) {
+      // Optional segments match ABSENCE too: descend without consuming and
+      // without setting the param.
+      for (const e of entries) {
+        if (!e.dir || !(isOptionalDir(e.name) || isOptionalCatchAllDir(e.name))) continue;
+        const hit = await descend(join(dir, e.name), [], params, segments);
+        if (hit) return hit;
+      }
+      return null;
+    }
     const [head, ...tail] = rest as [string, ...string[]];
 
     // 1) exact static dir
@@ -173,9 +186,9 @@ export async function matchRouteTree(
       const hit = await descend(join(dir, head), tail, params, segments);
       if (hit) return hit;
     }
-    // 2) [param] dirs
+    // 2) [param] and [[param]] dirs consume one segment
     for (const e of entries) {
-      if (!e.dir || !isParamDir(e.name)) continue;
+      if (!e.dir || !(isParamDir(e.name) || isOptionalDir(e.name))) continue;
       const hit = await descend(
         join(dir, e.name),
         tail,
@@ -184,9 +197,9 @@ export async function matchRouteTree(
       );
       if (hit) return hit;
     }
-    // 3) [...catchAll] dirs consume everything remaining
+    // 3) [...catchAll] and [[...catchAll]] dirs consume everything remaining
     for (const e of entries) {
-      if (!e.dir || !isCatchAllDir(e.name)) continue;
+      if (!e.dir || !(isCatchAllDir(e.name) || isOptionalCatchAllDir(e.name))) continue;
       const hit = await descend(
         join(dir, e.name),
         [],

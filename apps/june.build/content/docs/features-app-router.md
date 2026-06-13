@@ -14,7 +14,9 @@ order: "6"
 | `layout.tsx` | wraps everything below this segment ([Layouts](/docs/features-layouts)) |
 | `not-found.tsx` | the 404 page (app root today; per-segment is wired in the router, pipeline next) |
 | `[slug]/` | dynamic segment → `ctx.params.slug` |
+| `[[slug]]/` | optional segment — matches with the param set or absent |
 | `[...path]/` | catch-all → `ctx.params.path` (joined string) |
+| `[[...path]]/` | optional catch-all — also matches zero segments |
 | `(group)/` | route group — shapes the filesystem, invisible in the URL |
 | `_anything` | never a route — colocate components, tests, models freely |
 
