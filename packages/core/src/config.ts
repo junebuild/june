@@ -63,7 +63,10 @@ export type JuneConfig = {
   // (same seam philosophy as JuneHost) — "workers" today, "node"/"june-cloud"
   // later. name defaults to package.json name. domain attaches a Workers
   // custom domain (the zone must live in the same Cloudflare account).
-  deploy?: { target?: "workers"; name?: string; domain?: string };
+  // `adapter` is a deploy adapter (e.g. vercel()) — absent ⇒ the built-in
+  // workers() default. Typed loosely here so @junejs/core stays free of the
+  // server-side adapter implementation; build.ts casts it to JuneAdapter.
+  deploy?: { target?: "workers"; name?: string; domain?: string; adapter?: unknown };
 };
 
 const DEFAULT_AGENT: AgentConfig = {
