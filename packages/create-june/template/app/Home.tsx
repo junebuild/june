@@ -11,7 +11,7 @@ export function Home({ message }: { message: string }) {
       <p>{message}</p>
       <p>
         This page also answers as <a href="/.json">JSON</a> and <a href="/.md">Markdown</a>,
-        and to agents at <a href="/.agent">.agent</a> and <code>/mcp</code>.
+        and exposes its actions to agents at <code>/mcp</code>.
       </p>
       {/* A client island: only this subtree hydrates (app/_client.tsx registers it). */}
       <Island name="Counter" component={Counter} props={{ initial: 0 }} />

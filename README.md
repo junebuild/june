@@ -22,7 +22,7 @@ You get a working app, not a blank page:
 ```txt
 my-app/
   app/
-    page.tsx          # one route() — also answers /.json, /.md, /.agent
+    page.tsx          # one route() — also answers /.json and /.md
     users/page.tsx    # a second route with a defineAction() → an MCP tool
     layout.tsx        # wraps every page (nested layouts compose root → leaf)
     Counter.tsx       # a client island — the ONE subtree that hydrates

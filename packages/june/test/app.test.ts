@@ -34,21 +34,10 @@ describe("view projection (SSR)", () => {
   });
 });
 
-describe("data + agent projections from one load()", () => {
+describe("projections from one load()", () => {
   test("/users.json returns the data", async () => {
     const res = await get("/users.json");
     expect(await res.json()).toEqual({ users: [{ id: 1, name: "Ada" }, { id: 2, name: "Linus" }] });
-  });
-
-  test("/users.agent returns the capability manifest with the action", async () => {
-    const res = await get("/users.agent");
-    expect(res.headers.get("content-type")).toBe("application/vnd.june-agent+json");
-    const manifest = (await res.json()) as any;
-    expect(manifest.resource).toBe("users");
-    expect(manifest.actions[0]).toMatchObject({
-      id: "createUser",
-      invoke: { method: "POST", header: "x-june-action", action: "createUser" },
-    });
   });
 
   test("Accept: application/json negotiates the json projection without an extension", async () => {

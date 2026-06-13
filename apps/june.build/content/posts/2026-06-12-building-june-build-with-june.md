@@ -8,7 +8,7 @@ tags: [dogfood, dual-audience]
 This site is built with June and deployed on Cloudflare Workers. That sentence
 is most of the pitch, so let's prove it instead of repeating it.
 
-## One route, five surfaces
+## One route, four surfaces
 
 Every page here is a single `route()` definition with projections:
 
@@ -16,7 +16,6 @@ Every page here is a single `route()` definition with projections:
 GET /why            → streamed HTML (you, probably)
 GET /why.md         → clean markdown (an agent, probably)
 GET /blog.json      → structured frontmatter (a crawler with taste)
-GET /why.agent      → a capability manifest (an agent deciding what to do)
 POST /mcp           → tools/call search_site, get_page (an agent at work)
 ```
 

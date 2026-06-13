@@ -16,7 +16,7 @@ from the route graph and your actions — you author none of them:
 | `/llms.txt` | the route map + each route's markdown projection |
 | `/sitemap.xml`, `/robots.txt` | the classic crawler contract |
 | `/.well-known/api-catalog` | machine-readable API listing |
-| `<route>.agent` | a per-route capability manifest |
+| `/mcp` | your actions as MCP tools an agent can call |
 | `Link` response header | discovery advertised on every HTML response |
 
 It's on by default and one switch turns it all off (`agent: { enabled:

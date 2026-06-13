@@ -25,7 +25,6 @@ import {
   type RouteContext,
 } from "@junejs/core/route";
 import { Document, type DocumentConfig } from "@junejs/core/document";
-import { isResourceManifest } from "@junejs/core/agent";
 import {
   apiCatalog,
   buildLinkHeader,
@@ -188,11 +187,6 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
     switch (resolveProjection(def, target)) {
       case "json":
         return Response.json(await def.json!(data, ctx));
-      case "agent": {
-        const out = await def.agent!(data, ctx);
-        const body = isResourceManifest(out) ? out.toManifest() : out;
-        return text(JSON.stringify(body), "application/vnd.june-agent+json");
-      }
       default: {
         const node = def.view ? def.view(data, ctx) : null;
         return renderDocument(node, resolveMeta(def, data, ctx), 200, chain);

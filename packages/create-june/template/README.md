@@ -9,13 +9,13 @@ npm install
 npm run dev      # → http://localhost:3000
 ```
 
-Every route answers four ways from one definition — humans get HTML, data
-clients get `.json`, and agents get `.md`, `.agent`, and the `/mcp` endpoint:
+Every route answers from one definition — humans get HTML, data clients get
+`.json`, agents get `.md`, and actions are MCP tools at `/mcp`:
 
 ```sh
 curl localhost:3000/users          # HTML
 curl localhost:3000/users.json     # data
-curl localhost:3000/users.agent    # agent capability manifest (with tools)
+curl localhost:3000/users.md       # markdown
 ```
 
 ```sh

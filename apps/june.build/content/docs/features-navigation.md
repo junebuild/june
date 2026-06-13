@@ -23,8 +23,8 @@ browser already has one. Every HTML page carries three things:
    navigation stops looking like a full reload because the browser paints it
    as one continuous surface.
 
-The agent surfaces are deliberately excluded: `.md`, `.json`, `.agent`, and
-`/mcp` never prerender — machines don't hover.
+The agent surfaces are deliberately excluded: `.md`, `.json`, and `/mcp`
+never prerender — machines don't hover.
 
 ## Try it right now
 

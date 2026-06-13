@@ -11,7 +11,6 @@ describe("negotiate()", () => {
       target: "json",
       pathname: "/users",
     });
-    expect(neg(new URL("http://x/users.agent"), req("http://x/users.agent")).target).toBe("agent");
     expect(neg(new URL("http://x/posts/a.md"), req("http://x/posts/a.md"))).toMatchObject({
       target: "md",
       pathname: "/posts/a",
@@ -21,9 +20,6 @@ describe("negotiate()", () => {
   test("the Accept header is the fallback when there is no extension", () => {
     expect(neg(new URL("http://x/users"), req("http://x/users", { accept: "application/json" })).target).toBe("json");
     expect(neg(new URL("http://x/users"), req("http://x/users", { accept: "text/markdown" })).target).toBe("md");
-    expect(
-      neg(new URL("http://x/users"), req("http://x/users", { accept: "application/vnd.june-agent+json" })).target,
-    ).toBe("agent");
   });
 
   test("an extension wins over the Accept header", () => {

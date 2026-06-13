@@ -1,16 +1,14 @@
-// agent.ts — the unified action registry + the agent-facing surface.
+// agent.ts — the unified action registry.
 //
 // One `defineAction()` entry is the single source of truth: it is the UI server
-// action, the `.agent` manifest tool, AND the MCP tool — all invoked by the
+// action, the MCP tool at /mcp, AND the browser WebMCP tool — all invoked by the
 // same id against this one registry. The RSC server-action path registers into
-// THIS registry too, so a server action and an agent/MCP tool are no longer
-// "the same thing described twice."
+// THIS registry too, so a server action and an MCP tool are no longer "the same
+// thing described twice."
 //
 //   1. defineAction(): id + description + input schema + run.
-//   2. manifest.resource(name, data).actions([...]): the capability manifest a
-//      route returns to an agent client.
-//   3. invokeAction(id, input): the JSON dispatch path (agent / MCP). RSC's
-//      Flight dispatch resolves the same registry.
+//   2. invokeAction(id, input): the JSON dispatch path (MCP). RSC's Flight
+//      dispatch resolves the same registry.
 
 import { currentTrace } from "./instrumentation";
 import type { ActionContext } from "./context";
@@ -92,54 +90,3 @@ export async function invokeAction(
 
   return result;
 }
-
-type ActionManifestEntry = {
-  id: string;
-  description: string;
-  input: JsonSchema;
-  // How an agent invokes it. Mirrors the same dispatch the UI uses.
-  invoke: { method: "POST"; header: "x-june-action"; action: string };
-};
-
-export type ResourceManifestJson = {
-  resource: string;
-  data: unknown;
-  actions: ActionManifestEntry[];
-};
-
-export class ResourceManifest<T = unknown> {
-  private declared: AnyAction[] = [];
-
-  constructor(
-    private readonly name: string,
-    private readonly data: T,
-  ) {}
-
-  actions(actions: AnyAction[]) {
-    this.declared = actions;
-    return this;
-  }
-
-  toManifest(): ResourceManifestJson {
-    return {
-      resource: this.name,
-      data: this.data,
-      actions: this.declared.map((action) => ({
-        id: action.id,
-        description: action.description,
-        input: action.input,
-        invoke: { method: "POST", header: "x-june-action", action: action.id },
-      })),
-    };
-  }
-}
-
-export function isResourceManifest(value: unknown): value is ResourceManifest {
-  return value instanceof ResourceManifest;
-}
-
-export const manifest = {
-  resource<T>(name: string, data: T) {
-    return new ResourceManifest<T>(name, data);
-  },
-};

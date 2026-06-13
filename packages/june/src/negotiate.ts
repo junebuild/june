@@ -10,12 +10,10 @@ import type { RenderTarget } from "@junejs/core/route";
 
 const EXT_TARGET: Record<string, RenderTarget> = {
   ".json": "json",
-  ".agent": "agent",
   ".md": "md",
 };
 
 const ACCEPT_TARGET: Array<[test: RegExp, target: RenderTarget]> = [
-  [/application\/vnd\.june-agent\+json/, "agent"],
   [/text\/markdown/, "md"],
   [/application\/json/, "json"],
 ];

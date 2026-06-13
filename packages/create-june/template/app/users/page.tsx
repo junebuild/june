@@ -1,5 +1,5 @@
 import { route } from "@junejs/core/route";
-import { defineAction, manifest } from "@junejs/core/agent";
+import { defineAction } from "@junejs/core/agent";
 
 import { UsersList } from "./UsersList";
 
@@ -21,6 +21,5 @@ export default route({
   load: () => ({ users }),
   view: (data) => <UsersList users={data.users} />,
   json: (data) => data,
-  agent: (data) => manifest.resource("users", data.users).actions([createUser]),
   metadata: { title: "Users" },
 });

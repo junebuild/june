@@ -32,7 +32,6 @@ const SURFACES = [
   "/",
   "/users",
   "/users.json",
-  "/users.agent",
   "/users.md",
   "/posts/hello",
   "/posts/hello.md",

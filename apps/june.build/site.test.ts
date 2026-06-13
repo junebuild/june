@@ -31,7 +31,7 @@ beforeAll(async () => {
 describe("human surface", () => {
   test("landing, why, benchmarks render in the layout", async () => {
     for (const [path, marker] of [
-      ["/", "One definition, five surfaces"],
+      ["/", "One definition, four surfaces"],
       ["/why", "Core design philosophy"],
       ["/benchmarks", "48k ops/s"],
     ] as const) {

@@ -5,18 +5,19 @@
 //     async load(ctx) { return { users: await Users.all() }; },
 //     view({ users })  { return <UsersPage users={users} />; },  // HTML / Flight
 //     json({ users })  { return { users }; },                    // data API
-//     agent({ users }) { return manifest.resource("users", users); },
+//     md({ users })    { return renderMd(users); },              // markdown
 //   });
 //
-// The same data, three representations, never drifting apart. `view` is the
+// The same data, multiple representations, never drifting apart. `view` is the
 // React projection (named `view`, not `html`, because the framework decides
-// HTML-SSR vs RSC Flight by negotiation). `json` is the plain data API. `agent`
-// is the capability-described resource for agent clients.
+// HTML-SSR vs RSC Flight by negotiation). `json` is the plain data API. `md` is
+// the agent-facing markdown. Capabilities live at /mcp (defineAction), not as a
+// route projection.
 
 import type { JuneDb, JuneKv, JuneBlob } from "./resources";
 import type { Principal, Session } from "./context";
 
-export type RenderTarget = "view" | "json" | "agent" | "md";
+export type RenderTarget = "view" | "json" | "md";
 
 // Per-route document metadata. Static metadata keeps the streaming shell;
 // a FUNCTION (deriving from load() data) forces an eager load — the <head>
@@ -70,7 +71,6 @@ export type RouteDefinition<TData = unknown> = {
   load?: (ctx: RouteContext) => TData | Promise<TData>;
   view?: (data: TData, ctx: RouteContext) => React.ReactNode;
   json?: (data: TData, ctx: RouteContext) => unknown | Promise<unknown>;
-  agent?: (data: TData, ctx: RouteContext) => unknown | Promise<unknown>;
   // Markdown projection. If absent, the `md` target is auto-derived from `json`.
   md?: (data: TData, ctx: RouteContext) => string | Promise<string>;
   // Response cache: cache the rendered output of GET requests, keyed by
@@ -103,12 +103,11 @@ export function isRouteDefinition(value: unknown): value is BrandedRoute {
 }
 
 // The order each requested target degrades through when a projection is absent.
-// An agent asking for /users.agent on a route with no `agent()` still gets the
-// JSON projection rather than a 406.
+// An agent asking for /users.json on a route with no `json()` still gets the
+// view rather than a 406.
 const FALLBACK: Record<RenderTarget, RenderTarget[]> = {
-  agent: ["agent", "json", "view"],
-  json: ["json", "agent", "view"],
-  view: ["view", "json", "agent"],
+  json: ["json", "view"],
+  view: ["view", "json"],
   // `md` is handled specially (auto-derived from json when md() is absent);
   // this entry is only the last-resort fall-through.
   md: ["md", "json", "view"],

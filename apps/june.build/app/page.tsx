@@ -20,7 +20,7 @@ export default route({
       <p style={{ fontSize: 19, color: "#444" }}>{page.summary}</p>
       <ul style={{ lineHeight: 1.9 }}>
         <li>
-          <strong>One definition, five surfaces</strong> — this site speaks HTML to you and
+          <strong>One definition, four surfaces</strong> — this site speaks HTML to you and
           markdown / JSON / MCP to agents. Try <code>/why.md</code>, <code>/benchmarks.json</code>,
           or point an MCP client at <code>/mcp</code>.
         </li>

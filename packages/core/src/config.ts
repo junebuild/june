@@ -27,7 +27,7 @@ export type SpeculationConfig = {
   prerender?: "moderate" | "conservative" | false;
   prefetch?: "moderate" | "conservative" | false;
   // App-specific exclusions, ADDED to the built-in ones (agent surfaces:
-  // *.md *.json *.agent *.txt *.xml /mcp — those are always excluded).
+  // *.md *.json *.txt *.xml /mcp — those are always excluded).
   exclude?: string[];
   // "inline" (default): rules in a <script type=speculationrules>.
   // "header": rules served at /__june/speculation-rules and referenced by a
@@ -90,7 +90,7 @@ export function resolveAgent(partial?: Partial<AgentConfig>): AgentConfig {
 
 // Agent surfaces are ALWAYS excluded from human-intent speculation — humans
 // hover, agents don't; a footer link to llms.txt must not prerender.
-const BUILTIN_EXCLUDES = ["/*.md", "/*.json", "/*.agent", "/*.txt", "/*.xml", "/mcp"];
+const BUILTIN_EXCLUDES = ["/*.md", "/*.json", "/*.txt", "/*.xml", "/mcp"];
 
 export function resolveSpeculationRules(config?: SpeculationConfig | false): string | null {
   if (config === false) return null;

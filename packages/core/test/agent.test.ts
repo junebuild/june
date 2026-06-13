@@ -3,7 +3,6 @@ import {
   ACTION_REGISTRY,
   defineAction,
   invokeAction,
-  manifest,
   type JsonSchema,
 } from "@junejs/core/agent";
 import type { ActionContext } from "@junejs/core/context";
@@ -81,25 +80,5 @@ describe("invokeAction()", () => {
 
   test("throws on an unknown action id", () => {
     expect(invokeAction("missing", {})).rejects.toThrow("Unknown action: missing");
-  });
-});
-
-describe("manifest.resource()", () => {
-  test("produces a capability manifest with POST/x-june-action invocation", () => {
-    const createUser = defineAction({
-      id: "createUser",
-      description: "Create a user",
-      input: schema,
-      run: () => ({}),
-    });
-    const m = manifest.resource("users", [{ id: 1 }]).actions([createUser]).toManifest();
-    expect(m.resource).toBe("users");
-    expect(m.data).toEqual([{ id: 1 }]);
-    expect(m.actions[0]).toEqual({
-      id: "createUser",
-      description: "Create a user",
-      input: schema,
-      invoke: { method: "POST", header: "x-june-action", action: "createUser" },
-    });
   });
 });

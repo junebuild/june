@@ -27,11 +27,10 @@ export const PAGES: Page[] = [
 
 **The opinionated, agent-ready React framework.**
 
-- **One definition, five surfaces** — every \`route()\` projects an HTML view,
-  JSON, markdown, and an agent manifest, and every \`defineAction()\` is a UI
-  action AND an MCP tool. This very site: try \`/why.md\`, \`/benchmarks.json\`,
-  \`/llms.txt\`, or call our MCP tools at \`/mcp\`. Nothing drifts, because
-  nothing is duplicated.
+- **One definition, four surfaces** — every \`route()\` projects an HTML view,
+  JSON, and markdown, and every \`defineAction()\` is a UI action AND an MCP
+  tool. This very site: try \`/why.md\`, \`/benchmarks.json\`, \`/llms.txt\`, or
+  call our MCP tools at \`/mcp\`. Nothing drifts, because nothing is duplicated.
 - **No glue layer** — auth (Better Auth), data (resources + Juno), and agent
   capabilities are ONE coherent model; you wire no adapter matrix.
 - **Scoped-principal agent bridge** — the same authorization the UI enforces
@@ -64,9 +63,8 @@ Software now has two audiences — people and agents — and two authors: people
 and agents. June is designed for that world end to end:
 
 - **Serving agents**: routes are projections. One \`route()\` = HTML view +
-  JSON + markdown + a capability manifest. llms.txt, sitemap, and an MCP
-  endpoint derive automatically. Tools are intent-shaped, policy-checked —
-  never auto-CRUD.
+  JSON + markdown. llms.txt, sitemap, and an MCP endpoint derive
+  automatically. Tools are intent-shaped, policy-checked — never auto-CRUD.
 - **Agents as principals**: an agent calling \`/mcp\` carries a user's
   credential and hits the SAME authorization check the UI does —
   \`defineAction.run(input, ctx)\` is one gate for both.
@@ -86,9 +84,9 @@ June is opinionated on purpose — these choices are made for you:
 - **Convention over configuration.** Presence is the API: a \`page.tsx\` is a
   route, an \`app/_client.ts\` enables hydration, a \`content/*.md\` joins the
   manifest. Nothing asks to be wired.
-- **Don't repeat yourself.** One \`route()\` is five surfaces; one
-  \`defineAction()\` is a UI action, an MCP tool, and a manifest entry; one
-  render core serves dev and prod. Nothing drifts because nothing is
+- **Don't repeat yourself.** One \`route()\` is four surfaces; one
+  \`defineAction()\` is a UI action, an MCP tool, and a browser WebMCP tool;
+  one render core serves dev and prod. Nothing drifts because nothing is
   duplicated — even our benchmark numbers render from a single registry.
 - **Defaults you remove, not assemble.** The agent surface ships ON;
   \`june.config.ts\` exists to turn things off. An undeclared resource doesn't

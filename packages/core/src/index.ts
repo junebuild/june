@@ -68,19 +68,15 @@ export {
   type IslandProps,
 } from "./islands";
 
-// The unified action registry (UI action == agent tool == MCP tool)
+// The unified action registry (UI action == MCP tool == WebMCP tool)
 export {
   defineAction,
   invokeAction,
-  manifest,
-  ResourceManifest,
-  isResourceManifest,
   setServerReferenceRegistrar,
   ACTION_REGISTRY,
   type ActionDefinition,
   type AnyAction,
   type JsonSchema,
-  type ResourceManifestJson,
 } from "./agent";
 
 // Agent discovery emitters

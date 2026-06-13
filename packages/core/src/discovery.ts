@@ -38,8 +38,8 @@ export function llmsTxt(
     `# ${site?.name ?? "June app"}`,
     "",
     ...(site?.description ? [`> ${site.description}`, ""] : []),
-    "> Server-rendered React app. Every route also answers as JSON (`.json`),",
-    "> as an agent capability manifest (`.agent`), and as Markdown (`.md`).",
+    "> Server-rendered React app. Every route also answers as Markdown",
+    "> (`.md`) and JSON (`.json`); actions are MCP tools at `/mcp`.",
     "",
     // Canonical names travel with EVERY June app's llms.txt — this is the
     // grounding artifact agents fetch first; never let them guess npm names.

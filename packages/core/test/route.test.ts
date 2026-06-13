@@ -14,28 +14,17 @@ describe("route()", () => {
       load: () => ({ n: 1 }),
       view: () => null,
       json: (d) => d,
-      agent: (d) => d,
       md: () => "# hi",
     });
     expect(typeof def.view).toBe("function");
     expect(typeof def.json).toBe("function");
-    expect(typeof def.agent).toBe("function");
     expect(typeof def.md).toBe("function");
   });
 });
 
 describe("resolveProjection() content negotiation", () => {
-  test("agent degrades to json then view when agent() is absent", () => {
-    const onlyJson = route({ json: (d) => d });
-    expect(resolveProjection(onlyJson, "agent")).toBe("json");
-
-    const onlyView = route({ view: () => null });
-    expect(resolveProjection(onlyView, "agent")).toBe("view");
-  });
-
-  test("json prefers json, falls back to agent, then view", () => {
+  test("json prefers json, falls back to view", () => {
     expect(resolveProjection(route({ json: (d) => d }), "json")).toBe("json");
-    expect(resolveProjection(route({ agent: (d) => d }), "json")).toBe("agent");
     expect(resolveProjection(route({ view: () => null }), "json")).toBe("view");
   });
 
@@ -49,6 +38,6 @@ describe("resolveProjection() content negotiation", () => {
   });
 
   test("an empty route falls through to view", () => {
-    expect(resolveProjection(route({}), "agent")).toBe("view");
+    expect(resolveProjection(route({}), "json")).toBe("view");
   });
 });

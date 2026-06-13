@@ -21,8 +21,8 @@ export default route({
       </p>
       <ul style={{ lineHeight: 1.8 }}>
         <li>
-          <strong>Serving agents:</strong> one <code>route()</code> = HTML + JSON + markdown +
-          capability manifest. llms.txt, sitemap, MCP derive automatically. Tools are
+          <strong>Serving agents:</strong> one <code>route()</code> = HTML + JSON + markdown.
+          llms.txt, sitemap, MCP derive automatically. Tools are
           intent-shaped, policy-checked — never auto-CRUD.
         </li>
         <li>
@@ -48,7 +48,7 @@ export default route({
           <code>content/*.md</code> joins the manifest. Nothing asks to be wired.
         </li>
         <li>
-          <strong>Don&apos;t repeat yourself.</strong> One <code>route()</code> is five surfaces;
+          <strong>Don&apos;t repeat yourself.</strong> One <code>route()</code> is four surfaces;
           one <code>defineAction()</code> is a UI action, an MCP tool, and a manifest entry; one
           render core serves dev and prod. Nothing drifts because nothing is duplicated — even
           our benchmark numbers render from a single registry.
