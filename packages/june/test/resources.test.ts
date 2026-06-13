@@ -42,6 +42,20 @@ describe("ctx.db injection (the binding model)", () => {
     expect(await json(app, "/.json")).toEqual({ users: [{ name: "Ada" }, { name: "Linus" }] });
   });
 
+  test("sqlite() creates missing parent dirs and persists across reopen (the watch-restart shape)", async () => {
+    // The default is a FILE under .june/ — dev restarts on every save, so the
+    // data must outlive the process. Simulate two processes via two factories.
+    const nested = join(dir, "deep/never/created/dev.sqlite");
+    const first = await sqlite({ path: nested }).open();
+    await first.exec("create table notes (id integer primary key, body text)");
+    await first.run("insert into notes (body) values (?)", ["survives restarts"]);
+    await first.close();
+
+    const second = await sqlite({ path: nested }).open();
+    expect(await second.query("select body from notes")).toEqual([{ body: "survives restarts" }]);
+    await second.close();
+  });
+
   test("no declared resource → ctx.db is undefined (route degrades, no crash)", async () => {
     const app = createApp({ appDir: APP_DIR, config: {} });
     expect(await json(app, "/.json")).toEqual({ users: [] });

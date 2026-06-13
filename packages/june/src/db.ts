@@ -3,15 +3,28 @@
 // by the host, injected onto RouteContext as `ctx.db`. The framework depends on
 // the JuneDb contract; these adapters (and Juno on top) are swappable.
 
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
+
 import type { DbFactory, JuneDb, RunResult } from "@junejs/core/resources";
 
 import { host } from "./host";
 
-// Local SQLite — the zero-config dev default (embedded file or :memory:). Built
-// on the demoted host.openDb primitive (the sync bun:/node: driver wrapped async).
+// Local SQLite — the zero-config dev default. A persistent FILE, not :memory:,
+// on purpose: `june dev` restarts the process on every save (the watch
+// supervisor), so an in-memory default would evaporate your dev data at each
+// edit. A file also makes the dev db inspectable with the sqlite3 every
+// machine already has (`sqlite3 .june/dev.sqlite`). Pass ":memory:" explicitly
+// for ephemerality.
 export function sqlite(opts: { path?: string } = {}): DbFactory {
-  const path = opts.path ?? ":memory:";
-  return { kind: "sqlite", open: () => host.openDb(path) };
+  const path = opts.path ?? ".june/dev.sqlite";
+  return {
+    kind: "sqlite",
+    open: () => {
+      if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
+      return host.openDb(path);
+    },
+  };
 }
 
 // --- D1 (Cloudflare) — the third openDb impl (rebuild-plan Phase 5) ----------

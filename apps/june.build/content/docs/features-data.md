@@ -25,6 +25,14 @@ export default defineJune({
 route({ load: async (ctx) => ({ posts: await ctx.db.query("select * from posts") }) });
 ```
 
+The dev default is a plain file (`.june/dev.sqlite`) — it survives the dev
+server's reload-on-save restarts, and the `sqlite3` already on your machine
+opens it directly:
+
+```bash
+sqlite3 .june/dev.sqlite '.tables'
+```
+
 ## The magic
 
 Reads and writes through Juno (the default data layer) emit a public trace
