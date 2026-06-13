@@ -25,6 +25,11 @@ import { Readable } from "node:stream";
 import type { JuneDb, RunResult } from "@junejs/core/resources";
 export type { JuneDb, RunResult };
 
+// Local-sqlite driver selection lives in its own layer; the host just delegates
+// openDb to it (bun:sqlite under Bun, node:sqlite under Node, with guidance when
+// Node is too old). See src/sqlite-driver.ts.
+import { openLocalSqlite } from "./sqlite-driver";
+
 export type ServeHandle = { port: number; stop(force?: boolean): void };
 
 export type SpawnedModule = {
@@ -47,59 +52,6 @@ export interface JuneHost {
   // adapter builds on (docs/data-layer-boundary.md: openDb is demoted from the
   // user-facing API to a host primitive; apps declare `resources.db` instead).
   openDb(path: string): Promise<JuneDb>;
-}
-
-// --- a tiny sync→async SQLite adapter shared by both hosts ------------------
-
-// The shape bun:sqlite exposes directly and node:sqlite is adapted to: a
-// prepared statement with positional binding.
-type SyncStatement = {
-  all(...params: unknown[]): unknown[];
-  get(...params: unknown[]): unknown;
-  run(...params: unknown[]): { changes: number | bigint; lastInsertRowid?: number | bigint };
-};
-type SyncSqlite = {
-  query(sql: string): SyncStatement;
-  exec(sql: string): void;
-  close(): void;
-};
-
-// Wrap a synchronous SQLite handle as the async JuneDb. The driver work is
-// synchronous, but the SURFACE is async, so swapping in D1 later is invisible
-// to every caller.
-function asyncSqlite(db: SyncSqlite): JuneDb {
-  const self: JuneDb = {
-    async query<T>(sql: string, params: unknown[] = []) {
-      return db.query(sql).all(...params) as T[];
-    },
-    async get<T>(sql: string, params: unknown[] = []) {
-      // Normalize "no row" to undefined — bun:sqlite returns null, node:sqlite
-      // returns undefined; the seam hides the difference.
-      return (db.query(sql).get(...params) ?? undefined) as T | undefined;
-    },
-    async run(sql: string, params: unknown[] = []) {
-      const r = db.query(sql).run(...params);
-      return { changes: Number(r.changes), lastInsertRowid: r.lastInsertRowid ?? 0 };
-    },
-    async exec(sql: string) {
-      db.exec(sql);
-    },
-    async transaction<T>(fn: (tx: JuneDb) => Promise<T>) {
-      db.exec("BEGIN");
-      try {
-        const out = await fn(self); // same connection — sqlite is single-writer
-        db.exec("COMMIT");
-        return out;
-      } catch (e) {
-        db.exec("ROLLBACK");
-        throw e;
-      }
-    },
-    async close() {
-      db.close();
-    },
-  };
-  return self;
 }
 
 // --- Bun host ---------------------------------------------------------------
@@ -128,14 +80,7 @@ function bunHost(): JuneHost {
         exited: child.exited,
       };
     },
-    async openDb(path) {
-      // Non-literal specifier: only Bun has bun:sqlite, so resolve it at runtime.
-      const specifier = "bun:sqlite";
-      const { Database } = (await import(specifier)) as {
-        Database: new (p: string, o?: { create?: boolean }) => SyncSqlite;
-      };
-      return asyncSqlite(new Database(path, { create: true }));
-    },
+    openDb: openLocalSqlite, // bun:sqlite under the hood — see sqlite-driver.ts
   };
 }
 
@@ -212,23 +157,7 @@ function nodeHost(): JuneHost {
         exited: new Promise((resolve) => child.on("exit", (code) => resolve(code ?? 0))),
       };
     },
-    async openDb(path) {
-      const specifier = "node:sqlite"; // node-only builtin; resolve at runtime
-      const { DatabaseSync } = (await import(specifier)) as {
-        DatabaseSync: new (p: string) => {
-          prepare(sql: string): SyncStatement;
-          exec(sql: string): void;
-          close(): void;
-        };
-      };
-      const db = new DatabaseSync(path);
-      // Adapt node:sqlite (prepare()) to the query()-shaped SyncSqlite surface.
-      return asyncSqlite({
-        query: (sql) => db.prepare(sql),
-        exec: (sql) => db.exec(sql),
-        close: () => db.close(),
-      });
-    },
+    openDb: openLocalSqlite, // node:sqlite under the hood — see sqlite-driver.ts
   };
 }
 
