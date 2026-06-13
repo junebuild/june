@@ -1,6 +1,8 @@
 import { route } from "@junejs/core/route";
 import { defineAction, manifest } from "@junejs/core/agent";
 
+import { UsersList } from "./UsersList";
+
 type User = { id: number; name: string };
 const users: User[] = [
   { id: 1, name: "Ada" },
@@ -17,16 +19,7 @@ export const createUser = defineAction({
 
 export default route({
   load: () => ({ users }),
-  view: (data) => (
-    <main>
-      <h1>Users</h1>
-      <ul>
-        {data.users.map((u) => (
-          <li key={u.id}>{u.name}</li>
-        ))}
-      </ul>
-    </main>
-  ),
+  view: (data) => <UsersList users={data.users} />,
   json: (data) => data,
   agent: (data) => manifest.resource("users", data.users).actions([createUser]),
   metadata: { title: "Users" },
