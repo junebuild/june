@@ -28,6 +28,16 @@ describe("dev live reload", () => {
     expect(pipelineHtml).not.toContain("/__june/reload.js");
   });
 
+  test("the reload injection is stream-safe: a streaming route stays streamed", async () => {
+    // /slow streams (loading.tsx). The reload wrapper must NOT buffer it: the
+    // fallback (shell-first) and the reload script both reach the bytes.
+    const res = await fetch(`${server.url}/slow`);
+    expect(res.body).toBeInstanceOf(ReadableStream);
+    const html = await res.text();
+    expect(html).toContain('data-loading="slow"'); // streaming preserved
+    expect(html).toContain('<script src="/__june/reload.js" defer></script>'); // injected
+  });
+
   test("a taken port walks forward instead of dying", async () => {
     // server (beforeAll) holds 4521 — the second server must shift, not fail.
     const second = await startDevServer({ appDir: `${ROOT}/app`, port: 4521 });

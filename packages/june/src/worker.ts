@@ -16,7 +16,7 @@ import type { AgentConfig } from "@junejs/core/config";
 import type { DocumentConfig } from "@junejs/core/document";
 import type { Resources } from "@junejs/core/resources";
 
-import { createPipeline, type ExtraHandler, type LayoutComponent, type Resolved } from "./pipeline";
+import { createPipeline, type ExtraHandler, type LayoutComponent, type LoadingComponent, type Resolved } from "./pipeline";
 
 export type WorkerManifest = {
   // Static paths → route definitions ("/", "/users", ...).
@@ -26,6 +26,8 @@ export type WorkerManifest = {
   // Layout chains (root→leaf) keyed by route path / dynamic pattern. The build
   // freezes the same chain the dev server loads from app/layout.* files.
   layoutChains?: Record<string, LayoutComponent[]>;
+  // Nearest loading.tsx per route path → streaming Suspense fallback.
+  loadings?: Record<string, LoadingComponent>;
   document: DocumentConfig;
   agent: AgentConfig;
   // Preload Link values (config earlyHints + auto font hints), frozen at build.
@@ -94,6 +96,7 @@ export function createWorker(manifest: WorkerManifest): { fetch(request: Request
   ].sort();
 
   const chainFor = (key: string): LayoutComponent[] => manifest.layoutChains?.[key] ?? [];
+  const loadingFor = (key: string): LoadingComponent | undefined => manifest.loadings?.[key];
 
   return createPipeline({
     docConfig: manifest.document,
@@ -106,7 +109,8 @@ export function createWorker(manifest: WorkerManifest): { fetch(request: Request
     resources: manifest.resources,
     resolve: async (pathname): Promise<Resolved | null> => {
       const staticDef = manifest.routes[pathname];
-      if (staticDef) return { def: staticDef, params: {}, chain: chainFor(pathname) };
+      if (staticDef)
+        return { def: staticDef, params: {}, chain: chainFor(pathname), loading: loadingFor(pathname) };
       for (const d of dynamic) {
         const m = pathname.match(d.regex);
         if (m) {
@@ -118,7 +122,7 @@ export function createWorker(manifest: WorkerManifest): { fetch(request: Request
               return v === undefined ? [] : [[n, decodeURIComponent(v)]];
             }),
           );
-          return { def: d.def, params, chain: chainFor(d.pattern) };
+          return { def: d.def, params, chain: chainFor(d.pattern), loading: loadingFor(d.pattern) };
         }
       }
       return null;

@@ -30,7 +30,7 @@ import type { DocumentConfig } from "@junejs/core/document";
 import { collection } from "./content";
 import { createWorker, type WorkerManifest } from "./worker";
 import { findExtraFile } from "./router";
-import type { ExtraHandler, LayoutComponent } from "./pipeline";
+import type { ExtraHandler, LayoutComponent, LoadingComponent } from "./pipeline";
 import { findClientEntry, bundleClientToFile, CLIENT_SCRIPT_URL } from "./client-bundle";
 
 export type BuildResult = {
@@ -43,7 +43,13 @@ export type BuildResult = {
 
 // The segment layout CHAIN root→leaf: every directory level (route groups
 // included) may contribute a layout.* that wraps routes below it.
-type RouteEntry = { path: string; file: string; dynamic: boolean; layouts: string[] };
+type RouteEntry = {
+  path: string;
+  file: string;
+  dynamic: boolean;
+  layouts: string[];
+  loading?: string; // nearest loading.tsx up the tree → streaming Suspense fallback
+};
 
 const PAGE_BASENAMES = new Set(["page", "index"]);
 const ROUTE_EXTS = [".tsx", ".jsx", ".ts", ".js"];
@@ -62,15 +68,17 @@ export async function scanRoutes(
   dir = appDir,
   layouts: string[] = [],
   out: RouteEntry[] = [],
+  loading?: string,
 ): Promise<RouteEntry[]> {
   const ownLayout = segmentFile(dir, "layout");
   const chain = ownLayout ? [...layouts, ownLayout] : layouts;
+  const nearestLoading = segmentFile(dir, "loading") ?? loading;
   const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
   for (const e of entries) {
     if (e.name.startsWith("_") || e.name.startsWith(".")) continue;
     const full = join(dir, e.name);
     if (e.isDirectory()) {
-      await scanRoutes(appDir, full, chain, out);
+      await scanRoutes(appDir, full, chain, out, nearestLoading);
       continue;
     }
     const ext = e.name.match(/\.[^.]+$/)?.[0] ?? "";
@@ -79,7 +87,13 @@ export async function scanRoutes(
     const relDir = relative(appDir, dir);
     const segments = relDir === "" ? [] : relDir.split(sep).filter((s) => !isRouteGroup(s));
     const path = "/" + segments.join("/");
-    out.push({ path: path === "/" ? "/" : path, file: full, dynamic: /\[.+\]/.test(path), layouts: chain });
+    out.push({
+      path: path === "/" ? "/" : path,
+      file: full,
+      dynamic: /\[.+\]/.test(path),
+      layouts: chain,
+      loading: nearestLoading,
+    });
   }
   return out;
 }
@@ -167,15 +181,24 @@ export async function buildManifest(appRoot: string): Promise<WorkerManifest> {
     return chain;
   };
 
+  const loadingCache = new Map<string, LoadingComponent | null>();
+  const loadingFor = async (file?: string): Promise<LoadingComponent | undefined> => {
+    if (!file) return undefined;
+    if (!loadingCache.has(file)) loadingCache.set(file, await importLayout(file) as LoadingComponent | null);
+    return loadingCache.get(file) ?? undefined;
+  };
+
   const routes: Record<string, BrandedRoute> = {};
   const dynamicRoutes: Array<{ pattern: string; def: BrandedRoute }> = [];
   const layoutChains: Record<string, LayoutComponent[]> = {};
+  const loadings: Record<string, LoadingComponent> = {};
 
   for (const r of scanned) {
     const mod = await import(pathToFileURL(r.file).href);
     const def = routeFromModule(mod);
     if (!def) continue;
     const chain = await componentsFor(r.layouts);
+    const loading = await loadingFor(r.loading);
     if (r.dynamic) {
       dynamicRoutes.push({ pattern: r.path, def });
       layoutChains[r.path] = chain;
@@ -183,6 +206,7 @@ export async function buildManifest(appRoot: string): Promise<WorkerManifest> {
       routes[r.path] = def;
       layoutChains[r.path] = chain;
     }
+    if (loading) loadings[r.path] = loading;
   }
 
   let extra: ExtraHandler | undefined;
@@ -196,6 +220,7 @@ export async function buildManifest(appRoot: string): Promise<WorkerManifest> {
     routes,
     dynamicRoutes,
     layoutChains,
+    loadings,
     document: frozen.document,
     agent: frozen.agent,
     earlyHints: frozen.earlyHints,
@@ -245,12 +270,24 @@ export async function juneBuild(
     }
     return id;
   };
+  const loadingIds = new Map<string, string>();
+  const loadingId = (file: string) => {
+    let id = loadingIds.get(file);
+    if (!id) {
+      id = `Ld${loadingIds.size}`;
+      loadingIds.set(file, id);
+      imports.push(`import ${id} from ${JSON.stringify(importPath(genDir, file))};`);
+    }
+    return id;
+  };
   const chains: string[] = [];
+  const loadings: string[] = [];
   routes.forEach((r, i) => {
     imports.push(`import * as r${i} from ${JSON.stringify(importPath(genDir, r.file))};`);
     if (r.dynamic) dynamics.push(`    { pattern: ${JSON.stringify(r.path)}, def: routeFromModule(r${i}) },`);
     else statics.push(`    ${JSON.stringify(r.path)}: routeFromModule(r${i}),`);
     chains.push(`    ${JSON.stringify(r.path)}: [${r.layouts.map(layoutId).join(", ")}],`);
+    if (r.loading) loadings.push(`    ${JSON.stringify(r.path)}: ${loadingId(r.loading)},`);
   });
 
   const builtExtraFile = findExtraFile(appDir);
@@ -277,6 +314,9 @@ ${dynamics.join("\n")}
   ],
   layoutChains: {
 ${chains.join("\n")}
+  },
+  loadings: {
+${loadings.join("\n")}
   },
   document: ${JSON.stringify(frozen.document, null, 2).replace(/\n/g, "\n  ")},
   agent: ${JSON.stringify(frozen.agent)},

@@ -87,4 +87,12 @@ describe("golden contract: dev ≡ built worker", () => {
     const [d, w] = await Promise.all([dev.fetch(make()), worker.fetch(make())]);
     expect(await w.text()).toBe(await d.text());
   });
+
+  test("streaming Suspense works in the BUILT worker too (loading.tsx threaded through the manifest)", async () => {
+    // /slow opts into streaming via its sibling loading.tsx; the manifest must
+    // carry the loading component so the worker streams the fallback like dev.
+    const html = await (await worker.fetch(new Request(ORIGIN + "/slow"))).text();
+    expect(html).toContain('data-loading="slow"'); // fallback flushed = streamed
+    expect(html).toContain("streamed in after the shell");
+  });
 });

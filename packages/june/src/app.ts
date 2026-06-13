@@ -48,6 +48,20 @@ async function loadLayout(file: string): Promise<LayoutComponent | null> {
   return mod.default;
 }
 
+// The nearest loading.tsx up the segment chain (deepest wins) → the streaming
+// Suspense fallback. Memoized like layouts.
+const loadingCache = new Map<string, React.ComponentType>();
+async function nearestLoading(segments: SegmentMatch[]): Promise<React.ComponentType | undefined> {
+  const file = [...segments].reverse().find((s) => s.loading)?.loading;
+  if (!file) return undefined;
+  const cached = loadingCache.get(file);
+  if (cached) return cached;
+  const mod = (await import(pathToFileURL(file).href)) as { default?: React.ComponentType };
+  if (typeof mod.default !== "function") return undefined;
+  loadingCache.set(file, mod.default);
+  return mod.default;
+}
+
 async function loadChain(segments: SegmentMatch[]): Promise<LayoutComponent[]> {
   const chain: LayoutComponent[] = [];
   for (const seg of segments) {
@@ -120,7 +134,12 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
         const mod = await import(pathToFileURL(match.file).href);
         const def = routeFromModule(mod);
         if (!def) return null;
-        return { def, params: match.params, chain: await loadChain(match.segments) };
+        return {
+          def,
+          params: match.params,
+          chain: await loadChain(match.segments),
+          loading: await nearestLoading(match.segments),
+        };
       },
     });
   }

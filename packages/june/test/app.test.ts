@@ -34,6 +34,39 @@ describe("view projection (SSR)", () => {
   });
 });
 
+describe("streaming Suspense (loading.tsx opts a route in)", () => {
+  test("the loading.tsx fallback is flushed (proof of shell-first streaming)", async () => {
+    const html = await (await get("/slow")).text();
+    // The fallback reaches the bytes ONLY when React streams: a buffered
+    // allReady render resolves the boundary before emitting, so the fallback
+    // never appears. Both fallback and the streamed-in view are present.
+    expect(html).toContain('data-loading="slow"');
+    expect(html).toContain("streamed in after the shell");
+    expect(html.startsWith("<!doctype html>")).toBe(true);
+  });
+
+  test("the streaming response body is a live stream, not a buffered string", async () => {
+    const res = await get("/slow");
+    // A real ReadableStream we can read incrementally (vs a pre-rendered string).
+    expect(res.body).toBeInstanceOf(ReadableStream);
+    expect(await res.text()).toContain("streamed in after the shell");
+  });
+
+  test("a route without loading.tsx stays buffered (no fallback machinery)", async () => {
+    const html = await (await get("/users")).text();
+    expect(html).toContain("Ada");
+  });
+
+  test("data-derived metadata gates streaming OFF (the <head> needs the title)", async () => {
+    // /slow-meta has loading.tsx but a metadata FUNCTION → must buffer so the
+    // title renders. No fallback reaches the bytes; the derived title is present.
+    const html = await (await get("/slow-meta")).text();
+    expect(html).not.toContain('data-loading="slow-meta"');
+    expect(html).toContain("<title>Derived Title · June Basic</title>");
+    expect(html).toContain("Derived Title");
+  });
+});
+
 describe("projections from one load()", () => {
   test("/users.json returns the data", async () => {
     const res = await get("/users.json");

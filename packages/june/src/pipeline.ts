@@ -9,7 +9,7 @@
 // Bun.* — the dev-only and worker-only concerns (fs route discovery vs frozen
 // manifest) are injected as a RouteResolver, not branched on here.
 
-import React from "react";
+import React, { Suspense, use } from "react";
 // renderToReadableStream (NOT renderToStaticMarkup): it is the ONE render
 // function present in every react-dom/server build — node, browser, AND edge.
 // workerd resolves react-dom/server to server.edge (server.browser needs
@@ -39,6 +39,7 @@ import type { Resources } from "@junejs/core/resources";
 import { negotiate } from "./negotiate";
 
 export type LayoutComponent = React.ComponentType<{ children: React.ReactNode }>;
+export type LoadingComponent = React.ComponentType;
 
 // What a resolver returns for a matched pathname: the route definition, its
 // params, and the layout chain (root→leaf) that wraps it.
@@ -46,6 +47,10 @@ export type Resolved = {
   def: BrandedRoute;
   params: Record<string, string>;
   chain: LayoutComponent[];
+  // The nearest loading.tsx up the segment chain. Its presence opts a route
+  // into streaming Suspense: the shell + this fallback flush before load()
+  // resolves, then the view streams in.
+  loading?: React.ComponentType;
 };
 
 // The one thing dev and worker do differently: turn a clean pathname into a
@@ -93,6 +98,41 @@ function text(body: string, contentType: string, init?: ResponseInit) {
   return new Response(body, { ...init, headers });
 }
 
+// The suspending leaf of a streaming route: use() the load promise, then render
+// the view. While the promise is pending the component suspends, so React emits
+// the surrounding Suspense fallback (loading.tsx) in the shell.
+function StreamedView({
+  loadPromise,
+  def,
+  ctx,
+}: {
+  loadPromise: Promise<unknown>;
+  def: BrandedRoute;
+  ctx: RouteContext;
+}): React.ReactNode {
+  const data = use(loadPromise);
+  return def.view ? def.view(data, ctx) : null;
+}
+
+// renderToReadableStream does not emit the doctype; prepend it without buffering
+// the React stream (streaming stays incremental).
+function withDoctype(source: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
+  const reader = source.getReader();
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode("<!doctype html>\n"));
+    },
+    async pull(controller) {
+      const { done, value } = await reader.read();
+      if (done) controller.close();
+      else controller.enqueue(value);
+    },
+    cancel(reason) {
+      void reader.cancel(reason);
+    },
+  });
+}
+
 // The default favicon: the site name's first character in a rounded square —
 // a plain SVG string, so it needs no fonts, no rasterizer, and works for CJK
 // names as readily as latin ones. Served at /favicon.svg AND /favicon.ico
@@ -133,17 +173,50 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
       (acc, L) => React.createElement(L, null, acc),
       node,
     );
-    // WebMCP: register the app's actions as browser tools. Computed per render
-    // from the live registry (stable after warmup), gated on agent.webmcp + mcp
-    // (execute proxies to /mcp). No actions → no script → page stays zero-JS.
-    const webmcpTools = agent.webmcp && agent.mcp ? mcpTools() : null;
-    const config: DocumentConfig = webmcpTools?.length ? { ...docConfig, webmcpTools } : docConfig;
     const stream = await renderToReadableStream(
-      React.createElement(Document, { config, metadata, children: wrapped }),
+      React.createElement(Document, { config: docConfigForRender(), metadata, children: wrapped }),
     );
     await stream.allReady; // fully resolved markup (no streamed Suspense fallbacks)
     const html = "<!doctype html>\n" + (await new Response(stream).text());
     return new Response(html, { status, headers: htmlHeaders() });
+  }
+
+  // WebMCP: register the app's actions as browser tools. Computed per render
+  // from the live registry (stable after warmup), gated on agent.webmcp + mcp
+  // (execute proxies to /mcp). No actions → no script → page stays zero-JS.
+  function docConfigForRender(): DocumentConfig {
+    const webmcpTools = agent.webmcp && agent.mcp ? mcpTools() : null;
+    return webmcpTools?.length ? { ...docConfig, webmcpTools } : docConfig;
+  }
+
+  // Streaming Suspense: the shell (layout chain + the loading.tsx fallback)
+  // flushes immediately; <StreamedView> use()s the load promise, so React
+  // streams the resolved view in once load() settles. Gated by the caller on
+  // a present loading.tsx AND static metadata (a data-derived <title> can't
+  // stream — the <head> is outside the boundary).
+  async function renderStreamingDocument(
+    resolved: Resolved,
+    loadPromise: Promise<unknown>,
+    ctx: RouteContext,
+  ): Promise<Response> {
+    const { def, chain, loading: Loading } = resolved;
+    const leaf = React.createElement(StreamedView, { loadPromise, def, ctx });
+    const boundary = React.createElement(
+      Suspense,
+      { fallback: Loading ? React.createElement(Loading) : null },
+      leaf,
+    );
+    const wrapped = chain.reduceRight<React.ReactNode>(
+      (acc, L) => React.createElement(L, null, acc),
+      boundary,
+    );
+    const metadata = typeof def.metadata === "object" ? def.metadata : undefined;
+    const stream = await renderToReadableStream(
+      React.createElement(Document, { config: docConfigForRender(), metadata, children: wrapped }),
+      { onError: (e: unknown) => console.error("[june] streaming render error:", e) },
+    );
+    // NO allReady — return the live stream (shell first), doctype prepended.
+    return new Response(withDoctype(stream), { status: 200, headers: htmlHeaders() });
   }
 
   function notFoundResponse(target: RenderTarget, pathname: string): Promise<Response> | Response {
@@ -269,6 +342,16 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
         kv: res?.kv,
         blob: res?.blob,
       };
+      // Streaming Suspense: a view request on a route with loading.tsx AND
+      // static metadata flushes the shell + fallback before load() resolves.
+      // (data-derived metadata can't stream — the <head> needs the title.)
+      if (target === "view" && resolved.loading && typeof resolved.def.metadata !== "function") {
+        const loadPromise = Promise.resolve(
+          resolved.def.load ? resolved.def.load(ctx) : undefined,
+        );
+        return renderStreamingDocument(resolved, loadPromise, ctx);
+      }
+
       let data: unknown;
       try {
         data = resolved.def.load ? await resolved.def.load(ctx) : undefined;

@@ -77,14 +77,24 @@ export function withLiveReload(
     }
 
     const res = await fetchApp(req);
-    if (!res.headers.get("content-type")?.includes("text/html")) return res;
-    // Dev HTML is fully buffered by the pipeline already (allReady), so a
-    // text() round-trip costs nothing.
-    const html = await res.text();
-    const tag = `<script src="${SCRIPT_PATH}" defer></script>`;
-    const injected = html.includes("</body>") ? html.replace("</body>", `${tag}</body>`) : html + tag;
+    if (!res.headers.get("content-type")?.includes("text/html") || !res.body) return res;
+    // Append the reload script WITHOUT buffering — streaming routes must stay
+    // streamed in dev. The trailing <script defer> runs after the document
+    // parses regardless of position, so a final chunk is correct and keeps the
+    // shell-first flush intact.
+    const tag = new TextEncoder().encode(`<script src="${SCRIPT_PATH}" defer></script>`);
+    const tagged = res.body.pipeThrough(
+      new TransformStream<Uint8Array, Uint8Array>({
+        transform(chunk, controller) {
+          controller.enqueue(chunk);
+        },
+        flush(controller) {
+          controller.enqueue(tag);
+        },
+      }),
+    );
     const headers = new Headers(res.headers);
-    headers.delete("content-length"); // the body just grew; let the host recompute
-    return new Response(injected, { status: res.status, headers });
+    headers.delete("content-length"); // the body grew; let the host recompute
+    return new Response(tagged, { status: res.status, headers });
   };
 }
