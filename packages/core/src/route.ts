@@ -14,6 +14,8 @@
 // the agent-facing markdown. Capabilities live at /mcp (defineAction), not as a
 // route projection.
 
+import React from "react";
+
 import type { JuneDb, JuneKv, JuneBlob } from "./resources";
 import type { Principal, Session } from "./context";
 
@@ -70,9 +72,11 @@ export type RouteCache = {
 export type RouteDefinition<TData = unknown> = {
   load?: (ctx: RouteContext) => TData | Promise<TData>;
   view?: (data: TData, ctx: RouteContext) => React.ReactNode;
-  json?: (data: TData, ctx: RouteContext) => unknown | Promise<unknown>;
-  // Markdown projection. If absent, the `md` target is auto-derived from `json`.
-  md?: (data: TData, ctx: RouteContext) => string | Promise<string>;
+  // A projection function customizes the surface; `false` disables it (404 +
+  // dropped from discovery); absent derives the default (.json → loader data,
+  // .md → from json).
+  json?: ((data: TData, ctx: RouteContext) => unknown | Promise<unknown>) | false;
+  md?: ((data: TData, ctx: RouteContext) => string | Promise<string>) | false;
   // Response cache: cache the rendered output of GET requests, keyed by
   // target+URL, dropped by tag invalidation. Uses @junejs/core/cache.
   cache?: RouteCache;
@@ -100,6 +104,45 @@ export function isRouteDefinition(value: unknown): value is BrandedRoute {
     value !== null &&
     (value as Record<symbol, unknown>)[ROUTE_BRAND] === true
   );
+}
+
+// --- the multi-export page shape ------------------------------------------
+// A page.tsx default-exports its view component and configures the other
+// surfaces through named exports (loader / json / md / metadata). `Loaded<L>`
+// recovers the component's props type from the loader's return — the generated
+// `./+types` builds `Route.Data` from it.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type Loaded<L extends (ctx: any) => unknown> = Awaited<ReturnType<L>>;
+
+export type PageModule = {
+  default?: React.ComponentType<Record<string, unknown>>;
+  loader?: (ctx: RouteContext) => unknown;
+  json?: ((data: unknown, ctx: RouteContext) => unknown) | false;
+  md?: ((data: unknown, ctx: RouteContext) => string | Promise<string>) | false;
+  metadata?: Metadata | ((data: unknown, ctx: RouteContext) => Metadata);
+  cache?: RouteCache;
+  prerender?: boolean;
+};
+
+// Adapt a page module's exports into the internal BrandedRoute the pipeline
+// consumes. A legacy route({}) default export passes straight through, so both
+// shapes coexist during the migration. Returns null for non-route modules.
+export function routeFromModule(mod: unknown): BrandedRoute | null {
+  const m = (mod ?? {}) as PageModule;
+  if (isRouteDefinition(m.default)) return m.default; // legacy route({})
+  const View = typeof m.default === "function" ? m.default : undefined;
+  const hasConfig =
+    "loader" in m || "json" in m || "md" in m || "metadata" in m || "prerender" in m;
+  if (!View && !hasConfig) return null;
+  return route({
+    load: m.loader,
+    view: View ? (data: unknown) => React.createElement(View, data as Record<string, unknown>) : undefined,
+    json: m.json,
+    md: m.md,
+    metadata: m.metadata,
+    cache: m.cache,
+    prerender: m.prerender,
+  });
 }
 
 // The order each requested target degrades through when a projection is absent.

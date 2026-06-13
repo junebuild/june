@@ -14,12 +14,15 @@ export {
   route,
   isRouteDefinition,
   resolveProjection,
+  routeFromModule,
   type RenderTarget,
   type Metadata,
   type RouteContext,
   type RouteCache,
   type RouteDefinition,
   type BrandedRoute,
+  type PageModule,
+  type Loaded,
 } from "./route";
 
 // Config schema + pure resolvers

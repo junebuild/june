@@ -13,7 +13,7 @@ import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ComponentType } from "react";
 
-import { isRouteDefinition } from "@junejs/core/route";
+import { routeFromModule } from "@junejs/core/route";
 import { resolveAgent, resolveSpeculationRules, type JuneConfig } from "@junejs/core/config";
 import type { DocumentConfig } from "@junejs/core/document";
 import { runWithTrace, type RequestTrace } from "@junejs/core/instrumentation";
@@ -117,9 +117,10 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
       resolve: async (pathname): Promise<Resolved | null> => {
         const match = await matchRouteTree(appDir, pathname, { pageConvention: true });
         if (!match) return null;
-        const mod = (await import(pathToFileURL(match.file).href)) as { default?: unknown };
-        if (!isRouteDefinition(mod.default)) return null;
-        return { def: mod.default, params: match.params, chain: await loadChain(match.segments) };
+        const mod = await import(pathToFileURL(match.file).href);
+        const def = routeFromModule(mod);
+        if (!def) return null;
+        return { def, params: match.params, chain: await loadChain(match.segments) };
       },
     });
   }

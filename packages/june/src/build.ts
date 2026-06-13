@@ -25,7 +25,7 @@ import { pathToFileURL } from "node:url";
 import { loadJuneConfig } from "./config-loader";
 import { resolveAgent, resolveSpeculationRules } from "@junejs/core/config";
 import { buildLinkHeader } from "@junejs/core/discovery";
-import { isRouteDefinition, type BrandedRoute } from "@junejs/core/route";
+import { routeFromModule, type BrandedRoute } from "@junejs/core/route";
 import type { DocumentConfig } from "@junejs/core/document";
 import { collection } from "./content";
 import { createWorker, type WorkerManifest } from "./worker";
@@ -172,14 +172,15 @@ export async function buildManifest(appRoot: string): Promise<WorkerManifest> {
   const layoutChains: Record<string, LayoutComponent[]> = {};
 
   for (const r of scanned) {
-    const mod = (await import(pathToFileURL(r.file).href)) as { default?: unknown };
-    if (!isRouteDefinition(mod.default)) continue;
+    const mod = await import(pathToFileURL(r.file).href);
+    const def = routeFromModule(mod);
+    if (!def) continue;
     const chain = await componentsFor(r.layouts);
     if (r.dynamic) {
-      dynamicRoutes.push({ pattern: r.path, def: mod.default });
+      dynamicRoutes.push({ pattern: r.path, def });
       layoutChains[r.path] = chain;
     } else {
-      routes[r.path] = mod.default;
+      routes[r.path] = def;
       layoutChains[r.path] = chain;
     }
   }
@@ -225,7 +226,13 @@ export async function juneBuild(
   const frozen = await freezeConfig(appRoot);
 
   // ---- generated entry -----------------------------------------------------
-  const imports: string[] = [`import { createWorker } from "@junejs/server/worker";`];
+  // Routes are namespace-imported and adapted with routeFromModule, so the
+  // multi-export page shape (default view + named loader/json/md) and the legacy
+  // route({}) default export both work.
+  const imports: string[] = [
+    `import { createWorker } from "@junejs/server/worker";`,
+    `import { routeFromModule } from "@junejs/core/route";`,
+  ];
   const statics: string[] = [];
   const dynamics: string[] = [];
   const layoutIds = new Map<string, string>();
@@ -240,9 +247,9 @@ export async function juneBuild(
   };
   const chains: string[] = [];
   routes.forEach((r, i) => {
-    imports.push(`import r${i} from ${JSON.stringify(importPath(genDir, r.file))};`);
-    if (r.dynamic) dynamics.push(`    { pattern: ${JSON.stringify(r.path)}, def: r${i} },`);
-    else statics.push(`    ${JSON.stringify(r.path)}: r${i},`);
+    imports.push(`import * as r${i} from ${JSON.stringify(importPath(genDir, r.file))};`);
+    if (r.dynamic) dynamics.push(`    { pattern: ${JSON.stringify(r.path)}, def: routeFromModule(r${i}) },`);
+    else statics.push(`    ${JSON.stringify(r.path)}: routeFromModule(r${i}),`);
     chains.push(`    ${JSON.stringify(r.path)}: [${r.layouts.map(layoutId).join(", ")}],`);
   });
 

@@ -18,7 +18,6 @@ import React from "react";
 import { renderToReadableStream } from "react-dom/server";
 
 import {
-  resolveProjection,
   type BrandedRoute,
   type Metadata,
   type RenderTarget,
@@ -166,9 +165,14 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
   }
 
   async function renderMarkdown(def: BrandedRoute, data: unknown, ctx: RouteContext): Promise<Response> {
-    const body = def.md
-      ? await def.md(data, ctx)
-      : "```json\n" + JSON.stringify(def.json ? await def.json(data, ctx) : data, null, 2) + "\n```\n";
+    // md fn → custom; absent → derive from the json projection (loader data when
+    // json is also absent). md/json === false is handled as 404 by the caller.
+    const jsonData =
+      typeof def.json === "function" ? await def.json(data, ctx) : def.json === false ? null : data;
+    const body =
+      typeof def.md === "function"
+        ? await def.md(data, ctx)
+        : "```json\n" + JSON.stringify(jsonData, null, 2) + "\n```\n";
     // x-markdown-tokens: a rough estimate (~4 chars/token) agents use to budget.
     return text(body, "text/markdown; charset=utf-8", {
       headers: { "x-markdown-tokens": String(Math.ceil(body.length / 4)) },
@@ -182,16 +186,17 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
     ctx: RouteContext,
   ): Promise<Response> {
     const { def, chain } = resolved;
-    if (target === "md") return renderMarkdown(def, data, ctx);
+    // A projection declared `false` is disabled → 404 (and absent from discovery).
+    if (def[target] === false) return notFoundResponse(target, ctx.url.pathname);
 
-    switch (resolveProjection(def, target)) {
-      case "json":
-        return Response.json(await def.json!(data, ctx));
-      default: {
-        const node = def.view ? def.view(data, ctx) : null;
-        return renderDocument(node, resolveMeta(def, data, ctx), 200, chain);
-      }
+    if (target === "md") return renderMarkdown(def, data, ctx);
+    if (target === "json") {
+      // Convention: a json() fn customizes; absent → serialize the loader data.
+      const payload = typeof def.json === "function" ? await def.json(data, ctx) : data;
+      return Response.json(payload);
     }
+    const node = def.view ? def.view(data, ctx) : null;
+    return renderDocument(node, resolveMeta(def, data, ctx), 200, chain);
   }
 
   async function discovery(url: URL): Promise<Response | null> {

@@ -1,4 +1,4 @@
-import { route } from "@junejs/core/route";
+import type { Loaded } from "@junejs/core/route";
 import { defineAction } from "@junejs/core/agent";
 
 type User = { id: number; name: string };
@@ -20,18 +20,20 @@ export const createUser = defineAction({
   run: ({ name }: { name: string }): User => ({ id: users.length + 1, name }),
 });
 
-export default route({
-  load: () => ({ users }),
-  view: (data) => (
+export const loader = () => ({ users });
+
+export default function Users({ users }: Loaded<typeof loader>) {
+  return (
     <main>
       <h1>Users</h1>
       <ul>
-        {data.users.map((u) => (
+        {users.map((u) => (
           <li key={u.id}>{u.name}</li>
         ))}
       </ul>
     </main>
-  ),
-  json: (data) => data,
-  metadata: { title: "Users" },
-});
+  );
+}
+
+// .json auto-derives from the loader data ({ users }); no export needed.
+export const metadata = { title: "Users" };
