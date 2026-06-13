@@ -200,6 +200,16 @@ describe("agent surface", () => {
     expect(names).toContain("get_page");
   });
 
+  test("WebMCP: pages inject the tool manifest + registration bridge", async () => {
+    const html = await (await get("/")).text();
+    // the manifest the browser script reads — same tools as /mcp
+    expect(html).toContain('<script type="application/json" id="june-webmcp">');
+    expect(html).toContain("search_site");
+    // the registration bridge to navigator.modelContext
+    expect(html).toContain("navigator.modelContext");
+    expect(html).toContain("registerTool");
+  });
+
   test("search_site finds the cold-start post; get_page returns verbatim markdown", async () => {
     const search = await rpc({
       method: "tools/call",

@@ -30,8 +30,9 @@ function err(id: Rpc["id"], code: number, message: string) {
 }
 
 // Only rich actions (with a description) are surfaced as MCP tools; bare RSC
-// server actions registered via action(fn, id) carry no schema.
-function tools() {
+// server actions registered via action(fn, id) carry no schema. Exported as
+// mcpTools() so the WebMCP document injection registers the SAME set.
+export function mcpTools() {
   return [...ACTION_REGISTRY.values()]
     .filter((action) => action.description)
     .map((action) => ({
@@ -56,7 +57,7 @@ async function handle(message: Rpc, ctx: ActionContext): Promise<object | null> 
     case "ping":
       return ok(id, {});
     case "tools/list":
-      return ok(id, { tools: tools() });
+      return ok(id, { tools: mcpTools() });
     case "tools/call": {
       const name = params?.name as string | undefined;
       const args = (params?.arguments as Record<string, unknown>) ?? {};

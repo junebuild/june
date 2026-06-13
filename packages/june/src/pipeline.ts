@@ -34,7 +34,7 @@ import {
   robotsTxt,
   sitemapXml,
 } from "@junejs/core/discovery";
-import { mcpHandler } from "@junejs/core/mcp";
+import { mcpHandler, mcpTools } from "@junejs/core/mcp";
 import type { AgentConfig } from "@junejs/core/config";
 import type { Resources } from "@junejs/core/resources";
 
@@ -135,8 +135,13 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
       (acc, L) => React.createElement(L, null, acc),
       node,
     );
+    // WebMCP: register the app's actions as browser tools. Computed per render
+    // from the live registry (stable after warmup), gated on agent.webmcp + mcp
+    // (execute proxies to /mcp). No actions → no script → page stays zero-JS.
+    const webmcpTools = agent.webmcp && agent.mcp ? mcpTools() : null;
+    const config: DocumentConfig = webmcpTools?.length ? { ...docConfig, webmcpTools } : docConfig;
     const stream = await renderToReadableStream(
-      React.createElement(Document, { config: docConfig, metadata, children: wrapped }),
+      React.createElement(Document, { config, metadata, children: wrapped }),
     );
     await stream.allReady; // fully resolved markup (no streamed Suspense fallbacks)
     const html = "<!doctype html>\n" + (await new Response(stream).text());

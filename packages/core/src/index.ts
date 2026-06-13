@@ -94,7 +94,7 @@ export {
 } from "./discovery";
 
 // The Web-standard MCP endpoint
-export { mcpHandler } from "./mcp";
+export { mcpHandler, mcpTools } from "./mcp";
 
 // Cache primitives + the CacheStore seam
 export {

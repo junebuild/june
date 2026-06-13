@@ -17,6 +17,11 @@ export type DocumentConfig = {
   // loads it as a deferred module so `"use client"` islands hydrate. Absent /
   // null → the page ships zero client JS.
   clientScript?: string | null;
+  // WebMCP tool manifest (name/description/inputSchema) — the SAME actions the
+  // server exposes at /mcp. When present, the document injects a tiny script
+  // that registers each via navigator.modelContext.registerTool() so an
+  // in-browser agent can call them (each tool's execute proxies to /mcp).
+  webmcpTools?: Array<{ name: string; description?: string; inputSchema?: unknown }> | null;
 };
 
 // Cross-document View Transitions: same-origin MPA navigations cross-fade
@@ -31,6 +36,13 @@ export const VIEW_TRANSITION_CSS = `
           }`;
 
 export const PREFETCH_FALLBACK = `(function(){if(HTMLScriptElement.supports&&HTMLScriptElement.supports('speculationrules'))return;var seen=new Set();document.addEventListener('pointerover',function(e){var a=e.target&&e.target.closest&&e.target.closest('a[href]');if(!a)return;var u=new URL(a.href,location.href);if(u.origin!==location.origin||seen.has(u.pathname)||u.pathname===location.pathname)return;if(/\.(md|json|agent)$/.test(u.pathname)||u.pathname==='/mcp')return;seen.add(u.pathname);var l=document.createElement('link');l.rel='prefetch';l.href=u.pathname+u.search;document.head.appendChild(l);},{passive:true});})();`;
+
+// WebMCP bridge: register each declared action via navigator.modelContext so an
+// in-browser agent can call it; execute() proxies to /mcp (the same dispatch the
+// server MCP endpoint uses). No-op when the browser lacks the API. An
+// AbortController lets a future SPA navigation unregister. Reads its tool list
+// from the adjacent <script id="june-webmcp"> JSON.
+export const WEBMCP_SCRIPT = `(function(){var mc=navigator.modelContext;if(!mc||!mc.registerTool)return;var el=document.getElementById('june-webmcp');if(!el)return;var tools;try{tools=JSON.parse(el.textContent)}catch(e){return}var ac=new AbortController();tools.forEach(function(t){mc.registerTool({name:t.name,description:t.description,inputSchema:t.inputSchema,execute:function(args){return fetch('/mcp',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/call',params:{name:t.name,arguments:args}})}).then(function(r){return r.json()}).then(function(j){return j.result})}},{signal:ac.signal})})})();`;
 
 export function documentTitle(
   meta: Metadata | undefined,
@@ -116,6 +128,16 @@ export function Document({
         {/* type="module" defers automatically: the island runtime runs after the
             markup is parsed, so markers exist when it scans for them. */}
         {config.clientScript ? <script type="module" src={config.clientScript} /> : null}
+        {config.webmcpTools && config.webmcpTools.length ? (
+          <>
+            <script
+              type="application/json"
+              id="june-webmcp"
+              dangerouslySetInnerHTML={{ __html: JSON.stringify(config.webmcpTools) }}
+            />
+            <script dangerouslySetInnerHTML={{ __html: WEBMCP_SCRIPT }} />
+          </>
+        ) : null}
       </body>
     </html>
   );
