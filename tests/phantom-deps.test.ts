@@ -7,7 +7,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-const PACKAGES = ["core", "cli", "june", "juno", "create-june"];
+const PACKAGES = ["core", "db", "cli", "june", "juno", "create-june"];
 
 function sourceFiles(dir: string): string[] {
   const out: string[] = [];

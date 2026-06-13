@@ -10,7 +10,7 @@ work=$(mktemp -d)
 trap 'pkill -f "june.ts dev" 2>/dev/null; rm -rf "$work"' EXIT
 
 echo "→ packing workspace tarballs"
-for p in core june juno cli create-june; do
+for p in core db june juno cli create-june; do
   (cd "packages/$p" && bun pm pack --quiet >/dev/null 2>&1)
   mv packages/$p/*.tgz "$work/"
 done

@@ -3,20 +3,21 @@
 // ctx is IDENTITY (who is calling: user, session, url, params) — what
 // authorization needs. Resources are CAPABILITY (what tools exist). Mixing them
 // onto one object forced every model/repo/helper to thread ctx just to touch the
-// db (the Express `req.db` anti-pattern). Instead the pipeline runs each request
-// inside a scope holding the opened resources, and `db`/`kv`/`blob` are ambient
-// accessors that read it — so domain code never sees the request object:
+// db (the Express `req.db` anti-pattern). Instead the host pipeline runs each
+// request inside a scope holding the opened resources, and `db`/`kv`/`blob` are
+// ambient accessors that read it — so domain code never sees the request object:
 //
-//   import { db } from "@junejs/server";
+//   import { db } from "@junejs/db";
 //   const getUser = (id) => db.get("select * from users where id = ?", [id]);
 //
-// The async context is AsyncLocalStorage, loaded LAZILY through a non-literal
-// specifier (the same trick instrumentation.ts uses) so no bundler resolves a
-// static `node:*` import — workerd registers worker chunks raw and a static
-// node: import breaks module registration (rebuild-plan reminders #1, #4).
-// workerd provides node:async_hooks at runtime via nodejs_compat; dev gets it
-// from Bun/Node. The store propagates across awaits AND to async work spawned
-// inside runInScope, so a streamed loader still sees the db after fetch returns.
+// This package is the ambient data seam. It is EDGE-SAFE (no static `node:*`):
+// the async context is AsyncLocalStorage, loaded LAZILY through a non-literal
+// specifier so no bundler resolves a static `node:*` import — workerd registers
+// worker chunks raw and a static node: import breaks module registration
+// (rebuild-plan reminders #1, #4). workerd provides node:async_hooks at runtime
+// via nodejs_compat; dev gets it from Bun/Node. The store propagates across
+// awaits AND to async work spawned inside runInScope, so a streamed loader still
+// sees the db after fetch returns.
 
 import type { Resources, JuneDb, JuneKv, JuneBlob } from "@junejs/core/resources";
 
@@ -86,7 +87,7 @@ function ambient<T extends object>(name: keyof Resources): T {
   });
 }
 
-// The ambient resources. `import { db } from "@junejs/server"` anywhere.
+// The ambient resources. `import { db } from "@junejs/db"` anywhere.
 export const db: JuneDb = ambient<JuneDb>("db");
 export const kv: JuneKv = ambient<JuneKv>("kv");
 export const blob: JuneBlob = ambient<JuneBlob>("blob");

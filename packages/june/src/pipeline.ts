@@ -35,7 +35,7 @@ import {
 } from "@junejs/core/discovery";
 import { mcpHandler, mcpTools } from "@junejs/core/mcp";
 
-import { ensureScope, runInScope } from "./scope";
+import { ensureScope, runInScope } from "@junejs/db";
 import type { AgentConfig } from "@junejs/core/config";
 import type { Resources } from "@junejs/core/resources";
 

@@ -1,5 +1,5 @@
 import { route } from "@junejs/core/route";
-import { db } from "@junejs/server";
+import { db } from "@junejs/db";
 
 // Reads the AMBIENT `db` (decoupled from ctx). Declaring `resources.db` is
 // required to use it; without it the ambient db throws guidance, which the load

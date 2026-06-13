@@ -72,11 +72,19 @@
         "create-june": "./bin.mjs",
       },
     },
+    "packages/db": {
+      "name": "@junejs/db",
+      "version": "0.0.9",
+      "dependencies": {
+        "@junejs/core": "workspace:*",
+      },
+    },
     "packages/june": {
       "name": "@junejs/server",
       "version": "0.0.9",
       "dependencies": {
         "@junejs/core": "workspace:*",
+        "@junejs/db": "workspace:*",
         "marked": "^18.0.5",
         "rolldown": "^1.1.0",
       },
@@ -162,6 +170,8 @@
     "@junejs/cli": ["@junejs/cli@workspace:packages/cli"],
 
     "@junejs/core": ["@junejs/core@workspace:packages/core"],
+
+    "@junejs/db": ["@junejs/db@workspace:packages/db"],
 
     "@junejs/juno": ["@junejs/juno@workspace:packages/juno"],
 

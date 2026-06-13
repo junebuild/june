@@ -31,6 +31,7 @@
   },
   "dependencies": {
     "@junejs/core": "workspace:*",
+    "@junejs/db": "workspace:*",
     "marked": "^18.0.5",
     "rolldown": "^1.1.0"
   },
