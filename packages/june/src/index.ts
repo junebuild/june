@@ -1,12 +1,24 @@
 // @junejs/server — June's host adapters + dev server. Host-coupled (`node:*`
 // allowed); it composes ON TOP of the pure `@junejs/core` contract layer.
 
-export { workers, type JuneAdapter, type AdapterCapabilities } from "./adapter";
+export {
+  workers,
+  type JuneAdapter,
+  type AdapterCapabilities,
+  type ResourcePlan,
+  type AdapterEntry,
+  type AdapterEmitContext,
+} from "./adapter";
 export { host, type JuneHost, type JuneDb, type RunResult, type ServeHandle, type SpawnedModule } from "./host";
 export { sqlite, d1, type D1Database } from "./db";
 export { memoryKv, redisKv } from "./kv";
 export { localBlob, r2, type R2Bucket } from "./blob";
-export { memoizeResources } from "./resources";
+export {
+  memoizeResources,
+  bindWorkerResources,
+  type WorkerEnv,
+  type ResourceFlags,
+} from "./resources";
 export { loadJuneConfig } from "./config-loader";
 export { collection, entry, type ContentEntry } from "./content";
 export {

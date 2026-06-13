@@ -29,12 +29,24 @@ export type AdapterEntry = {
   wrap(pipelineVar: string): string;
 };
 
+// What the app's declared resources need from the platform. Derived from
+// config.resources at build time; the adapter turns it into platform bindings
+// (workers() → wrangler `d1_databases` etc.). Target-neutral so a future
+// vercel()/node() adapter maps the SAME plan to its own provisioning.
+export type ResourcePlan = {
+  // A declared `db` → a D1 binding named `binding`. The runtime provider
+  // (bindWorkerResources) reads env[binding]; keep in sync (default "DB").
+  db?: { binding: string; databaseName: string };
+};
+
 export type AdapterEmitContext = {
   appRoot: string;
   outDir: string;
   hasAssets: boolean;
   linkHeader: string | null;
   config: JuneConfig;
+  // Platform bindings the declared resources need (empty object = none).
+  plan: ResourcePlan;
   // package.json name (or sanitized dir name) — the fallback worker/app name.
   defaultName: string;
 };
@@ -64,7 +76,7 @@ export function workers(opts?: { name?: string; domain?: string }): JuneAdapter 
       };
     },
 
-    async emit({ appRoot, outDir, hasAssets, config, defaultName }) {
+    async emit({ appRoot, outDir, hasAssets, config, plan, defaultName }) {
       // An app that manages its own wrangler config wins — don't overwrite it.
       if (existsSync(join(appRoot, "wrangler.toml")) || existsSync(join(appRoot, "wrangler.jsonc"))) {
         return;
@@ -83,6 +95,21 @@ export function workers(opts?: { name?: string; domain?: string }): JuneAdapter 
             // negotiation. The ASSETS binding lets the worker serve assets.
             ...(hasAssets
               ? { assets: { directory: "./assets", binding: "ASSETS", run_worker_first: true } }
+              : {}),
+            // A declared `db` resource → a D1 binding. database_id is per-account
+            // (run `wrangler d1 create <name>` and paste it); emitted empty so
+            // the binding is wired and the one missing value is obvious. With it,
+            // the same `sqlite()` declaration runs on D1 at the edge.
+            ...(plan.db
+              ? {
+                  d1_databases: [
+                    {
+                      binding: plan.db.binding,
+                      database_name: plan.db.databaseName,
+                      database_id: "",
+                    },
+                  ],
+                }
               : {}),
             // config deploy.domain → a Workers custom domain; without it the
             // regenerated file would silently drop a hand-attached domain.

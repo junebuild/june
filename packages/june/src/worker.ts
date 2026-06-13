@@ -37,8 +37,9 @@ export type WorkerManifest = {
   // The app/_extra.* pre-route handler, imported by the generated entry.
   extra?: ExtraHandler;
   // Opened data resources (db/kv/blob) injected onto ctx. On workerd the D1/KV/R2
-  // bindings come from env per request, so the generated entry passes a provider.
-  resources?: () => Promise<Resources> | Resources;
+  // bindings come from env, so the generated entry passes an ENV-AWARE provider
+  // (bindWorkerResources) — the worker threads its env through on each fetch.
+  resources?: (env?: unknown) => Promise<Resources> | Resources;
 };
 
 type Compiled = { regex: RegExp; names: string[]; def: BrandedRoute; pattern: string };
@@ -84,7 +85,9 @@ function compilePattern(pattern: string): { regex: RegExp; names: string[] } {
   return { regex: new RegExp(allOptional ? `^(?:${source}|/)$` : `^${source}$`), names };
 }
 
-export function createWorker(manifest: WorkerManifest): { fetch(request: Request): Promise<Response> } {
+export function createWorker(
+  manifest: WorkerManifest,
+): { fetch(request: Request, env?: unknown): Promise<Response> } {
   const dynamic: Compiled[] = (manifest.dynamicRoutes ?? []).map((d) => ({
     ...compilePattern(d.pattern),
     def: d.def,
@@ -98,7 +101,13 @@ export function createWorker(manifest: WorkerManifest): { fetch(request: Request
   const chainFor = (key: string): LayoutComponent[] => manifest.layoutChains?.[key] ?? [];
   const loadingFor = (key: string): LoadingComponent | undefined => manifest.loadings?.[key];
 
-  return createPipeline({
+  // The worker's env (D1/KV/R2 bindings) arrives per fetch and is stable across
+  // requests in an isolate; we capture the latest and hand it to the env-aware
+  // provider, which memoizes the opened handles on first call.
+  let currentEnv: unknown;
+  const provider = manifest.resources;
+
+  const pipeline = createPipeline({
     docConfig: manifest.document,
     agent: manifest.agent,
     routeList: () => routeList,
@@ -106,7 +115,7 @@ export function createWorker(manifest: WorkerManifest): { fetch(request: Request
     htmlCacheControl: manifest.htmlCacheControl,
     notFoundComponent: manifest.notFound,
     extra: manifest.extra,
-    resources: manifest.resources,
+    resources: provider ? () => provider(currentEnv) : undefined,
     resolve: async (pathname): Promise<Resolved | null> => {
       const staticDef = manifest.routes[pathname];
       if (staticDef)
@@ -128,6 +137,13 @@ export function createWorker(manifest: WorkerManifest): { fetch(request: Request
       return null;
     },
   });
+
+  return {
+    fetch(request, env) {
+      currentEnv = env;
+      return pipeline.fetch(request);
+    },
+  };
 }
 
 // --- the deployed worker's outermost layer (run_worker_first) ---------------
@@ -140,7 +156,7 @@ export function createWorker(manifest: WorkerManifest): { fetch(request: Request
 // dynamic routes reach the pipeline. With no ASSETS binding (no prerender), this
 // is a transparent pass-through to the pipeline.
 type AssetEnv = { ASSETS?: { fetch(request: Request): Promise<Response> } };
-type FetchPipeline = { fetch(request: Request): Promise<Response> };
+type FetchPipeline = { fetch(request: Request, env?: unknown): Promise<Response> };
 
 const estimateTokens = (s: string) => String(Math.ceil(s.length / 4));
 
@@ -187,7 +203,8 @@ export function withAssets(
       }
 
       // 3. Dynamic routes → the render pipeline (already sets Link + negotiates).
-      return pipeline.fetch(request);
+      // Env flows through so the pipeline's resources get the D1/KV/R2 bindings.
+      return pipeline.fetch(request, env);
     },
   };
 }
