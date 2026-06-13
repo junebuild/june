@@ -1,7 +1,5 @@
-import { route } from "@junejs/core/route";
+import type { Loaded } from "@junejs/core/route";
 import { defineAction } from "@junejs/core/agent";
-
-import { UsersList } from "./UsersList";
 
 type User = { id: number; name: string };
 const users: User[] = [
@@ -9,7 +7,8 @@ const users: User[] = [
   { id: 2, name: "Grace" },
 ];
 
-// One definition, surfaced as a UI action AND an MCP tool an agent can call.
+// One definition, surfaced as a UI action AND an MCP tool (and a browser WebMCP
+// tool) an agent can call.
 export const createUser = defineAction({
   id: "createUser",
   description: "Create a user",
@@ -17,9 +16,19 @@ export const createUser = defineAction({
   run: ({ name }: { name: string }): User => ({ id: users.length + 1, name }),
 });
 
-export default route({
-  load: () => ({ users }),
-  view: (data) => <UsersList users={data.users} />,
-  json: (data) => data,
-  metadata: { title: "Users" },
-});
+export const loader = () => ({ users });
+
+export default function Users({ users }: Loaded<typeof loader>) {
+  return (
+    <main>
+      <h1>Users</h1>
+      <ul>
+        {users.map((u) => (
+          <li key={u.id}>{u.name}</li>
+        ))}
+      </ul>
+    </main>
+  );
+}
+
+export const metadata = { title: "Users" };
