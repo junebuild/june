@@ -14,7 +14,7 @@ import { createApp } from "./app";
 import { withLiveReload, notifyCssChange } from "./dev-reload";
 import { host as defaultHost, type JuneHost, type ServeHandle } from "./host";
 import { migrateApp, blockedMessage } from "./migrate";
-import { findGlobalCss } from "./css";
+import { findGlobalCss, processCss } from "./css";
 
 export type DevServerOptions = {
   appDir: string;
@@ -76,6 +76,11 @@ export async function startDevServer({
     watch(appDir, { recursive: true }, (_event, file) => {
       if (file && file.endsWith(".css")) notifyCssChange();
     });
+    // Warm the CSS engine in the background: Tailwind v4's native engine costs
+    // ~700ms to load ONCE. Doing it now (while the user reads the dev URL)
+    // overlaps that with startup, so the first page's stylesheet is instant
+    // instead of waiting on the cold compile. Recompiles after are ~10ms.
+    void processCss(appDir).catch(() => {});
   }
 
   const url = `http://localhost:${handle.port}`;
