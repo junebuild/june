@@ -15,6 +15,10 @@ const IGNORED_DIRS = new Set(["node_modules", ".git", "dist", ".june"]);
 export function ignoredPath(file: string): boolean {
   const parts = file.split(sep);
   if (parts.some((p) => IGNORED_DIRS.has(p))) return true;
+  // Stylesheets are hot-swapped by the dev server (CSS HMR), not a restart — so
+  // the supervisor must NOT respawn over a .css edit, or the swap degrades to a
+  // full reload. A .tsx edit still restarts (its rendered markup changed too).
+  if (file.endsWith(".css")) return true;
   return parts.length === 2 && parts[0] === "app" && /^_content\.[^/]+$/.test(parts[1]!);
 }
 

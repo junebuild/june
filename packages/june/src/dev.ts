@@ -4,15 +4,17 @@
 // work), load june.config.ts from the app root (the config the PoC forgot to
 // read), build the app, and serve through the detected JuneHost.
 
+import { watch } from "node:fs";
 import { createServer as createNetServer } from "node:net";
 import { dirname } from "node:path";
 
 import { loadJuneConfig } from "./config-loader";
 import { installAsyncContext } from "./instrumentation";
 import { createApp } from "./app";
-import { withLiveReload } from "./dev-reload";
+import { withLiveReload, notifyCssChange } from "./dev-reload";
 import { host as defaultHost, type JuneHost, type ServeHandle } from "./host";
 import { migrateApp, blockedMessage } from "./migrate";
+import { findGlobalCss } from "./css";
 
 export type DevServerOptions = {
   appDir: string;
@@ -65,6 +67,16 @@ export async function startDevServer({
     port,
     earlyHints: () => app.earlyHints(),
   });
+
+  // CSS hot-swap: a stylesheet edit pushes a `css` event to open browsers, which
+  // re-fetch /global.css and swap the <link> WITHOUT reloading (island state +
+  // scroll survive). The supervisor ignores .css so it won't restart over it; a
+  // .tsx edit still restarts → full reload (its markup changed too).
+  if (findGlobalCss(appDir)) {
+    watch(appDir, { recursive: true }, (_event, file) => {
+      if (file && file.endsWith(".css")) notifyCssChange();
+    });
+  }
 
   const url = `http://localhost:${handle.port}`;
   console.log(`june dev → ${url}  (host: ${host.name})`);

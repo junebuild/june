@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { createApp } from "../src/app";
 import { loadJuneConfig } from "../src/config-loader";
 import { startDevServer, type DevServer } from "../src/dev";
+import { notifyCssChange } from "../src/dev-reload";
 
 const ROOT = fileURLToPath(new URL("../../../examples/basic", import.meta.url));
 
@@ -86,5 +87,22 @@ describe("dev live reload", () => {
 
     const md = await (await fetch(`${server.url}/users.md`)).text();
     expect(md).not.toContain("__june/reload");
+  });
+
+  test("CSS HMR: a stylesheet change PUSHES a `css` event to open clients (no reload)", async () => {
+    const res = await fetch(`${server.url}/__june/events`);
+    const reader = res.body!.getReader();
+    expect(new TextDecoder().decode((await reader.read()).value)).toContain("data: connected");
+    notifyCssChange(); // the .css watcher fires this on a stylesheet edit
+    const evt = new TextDecoder().decode((await reader.read()).value);
+    expect(evt).toContain("event: css");
+    await reader.cancel();
+  });
+
+  test("the reload script hot-swaps /global.css on a css event, keeps reload for restarts", async () => {
+    const js = await (await fetch(`${server.url}/__june/reload.js`)).text();
+    expect(js).toContain('addEventListener("css"'); // the hot-swap channel
+    expect(js).toContain("/global.css"); // swaps only the stylesheet link
+    expect(js).toContain("location.reload()"); // a server restart still full-reloads
   });
 });

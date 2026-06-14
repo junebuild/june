@@ -18,6 +18,12 @@ describe("ignoredPath()", () => {
     expect(ignoredPath(".june/blob/x")).toBe(true);
   });
 
+  test("stylesheets are ignored — CSS HMR hot-swaps them, a restart would full-reload", () => {
+    expect(ignoredPath("app/global.css")).toBe(true);
+    expect(ignoredPath("app/components/card.module.css")).toBe(true);
+    expect(ignoredPath("app/page.tsx")).toBe(false); // code still restarts
+  });
+
   test("an _content-named file deeper than app/ still triggers", () => {
     expect(ignoredPath("app/docs/_content.ts")).toBe(false);
   });

@@ -12,15 +12,30 @@
 const EVENTS_PATH = "/__june/events";
 const SCRIPT_PATH = "/__june/reload.js";
 
-const RELOAD_JS = `// june dev live-reload: reconnect-after-drop → location.reload()
+const RELOAD_JS = `// june dev live-reload: reconnect-after-drop → reload; "css" event → hot-swap
 (() => {
   let dropped = false;
+  const swapCss = () => {
+    document.querySelectorAll('link[rel="stylesheet"]').forEach((old) => {
+      const u = new URL(old.href);
+      if (u.pathname !== "/global.css") return;
+      // Clone with a cache-busted href; drop the old one once the new loads so
+      // there's no flash of unstyled content. No page reload → island state and
+      // scroll survive.
+      const next = old.cloneNode();
+      u.searchParams.set("t", Date.now());
+      next.href = u.pathname + u.search;
+      next.addEventListener("load", () => old.remove(), { once: true });
+      old.parentNode.insertBefore(next, old.nextSibling);
+    });
+  };
   const connect = () => {
     const es = new EventSource(${JSON.stringify(EVENTS_PATH)});
     es.addEventListener("open", () => {
       if (dropped) location.reload();
       dropped = false;
     });
+    es.addEventListener("css", swapCss); // stylesheet edit → swap, no reload
     es.addEventListener("error", () => {
       dropped = true;
       // EventSource auto-retries while the connection is flaky, but goes to
@@ -36,14 +51,34 @@ const RELOAD_JS = `// june dev live-reload: reconnect-after-drop → location.re
 })();
 `;
 
+// Live SSE connections, so a CSS edit can be PUSHED to every open browser (a
+// code edit still rides the restart-then-reconnect path). The child watches the
+// stylesheet (dev.ts) and calls notifyCssChange; the supervisor ignores .css so
+// it does NOT restart — that's what keeps this a hot-swap instead of a reload.
+const clients = new Set<ReadableStreamDefaultController<Uint8Array>>();
+const enc = new TextEncoder();
+
+export function notifyCssChange(): void {
+  const msg = enc.encode("event: css\ndata: 1\n\n");
+  for (const c of clients) {
+    try {
+      c.enqueue(msg);
+    } catch {
+      clients.delete(c);
+    }
+  }
+}
+
 function devEvents(): Response {
   let heartbeat: ReturnType<typeof setInterval> | undefined;
+  let self: ReadableStreamDefaultController<Uint8Array> | undefined;
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
+      self = controller;
+      clients.add(controller);
       // One greeting so the browser fires `open`, then a comment heartbeat:
       // a silent stream gets culled by idle timeouts (hosts, proxies), and a
       // culled stream reads as a restart to the client — which reloads.
-      const enc = new TextEncoder();
       controller.enqueue(enc.encode("retry: 300\n\ndata: connected\n\n"));
       heartbeat = setInterval(() => {
         try {
@@ -55,6 +90,7 @@ function devEvents(): Response {
     },
     cancel() {
       clearInterval(heartbeat);
+      if (self) clients.delete(self);
     },
   });
   return new Response(stream, {
