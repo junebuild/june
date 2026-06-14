@@ -41,7 +41,7 @@ Usage: june <command> [dir] [options]
 Commands:
   dev      Start the dev server                 --port <n> --no-watch
   build    Build a workerd-ready bundle         --out <dir>
-  deploy   Build + deploy (Workers)             --dry-run
+  deploy   Build + migrate D1 + deploy          --dry-run --skip-migrate --allow-destructive
   gen      Freeze content/schema                --check
   db       Database tasks (db migrate)           --allow-destructive
   info     Show routes + the agent surface
@@ -124,7 +124,11 @@ export async function run(argv: string[]): Promise<number | undefined> {
     }
     case "deploy": {
       const { juneDeploy } = await import("@junejs/server");
-      const r = await juneDeploy(root, { dryRun: !!flags["dry-run"] });
+      const r = await juneDeploy(root, {
+        dryRun: !!flags["dry-run"],
+        skipMigrate: !!flags["skip-migrate"],
+        allowDestructive: !!flags["allow-destructive"],
+      });
       console.log(r.url ? `deployed → ${r.url}` : r.dryRun ? "dry-run ok" : "deployed");
       return 0;
     }

@@ -10,16 +10,24 @@ import { join } from "node:path";
 
 import { juneBuild } from "./build";
 import { loadJuneConfig } from "./config-loader";
+import { blockedMessage } from "./migrate";
+import { migrateD1, resolveD1Database } from "./d1-migrate";
 
 export type DeployResult = {
   url: string | null;
   dryRun: boolean;
   configPath: string;
+  migrated: string[]; // D1 migrations applied this deploy (empty if none / dry-run)
 };
 
 export async function juneDeploy(
   appRoot: string,
-  options: { dryRun?: boolean; skipBuild?: boolean } = {},
+  options: {
+    dryRun?: boolean;
+    skipBuild?: boolean;
+    skipMigrate?: boolean;
+    allowDestructive?: boolean;
+  } = {},
 ): Promise<DeployResult> {
   const cfg = await loadJuneConfig(appRoot);
   const target = cfg.deploy?.target ?? "workers";
@@ -37,6 +45,31 @@ export async function juneDeploy(
     join(appRoot, "dist/wrangler.jsonc");
   if (!existsSync(configPath)) {
     throw new Error(`no wrangler config found (expected ${configPath}) — run june build first`);
+  }
+
+  // Apply pending migrations to the production D1 BEFORE shipping the new worker,
+  // so the deployed code finds the schema it expects. Same migrate() (ledger +
+  // destructive gate) as dev — a destructive migration halts the deploy until you
+  // re-run with --allow-destructive. Skipped on --dry-run (never touches remote
+  // state) and for apps with no declared db.
+  const migrated: string[] = [];
+  if (cfg.resources?.db && !options.skipMigrate && !options.dryRun) {
+    const database = await resolveD1Database(appRoot, configPath);
+    if (database) {
+      const r = await migrateD1({
+        appRoot,
+        database,
+        configPath,
+        allowDestructive: options.allowDestructive,
+      });
+      if (r.blocked) throw new Error(`D1 ${database}: ${blockedMessage(r.blocked)}`);
+      migrated.push(...r.applied);
+      console.log(
+        r.applied.length
+          ? `migrated D1 ${database}: ${r.applied.join(", ")}`
+          : `D1 ${database}: migrations up to date`,
+      );
+    }
   }
 
   if (!options.dryRun && !process.env.CLOUDFLARE_API_TOKEN) {
@@ -68,5 +101,5 @@ export async function juneDeploy(
   }
 
   const url = out.match(/https:\/\/\S+\.workers\.dev\S*/)?.[0] ?? null;
-  return { url, dryRun: options.dryRun ?? false, configPath };
+  return { url, dryRun: options.dryRun ?? false, configPath, migrated };
 }

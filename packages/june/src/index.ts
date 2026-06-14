@@ -64,4 +64,5 @@ export {
   type BuildResult,
 } from "./build";
 export { juneDeploy, type DeployResult } from "./deploy";
+export { migrateD1, wranglerD1, resolveD1Database, type D1Exec } from "./d1-migrate";
 export { startDevServer, type DevServer, type DevServerOptions } from "./dev";
