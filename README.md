@@ -69,7 +69,9 @@ automatically.
 - **[Built-in MCP](https://june.build/docs/features-mcp)** — your app is an MCP server, no adapter
 - **[Markdown without drift](https://june.build/docs/features-markdown)** — `.md` serves your authored source
 - **[og:images as routes](https://june.build/docs/features-og-image)** — satori + resvg in the worker, CJK-ready
+- **[Ambient data + cache magic](https://june.build/docs/features-data)** — `import { db }`, explicit SQL migrations; a write auto-invalidates cached reads
 - **[Server-first RSC](https://june.build/docs/features-rsc)** + **[islands](https://june.build/docs/features-islands)** — zero client JS until a subtree earns it
+- **[Styling](https://june.build/docs/features-styling)** — `app/global.css` auto-linked, Tailwind v4 + CSS Modules, hashed & minified on build
 - **[App Router](https://june.build/docs/features-app-router)** — `[slug]`, `[[optional]]`, `[...catchAll]`, `(groups)`, nested [layouts](https://june.build/docs/features-layouts)
 - **[Browser-native navigation](https://june.build/docs/features-navigation)** — Speculation Rules + View Transitions, no router by default
 - **[Opt-in client router](https://june.build/docs/features-client-router)** — `clientRouter: true` adds soft swaps + `<Island persist>` when state must outlive a navigation
@@ -94,6 +96,7 @@ is Bun/Node, deploying to Workers. The full list lives on
 packages/core         @junejs/core — the pure contract layer (zero node:*, enforced)
 packages/june         @junejs/server — host adapters, dev server, build, deploy
 packages/cli          @junejs/cli — the `june` command
+packages/db           @junejs/db — ambient db/kv/blob (request-scoped, edge-safe)
 packages/juno         @junejs/juno — the default data layer
 packages/create-june  the scaffolder
 apps/june.build       the framework site, dogfooded on June

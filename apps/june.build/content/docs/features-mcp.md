@@ -12,14 +12,17 @@ Turn on `agent.mcp` (it's on by default) and your app serves MCP at `/mcp` —
 no separate server, no adapter, no tool re-declaration:
 
 ```ts
+import { db } from "@junejs/db";
+
 export const createUser = defineAction({
   id: "createUser",
   description: "Create a user",          // description → listed as an MCP tool
   input: { type: "object", properties: { name: { type: "string" } }, required: ["name"] },
-  run: (input, ctx) => {
-    // ctx carries the principal + resources — the SAME ctx whether the caller
-    // is your React UI or an agent calling /mcp. Authorize here, once.
-    return ctx.db.insert("users", input);
+  run: ({ name }, ctx) => {
+    // ctx carries the principal (identity) — the SAME ctx whether the caller
+    // is your React UI or an agent calling /mcp. Authorize here, once; the db
+    // is ambient (import { db }), not threaded through ctx.
+    return db.run("insert into users (name) values (?)", [name]);
   },
 });
 ```

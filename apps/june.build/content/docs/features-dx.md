@@ -17,8 +17,9 @@ is what lets the same app serve from Bun, Node, and workerd (see
 
 `june dev` runs with nothing installed around it: declared resources get
 local defaults — `db` is an embedded SQLite file, `blob` a local directory,
-`kv` in-memory. No Docker, no service to start. Declare the deploy adapter
-(`d1("DB")`, `r2("UPLOADS")`) and the SAME code runs on Workers.
+`kv` in-memory. No Docker, no service to start. The same `sqlite()` declaration
+becomes a Cloudflare binding (D1, R2, KV) on deploy, so the SAME code runs on
+Workers.
 
 ## Parity by construction
 
