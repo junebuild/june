@@ -1,6 +1,8 @@
 // CSS — the human surface's styling. Convention over import: if `app/global.css`
-// exists, June auto-links it (no `import "./global.css"`); dev serves it, build
-// emits it as an asset, both at /global.css (parity-safe, like /client.js).
+// exists, June auto-links it (no `import "./global.css"`). Dev serves it at the
+// stable /_june/global.css; build content-hashes it to /_june/global.<hash>.css
+// (served immutable). Only the asset HREF diverges dev↔built, never the rendered
+// structure — so dev/built parity (the agent surface) holds.
 //
 // Floor: plain CSS, zero deps. Blessed: if global.css opts into Tailwind
 // (`@import "tailwindcss"`), June compiles it via the app's own Tailwind v4
@@ -13,7 +15,10 @@ import { createRequire } from "node:module";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-export const STYLES_URL = "/global.css";
+// Framework-emitted assets live under the reserved /_june/ prefix so they never
+// collide with — or squat on — a user's own paths (cf. Next /_next/, Astro
+// /_astro/). Build content-hashes the file under here; this is the dev URL.
+export const STYLES_URL = "/_june/global.css";
 const GLOBAL_CSS = "global.css";
 
 // app/global.css, or null when the app declares no stylesheet.

@@ -24,7 +24,7 @@ import { join } from "node:path";
 
 // The URL the document loads + the asset path the bundle is written to. Single
 // source of truth so build (freeze) and dev (live) agree.
-export const CLIENT_SCRIPT_URL = "/client.js";
+export const CLIENT_SCRIPT_URL = "/_june/client.js";
 const CLIENT_BASENAME = "_client";
 const CLIENT_EXTS = [".tsx", ".ts", ".jsx", ".js"];
 
@@ -62,10 +62,16 @@ export async function bundleClientToString(entryFile: string, cwd: string): Prom
   return entry && entry.type === "chunk" ? entry.code : "";
 }
 
-// Build the client entry to `<destDir>/client.js` (build freezes it as an asset).
+// Build the client entry to `<destDir>/_june/client.js` (build freezes it as an
+// asset under the reserved /_june/ prefix; CLIENT_SCRIPT_URL matches).
 export async function bundleClientToFile(entryFile: string, cwd: string, destDir: string): Promise<void> {
   const bundle = await bundleClient(entryFile, cwd, "production");
   await mkdir(destDir, { recursive: true });
-  await bundle.write({ dir: destDir, format: "esm", entryFileNames: "client.js" });
+  await bundle.write({
+    dir: destDir,
+    format: "esm",
+    entryFileNames: "_june/client.js",
+    chunkFileNames: "_june/[name]-[hash].js",
+  });
   await bundle.close();
 }

@@ -1,5 +1,5 @@
 // The v0.1 islands acceptance test, end-to-end through the BUILD: `june build`
-// emits assets/client.js (production React, NODE_ENV baked), the built worker
+// emits assets/_june/client.js (production React, NODE_ENV baked), the built worker
 // SSRs the island marker, and executing that shipped bundle against that
 // shipped markup makes the counter count. This is the milestone criterion —
 // "a `"use client"` counter increments in the browser in a built app" — run
@@ -25,7 +25,7 @@ beforeAll(async () => {
   // race or clobber its artifacts.
   outDir = await mkdtemp(join(tmpdir(), "june-islands-e2e-"));
   await juneBuild(ROOT, { outDir });
-  clientJs = join(outDir, "assets", "client.js");
+  clientJs = join(outDir, "assets", "_june", "client.js");
 
   // The page as the BUILT worker serves it (the parity-verified render path).
   const worker = createWorker(await buildManifest(ROOT));

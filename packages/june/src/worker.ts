@@ -188,14 +188,21 @@ export function withAssets(
         // no prerendered .md → fall through; a dynamic route renders it below.
       }
 
-      // 2. Static assets (prerendered HTML/.md/.json, /client.js) served direct.
+      // 2. Static assets (prerendered HTML/.md/.json, /client.js, hashed CSS)
+      //    served direct.
       if (assets) {
         const a = await assets.fetch(request);
         if (a.status !== 404) {
           const ct = a.headers.get("content-type") ?? "";
-          if (opts.link && ct.includes("text/html") && !a.headers.has("link")) {
+          const addLink = !!opts.link && ct.includes("text/html") && !a.headers.has("link");
+          // Content-hashed assets (e.g. /global.<hash>.css) are immutable — the
+          // URL changes when the bytes do, so the browser may cache forever and
+          // never revalidate (no 304 round-trip, no stale window).
+          const immutable = /\.[a-f0-9]{8,}\.(css|js)$/.test(url.pathname);
+          if (addLink || immutable) {
             const headers = new Headers(a.headers);
-            headers.set("link", opts.link);
+            if (addLink) headers.set("link", opts.link!);
+            if (immutable) headers.set("cache-control", "public, max-age=31536000, immutable");
             return new Response(a.body, { status: a.status, headers });
           }
           return a;

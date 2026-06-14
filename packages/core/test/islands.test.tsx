@@ -68,13 +68,13 @@ const baseConfig: DocumentConfig = {
 describe("Document client-script injection", () => {
   test("loads the island runtime as a deferred module when configured", () => {
     const html = renderToStaticMarkup(
-      <Document config={{ ...baseConfig, clientScript: "/client.js" }}>
+      <Document config={{ ...baseConfig, clientScript: "/_june/client.js" }}>
         <main />
       </Document>,
     );
-    expect(html).toContain(`<script type="module" src="/client.js">`);
+    expect(html).toContain(`<script type="module" src="/_june/client.js">`);
     // It loads at the end of <body>, after the markup it hydrates.
-    expect(html.indexOf("/client.js")).toBeGreaterThan(html.indexOf("<main"));
+    expect(html.indexOf("/_june/client.js")).toBeGreaterThan(html.indexOf("<main"));
   });
 
   test("ships zero client JS when no clientScript is set", () => {

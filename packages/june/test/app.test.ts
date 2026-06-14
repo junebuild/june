@@ -154,18 +154,18 @@ describe("/mcp endpoint", () => {
 });
 
 describe("client islands (dev)", () => {
-  test("a page with an <Island> SSRs the marker and the document loads /client.js", async () => {
+  test("a page with an <Island> SSRs the marker and the document loads /_june/client.js", async () => {
     const res = await get("/counter");
     const html = await res.text();
     // The island is server-rendered (visible with zero JS)…
     expect(html).toContain(`<june-island data-june-island="Counter"`);
     expect(html).toContain("count: ");
     // …and the document loads the hydration runtime because app/_client.tsx exists.
-    expect(html).toContain(`<script type="module" src="/client.js">`);
+    expect(html).toContain(`<script type="module" src="/_june/client.js">`);
   });
 
-  test("dev serves /client.js — the bundled registry + hydration runtime", async () => {
-    const res = await get("/client.js");
+  test("dev serves /_june/client.js — the bundled registry + hydration runtime", async () => {
+    const res = await get("/_june/client.js");
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toBe("text/javascript; charset=utf-8");
     const code = await res.text();

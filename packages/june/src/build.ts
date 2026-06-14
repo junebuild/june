@@ -17,6 +17,7 @@
 // content freeze (content/*.md → app/_content.ts) is what removes fs from the
 // dynamic route's graph; the worker reads frozen data, never the filesystem.
 
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, sep } from "node:path";
@@ -259,6 +260,20 @@ export async function juneBuild(
   const fullConfig = await loadJuneConfig(appRoot);
   const adapter = (fullConfig.deploy?.adapter as JuneAdapter | undefined) ?? workers();
 
+  // Compile the global stylesheet ONCE and content-hash it: the built worker and
+  // prerendered HTML link `/global.<hash>.css`, served immutable (cache forever,
+  // a content change ships a new URL → no revalidation, no stale window). Dev
+  // keeps the stable /global.css; only the asset HREF diverges dev↔built, never
+  // render semantics. freezeConfig + buildManifest both default styles to the
+  // stable URL — override both with the hashed one.
+  const cssOut = await processCss(appDir, { minify: true });
+  let cssAsset: string | null = null;
+  if (cssOut !== null) {
+    const hash = createHash("sha256").update(cssOut).digest("hex").slice(0, 8);
+    cssAsset = `_june/global.${hash}.css`; // under the reserved /_june/ prefix
+    frozen.document.styles = `/${cssAsset}`;
+  }
+
   // Declared resources become two things: a build-time plan (→ platform bindings
   // the adapter emits) and a runtime provider wired into the generated entry.
   // A resource-less app imports no config and emits no bindings, so its output
@@ -391,6 +406,7 @@ ${adapterEntry.wrap("pipeline")}
   // what ships is what the parity test verified.
   const prerendered: string[] = [];
   const manifest = await buildManifest(appRoot);
+  if (cssAsset) manifest.document.styles = `/${cssAsset}`; // prerendered HTML links the hashed sheet
   const worker = createWorker(manifest);
   const assetsDir = join(outDir, "assets");
   let hasAssets = false;
@@ -431,10 +447,10 @@ ${adapterEntry.wrap("pipeline")}
   // ---- global stylesheet: app/global.css → assets/global.css ---------------
   // Served at /global.css; the frozen document already <link>s it. Compiled
   // (Tailwind) or passed through (plain CSS). No file → no asset.
-  const css = await processCss(appDir, { minify: true });
-  if (css !== null) {
-    await mkdir(assetsDir, { recursive: true });
-    await writeFile(join(assetsDir, "global.css"), css);
+  if (cssOut !== null && cssAsset) {
+    const dest = join(assetsDir, cssAsset);
+    await mkdir(dirname(dest), { recursive: true }); // cssAsset includes the _june/ subdir
+    await writeFile(dest, cssOut);
     hasAssets = true;
   }
 

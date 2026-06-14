@@ -1,19 +1,25 @@
-// CSS: the auto-link convention. app/global.css → dev serves /global.css and the
-// document <link>s it; no global.css → no link (parity). processCss passes plain
-// CSS through; the build emits dist/assets/global.css.
-import { describe, expect, test } from "bun:test";
+// CSS: the auto-link convention (app/global.css → /_june/global.css, document
+// <link>s it), the build's content-hashed asset under /_june/, and the immutable
+// cache header hashed assets get from withAssets.
+import { afterAll, describe, expect, test } from "bun:test";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { createApp } from "../src/app";
+import { juneBuild } from "../src/build";
+import { withAssets } from "../src/worker";
 import { processCss, findGlobalCss, STYLES_URL } from "../src/css";
 
 const CSS_APP = fileURLToPath(new URL("./fixtures/css/app", import.meta.url));
+const CSS_ROOT = dirname(CSS_APP); // the app ROOT (juneBuild takes the root, not app/)
 const NOCSS_APP = fileURLToPath(new URL("./fixtures/db/app", import.meta.url)); // has no global.css
 
 describe("global.css auto-link", () => {
-  test("app/global.css → /global.css is served as text/css", async () => {
+  test("app/global.css → /_june/global.css is served as text/css", async () => {
     const app = createApp({ appDir: CSS_APP, config: {} });
-    const res = await app.fetch(new Request("http://june.test/global.css"));
+    const res = await app.fetch(new Request("http://june.test/_june/global.css"));
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/css");
     expect(await res.text()).toContain("rebeccapurple");
@@ -37,5 +43,56 @@ describe("global.css auto-link", () => {
   test("processCss passes plain CSS through unchanged", async () => {
     expect(await processCss(CSS_APP)).toContain("rebeccapurple");
     expect(await processCss(NOCSS_APP)).toBeNull();
+  });
+
+  test("framework assets live under the reserved /_june/ prefix", () => {
+    expect(STYLES_URL.startsWith("/_june/")).toBe(true);
+  });
+});
+
+describe("build: content-hashed CSS under /_june/", () => {
+  let out: string | undefined;
+  afterAll(async () => {
+    if (out) await rm(out, { recursive: true, force: true });
+  });
+
+  test("global.css is emitted as /_june/global.<hash>.css and linked from the worker", async () => {
+    out = await mkdtemp(join(tmpdir(), "june-css-build-"));
+    await juneBuild(CSS_ROOT, { outDir: out });
+
+    const files = await readdir(join(out, "assets", "_june"));
+    const hashed = files.find((f) => /^global\.[a-f0-9]{8}\.css$/.test(f));
+    expect(hashed).toBeTruthy(); // content-hashed name, not the stable /_june/global.css
+    expect(await readFile(join(out, "assets", "_june", hashed!), "utf8")).toContain("rebeccapurple");
+
+    // the built worker freezes the HASHED url (not the dev-stable one)
+    const worker = await readFile(join(out, "worker.js"), "utf8");
+    expect(worker).toContain(`/_june/${hashed}`);
+    expect(worker).not.toContain('"/_june/global.css"');
+  });
+});
+
+describe("immutable cache header for hashed assets", () => {
+  const fakeAssets = (body: string, ct: string) => ({
+    fetch: async () => new Response(body, { headers: { "content-type": ct } }),
+  });
+  const passthrough = { fetch: async () => new Response("dynamic") };
+
+  test("a content-hashed asset is served Cache-Control: immutable", async () => {
+    const w = withAssets(passthrough);
+    const res = await w.fetch(
+      new Request("http://x/_june/global.abcd1234.css"),
+      { ASSETS: fakeAssets("body{}", "text/css") } as never,
+    );
+    expect(res.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
+  });
+
+  test("a NON-hashed asset is NOT marked immutable (relies on ETag)", async () => {
+    const w = withAssets(passthrough);
+    const res = await w.fetch(
+      new Request("http://x/_june/client.js"),
+      { ASSETS: fakeAssets("//js", "text/javascript") } as never,
+    );
+    expect(res.headers.get("cache-control")).toBeNull();
   });
 });

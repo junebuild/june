@@ -18,7 +18,7 @@ const RELOAD_JS = `// june dev live-reload: reconnect-after-drop → reload; "cs
   const swapCss = () => {
     document.querySelectorAll('link[rel="stylesheet"]').forEach((old) => {
       const u = new URL(old.href);
-      if (u.pathname !== "/global.css") return;
+      if (u.pathname !== "/_june/global.css") return;
       // Clone with a cache-busted href; drop the old one once the new loads so
       // there's no flash of unstyled content. No page reload → island state and
       // scroll survive.

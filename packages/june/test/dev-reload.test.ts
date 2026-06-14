@@ -102,7 +102,7 @@ describe("dev live reload", () => {
   test("the reload script hot-swaps /global.css on a css event, keeps reload for restarts", async () => {
     const js = await (await fetch(`${server.url}/__june/reload.js`)).text();
     expect(js).toContain('addEventListener("css"'); // the hot-swap channel
-    expect(js).toContain("/global.css"); // swaps only the stylesheet link
+    expect(js).toContain("/_june/global.css"); // swaps only the stylesheet link
     expect(js).toContain("location.reload()"); // a server restart still full-reloads
   });
 });

@@ -58,15 +58,15 @@ describe("juneBuild()", () => {
     expect(indexHtml).toBe(devHome); // prerender == dev render, exactly
   });
 
-  test("bundles app/_client.tsx into assets/client.js with NODE_ENV baked", async () => {
-    const clientJs = await readFile(join(DIST, "assets", "client.js"), "utf8");
+  test("bundles app/_client.tsx into assets/_june/client.js with NODE_ENV baked", async () => {
+    const clientJs = await readFile(join(DIST, "assets", "_june", "client.js"), "utf8");
     expect(clientJs).toContain("june-island"); // the hydration runtime is in there
     expect(clientJs).not.toContain("process.env.NODE_ENV"); // browsers have no process
   });
 
-  test("the frozen document loads /client.js (prerendered pages included)", async () => {
+  test("the frozen document loads /_june/client.js (prerendered pages included)", async () => {
     const indexHtml = await readFile(join(DIST, "assets", "index.html"), "utf8");
-    expect(indexHtml).toContain(`<script type="module" src="/client.js">`);
+    expect(indexHtml).toContain(`<script type="module" src="/_june/client.js">`);
   });
 
   test("the bundled worker executes and serves /", async () => {
