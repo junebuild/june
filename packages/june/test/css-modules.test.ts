@@ -147,6 +147,58 @@ describe("buildModuleCss (glob + collect)", () => {
     expect(css).toContain("border: 1px");
   });
 
+  test("dedup preserves cascade: keeps the LAST of interleaved identical rules", async () => {
+    // :global lets two files emit the same raw selector. Sorted a,b,c gives the
+    // cascade [red, blue, red]; the last (red) must keep winning. Keep-first dedup
+    // would drop c's red and let blue win — a behavior change. Keep-last is safe.
+    dir = await mkdtemp(join(tmpdir(), "june-cssm-"));
+    await mkdir(join(dir, "app"), { recursive: true });
+    await writeFile(join(dir, "app", "a.module.css"), ":global(.g) { color: red }");
+    await writeFile(join(dir, "app", "b.module.css"), ":global(.g) { color: blue }");
+    await writeFile(join(dir, "app", "c.module.css"), ":global(.g) { color: red }");
+    const { css } = await buildModuleCss(join(dir, "app"), dir);
+    expect((css!.match(/color: red/g) ?? []).length).toBe(1); // a's red deduped away
+    expect((css!.match(/color: blue/g) ?? []).length).toBe(1);
+    // red still comes AFTER blue → red wins, exactly as in the un-deduped cascade
+    expect(css!.indexOf("color: red")).toBeGreaterThan(css!.indexOf("color: blue"));
+  });
+
+  test("dedup collapses identical :global rules across files to one copy", async () => {
+    dir = await mkdtemp(join(tmpdir(), "june-cssm-"));
+    await mkdir(join(dir, "app"), { recursive: true });
+    await writeFile(join(dir, "app", "a.module.css"), ":global(.reset) { margin: 0 }");
+    await writeFile(join(dir, "app", "b.module.css"), ":global(.reset) { margin: 0 }");
+    const { css } = await buildModuleCss(join(dir, "app"), dir);
+    expect((css!.match(/margin: 0/g) ?? []).length).toBe(1);
+  });
+
+  test("dedup handles @media blocks: identical collapsed, distinct kept", async () => {
+    dir = await mkdtemp(join(tmpdir(), "june-cssm-"));
+    await mkdir(join(dir, "app"), { recursive: true });
+    const block = "@media (min-width: 600px) { :global(.w) { display: grid } }";
+    await writeFile(join(dir, "app", "a.module.css"), block);
+    await writeFile(join(dir, "app", "b.module.css"), block); // identical → one
+    await writeFile(
+      join(dir, "app", "c.module.css"),
+      "@media (min-width: 900px) { :global(.w) { display: flex } }", // distinct → kept
+    );
+    const { css } = await buildModuleCss(join(dir, "app"), dir);
+    expect((css!.match(/display: grid/g) ?? []).length).toBe(1);
+    expect((css!.match(/min-width: 600px/g) ?? []).length).toBe(1);
+    expect(css).toContain("display: flex");
+    expect(css).toContain("min-width: 900px");
+  });
+
+  test("dedup does NOT collapse same selector with different declarations", async () => {
+    dir = await mkdtemp(join(tmpdir(), "june-cssm-"));
+    await mkdir(join(dir, "app"), { recursive: true });
+    await writeFile(join(dir, "app", "a.module.css"), ":global(.h) { color: red }");
+    await writeFile(join(dir, "app", "b.module.css"), ":global(.h) { color: green }");
+    const { css } = await buildModuleCss(join(dir, "app"), dir);
+    expect(css).toContain("color: red");
+    expect(css).toContain("color: green"); // both survive — genuinely different
+  });
+
   test("no .module.css → null css", async () => {
     dir = await mkdtemp(join(tmpdir(), "june-cssm-"));
     await mkdir(join(dir, "app"), { recursive: true });

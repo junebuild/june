@@ -18,7 +18,7 @@
 import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
-import type { AcceptedPlugin } from "postcss";
+import type { AcceptedPlugin, ChildNode } from "postcss";
 
 export const MODULE_STYLES_URL = "/_june/modules.css";
 
@@ -89,17 +89,26 @@ async function findModuleCss(dir: string): Promise<string[]> {
 // `composes: x from "./y"` INLINES y's rule into this file's output — and we also
 // emit y directly, so a composed rule lands N+1 times. Vite never duplicates
 // (composes is a graph edge there); we get the same one-copy result by deduping.
-// Safe precisely because our scoped names are deterministic: the copies are
-// byte-identical, so exact-string dedup can't drop a genuinely different rule.
+//
+// Two safety points:
+//  - Exact-string match only. Our scoped names are deterministic, so the copies
+//    are byte-identical; we never collapse two genuinely different rules.
+//  - Keep the LAST occurrence, not the first. With :global, two files can write
+//    the same raw selector with different bodies, so the cascade can interleave
+//    (red, blue, red). The winner is the last declaration; dropping the EARLIER
+//    identical copies leaves the last one in place, so the computed result is
+//    unchanged. Keeping the first instead would change which rule wins.
 async function dedupeRules(css: string): Promise<string> {
   const postcss = (await import("postcss")).default;
   const root = postcss.parse(css);
-  const seen = new Set<string>();
+  const last = new Map<string, ChildNode>();
   root.each((node) => {
-    if (node.type !== "rule" && node.type !== "atrule") return;
-    const key = node.toString();
-    if (seen.has(key)) node.remove();
-    else seen.add(key);
+    if (node.type === "rule" || node.type === "atrule") last.set(node.toString(), node);
+  });
+  root.each((node) => {
+    if ((node.type === "rule" || node.type === "atrule") && last.get(node.toString()) !== node) {
+      node.remove();
+    }
   });
   return root.toString();
 }
