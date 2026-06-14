@@ -103,7 +103,11 @@ not rebuild differential dataflow. But four things transfer:
   `DB.batch()`; route reads through a per-request session (read replication). Both
   are framework-only wins a plain library can't do. (See perf doc.)
 - **Cache / invalidate / live** → keep pragmatic table-tag invalidate + live RSC
-  push; borrow the error-surfacing discipline; IVM is a future frontier.
+  push; borrow the error-surfacing discipline; IVM is a future frontier. But
+  Appendix 3 found the *implicit* "never call invalidate" magic backfires with LLMs
+  (silent staleness when a raw query slips inside `cache()`): auto-tagging must cover
+  raw `query`/`get`, and keep an **explicit `invalidate` escape hatch** — explicit
+  beat implicit for LLM correctness.
 - **Agent-native** → the least-explored axis among references = the moat candidate.
   `llms.txt` + machine-readable schema/query catalog is step one. Refined by the
   codegen eval (Appendix 2): the moat is **not** "LLMs write better query code with
@@ -269,3 +273,52 @@ The moat is what the developer-or-agent **doesn't have to get right**.
 query — under-tests scattered N+1); and the tasks did **not** exercise juno's
 automatic invalidation / live / compile-once, which is exactly where the moat now
 sits. Next round: scattered per-component loads, and a read-after-write freshness task.
+
+---
+
+## Appendix 3 — codegen eval v2: the automatic layer, scattered + freshness (2026-06-14)
+
+> Snapshot. Redesigned to hit the automatic layer Appendix 2 said the moat sits in.
+> Result: one decisive win, two losses — and a sharper rule for when "automatic" pays.
+
+Same 6-agent / two-arm setup. juno arm now advertises its **automatic** behaviors
+(point reads auto-coalesce per request; `cache(fn)` auto-tags by tables read; writes
+auto-invalidate cached reads). Baseline arm gets capability-equal but **explicit**
+primitives (`batch`, `cache(key, fn)`, `invalidate(key)`). 3 tasks:
+
+| task | juno (3) | baseline (3) | winner |
+|---|---|---|---|
+| **T1 scattered per-component reads** (30 components each fetch order→user, no shared id list) | ✓✓✓ naive `findBy` → auto-coalesce → **~2 round trips** | ⚠⚠⚠ **N+1 (~60 RTT)**; clever user-cache dedups users but orders stay per-component | **juno, decisively** |
+| **T2 cache → write → re-read freshness** | ◑⚠⚠ one wrapped a raw `query` in `cache` (auto-tag may not fire → stale risk); two wrote dead-code cache and bypassed it (uncached) | ✓✓✓ explicit `cache(key)` + `invalidate(key)` → correct + cached | **baseline** |
+| **T3 multi-table cached aggregate + write to both** | ◑◑◑ relies on auto-tagging raw `get` reads; also looped `line_items` inserts (extra RTT) | ✓✓✓ explicit `invalidate` + **batched** reads & writes | **baseline** |
+
+**Two findings, one positive one negative:**
+
+1. **Zero-ceremony auto-batch is a real moat the baseline structurally cannot match
+   (T1).** Each component writes naive `findBy`; juno coalesces them into ~2 batched
+   round trips. The baseline LLMs were *smart* (caching users by id to dedup) yet
+   still could not batch order reads across independent components → ~60 RTT.
+   → Validates design input B: make point reads auto-batch per request. Build it.
+2. **Auto-invalidate, as specified, *lost* to explicit invalidation (T2/T3).** The
+   explicit `invalidate(key)` was an obvious anchor all 3 baseline instances used
+   correctly. juno's invisible "you never call invalidate" left the LLM no anchor:
+   it wrapped raw `query`/`get` in `cache()` (auto-tag likely tracks only table-API
+   reads, **not** raw SQL → cache untagged → write doesn't invalidate → **silent
+   staleness**), or got confused by the `cache(fn)` signature and skipped caching.
+   "Looks correct, silently stale" is the worst failure mode and the magic invited it.
+
+**The sharpened rule:** *automatic is a moat only when it (1) needs zero ceremony
+**and** (2) cannot silently break.* Auto-batch `findBy` satisfies both. Auto-invalidate
+(as specified) fails both — it replaces an action the LLM expects to take, and its
+correctness hinges on auto-tagging the LLM never verifies.
+
+**Design requirements surfaced:**
+1. **Build ambient per-request `findBy` auto-batch** (T1 — high value, baseline can't copy).
+2. **Rework auto-invalidate for legibility + robustness:** auto-tagging MUST cover raw
+   `query`/`get` reads (or those reads must be unrepresentable inside `cache()`), the
+   `cache()` API must be LLM-obvious, and **keep an explicit `invalidate` escape
+   hatch** — explicit beat implicit for LLM correctness here.
+
+**Caveats:** small N; juno's `cache(fn)` signature was under-specified and likely
+handicapped T2/T3 — but that itself is the signal (an under-specified magic API
+confuses LLMs). Re-run once the real `cache()` ergonomics are pinned down.
