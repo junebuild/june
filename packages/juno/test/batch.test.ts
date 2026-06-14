@@ -160,3 +160,48 @@ describe("filtered-list read: all(where)", () => {
     expect(await t.all({ user_id: 2 })).toHaveLength(2); // re-queried, not stale
   });
 });
+
+describe("Stage 2: where-operators + order / limit / offset", () => {
+  type Post = { id: number; user_id: number; title: string };
+  // ids 1..5 → user_id 1,1,2,1,3 ; titles a,b,c,d,e
+  async function seedPosts(): Promise<JuneDb> {
+    const db = await host.openDb(":memory:");
+    await db.exec("create table posts (id integer primary key, user_id integer, title text)");
+    for (const [uid, title] of [[1, "a"], [1, "b"], [2, "c"], [1, "d"], [3, "e"]] as const) {
+      await db.run("insert into posts (user_id, title) values (?, ?)", [uid, title]);
+    }
+    return db;
+  }
+  const ids = (rows: Post[]) => rows.map((r) => r.id);
+
+  test("comparison operators (gt / ne / in / like)", async () => {
+    const t = juno(await seedPosts()).table<Post>("posts");
+    expect(ids(await t.all({ user_id: { gt: 1 } })).sort()).toEqual([3, 5]); // user_id > 1
+    expect(ids(await t.all({ user_id: { ne: 1 } })).sort()).toEqual([3, 5]);
+    expect(ids(await t.all({ id: { in: [1, 3, 5] } })).sort()).toEqual([1, 3, 5]);
+    expect(ids(await t.all({ title: { like: "a" } }))).toEqual([1]); // exact 'a'
+  });
+
+  test("mix equality + operators (AND-joined)", async () => {
+    const t = juno(await seedPosts()).table<Post>("posts");
+    expect(ids(await t.all({ user_id: 1, id: { gte: 2 } })).sort()).toEqual([2, 4]);
+  });
+
+  test("orderBy + limit + offset (keyset pagination)", async () => {
+    const t = juno(await seedPosts()).table<Post>("posts");
+    expect(ids(await t.all({}, { orderBy: { id: "desc" } }))).toEqual([5, 4, 3, 2, 1]);
+    expect(ids(await t.all({}, { orderBy: { id: "asc" }, limit: 2, offset: 1 }))).toEqual([2, 3]);
+  });
+
+  test("a single-col filter WITH opts skips the ambient batch (direct query)", async () => {
+    const t = juno(await seedPosts()).table<Post>("posts");
+    // user 1's posts (1,2,4), desc, limit 2 → 4,2
+    expect(ids(await t.all({ user_id: 1 }, { orderBy: { id: "desc" }, limit: 2 }))).toEqual([4, 2]);
+  });
+
+  test("rejects an unknown operator", async () => {
+    const t = juno(await seedPosts()).table<Post>("posts");
+    // @ts-expect-error — not a known operator
+    await expect(t.all({ user_id: { bogus: 1 } })).rejects.toThrow("unknown operator");
+  });
+});

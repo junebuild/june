@@ -8,7 +8,26 @@
 // every later call reuses the string — what Kysely-style builders don't do (they
 // recompile per execute). Param VALUES are bound by the caller, never cached.
 
-import type { Node } from "./ast";
+import type { CmpOp, Node, Predicate } from "./ast";
+
+const SYM: Record<CmpOp, string> = {
+  eq: "=",
+  ne: "!=",
+  gt: ">",
+  gte: ">=",
+  lt: "<",
+  lte: "<=",
+  like: "like",
+};
+
+// Emit one WHERE predicate. `ph()` yields the next placeholder (and advances the
+// dialect's counter), so `in` can consume `arity` of them in order.
+function predicate(p: Predicate, ph: () => string): string {
+  if (p.op === "in") {
+    return `${ident(p.col)} in (${Array.from({ length: p.arity }, ph).join(", ")})`;
+  }
+  return `${ident(p.col)} ${SYM[p.op]} ${ph()}`;
+}
 
 // Guard table/column names — identifiers can't be parameterized. Values always go
 // through bound placeholders, so they are injection-safe by construction.
@@ -22,7 +41,12 @@ export function ident(name: string): string {
 function keyOf(node: Node): string {
   switch (node.kind) {
     case "select":
-      return `s|${node.from}|${node.where.join(",")}|${node.limit ?? ""}`;
+      return (
+        `s|${node.from}|` +
+        node.where.map((p) => (p.op === "in" ? `${p.col}:in${p.arity}` : `${p.col}:${p.op}`)).join("&") +
+        `|${(node.orderBy ?? []).map((o) => `${o.col} ${o.dir}`).join(",")}` +
+        `|${node.limit ?? ""}|${node.offset ?? ""}`
+      );
     case "insert":
       return `i|${node.into}|${node.columns.join(",")}`;
     case "update":
@@ -57,11 +81,16 @@ export abstract class Dialect {
     switch (node.kind) {
       case "select": {
         let i = 0;
+        const ph = () => this.placeholder(++i);
         const where = node.where.length
-          ? ` where ${node.where.map((c) => `${ident(c)} = ${this.placeholder(++i)}`).join(" and ")}`
+          ? ` where ${node.where.map((p) => predicate(p, ph)).join(" and ")}`
           : "";
-        const limit = node.limit != null ? ` limit ${node.limit}` : "";
-        return `select * from ${ident(node.from)}${where}${limit}`;
+        const order = node.orderBy?.length
+          ? ` order by ${node.orderBy.map((o) => `${ident(o.col)} ${o.dir === "desc" ? "desc" : "asc"}`).join(", ")}`
+          : "";
+        const limit = node.limit === "param" ? ` limit ${ph()}` : node.limit != null ? ` limit ${node.limit}` : "";
+        const offset = node.offset === "param" ? ` offset ${ph()}` : "";
+        return `select * from ${ident(node.from)}${where}${order}${limit}${offset}`;
       }
       case "insert": {
         let i = 0;

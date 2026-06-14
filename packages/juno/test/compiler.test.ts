@@ -8,14 +8,41 @@ import { Dialect, SqliteDialect, sqlite } from "../src/compiler";
 import type { Node } from "../src/ast";
 
 describe("SqliteDialect.compile — SQL per node kind", () => {
-  test("select: none / where / where+limit", () => {
+  test("select: none / equality where / where+limit", () => {
     expect(sqlite.compile({ kind: "select", from: "users", where: [] })).toBe("select * from users");
-    expect(sqlite.compile({ kind: "select", from: "users", where: ["a", "b"] })).toBe(
-      "select * from users where a = ? and b = ?",
-    );
-    expect(sqlite.compile({ kind: "select", from: "users", where: ["id"], limit: 1 })).toBe(
-      "select * from users where id = ? limit 1",
-    );
+    expect(
+      sqlite.compile({
+        kind: "select",
+        from: "users",
+        where: [{ col: "a", op: "eq" }, { col: "b", op: "eq" }],
+      }),
+    ).toBe("select * from users where a = ? and b = ?");
+    expect(
+      sqlite.compile({ kind: "select", from: "users", where: [{ col: "id", op: "eq" }], limit: 1 }),
+    ).toBe("select * from users where id = ? limit 1");
+  });
+
+  test("select: operators (gt/lte/ne/like/in), order, param limit/offset", () => {
+    expect(
+      sqlite.compile({
+        kind: "select",
+        from: "users",
+        where: [{ col: "age", op: "gte" }, { col: "name", op: "like" }],
+      }),
+    ).toBe("select * from users where age >= ? and name like ?");
+    expect(
+      sqlite.compile({ kind: "select", from: "users", where: [{ col: "id", op: "in", arity: 3 }] }),
+    ).toBe("select * from users where id in (?, ?, ?)");
+    expect(
+      sqlite.compile({
+        kind: "select",
+        from: "posts",
+        where: [{ col: "user_id", op: "eq" }],
+        orderBy: [{ col: "created_at", dir: "desc" }],
+        limit: "param",
+        offset: "param",
+      }),
+    ).toBe("select * from posts where user_id = ? order by created_at desc limit ? offset ?");
   });
 
   test("insert / update / delete", () => {
@@ -65,10 +92,10 @@ describe("compile-once", () => {
 
   test("same shape compiles once; a different shape compiles again", () => {
     const d = new CountingSqlite();
-    const shape: Node = { kind: "select", from: "users", where: ["id"], limit: 1 };
+    const shape: Node = { kind: "select", from: "users", where: [{ col: "id", op: "eq" }], limit: 1 };
     expect(d.compile(shape)).toBe(d.compile({ ...shape })); // structurally equal → cache hit
     expect(d.emits).toBe(1);
-    d.compile({ kind: "select", from: "users", where: ["name"], limit: 1 }); // different shape
+    d.compile({ kind: "select", from: "users", where: [{ col: "name", op: "eq" }], limit: 1 }); // different shape
     expect(d.emits).toBe(2);
   });
 });
@@ -82,11 +109,25 @@ describe("dialect seam (multi-dialect off one AST)", () => {
 
   test("a $n placeholder subclass compiles the same nodes for Postgres", () => {
     const pg = new PgDialect();
-    expect(pg.compile({ kind: "select", from: "users", where: ["a", "b"] })).toBe(
-      "select * from users where a = $1 and b = $2",
-    );
+    expect(
+      pg.compile({
+        kind: "select",
+        from: "users",
+        where: [{ col: "a", op: "eq" }, { col: "b", op: "eq" }],
+      }),
+    ).toBe("select * from users where a = $1 and b = $2");
     expect(pg.compile({ kind: "insert", into: "t", columns: ["x", "y"] })).toBe(
       "insert into t (x, y) values ($1, $2)",
     );
+    // the $n counter must run across in-elements + limit/offset, in order
+    expect(
+      pg.compile({
+        kind: "select",
+        from: "users",
+        where: [{ col: "id", op: "in", arity: 2 }],
+        limit: "param",
+        offset: "param",
+      }),
+    ).toBe("select * from users where id in ($1, $2) limit $3 offset $4");
   });
 });

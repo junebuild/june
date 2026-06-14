@@ -14,6 +14,7 @@ import { recordTableRead, recordTableWrite } from "@junejs/core/instrumentation"
 import type { DataLayer } from "@junejs/core/config";
 import { db as ambientDb, requestLocal, registerSqlTagger } from "@junejs/db";
 
+import type { Predicate, SelectNode } from "./ast";
 import { tableLoader, tableListLoader, type Loader, type ListLoader } from "./batch";
 import { sqlite } from "./compiler";
 import { taggingDb, tagSql } from "./tag";
@@ -24,6 +25,28 @@ export { Dialect, SqliteDialect, sqlite, ident } from "./compiler";
 export type { Node, SelectNode, InsertNode, UpdateNode, DeleteNode, UpsertNode } from "./ast";
 
 export type Row = Record<string, unknown>;
+
+// A WHERE value is either an equality value or an operator object (Stage 2).
+// `{ age: { gte: 18 }, name: { like: "%a%" }, id: { in: [1, 2] } }` — AND-joined.
+export type Operators = {
+  eq?: unknown;
+  ne?: unknown;
+  gt?: unknown;
+  gte?: unknown;
+  lt?: unknown;
+  lte?: unknown;
+  in?: unknown[];
+  like?: string;
+};
+export type Where<T> = { [K in keyof T]?: T[K] | Operators };
+export type OrderBy<T> = { [K in keyof T]?: "asc" | "desc" };
+
+const OPS = new Set(["eq", "ne", "gt", "gte", "lt", "lte", "in", "like"]);
+// An operator object is a non-array object (sqlite values are primitives, so a
+// non-array object in a WHERE position means operators, not a bound value).
+function isOperators(v: unknown): v is Operators {
+  return v != null && typeof v === "object" && !Array.isArray(v);
+}
 
 export class Table<T extends Row = Row> {
   constructor(
@@ -40,15 +63,57 @@ export class Table<T extends Row = Row> {
   // counterpart of findBy, same where syntax). A single-column filter ambient-
   // batches like findBy — concurrent `all({user_id})` across components coalesce
   // into one `where user_id in (...)` grouped by key (list N+1 → 1).
-  async all(where?: Partial<T>): Promise<T[]> {
+  async all(
+    where?: Where<T>,
+    opts?: { orderBy?: OrderBy<T>; limit?: number; offset?: number },
+  ): Promise<T[]> {
     recordTableRead(this.name); // auto-tag: a cache() around this gets table:<name>
-    const keys = where ? Object.keys(where) : [];
+    const w = (where ?? {}) as Row;
+    const keys = Object.keys(w);
     const [col] = keys;
-    if (keys.length === 1 && col !== undefined) {
-      return this.ambientListLoader(col).load((where as Row)[col] as string | number) as Promise<T[]>;
+    // Ambient batch only for a single-column EQUALITY filter with no opts —
+    // operators / multi-column / order / limit fall through to a direct query.
+    if (!opts && keys.length === 1 && col !== undefined && !isOperators(w[col])) {
+      return this.ambientListLoader(col).load(w[col] as string | number) as Promise<T[]>;
     }
-    const sql = sqlite.compile({ kind: "select", from: this.name, where: keys });
-    return this.db.query<T>(sql, where ? Object.values(where) : []);
+
+    const predicates: Predicate[] = [];
+    const params: unknown[] = [];
+    for (const c of keys) {
+      const v = w[c];
+      if (isOperators(v)) {
+        for (const op of Object.keys(v)) {
+          if (!OPS.has(op)) throw new Error(`unknown operator: ${op}`);
+          const operand = (v as Record<string, unknown>)[op];
+          if (op === "in") {
+            const arr = operand as unknown[];
+            predicates.push({ col: c, op: "in", arity: arr.length });
+            params.push(...arr);
+          } else {
+            predicates.push({ col: c, op: op as Exclude<keyof Operators, "in"> });
+            params.push(operand);
+          }
+        }
+      } else {
+        predicates.push({ col: c, op: "eq" });
+        params.push(v);
+      }
+    }
+
+    const orderBy = opts?.orderBy
+      ? (Object.entries(opts.orderBy) as [string, "asc" | "desc"][]).map(([c, dir]) => ({ col: c, dir }))
+      : undefined;
+    const node: SelectNode = {
+      kind: "select",
+      from: this.name,
+      where: predicates,
+      orderBy,
+      limit: opts?.limit != null ? "param" : undefined,
+      offset: opts?.offset != null ? "param" : undefined,
+    };
+    if (opts?.limit != null) params.push(opts.limit);
+    if (opts?.offset != null) params.push(opts.offset);
+    return this.db.query<T>(sqlite.compile(node), params);
   }
 
   async findBy(where: Partial<T>): Promise<T | undefined> {
@@ -64,7 +129,8 @@ export class Table<T extends Row = Row> {
       const hit = await this.ambientLoader(col).load((where as Row)[col] as string | number);
       return (hit ?? undefined) as T | undefined;
     }
-    const sql = sqlite.compile({ kind: "select", from: this.name, where: keys, limit: 1 });
+    const where2: Predicate[] = keys.map((k) => ({ col: k, op: "eq" }));
+    const sql = sqlite.compile({ kind: "select", from: this.name, where: where2, limit: 1 });
     return this.db.get<T>(sql, Object.values(where));
   }
 
