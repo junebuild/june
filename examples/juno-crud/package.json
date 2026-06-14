@@ -1,0 +1,14 @@
+{
+  "name": "@june-examples/juno-crud",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@junejs/core": "workspace:*",
+    "@junejs/db": "workspace:*",
+    "@junejs/juno": "workspace:*"
+  },
+  "devDependencies": {
+    "@junejs/server": "workspace:*"
+  }
+}
