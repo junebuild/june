@@ -1,6 +1,6 @@
 {
   "name": "@junejs/juno",
-  "version": "0.0.10",
+  "version": "0.0.11",
   "description": "Juno — June's ergonomic data layer over the JuneDb contract. The default that ships with the agent-native magic (Tier 3).",
   "type": "module",
   "license": "MIT",
