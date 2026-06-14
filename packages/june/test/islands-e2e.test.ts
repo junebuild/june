@@ -6,7 +6,7 @@
 // against real build artifacts, not the dev-server path app.test.ts covers.
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -25,7 +25,9 @@ beforeAll(async () => {
   // race or clobber its artifacts.
   outDir = await mkdtemp(join(tmpdir(), "june-islands-e2e-"));
   await juneBuild(ROOT, { outDir });
-  clientJs = join(outDir, "assets", "_june", "client.js");
+  const juneDir = join(outDir, "assets", "_june");
+  const hashed = (await readdir(juneDir)).find((f) => /^client\.[a-f0-9]{8}\.js$/.test(f))!;
+  clientJs = join(juneDir, hashed); // content-hashed in build
 
   // The page as the BUILT worker serves it (the parity-verified render path).
   const worker = createWorker(await buildManifest(ROOT));

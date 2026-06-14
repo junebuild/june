@@ -18,9 +18,10 @@
 // Host-coupled (node:fs + Rolldown), so it lives in @junejs/server, never the pure
 // contract layer.
 
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 
 // The URL the document loads + the asset path the bundle is written to. Single
 // source of truth so build (freeze) and dev (live) agree.
@@ -62,16 +63,19 @@ export async function bundleClientToString(entryFile: string, cwd: string): Prom
   return entry && entry.type === "chunk" ? entry.code : "";
 }
 
-// Build the client entry to `<destDir>/_june/client.js` (build freezes it as an
-// asset under the reserved /_june/ prefix; CLIENT_SCRIPT_URL matches).
-export async function bundleClientToFile(entryFile: string, cwd: string, destDir: string): Promise<void> {
+// Build the client entry, content-hash it, and write `<destDir>/_june/client.<hash>.js`
+// (immutable-cacheable, like the hashed CSS). Returns the asset filename
+// (`_june/client.<hash>.js`) so the build can freeze its URL into the document.
+export async function bundleClientToFile(entryFile: string, cwd: string, destDir: string): Promise<string> {
   const bundle = await bundleClient(entryFile, cwd, "production");
-  await mkdir(destDir, { recursive: true });
-  await bundle.write({
-    dir: destDir,
-    format: "esm",
-    entryFileNames: "_june/client.js",
-    chunkFileNames: "_june/[name]-[hash].js",
-  });
+  const { output } = await bundle.generate({ format: "esm", entryFileNames: "client.js" });
   await bundle.close();
+  const entry = output.find((o) => o.type === "chunk" && o.isEntry);
+  const code = entry && entry.type === "chunk" ? entry.code : "";
+  const hash = createHash("sha256").update(code).digest("hex").slice(0, 8);
+  const fileName = `_june/client.${hash}.js`;
+  const dest = join(destDir, fileName);
+  await mkdir(dirname(dest), { recursive: true });
+  await writeFile(dest, code);
+  return fileName;
 }

@@ -78,13 +78,18 @@ describe("immutable cache header for hashed assets", () => {
   });
   const passthrough = { fetch: async () => new Response("dynamic") };
 
-  test("a content-hashed asset is served Cache-Control: immutable", async () => {
+  test("content-hashed CSS and JS are served Cache-Control: immutable", async () => {
     const w = withAssets(passthrough);
-    const res = await w.fetch(
+    const css = await w.fetch(
       new Request("http://x/_june/global.abcd1234.css"),
       { ASSETS: fakeAssets("body{}", "text/css") } as never,
     );
-    expect(res.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
+    expect(css.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
+    const js = await w.fetch(
+      new Request("http://x/_june/client.abcd1234.js"),
+      { ASSETS: fakeAssets("//js", "text/javascript") } as never,
+    );
+    expect(js.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
   });
 
   test("a NON-hashed asset is NOT marked immutable (relies on ETag)", async () => {

@@ -3,7 +3,7 @@
 // parity test verified. Runs the real Rolldown build once (≈1.5s).
 
 import { beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -48,25 +48,31 @@ describe("juneBuild()", () => {
     expect(wrangler.assets.directory).toBe("./assets");
   });
 
-  test("prerenders / THROUGH the worker — byte-equivalent to the dev home", async () => {
+  test("prerenders / THROUGH the worker — render-equivalent to the dev home", async () => {
     const indexHtml = await readFile(join(DIST, "assets", "index.html"), "utf8");
     expect(indexHtml).toContain(`<meta charSet="utf-8"/>`);
     expect(indexHtml).toContain("Hello from June");
 
     const dev = createApp({ appDir: join(ROOT, "app"), config: await loadJuneConfig(ROOT) });
     const devHome = await (await dev.fetch(new Request("https://prerender.june/"))).text();
-    expect(indexHtml).toBe(devHome); // prerender == dev render, exactly
+    // Render structure is identical; only the hashed asset HREFs differ (build
+    // hashes for immutable caching, dev keeps stable URLs). Normalize the hash
+    // out and the documents are byte-equal — parity is about render, not caching.
+    const unhash = (h: string) => h.replace(/\/_june\/(client|global)\.[a-f0-9]{8}\.(js|css)/g, "/_june/$1.$2");
+    expect(unhash(indexHtml)).toBe(devHome);
   });
 
-  test("bundles app/_client.tsx into assets/_june/client.js with NODE_ENV baked", async () => {
-    const clientJs = await readFile(join(DIST, "assets", "_june", "client.js"), "utf8");
+  test("bundles app/_client.tsx into a content-hashed /_june/client.<hash>.js (NODE_ENV baked)", async () => {
+    const name = (await readdir(join(DIST, "assets", "_june"))).find((f) => /^client\.[a-f0-9]{8}\.js$/.test(f));
+    expect(name).toBeTruthy(); // hashed, not the stable dev name
+    const clientJs = await readFile(join(DIST, "assets", "_june", name!), "utf8");
     expect(clientJs).toContain("june-island"); // the hydration runtime is in there
     expect(clientJs).not.toContain("process.env.NODE_ENV"); // browsers have no process
   });
 
-  test("the frozen document loads /_june/client.js (prerendered pages included)", async () => {
+  test("the frozen document loads the hashed client bundle (prerendered pages included)", async () => {
     const indexHtml = await readFile(join(DIST, "assets", "index.html"), "utf8");
-    expect(indexHtml).toContain(`<script type="module" src="/_june/client.js">`);
+    expect(indexHtml).toMatch(/<script type="module" src="\/_june\/client\.[a-f0-9]{8}\.js">/);
   });
 
   test("the bundled worker executes and serves /", async () => {

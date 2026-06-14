@@ -274,6 +274,17 @@ export async function juneBuild(
     frozen.document.styles = `/${cssAsset}`;
   }
 
+  // Same for the client islands bundle: build + content-hash it NOW (before the
+  // entry codegen + prerender) so both freeze the hashed /_june/client.<hash>.js
+  // and it can be served immutable. The asset is written here.
+  const assetsDir = join(outDir, "assets");
+  const clientEntry = findClientEntry(appDir);
+  let clientAsset: string | null = null;
+  if (clientEntry) {
+    clientAsset = await bundleClientToFile(clientEntry, appRoot, assetsDir);
+    frozen.document.clientScript = `/${clientAsset}`;
+  }
+
   // Declared resources become two things: a build-time plan (→ platform bindings
   // the adapter emits) and a runtime provider wired into the generated entry.
   // A resource-less app imports no config and emits no bindings, so its output
@@ -407,8 +418,8 @@ ${adapterEntry.wrap("pipeline")}
   const prerendered: string[] = [];
   const manifest = await buildManifest(appRoot);
   if (cssAsset) manifest.document.styles = `/${cssAsset}`; // prerendered HTML links the hashed sheet
+  if (clientAsset) manifest.document.clientScript = `/${clientAsset}`;
   const worker = createWorker(manifest);
-  const assetsDir = join(outDir, "assets");
   let hasAssets = false;
 
   for (const r of routes.filter((x) => !x.dynamic)) {
@@ -435,14 +446,9 @@ ${adapterEntry.wrap("pipeline")}
     hasAssets = true;
   }
 
-  // ---- client islands bundle: app/_client.* → assets/client.js -------------
-  // Served at /client.js by the assets binding; the frozen document (freezeConfig)
-  // already points <script src> at it. No entry → no bundle, page ships zero JS.
-  const clientEntry = findClientEntry(appDir);
-  if (clientEntry) {
-    await bundleClientToFile(clientEntry, appRoot, assetsDir);
-    hasAssets = true;
-  }
+  // ---- client islands bundle: built + content-hashed earlier (assets/_june/
+  //      client.<hash>.js, frozen into the document). No entry → page ships zero JS.
+  if (clientAsset) hasAssets = true;
 
   // ---- global stylesheet: app/global.css → assets/global.css ---------------
   // Served at /global.css; the frozen document already <link>s it. Compiled
