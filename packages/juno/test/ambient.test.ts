@@ -3,12 +3,16 @@
 // structural request-scoping: batching coalesces WITHIN a scope and a fresh scope
 // gets fresh loaders, so the cross-request leak A3 found can't happen.
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { beforeAll, describe, expect, test } from "bun:test";
 import { ensureScope, runInScope } from "@junejs/db";
 import { host } from "@junejs/server/host";
 import type { JuneDb } from "@junejs/core/resources";
+import { installTraceContext, runWithTrace, type RequestTrace } from "@junejs/core/instrumentation";
 
-import { table } from "../src";
+import { table, db as junoDb } from "../src";
+
+installTraceContext(new AsyncLocalStorage<RequestTrace>());
 
 beforeAll(async () => {
   await ensureScope(); // wire AsyncLocalStorage (bun provides node:async_hooks)
@@ -61,5 +65,27 @@ describe("ambient table — request-scoped, no handle", () => {
 
   test("throws when used outside a request scope", () => {
     expect(() => table("users")).toThrow("outside a request scope");
+  });
+});
+
+describe("ambient `db` — the auto-tagging raw escape hatch (Proxy taggingDb)", () => {
+  test("forwards to the scoped handle, and exec/transaction are NOT dropped", async () => {
+    const seeded = await seed();
+    await runInScope({ resources: { db: seeded } }, async () => {
+      const rows = await junoDb.query<{ id: number }>("select id from users where id = ?", [1]);
+      expect(rows).toHaveLength(1);
+      expect(typeof junoDb.exec).toBe("function"); // the Proxy fix — was undefined when spread
+      await junoDb.exec("create table t (id integer)");
+      expect(typeof junoDb.transaction).toBe("function");
+    });
+  });
+
+  test("auto-tags raw queries — records the read for cache invalidation", async () => {
+    const seeded = await seed();
+    const trace: RequestTrace = { id: "amb", startedAt: 0, events: [] };
+    await runInScope({ resources: { db: seeded } }, () =>
+      runWithTrace(trace, () => junoDb.query("select id from users")),
+    );
+    expect([...(trace.reads ?? [])]).toContain("users");
   });
 });

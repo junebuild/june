@@ -3,7 +3,8 @@
 // on ambiguity — under-tagging is the silent-staleness failure we must not have.
 
 import { describe, expect, test } from "bun:test";
-import { tablesFromSql } from "../src/tag";
+import { tablesFromSql, taggingDb } from "../src/tag";
+import type { JuneDb } from "@junejs/core/resources";
 
 describe("tablesFromSql", () => {
   test("select: single table", () => {
@@ -41,5 +42,41 @@ describe("tablesFromSql", () => {
   test("unclassifiable SQL returns no tables (→ explicit escape hatch)", () => {
     expect(tablesFromSql("pragma journal_mode = wal")).toEqual({ kind: "other", tables: [] });
     expect(tablesFromSql("select 1").tables).toEqual([]);
+  });
+});
+
+describe("taggingDb forwards every method (Proxy, not spread)", () => {
+  function fakeDb(calls: string[]) {
+    return {
+      query: async (sql: string) => (calls.push(`query:${sql}`), [] as unknown[]),
+      get: async () => undefined,
+      run: async () => ({ changes: 0, lastInsertRowid: 0 }),
+      exec: async () => void calls.push("exec"),
+      transaction: async (fn: (tx: unknown) => unknown) => fn({}),
+      close: async () => void calls.push("close"),
+    } as unknown as JuneDb;
+  }
+
+  test("over a plain object: all methods present; exec forwards", async () => {
+    const calls: string[] = [];
+    const d = taggingDb(fakeDb(calls));
+    expect(typeof d.exec).toBe("function");
+    expect(typeof d.transaction).toBe("function");
+    await d.exec("x");
+    expect(calls).toContain("exec");
+  });
+
+  test("over a Proxy (the ambient `db` shape): exec/transaction/close SURVIVE", async () => {
+    const calls: string[] = [];
+    const inner = fakeDb(calls);
+    // an ambient-like Proxy: methods come from a get-trap, no own keys to spread
+    const proxy = new Proxy({} as JuneDb, { get: (_t, p) => (inner as unknown as Record<string | symbol, unknown>)[p] });
+    const d = taggingDb(proxy);
+    expect(typeof d.query).toBe("function");
+    expect(typeof d.exec).toBe("function"); // was `undefined` before the Proxy fix
+    expect(typeof d.transaction).toBe("function");
+    expect(typeof d.close).toBe("function");
+    await d.exec("y");
+    expect(calls).toContain("exec");
   });
 });

@@ -64,20 +64,21 @@ export function tagSql(sql: string): void {
 // table API keeps tagging explicitly (precise, parser-independent); this covers
 // the raw escape hatch so `cache(() => db.query("select ... from posts"))` is
 // invalidated by a posts write instead of going silently stale.
+//
+// A PROXY, not a spread: the ambient `db` resource is itself a Proxy whose methods
+// come from a get-trap, so `{ ...db }` would drop exec/transaction/close. The
+// Proxy forwards everything to the underlying handle and only wraps query/get/run.
 export function taggingDb(db: JuneDb): JuneDb {
-  return {
-    ...db,
-    query<T = unknown>(sql: string, params?: unknown[]) {
-      tagSql(sql);
-      return db.query<T>(sql, params);
+  const query = <T = unknown>(sql: string, params?: unknown[]) => (tagSql(sql), db.query<T>(sql, params));
+  const get = <T = unknown>(sql: string, params?: unknown[]) => (tagSql(sql), db.get<T>(sql, params));
+  const run = (sql: string, params?: unknown[]) => (tagSql(sql), db.run(sql, params));
+  return new Proxy(db, {
+    get(target, prop, receiver) {
+      if (prop === "query") return query;
+      if (prop === "get") return get;
+      if (prop === "run") return run;
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
     },
-    get<T = unknown>(sql: string, params?: unknown[]) {
-      tagSql(sql);
-      return db.get<T>(sql, params);
-    },
-    run(sql: string, params?: unknown[]) {
-      tagSql(sql);
-      return db.run(sql, params);
-    },
-  };
+  });
 }

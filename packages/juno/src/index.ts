@@ -187,6 +187,13 @@ export function table<T extends Row = Row>(name: string): Table<T> {
   return new Table<T>(ambientDb, name, loaders);
 }
 
+// The ambient raw escape hatch, auto-tagging. `import { db } from "@junejs/juno"`
+// is the ambient `db` resource wrapped so raw `db.query("... from posts")` inside
+// a cache() is invalidated by a posts write (vs the un-tagged `@junejs/db` `db`,
+// which would go silently stale). Stateless wrapper over the ambient Proxy, so a
+// module-scope export still resolves the per-request handle.
+export const db: JuneDb = taggingDb(ambientDb);
+
 // Explicit tag/invalidate hatch, ambiently (no handle needed — they only record).
 export function reads(...tables: string[]): void {
   for (const t of tables) recordTableRead(t);
