@@ -61,3 +61,51 @@ describe("tableLoader auto-batch", () => {
     expect(() => juno({} as JuneDb).table("users").loader("id; drop")).toThrow("unsafe SQL identifier");
   });
 });
+
+describe("ambient findBy auto-batch (no loader to manage)", () => {
+  type User = { id: number; name: string };
+
+  test("concurrent findBy on the same column coalesce into ONE query", async () => {
+    const c = counting(await seed());
+    const t = juno(c.db).table<User>("users");
+    const [a, b, dup] = await Promise.all([
+      t.findBy({ id: 1 }),
+      t.findBy({ id: 2 }),
+      t.findBy({ id: 1 }), // duplicate key — deduped, still free
+    ]);
+    expect(a?.name).toBe("Ada");
+    expect(b?.name).toBe("Linus");
+    expect(dup?.name).toBe("Ada");
+    expect(c.queries()).toBe(1); // N+1 → 1, scattered findBy with no shared loader
+  });
+
+  test("coalesces across separate .table() calls on the same juno() handle", async () => {
+    const c = counting(await seed());
+    const j = juno(c.db); // one handle = one request
+    const [a, b] = await Promise.all([
+      j.table<User>("users").findBy({ id: 1 }),
+      j.table<User>("users").findBy({ id: 3 }),
+    ]);
+    expect(a?.name).toBe("Ada");
+    expect(b?.name).toBe("Grace");
+    expect(c.queries()).toBe(1); // shared per-request registry → single batch
+  });
+
+  test("a missing row resolves to undefined", async () => {
+    const t = juno(await seed()).table<User>("users");
+    expect(await t.findBy({ id: 999 })).toBeUndefined();
+  });
+
+  test("read-after-write in a later tick is fresh (no cross-tick cache)", async () => {
+    const t = juno(await seed()).table<User>("users");
+    expect((await t.findBy({ id: 1 }))?.name).toBe("Ada");
+    await t.update({ id: 1 }, { name: "Ada Lovelace" });
+    expect((await t.findBy({ id: 1 }))?.name).toBe("Ada Lovelace"); // re-queried, not stale
+  });
+
+  test("multi-column findBy falls back to a direct query (still correct)", async () => {
+    const t = juno(await seed()).table<User>("users");
+    expect((await t.findBy({ id: 1, name: "Ada" }))?.name).toBe("Ada");
+    expect(await t.findBy({ id: 1, name: "Nope" })).toBeUndefined();
+  });
+});

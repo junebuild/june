@@ -28,6 +28,10 @@ export class Table<T extends Row = Row> {
   constructor(
     private readonly db: JuneDb,
     private readonly name: string,
+    // Per-request ambient-loader registry, shared across the juno() handle's
+    // .table() calls so concurrent findBy coalesce. Optional/defaulted so a
+    // standalone `new Table(db, name)` still works (it just batches alone).
+    private readonly loaders: Map<string, Loader<string | number, Row>> = new Map(),
   ) {}
 
   async all(): Promise<T[]> {
@@ -36,10 +40,33 @@ export class Table<T extends Row = Row> {
   }
 
   async findBy(where: Partial<T>): Promise<T | undefined> {
-    recordTableRead(this.name);
-    const keys = Object.keys(where).map(ident);
-    const clause = keys.length ? ` where ${keys.map((k) => `${k} = ?`).join(" and ")}` : "";
+    recordTableRead(this.name); // sync, in-trace: cache() auto-tags table:<name> here
+    const keys = Object.keys(where);
+    // Ambient auto-batch: a single-column equality lookup coalesces with other
+    // concurrent findBy on the same (table, column) this request into ONE
+    // `where col in (...)` query — N+1 → 1, with no loader to manage. There is no
+    // cross-tick cache, so a read AFTER a write (a later tick) re-queries and sees
+    // the new value. Multi-column or empty `where` falls back to a direct query.
+    const [col] = keys;
+    if (keys.length === 1 && col !== undefined) {
+      const hit = await this.ambientLoader(col).load((where as Row)[col] as string | number);
+      return (hit ?? undefined) as T | undefined;
+    }
+    const cols = keys.map(ident);
+    const clause = cols.length ? ` where ${cols.map((k) => `${k} = ?`).join(" and ")}` : "";
     return this.db.get<T>(`select * from ${ident(this.name)}${clause} limit 1`, Object.values(where));
+  }
+
+  // get-or-create the per-request ambient loader for (table, column). tableLoader
+  // validates both identifiers and emits recordTableRead in its batch.
+  private ambientLoader(col: string): Loader<string | number, T> {
+    const key = `${this.name}::${col}`;
+    let loader = this.loaders.get(key);
+    if (!loader) {
+      loader = tableLoader<Row>(this.db, this.name, col);
+      this.loaders.set(key, loader);
+    }
+    return loader as Loader<string | number, T>;
   }
 
   async insert(values: Partial<T>): Promise<RunResult> {
@@ -81,12 +108,16 @@ export type Juno = {
   db: JuneDb;
 };
 
-// Wrap any JuneDb handle (ctx.db) in Juno's ergonomic surface.
+// Wrap any JuneDb handle (ctx.db) in Juno's ergonomic surface. Build ONE per
+// request: the ambient-loader registry it carries is what makes concurrent
+// findBy across components coalesce — and scoping it to the per-request handle
+// is what keeps keys from leaking across requests.
 export function juno(db: JuneDb): Juno {
+  const loaders = new Map<string, Loader<string | number, Row>>();
   return {
     db,
     table<T extends Row = Row>(name: string) {
-      return new Table<T>(db, name);
+      return new Table<T>(db, name, loaders);
     },
   };
 }
