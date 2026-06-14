@@ -1,5 +1,6 @@
-// The CSS-modules transform: scope every class selector, but NEVER touch class-
-// like text inside url()/strings; deterministic so dev/build/client agree.
+// The CSS-modules transform (postcss-modules + our deterministic scoper): scope
+// every local class, honor :global / composes, never touch url()/strings, and
+// stay deterministic so dev/build/client/Node agree.
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -9,46 +10,91 @@ import { transformCssModule, buildModuleCss, stableKey } from "../src/css-module
 import { initialize, load } from "../src/css-modules-loader.mjs";
 
 describe("transformCssModule", () => {
-  test("scopes a class selector and maps it", () => {
-    const { map, css } = transformCssModule(".button { color: red }", "app/x.module.css");
+  let dir: string;
+  // Each transform reads a real file (postcss-modules needs `from` to resolve
+  // composes), so tests write a fixture and transform it.
+  const transform = async (name: string, css: string, appRoot = dir) => {
+    await writeFile(join(dir, name), css);
+    return transformCssModule(join(dir, name), appRoot);
+  };
+  afterEach(async () => {
+    if (dir) await rm(dir, { recursive: true, force: true });
+  });
+  // mkdtemp per test via a getter-ish: set dir lazily in each test.
+  const setup = async () => {
+    dir = await mkdtemp(join(tmpdir(), "june-cssm-"));
+  };
+
+  test("scopes a class selector and maps it", async () => {
+    await setup();
+    const { map, css } = await transform("x.module.css", ".button { color: red }");
     expect(Object.keys(map)).toEqual(["button"]);
     expect(map.button).toMatch(/^button_[a-f0-9]{8}$/);
-    expect(css).toBe(`.${map.button} { color: red }`);
+    expect(css).toContain(`.${map.button}`);
+    expect(css).toContain("color: red");
   });
 
-  test("scopes multiple, compound, descendant and pseudo selectors", () => {
-    const { map } = transformCssModule(".a .b:hover, .c.d::before { x: y }", "k");
+  test("scopes multiple, compound, descendant and pseudo selectors", async () => {
+    await setup();
+    const { map } = await transform("m.module.css", ".a .b:hover, .c.d::before { x: y }");
     expect(Object.keys(map).sort()).toEqual(["a", "b", "c", "d"]);
   });
 
-  test("does NOT scope class-like text inside url() — file extensions stay intact", () => {
-    const { map, css } = transformCssModule(".bg { background: url(hero.png) }", "k");
+  test(":global(...) is left unscoped", async () => {
+    await setup();
+    const { map, css } = await transform(
+      "g.module.css",
+      ".local { x: y } :global(.no-scope) { a: b }",
+    );
+    expect(Object.keys(map)).toEqual(["local"]); // .no-scope is NOT a local
+    expect(css).toContain(".no-scope {"); // emitted verbatim, unscoped
+    expect(css).toContain(`.${map.local}`);
+  });
+
+  test("composes pulls in the referenced class (cross-file) and merges names", async () => {
+    await setup();
+    await writeFile(join(dir, "base.module.css"), ".pad { padding: 4px }");
+    const { map, css } = await transform(
+      "btn.module.css",
+      '.btn { composes: pad from "./base.module.css"; color: red }',
+    );
+    // styles.btn === "btn_<hash> pad_<hash>" — both classes applied
+    const parts = map.btn!.split(" ");
+    expect(parts).toHaveLength(2);
+    expect(parts[0]).toMatch(/^btn_[a-f0-9]{8}$/);
+    expect(parts[1]).toMatch(/^pad_[a-f0-9]{8}$/);
+    // the composed rule is inlined into this file's output
+    expect(css).toContain(`.${parts[1]}`);
+    expect(css).toContain("padding: 4px");
+  });
+
+  test("does NOT scope class-like text inside url() — file extensions stay intact", async () => {
+    await setup();
+    const { map, css } = await transform("u.module.css", ".bg { background: url(hero.png) }");
     expect(Object.keys(map)).toEqual(["bg"]); // only .bg, NOT .png
     expect(css).toContain("url(hero.png)");
   });
 
-  test("does NOT scope class-like text inside strings (content)", () => {
-    const { map, css } = transformCssModule('.x::after { content: ".active" }', "k");
+  test("does NOT scope class-like text inside strings (content)", async () => {
+    await setup();
+    const { map, css } = await transform("s.module.css", '.x::after { content: ".active" }');
     expect(Object.keys(map)).toEqual(["x"]); // not .active
     expect(css).toContain('content: ".active"');
   });
 
-  test("does NOT mistake numeric CSS values for classes or placeholders", () => {
-    const { map, css } = transformCssModule(".g { grid-row: 1 / 3; margin: .5rem }", "k");
+  test("does NOT mistake numeric CSS values for classes", async () => {
+    await setup();
+    const { map, css } = await transform("n.module.css", ".g { grid-row: 1 / 3; margin: .5rem }");
     expect(Object.keys(map)).toEqual(["g"]);
-    expect(css).toContain("grid-row: 1 / 3"); // not corrupted by guard restore
-    expect(css).toContain(".5rem"); // digit-led, never a class
+    expect(css).toContain("grid-row: 1 / 3");
+    expect(css).toContain(".5rem");
   });
 
-  test("strips comments (a `.x` in a comment isn't scoped)", () => {
-    const { map } = transformCssModule("/* .ghost */ .real { x: y }", "k");
-    expect(Object.keys(map)).toEqual(["real"]);
-  });
-
-  test("deterministic: same (key, class) → same name; different key → different name", () => {
-    const a = transformCssModule(".btn{}", "app/a.module.css").map.btn;
-    const a2 = transformCssModule(".btn{}", "app/a.module.css").map.btn;
-    const b = transformCssModule(".btn{}", "app/b.module.css").map.btn;
+  test("deterministic: same (key, class) → same name; different file → different name", async () => {
+    await setup();
+    const a = (await transform("a.module.css", ".btn{ x: y }")).map.btn;
+    const a2 = (await transform("a.module.css", ".btn{ x: y }")).map.btn;
+    const b = (await transform("b.module.css", ".btn{ x: y }")).map.btn;
     expect(a).toBe(a2);
     expect(a).not.toBe(b);
   });

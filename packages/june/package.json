@@ -33,7 +33,9 @@
     "@junejs/core": "workspace:*",
     "@junejs/db": "workspace:*",
     "marked": "^18.0.5",
-    "rolldown": "^1.1.0"
+    "rolldown": "^1.1.0",
+    "postcss": "^8.4.0",
+    "postcss-modules": "^6.0.0"
   },
   "peerDependencies": {
     "react": "^19.2.0",

@@ -10,13 +10,15 @@
 // lookups into it, and the served/emitted CSS comes from the SAME pass — so the
 // JS maps and the CSS agree by construction.
 //
-// v1 scope: every class selector is locally scoped (the CSS-Modules default).
-// `:global(...)` and `composes` are NOT handled yet (documented follow-up) — use
-// app/global.css for genuinely global styles.
+// Transforms go through postcss-modules, so the full CSS-Modules surface works:
+// local scoping (the default), `:global(...)`, and cross-file `composes`. The one
+// thing we override is generateScopedName — it's our deterministic hash, not a
+// bundler internal, which is what makes dev/build/client/Node agree.
 
 import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
+import type { AcceptedPlugin } from "postcss";
 
 export const MODULE_STYLES_URL = "/_june/modules.css";
 
@@ -32,26 +34,30 @@ function scopedName(key: string, cls: string): string {
   return `${cls}_${h}`;
 }
 
-// Transform one .module.css → { map, css }. url(...) and string literals are
-// guarded so a `.png` in a url or a `.x` in `content:""` is never scoped. The
-// guard token can't appear in real CSS and isn't a class (no leading dot), so it
-// survives scoping and is restored verbatim afterward.
-export function transformCssModule(
-  source: string,
-  key: string,
-): { map: Record<string, string>; css: string } {
-  let s = source.replace(/\/\*[\s\S]*?\*\//g, ""); // strip comments
-  const guarded: string[] = [];
-  const stash = (m: string): string => `__JUNE_CSSM_${guarded.push(m) - 1}__`;
-  s = s.replace(/url\([^)]*\)/gi, stash).replace(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, stash);
-
-  const map: Record<string, string> = {};
-  let css = s.replace(/\.(-?[a-zA-Z_][\w-]*)/g, (_m, cls: string) => {
-    if (!(cls in map)) map[cls] = scopedName(key, cls);
-    return "." + map[cls];
-  });
-  css = css.replace(/__JUNE_CSSM_(\d+)__/g, (_m, i: string) => guarded[Number(i)]!);
-  return { map, css };
+// Transform one .module.css via postcss-modules — correct scoping, `:global`,
+// `composes` (cross-file), and url()/string safety — but with OUR deterministic
+// generateScopedName, so dev SSR / worker build / client build / Node all produce
+// identical names. postcss is imported lazily and only runs at build/dev time, so
+// it never enters the worker graph.
+export async function transformCssModule(
+  file: string,
+  appRoot: string,
+): Promise<{ map: Record<string, string>; css: string }> {
+  const postcss = (await import("postcss")).default;
+  const postcssModules = (await import("postcss-modules")).default as (opts: {
+    generateScopedName(name: string, filename: string): string;
+    getJSON(file: string, json: Record<string, string>): void;
+  }) => AcceptedPlugin;
+  let map: Record<string, string> = {};
+  const result = await postcss([
+    postcssModules({
+      generateScopedName: (name, filename) => scopedName(stableKey(appRoot, filename), name),
+      getJSON: (_f, json) => {
+        map = json;
+      },
+    }),
+  ]).process(await readFile(file, "utf8"), { from: file });
+  return { map, css: result.css };
 }
 
 // The JS a .module.css import resolves to.
@@ -90,7 +96,7 @@ export async function buildModuleCss(
   const maps: ModuleMaps = {};
   const parts: string[] = [];
   for (const file of files) {
-    const { map, css } = transformCssModule(await readFile(file, "utf8"), stableKey(appRoot, file));
+    const { map, css } = await transformCssModule(file, appRoot);
     maps[file] = map;
     parts.push(css);
   }
