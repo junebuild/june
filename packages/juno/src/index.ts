@@ -12,8 +12,10 @@ import type { JuneDb, RunResult } from "@junejs/core/resources";
 import { recordTableRead, recordTableWrite } from "@junejs/core/instrumentation";
 
 import { tableLoader, type Loader } from "./batch";
+import { taggingDb } from "./tag";
 
 export { createLoader, tableLoader, type Loader } from "./batch";
+export { tablesFromSql, tagSql, taggingDb, type SqlTouch } from "./tag";
 
 export type Row = Record<string, unknown>;
 
@@ -105,7 +107,16 @@ export class Table<T extends Row = Row> {
 
 export type Juno = {
   table<T extends Row = Row>(name: string): Table<T>;
+  // Raw escape hatch. Reads/writes through it auto-tag by parsed table name, so a
+  // `cache(() => db.query("select ... from posts"))` is invalidated by a posts
+  // write instead of going silently stale.
   db: JuneDb;
+  // Explicit tag escape hatch for SQL the parser can't classify (CTEs over a
+  // function, dynamic table names, a read computed outside SQL). `reads()` makes a
+  // cache() pick up the tag; `writes()` invalidates it. Explicit, so it can't
+  // silently break — the failure mode the implicit-only design had.
+  reads(...tables: string[]): void;
+  writes(...tables: string[]): void;
 };
 
 // Wrap any JuneDb handle (ctx.db) in Juno's ergonomic surface. Build ONE per
@@ -115,9 +126,17 @@ export type Juno = {
 export function juno(db: JuneDb): Juno {
   const loaders = new Map<string, Loader<string | number, Row>>();
   return {
-    db,
+    // Table API uses the raw db and tags explicitly (precise, parser-independent);
+    // the exposed handle wraps it so the raw escape hatch auto-tags too.
+    db: taggingDb(db),
     table<T extends Row = Row>(name: string) {
       return new Table<T>(db, name, loaders);
+    },
+    reads(...tables: string[]) {
+      for (const t of tables) recordTableRead(t);
+    },
+    writes(...tables: string[]) {
+      for (const t of tables) recordTableWrite(t);
     },
   };
 }
