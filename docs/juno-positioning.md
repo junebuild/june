@@ -105,9 +105,12 @@ not rebuild differential dataflow. But four things transfer:
 - **Cache / invalidate / live** → keep pragmatic table-tag invalidate + live RSC
   push; borrow the error-surfacing discipline; IVM is a future frontier.
 - **Agent-native** → the least-explored axis among references = the moat candidate.
-  `llms.txt` + machine-readable schema/query catalog is step one. The performance
-  property "the idiomatic way to write a query is the fast way" is itself an
-  agent-native property: an LLM emits near-optimal code without knowing the footguns.
+  `llms.txt` + machine-readable schema/query catalog is step one. Refined by the
+  codegen eval (Appendix 2): the moat is **not** "LLMs write better query code with
+  juno" (there it ties a capable low-level API) — it's that **the LLM writes naive
+  code and juno's automatic layer (compile-once, auto-invalidate/live, request-scoped
+  batching) makes it fast/correct/fresh underneath**, plus encoding the blind-spot
+  facts (Appendix 1) that models otherwise assert wrong.
 
 ## Migrations (resolved direction)
 
@@ -212,3 +215,57 @@ otherwise assert wrong. Current list (revise as measured):
 6. Named-bind insert is **~75–81% of raw positional** insert, not ~90%.
 7. An async/remote client per call is **~10–25× slower** than the same engine
    synchronous — keep the hot path sync, batch the remote.
+
+---
+
+## Appendix 2 — codegen eval: do LLMs write better data code with juno? (2026-06-14)
+
+> Snapshot. This materially **refines the agent-native thesis** above.
+
+Setup: 6 fresh parallel model instances, two arms (3 each) — juno's high-level API
+vs a capable low-level async DB API (both expose `batch()` and `prepare()`, so the
+fast path is reachable in either). Same 5 realistic D1 tasks, blind first-shot (no
+tools, no execution), then we hand-scored each solution for correctness /
+round-trips / safety / footguns.
+
+**Result — on LLM-written query code, juno ≈ the capable baseline:**
+- T1 (30 rows by id): both arms 1 round trip (juno loader / baseline `WHERE id IN (...)`).
+- T2 (orders + line_items): both 2 round trips, no N+1; juno fell back to raw SQL
+  (it has no relation affordance).
+- T3 (idempotent upsert): the baseline went straight to atomic
+  `INSERT … ON CONFLICT DO NOTHING` + select (2 RTT); juno's ergonomic `findBy`
+  **nudged a check-then-insert** (extra RTT), and one instance dropped `created_at`.
+  The higher-level API led to a slightly *worse* pattern.
+- T4 (search by user-provided string): all 6 parameterized and even escaped LIKE
+  wildcards — no injection in either arm.
+- T5 (hot `getUserById`): ~2/3 of **both** arms stashed the cache/loader on the
+  long-lived `db` handle → cross-request leak. juno's loader did not prevent it.
+
+So "LLMs write better code with juno's higher-level API" is **not supported here** —
+capable models + a clean low-level API already reach set queries, parameterization,
+and upsert, and a high-level affordance can backfire (T3).
+
+**The reframe.** A codegen eval can only see code the LLM writes. juno's real wins
+are the **automatic layer the LLM never writes** — compile-once caching, auto
+cache-tag + invalidate + live, request-scoped batching. So the agent-native thesis
+shifts:
+
+> from "LLMs write *better code* with juno"
+> to&nbsp;&nbsp;&nbsp;"LLMs write *naive* code and juno makes it fast / correct / fresh underneath."
+
+The moat is what the developer-or-agent **doesn't have to get right**.
+
+**Design inputs this surfaced:**
+1. Make request-scoping **structural** — bind loaders to a request context that
+   can't be stashed on the long-lived handle, so the T5 cross-request leak is
+   unrepresentable (both arms hit it = a real blind spot).
+2. Add an **atomic upsert** primitive so the obvious path is the atomic one, not
+   `findBy`-then-insert — and **eval every new API primitive this way**: does it
+   steer the LLM to the fast path, or backfire like T3's `findBy`?
+3. Relation loading (`with`/include or FK loader) — juno currently adds nothing over
+   raw for T2; only worth shipping if it is correct + fast by default.
+
+**Caveats:** small N (3/arm), 5 tasks; T1 handed an `ids[]` array (invites a set
+query — under-tests scattered N+1); and the tasks did **not** exercise juno's
+automatic invalidation / live / compile-once, which is exactly where the moat now
+sits. Next round: scattered per-component loads, and a read-after-write freshness task.
