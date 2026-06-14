@@ -85,6 +85,25 @@ async function findModuleCss(dir: string): Promise<string[]> {
   return out.sort();
 }
 
+// Drop byte-identical top-level rules. postcss-modules has no module graph, so
+// `composes: x from "./y"` INLINES y's rule into this file's output — and we also
+// emit y directly, so a composed rule lands N+1 times. Vite never duplicates
+// (composes is a graph edge there); we get the same one-copy result by deduping.
+// Safe precisely because our scoped names are deterministic: the copies are
+// byte-identical, so exact-string dedup can't drop a genuinely different rule.
+async function dedupeRules(css: string): Promise<string> {
+  const postcss = (await import("postcss")).default;
+  const root = postcss.parse(css);
+  const seen = new Set<string>();
+  root.each((node) => {
+    if (node.type !== "rule" && node.type !== "atrule") return;
+    const key = node.toString();
+    if (seen.has(key)) node.remove();
+    else seen.add(key);
+  });
+  return root.toString();
+}
+
 // One pass over app/**/*.module.css → the per-file class maps AND the combined
 // scoped stylesheet. null css when there are none. Deterministic, so the maps the
 // loaders hand out match the CSS that's served/emitted.
@@ -100,7 +119,7 @@ export async function buildModuleCss(
     maps[file] = map;
     parts.push(css);
   }
-  return { maps, css: parts.length ? parts.join("\n") : null };
+  return { maps, css: parts.length ? await dedupeRules(parts.join("\n")) : null };
 }
 
 // --- the three dumb interception points (all lookups into `maps`) ------------

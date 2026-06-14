@@ -127,6 +127,26 @@ describe("buildModuleCss (glob + collect)", () => {
     expect(css).toContain(`.${bMap.two}`);
   });
 
+  test("a rule composed from N files appears ONCE in the combined sheet (like Vite)", async () => {
+    dir = await mkdtemp(join(tmpdir(), "june-cssm-"));
+    await mkdir(join(dir, "app"), { recursive: true });
+    await writeFile(join(dir, "app", "base.module.css"), ".base { color: red }");
+    await writeFile(
+      join(dir, "app", "a.module.css"),
+      '.btn { composes: base from "./base.module.css"; font-weight: bold }',
+    );
+    await writeFile(
+      join(dir, "app", "b.module.css"),
+      '.card { composes: base from "./base.module.css"; border: 1px }',
+    );
+    const { css } = await buildModuleCss(join(dir, "app"), dir);
+    // base is composed by a + b AND emitted directly → would be ×3 without dedup
+    expect((css!.match(/color: red/g) ?? []).length).toBe(1);
+    // the composers' own rules survive
+    expect(css).toContain("font-weight: bold");
+    expect(css).toContain("border: 1px");
+  });
+
   test("no .module.css → null css", async () => {
     dir = await mkdtemp(join(tmpdir(), "june-cssm-"));
     await mkdir(join(dir, "app"), { recursive: true });
