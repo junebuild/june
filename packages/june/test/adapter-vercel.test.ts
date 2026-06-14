@@ -17,6 +17,10 @@ describe("vercel() adapter — units", () => {
     expect(a.name).toBe("vercel");
     expect(a.conditions[0]).toBe("edge-light");
     expect(a.conditions).not.toContain("workerd");
+    // NOT "worker"/"browser": react-dom maps "worker" → its browser SSR build,
+    // which crashes the edge function — must reach "edge-light" → server.edge.
+    expect(a.conditions).not.toContain("worker");
+    expect(a.conditions).not.toContain("browser");
     expect(a.capabilities.runtime).toBe("edge");
   });
 

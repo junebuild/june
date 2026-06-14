@@ -151,7 +151,12 @@ export function vercel(opts?: { regions?: string[] }): JuneAdapter {
   return {
     name: "vercel",
     capabilities: { runtime: "edge", persistentConnections: false, assets: "platform" },
-    conditions: ["edge-light", "worker", "browser", "import", "default"],
+    // NO "worker"/"browser": react-dom's ./server exports map "worker" → the
+    // BROWSER SSR build (server.browser.js), listed BEFORE "edge-light", so
+    // requesting "worker" pulls the wrong renderer and the edge function crashes
+    // at invocation. "edge-light" → server.edge.js (the same build workerd gets
+    // via "workerd"). Mirrors workers()'s shape: <runtime>, edge, import, default.
+    conditions: ["edge-light", "edge", "import", "default"],
 
     validate({ plan }) {
       if (plan.db) {
