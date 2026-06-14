@@ -15,6 +15,15 @@ registry update.
 | `sqlite-driver-libsql/` | `libsql` sync binding vs `@libsql/client` async, vs `better-sqlite3` | the async per-call tax + the sync libSQL binding gap (not in the PoC) |
 | `edge-d1-remote/` | **real remote Cloudflare D1** (deployed Worker): per-query RTT, batch-size sweep, render auto-batch, Sessions API read replication | the PoC only had a `wrangler dev` local-miniflare D1; real cross-region latency changes the conclusions |
 
+## Workspace benches (live with their package, not here)
+
+Benches that import the real `@junejs/*` packages can't sit under `bench/scenarios/`
+(those modules resolve only via a package's own `node_modules`). They live next to
+the package:
+
+- `packages/juno/bench/ambient-batch.ts` — ambient per-request `findBy` auto-batch:
+  K scattered no-loader `findBy` collapse to 1 query (see `packages/juno/bench/README.md`).
+
 ## Not ported (still in the frozen PoC `../../../experiments/orm-bench/`)
 
 The broader local-driver suite — `better-sqlite3` / `node:sqlite` / `bun:sqlite` /
