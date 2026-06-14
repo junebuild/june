@@ -417,6 +417,12 @@ ${adapterEntry.wrap("pipeline")}
     input: entryFile,
     cwd: appRoot,
     platform: "browser", // workerd's surface is web-standard; no node:* in the graph
+    // Bake NODE_ENV=production at BUILD (the same the client bundle does), so React's
+    // server entry folds to its production build (smaller/faster, no dev warnings) and
+    // the dev-only code tree-shakes. Build-time on purpose: runtime process.env.NODE_ENV
+    // differs by target (Vercel sets it; workerd may not), so baking it makes the output
+    // deterministic and target-agnostic. `june dev` doesn't use this path.
+    transform: { define: { "process.env.NODE_ENV": JSON.stringify("production") } },
     plugins: [rolldownCssModulesPlugin(cssModuleMaps)], // .module.css → scoped class map
     external: (id: string) => {
       // Binary assets stay external — wrangler's CompiledWasm/Data rules own them.
