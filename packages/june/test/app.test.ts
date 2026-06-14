@@ -26,7 +26,7 @@ describe("view projection (SSR)", () => {
     const res = await get("/");
     expect(res.headers.get("content-type")).toBe("text/html; charset=utf-8");
     const html = await res.text();
-    expect(html.startsWith("<!doctype html>")).toBe(true);
+    expect(html.startsWith("<!DOCTYPE html>")).toBe(true);
     expect(html).toContain(`<meta charSet="utf-8"/>`);
     expect(html).toContain("<title>June Basic</title>"); // title == site name → not templated
     expect(html).toContain("Hello from June");
@@ -42,7 +42,7 @@ describe("streaming Suspense (loading.tsx opts a route in)", () => {
     // never appears. Both fallback and the streamed-in view are present.
     expect(html).toContain('data-loading="slow"');
     expect(html).toContain("streamed in after the shell");
-    expect(html.startsWith("<!doctype html>")).toBe(true);
+    expect(html.startsWith("<!DOCTYPE html>")).toBe(true);
   });
 
   test("the streaming response body is a live stream, not a buffered string", async () => {

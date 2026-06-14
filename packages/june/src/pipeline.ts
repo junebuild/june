@@ -124,25 +124,6 @@ function StreamedView({
   return provideLoaderData(data, def.view ? def.view(data, ctx) : null);
 }
 
-// renderToReadableStream does not emit the doctype; prepend it without buffering
-// the React stream (streaming stays incremental).
-function withDoctype(source: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
-  const reader = source.getReader();
-  return new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode("<!doctype html>\n"));
-    },
-    async pull(controller) {
-      const { done, value } = await reader.read();
-      if (done) controller.close();
-      else controller.enqueue(value);
-    },
-    cancel(reason) {
-      void reader.cancel(reason);
-    },
-  });
-}
-
 // The default favicon: the site name's first character in a rounded square —
 // a plain SVG string, so it needs no fonts, no rasterizer, and works for CJK
 // names as readily as latin ones. Served at /favicon.svg AND /favicon.ico
@@ -187,8 +168,9 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
       React.createElement(Document, { config: docConfigForRender(), metadata, children: wrapped }),
     );
     await stream.allReady; // fully resolved markup (no streamed Suspense fallbacks)
-    const html = "<!doctype html>\n" + (await new Response(stream).text());
-    return new Response(html, { status, headers: htmlHeaders() });
+    // React 19 emits <!DOCTYPE html> itself for an <html> root — don't prepend a
+    // second one.
+    return new Response(stream, { status, headers: htmlHeaders() });
   }
 
   // Route A: the [data-june-root] inner HTML for a soft-nav / live-apply request
@@ -249,8 +231,9 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
       React.createElement(Document, { config: docConfigForRender(), metadata, children: wrapped }),
       { onError: (e: unknown) => console.error("[june] streaming render error:", e) },
     );
-    // NO allReady — return the live stream (shell first), doctype prepended.
-    return new Response(withDoctype(stream), { status: 200, headers: htmlHeaders() });
+    // NO allReady — return the live stream (shell first). React 19 streams the
+    // <!DOCTYPE html> as the first bytes, so nothing to prepend.
+    return new Response(stream, { status: 200, headers: htmlHeaders() });
   }
 
   function notFoundResponse(target: RenderTarget, pathname: string): Promise<Response> | Response {

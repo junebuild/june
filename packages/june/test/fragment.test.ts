@@ -49,7 +49,7 @@ describe("fragment projection", () => {
   test("a normal browser navigation still gets the full document, not a fragment", async () => {
     const res = await get("/", { accept: "text/html" });
     const html = await res.text();
-    expect(html).toContain("<!doctype html>");
+    expect(html).toContain("<!DOCTYPE html>");
     expect(html).toContain("<html");
     expect(res.headers.get(TITLE_HEADER)).toBeNull(); // no fragment header
   });
