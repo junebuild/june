@@ -36,11 +36,16 @@ not a virtual DOM, not a client cache to invalidate.
 ## The posture
 
 Client routers exist to make navigation fast and transitions smooth. The
-platform now does both natively, so June's choice is the same one it makes
-everywhere ([Standards](/docs/features-web-standards)): use the browser's
-mechanism and ship nothing. This is also why we haven't built
-Flight-payload navigation ([RSC](/docs/features-rsc)) — full documents made
-instant cover most sites with zero client state to manage.
+platform now does both natively, so June's default is the same choice it
+makes everywhere ([Standards](/docs/features-web-standards)): use the
+browser's mechanism and ship nothing. This is also why a full document — not
+a Flight payload ([RSC](/docs/features-rsc)) — is what crosses the wire: it
+covers most sites with zero client state to manage.
+
+When an app-like surface genuinely needs in-memory state to survive a
+navigation (a dashboard, an open websocket), the opt-in
+[Client Router](/docs/features-client-router) adds soft swaps as progressive
+enhancement — off by default, and this site keeps it off.
 
 Configured by `speculation` in `june.config.ts`, on by default — the config
 exists to turn it off.
