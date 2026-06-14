@@ -53,4 +53,18 @@ describe("fragment projection", () => {
     expect(html).toContain("<html");
     expect(res.headers.get(TITLE_HEADER)).toBeNull(); // no fragment header
   });
+
+  test("both representations carry Vary: Accept (same url → cache must key on Accept)", async () => {
+    // The full page and the fragment share `/`; without Vary a cache can serve the
+    // fragment to a real page load (document starting mid-body). Both must vary.
+    const full = await get("/", { accept: "text/html" });
+    const frag = await get("/", { accept: FRAGMENT_ACCEPT });
+    expect(full.headers.get("vary")?.toLowerCase()).toContain("accept");
+    expect(frag.headers.get("vary")?.toLowerCase()).toContain("accept");
+  });
+
+  test("the full document is emitted exactly once — no double doctype", async () => {
+    const html = await (await get("/")).text();
+    expect((html.match(/<!doctype html>/gi) ?? []).length).toBe(1);
+  });
 });

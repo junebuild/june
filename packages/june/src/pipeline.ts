@@ -283,6 +283,23 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
       return notFoundResponse(target, ctx.url.pathname);
     }
 
+    const res = await renderTarget(target, def, data, ctx, chain);
+    // Every projection here is chosen by the Accept header at the SAME url (a full
+    // page, its fragment, its .md and .json all live at the clean path). Without
+    // Vary, a shared/browser cache can hand a soft-nav fragment to a real page
+    // load — which surfaces as a document that starts mid-body. Make Accept part
+    // of the cache key.
+    res.headers.set("vary", "accept");
+    return res;
+  }
+
+  async function renderTarget(
+    target: RenderTarget,
+    def: Resolved["def"],
+    data: unknown,
+    ctx: RouteContext,
+    chain: LayoutComponent[],
+  ): Promise<Response> {
     if (target === "md") return renderMarkdown(def, data, ctx);
     if (target === "json") {
       // Convention: a json() fn customizes; absent → serialize the loader data.
