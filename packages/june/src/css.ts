@@ -76,6 +76,23 @@ export function invalidateCss(): void {
   devCache = null;
 }
 
+// Minify a finished stylesheet with Lightning CSS — the same engine Tailwind v4
+// optimizes with, so all of June's build-time CSS comes out consistently. It only
+// touches whitespace/comments/redundancy, never identifiers, so scoped CSS-module
+// class names survive intact (hydration stays byte-identical to SSR). Lazy import:
+// build/dev-time only, never in the worker graph. Falls back to the input if
+// Lightning CSS can't parse it, so minification can never break a build.
+export async function minifyCss(css: string, filename = "input.css"): Promise<string> {
+  try {
+    const { transform } = await import("lightningcss");
+    const { code } = transform({ filename, code: Buffer.from(css), minify: true });
+    return code.toString();
+  } catch (e) {
+    console.warn("[june] CSS minify failed; emitting unminified:", e);
+    return css;
+  }
+}
+
 // Read + process app/global.css → the CSS to serve/emit. null when absent.
 // build passes { minify: true } (optimized, deployable); dev leaves it readable.
 export async function processCss(
@@ -90,10 +107,12 @@ export async function processCss(
       console.warn("[june] Tailwind compile failed; serving raw CSS:", e);
       return null;
     });
-    if (compiled !== null) return compiled;
+    if (compiled !== null) return compiled; // Tailwind already minified when asked
     console.warn(
       "[june] global.css uses Tailwind but @tailwindcss/postcss isn't installed — serving raw CSS.",
     );
   }
-  return css;
+  // Plain CSS (or the Tailwind fallback): minify here so the non-Tailwind path
+  // is optimized too, matching the Tailwind path.
+  return opts.minify ? await minifyCss(css, file) : css;
 }

@@ -50,6 +50,10 @@ describe("CSS Modules e2e", () => {
     expect(sheet).toBeTruthy();
     const sheetCss = await readFile(join(out, "assets", "_june", sheet!), "utf8");
     expect(sheetCss).toContain(`.${devClass}`); // dev name == build name
+    // build sheet is MINIFIED (dev served it readable) — scoped names survive
+    expect(sheetCss).toContain(`.${devClass}{`); // no space before { → minified
+    expect(sheetCss).not.toContain("\n");
+    expect(sheetCss).not.toContain("color: green"); // readable form is gone
 
     // the prerendered page links the hashed sheet AND uses the same scoped class
     const indexHtml = await readFile(join(out, "assets", "index.html"), "utf8");

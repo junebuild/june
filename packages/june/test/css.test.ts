@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { createApp } from "../src/app";
 import { juneBuild } from "../src/build";
 import { withAssets } from "../src/worker";
-import { processCss, findGlobalCss, STYLES_URL } from "../src/css";
+import { processCss, findGlobalCss, STYLES_URL, minifyCss } from "../src/css";
 
 const CSS_APP = fileURLToPath(new URL("./fixtures/css/app", import.meta.url));
 const CSS_ROOT = dirname(CSS_APP); // the app ROOT (juneBuild takes the root, not app/)
@@ -50,6 +50,23 @@ describe("global.css auto-link", () => {
   });
 });
 
+describe("minifyCss (Lightning CSS)", () => {
+  test("collapses whitespace + comments but keeps scoped identifiers", async () => {
+    const out = await minifyCss(
+      ".hero_ab12cd34 {\n  color: green;\n  /* note */ padding: .5rem;\n}\n.x { margin: 0 0 0 0 }",
+    );
+    expect(out).toContain(".hero_ab12cd34"); // scoped name intact → SSR/hydration parity
+    expect(out).not.toContain("/* note */");
+    expect(out).not.toContain("\n");
+    expect(out).toContain("margin:0"); // redundancy collapsed (0 0 0 0 → 0)
+  });
+
+  test("returns the input unchanged when it can't be parsed (build never breaks)", async () => {
+    const garbage = "@@@ this is not valid css @@@";
+    expect(await minifyCss(garbage)).toBe(garbage);
+  });
+});
+
 describe("build: content-hashed CSS under /_june/", () => {
   let out: string | undefined;
   afterAll(async () => {
@@ -63,7 +80,10 @@ describe("build: content-hashed CSS under /_june/", () => {
     const files = await readdir(join(out, "assets", "_june"));
     const hashed = files.find((f) => /^global\.[a-f0-9]{8}\.css$/.test(f));
     expect(hashed).toBeTruthy(); // content-hashed name, not the stable /_june/global.css
-    expect(await readFile(join(out, "assets", "_june", hashed!), "utf8")).toContain("rebeccapurple");
+    const built = await readFile(join(out, "assets", "_june", hashed!), "utf8");
+    // raw (non-Tailwind) global.css is minified at build too: whitespace gone and
+    // `rebeccapurple` shortened to `#639` by Lightning CSS.
+    expect(built).toBe("body{background:#639}");
 
     // the built worker freezes the HASHED url (not the dev-stable one)
     const worker = await readFile(join(out, "worker.js"), "utf8");

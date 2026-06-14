@@ -34,7 +34,7 @@ import { createWorker, type WorkerManifest } from "./worker";
 import { findExtraFile } from "./router";
 import type { ExtraHandler, LayoutComponent, LoadingComponent } from "./pipeline";
 import { findClientEntry, bundleClientToFile, CLIENT_SCRIPT_URL } from "./client-bundle";
-import { findGlobalCss, processCss, STYLES_URL } from "./css";
+import { findGlobalCss, minifyCss, processCss, STYLES_URL } from "./css";
 import { buildModuleCss, rolldownCssModulesPlugin, registerCssModules } from "./css-modules";
 
 export type BuildResult = {
@@ -278,7 +278,10 @@ export async function juneBuild(
   // CSS Modules: glob + transform app/**/*.module.css ONCE → the per-file class
   // maps (the bundlers + dev loaders look these up) AND the collected stylesheet,
   // which is content-hashed + emitted + linked just like global.css.
-  const { maps: cssModuleMaps, css: moduleCss } = await buildModuleCss(appDir, appRoot);
+  const { maps: cssModuleMaps, css: rawModuleCss } = await buildModuleCss(appDir, appRoot);
+  // Minify for build (dev serves it readable). Scoped class names are untouched,
+  // so the hashed sheet still matches the maps the bundlers/loaders hand out.
+  const moduleCss = rawModuleCss === null ? null : await minifyCss(rawModuleCss, "modules.css");
   let moduleCssAsset: string | null = null;
   if (moduleCss !== null) {
     const hash = createHash("sha256").update(moduleCss).digest("hex").slice(0, 8);
