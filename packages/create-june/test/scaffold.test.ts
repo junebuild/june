@@ -28,6 +28,7 @@ describe("create-june scaffolder", () => {
       "app/Counter.tsx", // the starter island…
       "app/_client.tsx", // …and the client entry that hydrates it
       "README.md",
+      "AGENTS.md", // agent guidance — the file coding agents actually read
       ".gitignore", // restored from _gitignore
       "tsconfig.json",
     ]) {
