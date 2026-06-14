@@ -109,3 +109,54 @@ describe("ambient findBy auto-batch (no loader to manage)", () => {
     expect(await t.findBy({ id: 1, name: "Nope" })).toBeUndefined();
   });
 });
+
+describe("filtered-list read: all(where)", () => {
+  type Post = { id: number; user_id: number; title: string };
+
+  async function seedPosts(): Promise<JuneDb> {
+    const db = await host.openDb(":memory:");
+    await db.exec("create table posts (id integer primary key, user_id integer, title text)");
+    for (const [uid, title] of [[1, "a"], [1, "b"], [2, "c"], [1, "d"], [3, "e"]] as const) {
+      await db.run("insert into posts (user_id, title) values (?, ?)", [uid, title]);
+    }
+    return db; // user 1 has 3 posts, user 2 has 1, user 3 has 1
+  }
+
+  test("all(where) returns ALL matching rows (a list, not one)", async () => {
+    const t = juno(await seedPosts()).table<Post>("posts");
+    expect((await t.all({ user_id: 1 })).map((p) => p.title).sort()).toEqual(["a", "b", "d"]);
+    expect(await t.all({ user_id: 2 })).toHaveLength(1);
+    expect(await t.all({ user_id: 999 })).toEqual([]);
+  });
+
+  test("all() with no filter still returns everything", async () => {
+    expect(await juno(await seedPosts()).table<Post>("posts").all()).toHaveLength(5);
+  });
+
+  test("concurrent all({col}) coalesce into ONE query (list N+1 → 1)", async () => {
+    const c = counting(await seedPosts());
+    const t = juno(c.db).table<Post>("posts");
+    const [u1, u2, u3] = await Promise.all([
+      t.all({ user_id: 1 }),
+      t.all({ user_id: 2 }),
+      t.all({ user_id: 3 }),
+    ]);
+    expect(u1).toHaveLength(3);
+    expect(u2).toHaveLength(1);
+    expect(u3).toHaveLength(1);
+    expect(c.queries()).toBe(1);
+  });
+
+  test("multi-column all(where) filters by AND (direct query)", async () => {
+    const r = await juno(await seedPosts()).table<Post>("posts").all({ user_id: 1, title: "a" });
+    expect(r).toHaveLength(1);
+    expect(r[0]?.title).toBe("a");
+  });
+
+  test("read-after-write in a later tick is fresh", async () => {
+    const t = juno(await seedPosts()).table<Post>("posts");
+    expect(await t.all({ user_id: 2 })).toHaveLength(1);
+    await t.insert({ user_id: 2, title: "new" });
+    expect(await t.all({ user_id: 2 })).toHaveLength(2); // re-queried, not stale
+  });
+});

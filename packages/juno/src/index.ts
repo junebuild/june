@@ -31,14 +31,26 @@ export class Table<T extends Row = Row> {
     private readonly db: JuneDb,
     private readonly name: string,
     // Per-request ambient-loader registry, shared across the juno() handle's
-    // .table() calls so concurrent findBy coalesce. Optional/defaulted so a
-    // standalone `new Table(db, name)` still works (it just batches alone).
-    private readonly loaders: Map<string, Loader<string | number, Row>> = new Map(),
+    // .table() calls so concurrent findBy/all coalesce. Holds both point and list
+    // loaders (keyed apart). Optional/defaulted so a standalone `new Table(db,
+    // name)` still works (it just batches alone).
+    private readonly loaders: Map<string, unknown> = new Map(),
   ) {}
 
-  async all(): Promise<T[]> {
+  // No `where` → every row. With a `where`, the list of rows matching it (the list
+  // counterpart of findBy, same where syntax). A single-column filter ambient-
+  // batches like findBy — concurrent `all({user_id})` across components coalesce
+  // into one `where user_id in (...)` grouped by key (list N+1 → 1).
+  async all(where?: Partial<T>): Promise<T[]> {
     recordTableRead(this.name); // auto-tag: a cache() around this gets table:<name>
-    return this.db.query<T>(`select * from ${ident(this.name)}`);
+    const keys = where ? Object.keys(where) : [];
+    const [col] = keys;
+    if (keys.length === 1 && col !== undefined) {
+      return this.ambientListLoader(col).load((where as Row)[col] as string | number) as Promise<T[]>;
+    }
+    const cols = keys.map(ident);
+    const clause = cols.length ? ` where ${cols.map((k) => `${k} = ?`).join(" and ")}` : "";
+    return this.db.query<T>(`select * from ${ident(this.name)}${clause}`, where ? Object.values(where) : []);
   }
 
   async findBy(where: Partial<T>): Promise<T | undefined> {
@@ -69,6 +81,18 @@ export class Table<T extends Row = Row> {
       this.loaders.set(key, loader);
     }
     return loader as Loader<string | number, T>;
+  }
+
+  // get-or-create the per-request ambient LIST loader for (table, column). Keyed
+  // apart from the point loader (`list:` prefix) — they coalesce different shapes.
+  private ambientListLoader(col: string): ListLoader<string | number, T> {
+    const key = `list:${this.name}::${col}`;
+    let loader = this.loaders.get(key);
+    if (!loader) {
+      loader = tableListLoader<Row>(this.db, this.name, col);
+      this.loaders.set(key, loader);
+    }
+    return loader as ListLoader<string | number, T>;
   }
 
   async insert(values: Partial<T>): Promise<RunResult> {
@@ -124,7 +148,7 @@ export type Juno = {
 // findBy across components coalesce — and scoping it to the per-request handle
 // is what keeps keys from leaking across requests.
 export function juno(db: JuneDb): Juno {
-  const loaders = new Map<string, Loader<string | number, Row>>();
+  const loaders = new Map<string, unknown>();
   return {
     // Table API uses the raw db and tags explicitly (precise, parser-independent);
     // the exposed handle wraps it so the raw escape hatch auto-tags too.
