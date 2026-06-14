@@ -23,6 +23,7 @@ import { createPipeline, type ExtraHandler, type LayoutComponent, type Pipeline,
 import { memoizeResources } from "./resources";
 import { findClientEntry, bundleClientToString, CLIENT_SCRIPT_URL } from "./client-bundle";
 import { findGlobalCss, processCssCached, STYLES_URL } from "./css";
+import { buildModuleCss, registerCssModules, MODULE_STYLES_URL, type ModuleMaps } from "./css-modules";
 
 export type CreateAppOptions = {
   appDir: string;
@@ -93,11 +94,18 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
     styles: cssEntry ? STYLES_URL : null,
   };
 
+  // CSS Modules: glob + transform app/**/*.module.css ONCE (memoized) → the maps
+  // (runtime interceptor + client bundle look these up) + the collected sheet.
+  let moduleCssPromise: Promise<{ maps: ModuleMaps; css: string | null }> | undefined;
+  const getModuleCss = () => (moduleCssPromise ??= buildModuleCss(appDir, dirname(appDir)));
+
   let clientBundle: Promise<string> | undefined;
   const serveClient = (): Promise<string> =>
     // cwd = the app ROOT (appDir's parent) so rolldown resolves node_modules
-    // from the project, exactly like the build does.
-    (clientBundle ??= bundleClientToString(clientEntry!, dirname(appDir)));
+    // from the project, exactly like the build does. Islands may import .module.css.
+    (clientBundle ??= getModuleCss().then(({ maps }) =>
+      bundleClientToString(clientEntry!, dirname(appDir), maps),
+    ));
 
   const routePaths = () => listRoutes(appDir, { pageConvention: true });
 
@@ -109,6 +117,13 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
   let pipelinePromise: Promise<Pipeline> | undefined;
   const getPipeline = (): Promise<Pipeline> => (pipelinePromise ??= buildPipeline());
   async function buildPipeline(): Promise<Pipeline> {
+    // Wire CSS Modules BEFORE any route import: the runtime interceptor must be
+    // active so `import "x.module.css"` in a route resolves to the scoped map,
+    // and the document must link the collected sheet.
+    const { maps, css } = await getModuleCss();
+    await registerCssModules(maps);
+    if (css !== null) docConfig.moduleStyles = MODULE_STYLES_URL;
+
     const { notFound } = await resolveNotFound(appDir, "/");
     let notFoundComponent: ComponentType<{ pathname: string }> | undefined;
     if (notFound) {
@@ -168,6 +183,13 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
               headers: { "content-type": "text/css; charset=utf-8" },
             });
           },
+        );
+      }
+      // Dev serves the collected CSS-Modules stylesheet (build ships it hashed).
+      if (new URL(request.url).pathname === MODULE_STYLES_URL) {
+        return getModuleCss().then(
+          ({ css }) =>
+            new Response(css ?? "", { headers: { "content-type": "text/css; charset=utf-8" } }),
         );
       }
       // Dev serves the islands runtime itself (build ships it as a static

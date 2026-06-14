@@ -23,6 +23,8 @@ import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
+import { rolldownCssModulesPlugin, type ModuleMaps } from "./css-modules";
+
 // The URL the document loads + the asset path the bundle is written to. Single
 // source of truth so build (freeze) and dev (live) agree.
 export const CLIENT_SCRIPT_URL = "/_june/client.js";
@@ -40,7 +42,7 @@ export function findClientEntry(appDir: string): string | undefined {
 
 type BundleMode = "development" | "production";
 
-async function bundleClient(entryFile: string, cwd: string, mode: BundleMode) {
+async function bundleClient(entryFile: string, cwd: string, mode: BundleMode, maps: ModuleMaps = {}) {
   const { rolldown } = await import("rolldown");
   const bundle = await rolldown({
     input: entryFile,
@@ -48,6 +50,7 @@ async function bundleClient(entryFile: string, cwd: string, mode: BundleMode) {
     // The client graph is plain web — browser conditions, and React's dev/prod
     // branch resolved at build (no `process` in the browser to read it at runtime).
     platform: "browser",
+    plugins: [rolldownCssModulesPlugin(maps)], // islands may import .module.css
     transform: { define: { "process.env.NODE_ENV": JSON.stringify(mode) } },
     resolve: { conditionNames: ["browser", "import", "default"] },
   });
@@ -55,8 +58,8 @@ async function bundleClient(entryFile: string, cwd: string, mode: BundleMode) {
 }
 
 // Build the client entry to a single `client.js` string (dev serves this live).
-export async function bundleClientToString(entryFile: string, cwd: string): Promise<string> {
-  const bundle = await bundleClient(entryFile, cwd, "development");
+export async function bundleClientToString(entryFile: string, cwd: string, maps: ModuleMaps = {}): Promise<string> {
+  const bundle = await bundleClient(entryFile, cwd, "development", maps);
   const { output } = await bundle.generate({ format: "esm", entryFileNames: "client.js" });
   await bundle.close();
   const entry = output.find((o) => o.type === "chunk" && o.isEntry);
@@ -66,8 +69,8 @@ export async function bundleClientToString(entryFile: string, cwd: string): Prom
 // Build the client entry, content-hash it, and write `<destDir>/_june/client.<hash>.js`
 // (immutable-cacheable, like the hashed CSS). Returns the asset filename
 // (`_june/client.<hash>.js`) so the build can freeze its URL into the document.
-export async function bundleClientToFile(entryFile: string, cwd: string, destDir: string): Promise<string> {
-  const bundle = await bundleClient(entryFile, cwd, "production");
+export async function bundleClientToFile(entryFile: string, cwd: string, destDir: string, maps: ModuleMaps = {}): Promise<string> {
+  const bundle = await bundleClient(entryFile, cwd, "production", maps);
   const { output } = await bundle.generate({ format: "esm", entryFileNames: "client.js" });
   await bundle.close();
   const entry = output.find((o) => o.type === "chunk" && o.isEntry);

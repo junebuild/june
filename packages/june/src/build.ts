@@ -35,6 +35,7 @@ import { findExtraFile } from "./router";
 import type { ExtraHandler, LayoutComponent, LoadingComponent } from "./pipeline";
 import { findClientEntry, bundleClientToFile, CLIENT_SCRIPT_URL } from "./client-bundle";
 import { findGlobalCss, processCss, STYLES_URL } from "./css";
+import { buildModuleCss, rolldownCssModulesPlugin, registerCssModules } from "./css-modules";
 
 export type BuildResult = {
   outFile: string;
@@ -274,14 +275,26 @@ export async function juneBuild(
     frozen.document.styles = `/${cssAsset}`;
   }
 
+  // CSS Modules: glob + transform app/**/*.module.css ONCE → the per-file class
+  // maps (the bundlers + dev loaders look these up) AND the collected stylesheet,
+  // which is content-hashed + emitted + linked just like global.css.
+  const { maps: cssModuleMaps, css: moduleCss } = await buildModuleCss(appDir, appRoot);
+  let moduleCssAsset: string | null = null;
+  if (moduleCss !== null) {
+    const hash = createHash("sha256").update(moduleCss).digest("hex").slice(0, 8);
+    moduleCssAsset = `_june/modules.${hash}.css`;
+    frozen.document.moduleStyles = `/${moduleCssAsset}`;
+  }
+
   // Same for the client islands bundle: build + content-hash it NOW (before the
   // entry codegen + prerender) so both freeze the hashed /_june/client.<hash>.js
-  // and it can be served immutable. The asset is written here.
+  // and it can be served immutable. The asset is written here. The client may
+  // import .module.css too, so it gets the same module maps.
   const assetsDir = join(outDir, "assets");
   const clientEntry = findClientEntry(appDir);
   let clientAsset: string | null = null;
   if (clientEntry) {
-    clientAsset = await bundleClientToFile(clientEntry, appRoot, assetsDir);
+    clientAsset = await bundleClientToFile(clientEntry, appRoot, assetsDir, cssModuleMaps);
     frozen.document.clientScript = `/${clientAsset}`;
   }
 
@@ -392,6 +405,7 @@ ${adapterEntry.wrap("pipeline")}
     input: entryFile,
     cwd: appRoot,
     platform: "browser", // workerd's surface is web-standard; no node:* in the graph
+    plugins: [rolldownCssModulesPlugin(cssModuleMaps)], // .module.css → scoped class map
     external: (id: string) => {
       // Binary assets stay external — wrangler's CompiledWasm/Data rules own them.
       if (/\.(wasm|ttf|otf|woff2?|png|jpe?g|avif|webp)$/.test(id)) return true;
@@ -416,9 +430,13 @@ ${adapterEntry.wrap("pipeline")}
   // Same render path as the bundle (createWorker over the frozen manifest), so
   // what ships is what the parity test verified.
   const prerendered: string[] = [];
+  // Prerender imports route modules in-process, so the runtime CSS-Modules
+  // interceptor must be active for any route that imports a .module.css.
+  await registerCssModules(cssModuleMaps);
   const manifest = await buildManifest(appRoot);
   if (cssAsset) manifest.document.styles = `/${cssAsset}`; // prerendered HTML links the hashed sheet
   if (clientAsset) manifest.document.clientScript = `/${clientAsset}`;
+  if (moduleCssAsset) manifest.document.moduleStyles = `/${moduleCssAsset}`;
   const worker = createWorker(manifest);
   let hasAssets = false;
 
@@ -457,6 +475,14 @@ ${adapterEntry.wrap("pipeline")}
     const dest = join(assetsDir, cssAsset);
     await mkdir(dirname(dest), { recursive: true }); // cssAsset includes the _june/ subdir
     await writeFile(dest, cssOut);
+    hasAssets = true;
+  }
+
+  // ---- collected CSS Modules: app/**/*.module.css → assets/_june/modules.<hash>.css
+  if (moduleCss !== null && moduleCssAsset) {
+    const dest = join(assetsDir, moduleCssAsset);
+    await mkdir(dirname(dest), { recursive: true });
+    await writeFile(dest, moduleCss);
     hasAssets = true;
   }
 

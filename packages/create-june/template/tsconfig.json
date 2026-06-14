@@ -12,5 +12,5 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["app", "june.config.ts"]
+  "include": ["app", "june.config.ts", "june-env.d.ts"]
 }

@@ -22,6 +22,10 @@ export type DocumentConfig = {
   // null → no stylesheet. CSS is a HUMAN-surface concern; agent projections
   // (.md/.json/mcp) never carry it.
   styles?: string | null;
+  // URL of the collected CSS-Modules stylesheet (app/**/*.module.css), when any
+  // exist. Linked after `styles` so component-scoped rules win over the global
+  // sheet. Same dev-stable / build-hashed split as `styles`.
+  moduleStyles?: string | null;
   // WebMCP tool manifest (name/description/inputSchema) — the SAME actions the
   // server exposes at /mcp. When present, the document injects a tiny script
   // that registers each via navigator.modelContext.registerTool() so an
@@ -130,6 +134,8 @@ export function Document({
         {/* The app's global.css — auto-linked, AFTER the inline base styles so it
             (and a Tailwind reset) wins. Absent → no stylesheet. */}
         {config.styles ? <link rel="stylesheet" href={config.styles} /> : null}
+        {/* Collected CSS Modules — after global so component-scoped rules win. */}
+        {config.moduleStyles ? <link rel="stylesheet" href={config.moduleStyles} /> : null}
       </head>
       <body>
         {children}
