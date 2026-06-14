@@ -431,7 +431,7 @@ ${adapterEntry.wrap("pipeline")}
   // ---- global stylesheet: app/global.css → assets/global.css ---------------
   // Served at /global.css; the frozen document already <link>s it. Compiled
   // (Tailwind) or passed through (plain CSS). No file → no asset.
-  const css = await processCss(appDir);
+  const css = await processCss(appDir, { minify: true });
   if (css !== null) {
     await mkdir(assetsDir, { recursive: true });
     await writeFile(join(assetsDir, "global.css"), css);

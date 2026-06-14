@@ -34,23 +34,36 @@ function resolveFromApp(specifier: string, appDir: string): string | null {
   }
 }
 
-async function compileTailwind(css: string, file: string, appDir: string): Promise<string | null> {
+async function compileTailwind(
+  css: string,
+  file: string,
+  appDir: string,
+  minify: boolean,
+): Promise<string | null> {
   const postcssPath = resolveFromApp("postcss", appDir);
   const tailwindPath = resolveFromApp("@tailwindcss/postcss", appDir);
   if (!postcssPath || !tailwindPath) return null;
   const postcss = ((await import(postcssPath)) as { default: (p: unknown[]) => { process(css: string, opts: { from: string }): Promise<{ css: string }> } }).default;
-  const tailwind = ((await import(tailwindPath)) as { default: () => unknown }).default;
-  const result = await postcss([tailwind()]).process(css, { from: file });
+  const tailwind = ((await import(tailwindPath)) as { default: (opts?: unknown) => unknown }).default;
+  // Tailwind v4 only emits the classes the project actually uses (content
+  // detection = tree-shaking). For build we ALSO minify via its Lightning CSS
+  // optimizer; dev stays unminified for readability.
+  const plugin = minify ? tailwind({ optimize: { minify: true } }) : tailwind();
+  const result = await postcss([plugin]).process(css, { from: file });
   return result.css;
 }
 
 // Read + process app/global.css → the CSS to serve/emit. null when absent.
-export async function processCss(appDir: string): Promise<string | null> {
+// build passes { minify: true } (optimized, deployable); dev leaves it readable.
+export async function processCss(
+  appDir: string,
+  opts: { minify?: boolean } = {},
+): Promise<string | null> {
   const file = findGlobalCss(appDir);
   if (!file) return null;
   const css = await readFile(file, "utf8");
   if (usesTailwind(css)) {
-    const compiled = await compileTailwind(css, file, appDir).catch((e) => {
+    const compiled = await compileTailwind(css, file, appDir, !!opts.minify).catch((e) => {
       console.warn("[june] Tailwind compile failed; serving raw CSS:", e);
       return null;
     });
