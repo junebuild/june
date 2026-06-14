@@ -47,6 +47,17 @@ export type JuneConfig = {
   // animate (default cross-fade) with ZERO JS; browsers without support (or
   // users with prefers-reduced-motion) get instant navigation — the floor.
   viewTransitions?: boolean; // default true
+  // Opt-in client router. OFF by default — June's floor is browser-native MPA
+  // navigation (speculation prerender + View Transitions = SPA feel, zero JS).
+  // Turn it on for app-like surfaces (dashboards) that need in-memory state to
+  // survive navigation: with it, same-origin link clicks become soft swaps
+  // (fetch the next page — the SAME document the server already serves — replace
+  // the [data-june-root] region, re-hydrate islands) and an <Island persist>
+  // (e.g. a websocket) is carried across navigations instead of torn down.
+  // Pure progressive enhancement: it degrades to a hard navigation when JS is
+  // off or a fetch fails, and never touches the agent surface — every URL is
+  // still a complete, projectable (.md/.json/mcp) document.
+  clientRouter?: boolean; // default false
   // Early Hints (IETF RFC 8297): Link rel=preload values for critical assets
   // (fonts/CSS), e.g. ["</fonts/inter.woff2>; rel=preload; as=font; crossorigin"].
   // Floor: sent as a Link header on HTML responses (Cloudflare upgrades it to

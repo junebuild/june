@@ -12,6 +12,11 @@ export type DocumentConfig = {
   speculationRules: string | null;
   speculationDelivery: "inline" | "header";
   viewTransitions: boolean;
+  // Opt-in client router (config.clientRouter). When true the page is wrapped in
+  // <div data-june-root> — the region the router swaps on soft navigation — and
+  // that element's presence is the runtime signal the islands bundle reads to
+  // start the router. Absent → classic MPA navigation, zero added JS.
+  clientRouter?: boolean;
   // URL of the client islands runtime bundle. Set by the host (dev serves it,
   // build freezes its hashed path) when the app has islands; the document then
   // loads it as a deferred module so `"use client"` islands hydrate. Absent /
@@ -138,7 +143,10 @@ export function Document({
         {config.moduleStyles ? <link rel="stylesheet" href={config.moduleStyles} /> : null}
       </head>
       <body>
-        {children}
+        {/* clientRouter on → wrap the page in the swap region. Its presence is
+            also the router's activation signal (the islands bundle starts the
+            router iff [data-june-root] exists). Off → bytes are unchanged. */}
+        {config.clientRouter ? <div data-june-root>{children}</div> : children}
         {/* type="module" defers automatically: the island runtime runs after the
             markup is parsed, so markers exist when it scans for them. */}
         {config.clientScript ? <script type="module" src={config.clientScript} /> : null}
