@@ -12,19 +12,15 @@ import type { JuneDb, RunResult } from "@junejs/core/resources";
 import { recordTableRead, recordTableWrite } from "@junejs/core/instrumentation";
 
 import { tableLoader, tableListLoader, type Loader, type ListLoader } from "./batch";
+import { sqlite } from "./compiler";
 import { taggingDb } from "./tag";
 
 export { createLoader, createGroupLoader, tableLoader, tableListLoader, type Loader, type ListLoader } from "./batch";
 export { tablesFromSql, tagSql, taggingDb, type SqlTouch } from "./tag";
+export { Dialect, SqliteDialect, sqlite, ident } from "./compiler";
+export type { Node, SelectNode, InsertNode, UpdateNode, DeleteNode, UpsertNode } from "./ast";
 
 export type Row = Record<string, unknown>;
-
-// Guard table/column names (identifiers can't be parameterized). Values always
-// go through bound `?` placeholders, so they are injection-safe by construction.
-function ident(name: string): string {
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) throw new Error(`unsafe SQL identifier: ${name}`);
-  return name;
-}
 
 export class Table<T extends Row = Row> {
   constructor(
@@ -48,9 +44,8 @@ export class Table<T extends Row = Row> {
     if (keys.length === 1 && col !== undefined) {
       return this.ambientListLoader(col).load((where as Row)[col] as string | number) as Promise<T[]>;
     }
-    const cols = keys.map(ident);
-    const clause = cols.length ? ` where ${cols.map((k) => `${k} = ?`).join(" and ")}` : "";
-    return this.db.query<T>(`select * from ${ident(this.name)}${clause}`, where ? Object.values(where) : []);
+    const sql = sqlite.compile({ kind: "select", from: this.name, where: keys });
+    return this.db.query<T>(sql, where ? Object.values(where) : []);
   }
 
   async findBy(where: Partial<T>): Promise<T | undefined> {
@@ -66,9 +61,8 @@ export class Table<T extends Row = Row> {
       const hit = await this.ambientLoader(col).load((where as Row)[col] as string | number);
       return (hit ?? undefined) as T | undefined;
     }
-    const cols = keys.map(ident);
-    const clause = cols.length ? ` where ${cols.map((k) => `${k} = ?`).join(" and ")}` : "";
-    return this.db.get<T>(`select * from ${ident(this.name)}${clause} limit 1`, Object.values(where));
+    const sql = sqlite.compile({ kind: "select", from: this.name, where: keys, limit: 1 });
+    return this.db.get<T>(sql, Object.values(where));
   }
 
   // get-or-create the per-request ambient loader for (table, column). tableLoader
@@ -97,12 +91,8 @@ export class Table<T extends Row = Row> {
 
   async insert(values: Partial<T>): Promise<RunResult> {
     recordTableWrite(this.name); // auto-invalidate: invokeAction drops table:<name>
-    const cols = Object.keys(values).map(ident);
-    const placeholders = cols.map(() => "?").join(", ");
-    return this.db.run(
-      `insert into ${ident(this.name)} (${cols.join(", ")}) values (${placeholders})`,
-      Object.values(values),
-    );
+    const sql = sqlite.compile({ kind: "insert", into: this.name, columns: Object.keys(values) });
+    return this.db.run(sql, Object.values(values));
   }
 
   // Atomic insert-or-update: insert `values`; on a conflict of the `onConflict`
@@ -113,33 +103,29 @@ export class Table<T extends Row = Row> {
   // (a get-or-create).
   async upsert(values: Partial<T>, opts: { onConflict: string | string[] }): Promise<T | undefined> {
     recordTableWrite(this.name);
-    const cols = Object.keys(values).map(ident);
-    const conflict = (Array.isArray(opts.onConflict) ? opts.onConflict : [opts.onConflict]).map(ident);
-    const placeholders = cols.map(() => "?").join(", ");
-    const updates = cols.filter((c) => !conflict.includes(c));
-    const setCols = updates.length ? updates : conflict;
-    const setClause = setCols.map((c) => `${c} = excluded.${c}`).join(", ");
-    return this.db.get<T>(
-      `insert into ${ident(this.name)} (${cols.join(", ")}) values (${placeholders}) ` +
-        `on conflict (${conflict.join(", ")}) do update set ${setClause} returning *`,
-      Object.values(values),
-    );
+    const columns = Object.keys(values);
+    const conflict = Array.isArray(opts.onConflict) ? opts.onConflict : [opts.onConflict];
+    const updates = columns.filter((c) => !conflict.includes(c));
+    const update = updates.length ? updates : conflict;
+    const sql = sqlite.compile({ kind: "upsert", into: this.name, columns, conflict, update });
+    return this.db.get<T>(sql, Object.values(values));
   }
 
   async update(where: Partial<T>, values: Partial<T>): Promise<RunResult> {
     recordTableWrite(this.name);
-    const set = Object.keys(values).map((k) => `${ident(k)} = ?`).join(", ");
-    const cond = Object.keys(where).map((k) => `${ident(k)} = ?`).join(" and ");
-    return this.db.run(
-      `update ${ident(this.name)} set ${set} where ${cond}`,
-      [...Object.values(values), ...Object.values(where)],
-    );
+    const sql = sqlite.compile({
+      kind: "update",
+      table: this.name,
+      set: Object.keys(values),
+      where: Object.keys(where),
+    });
+    return this.db.run(sql, [...Object.values(values), ...Object.values(where)]);
   }
 
   async delete(where: Partial<T>): Promise<RunResult> {
     recordTableWrite(this.name);
-    const cond = Object.keys(where).map((k) => `${ident(k)} = ?`).join(" and ");
-    return this.db.run(`delete from ${ident(this.name)} where ${cond}`, Object.values(where));
+    const sql = sqlite.compile({ kind: "delete", from: this.name, where: Object.keys(where) });
+    return this.db.run(sql, Object.values(where));
   }
 
   // A per-request by-key loader: concurrent .load(key) calls during one render
