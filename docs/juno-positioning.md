@@ -398,3 +398,47 @@ also correct this round (LLMs didn't forget to invalidate), so the edge is **not
 table API has only `findBy` (one) and `all` (everything); a user's posts needs a
 `where`/list read. The LLMs reached for the wrong tool because the right one doesn't
 exist. Add a filtered-list read — and it should auto-batch + auto-tag like the rest.
+
+---
+
+## Appendix 6 — upsert retest + capstone: the A3 inputs, implemented & validated (2026-06-14)
+
+> Snapshot. Closes the loop on design input #3 and the whole eval-driven cycle.
+
+With `upsert(values, { onConflict })` implemented and in the cheat sheet, re-ran the
+get-or-create task A2 originally failed on (`ensureUser`, TA) plus an insert-or-update
+(`saveProfile`, TB). 3 juno + 3 baseline (low-level, write the SQL yourself).
+
+| task | juno (3) | baseline (3) |
+|---|---|---|
+| TA get-or-create (`ensureUser`) | ✓✓✓ all reach for `upsert` — atomic, one round trip | ✓⚠⚠ 1/3 atomic `ON CONFLICT`; **2/3 fell into check-then-insert** (the exact footgun A2 saw in juno, now in baseline without the primitive) |
+| TB insert-or-update (`saveProfile`) | ✓✓✓ `upsert` | ✓✓✓ atomic `ON CONFLICT` (here the upsert intent is obvious to all) |
+
+**Verdict — design input #3 validated.** With the primitive, juno is **6/6 atomic**;
+without it, LLMs writing raw get-or-create SQL hedge into a redundant `SELECT`-first
+**2/3 of the time**. The primitive turns the obvious call into the atomic one. (TB
+doesn't discriminate — "exists → update" reads as upsert to everyone; TA — "exists →
+keep" — is where the primitive earns its place.)
+
+### Capstone — the eval-driven cycle
+
+Four evals drove four shipped changes, each: gap found → recorded here → implemented
+with tests → re-tested for the behavior change.
+
+| input | what | implemented | LLM-behavior proof |
+|---|---|---|---|
+| #1 | ambient per-request `findBy` auto-batch | `e834025` (+bench `99b1844`) | scattered `findBy` → 1 query (K→1) |
+| #2 | robust auto-tag (raw queries) + explicit `reads()/writes()` hatch | `6563ac9` | A5: 3/3 fresh, zero ceremony, incl. multi-table |
+| #3 | atomic `upsert(values, { onConflict })` returning the row | `a465aa1` | this retest: 6/6 atomic vs baseline 2/3 footgun |
+| #5 | filtered-list `all(where)` (+ group-batch) | `b9d3b76` | closes the `findBy`-as-list misuse A5 found |
+
+(#4 "cache() legibility" dissolved — A4's reading was a framing artifact; cache works
+under the action model, A5.)
+
+**The thesis these earned:** juno's moat is not "LLMs write better code with it" — a
+capable low-level API ties on the obvious paths. It is that **the LLM writes the
+naive thing and juno's automatic layer makes it fast / correct / fresh**: ambient
+batching, action-boundary auto-invalidation with complete (can't-miss) table tagging,
+and primitives (`upsert`, `all(where)`) that make the atomic/correct call the obvious
+one. The agent-native value to *document* is the calibrated blind-spot facts (A1),
+not the API shape — models derive that for free.
