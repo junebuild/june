@@ -6,20 +6,21 @@ on the resource seam: it depends on `@junejs/core` and `@junejs/db` (inward); th
 framework never imports Juno.
 
 ```ts
-import { table, db } from "@junejs/juno";
+import { table } from "@junejs/juno";
+import { db } from "@junejs/server"; // the ONE canonical handle
 
-// Ambient — matches June's resource model (`import { db } from "@junejs/db"`).
-// No handle to thread; `ctx` stays identity-only. Use inside a request scope
-// (a loader/view/action). The batch-loader registry lives in the request scope,
-// so batching is structurally per-request and unstashable.
+// Ambient — matches June's resource model. No handle to thread; `ctx` stays
+// identity-only. Use inside a request scope (a loader/view/action). The
+// batch-loader registry lives in the request scope, so batching is structurally
+// per-request and unstashable.
 await table("users").all();
 await table("users").all({ org_id: 7 });           // filtered list
 await table("users").findBy({ email: "ada@x.dev" }); // concurrent calls auto-batch
 await table("users").insert({ name: "Ada" });
 await table("users").upsert({ email: "ada@x.dev", name: "Ada" }, { onConflict: "email" });
 
-// `db` is the raw escape hatch, auto-tagging: a raw read inside cache() is still
-// invalidated by a write (vs the un-tagged `@junejs/db` `db`).
+// The canonical `db` is the raw escape hatch. Importing Juno makes it auto-tagging,
+// so a raw read inside cache() is still invalidated by a write — no silent stale.
 await db.query("select * from users where age > ?", [18]);
 ```
 

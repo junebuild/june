@@ -122,10 +122,13 @@ Tier 3 out of the box.
 Juno is the ergonomic layer over the `db` resource (SQL-shaped typed builder,
 SQL-as-truth migrations + semantic overlay, every-surface-an-oracle — see
 data-philosophy.md). It is a SEPARATE package (`@junejs/juno`) on the resource seam
-(depends on `@junejs/core` + `@junejs/db`, inward). It mirrors the ambient model —
-`import { table, db } from "@junejs/juno"` — and keeps its per-request batch loaders
-in the request scope via `requestLocal`, so batching is structurally per-request and
-unstashable. The ambient `db` (raw) is always usable without Juno.
+(depends on `@junejs/core` + `@junejs/db`, inward). It mirrors the ambient model
+(`import { table } from "@junejs/juno"`) and keeps its per-request batch loaders in
+the request scope via `requestLocal`, so batching is structurally per-request and
+unstashable. There is ONE canonical `db` (from `@junejs/db`, re-exported by
+`@junejs/server`); it is always usable without Juno, and importing Juno upgrades it
+in place to auto-tag raw queries (Juno registers a tagger; the framework never
+imports Juno).
 
 ## Phase 5 constraints (do these from commit #1)
 
