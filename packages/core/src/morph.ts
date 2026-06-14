@@ -21,8 +21,25 @@ type Live = Element & { __juneHydrated?: boolean };
 const isIsland = (n: Node): n is Element =>
   n.nodeType === 1 && (n as Element).tagName.toLowerCase() === ISLAND_TAG;
 const islandName = (el: Element): string => el.getAttribute(ISLAND_NAME_ATTR) ?? "";
-const isLivePersist = (n: Node): n is Live =>
-  isIsland(n) && (n as Element).hasAttribute(ISLAND_PERSIST_ATTR) && !!(n as Live).__juneHydrated;
+
+export type MorphOptions = {
+  // Which live islands are REUSED (their React state/effects/connections survive)
+  // vs. taken fresh (re-hydrated by the caller):
+  //  - "persist" (default) — only <Island persist> ones. The NAV model: a page
+  //    island refreshes to the new route's data; a layout island persists.
+  //  - "all" — every live island, matched by name. The LIVE-UPDATE model: the
+  //    SAME page re-renders, so nothing resets (the static skeleton morphs around
+  //    the live islands). Islands stay opaque either way.
+  preserveIslands?: "persist" | "all";
+};
+
+// A live island the current mode should reuse (keep its node + state).
+const reusableIn =
+  (all: boolean) =>
+  (n: Node): n is Live =>
+    isIsland(n) &&
+    !!(n as Live).__juneHydrated &&
+    (all || (n as Element).hasAttribute(ISLAND_PERSIST_ATTR));
 
 // Place `node` before `ref` in `parent`. For a node ALREADY in the document use
 // moveBefore() when available (Chrome 133+) so its live state survives the
@@ -57,28 +74,31 @@ const sameType = (a: Node, b: Node): boolean =>
 const fresh = (parent: Node, n: Node): Node => parent.ownerDocument!.importNode(n, true);
 
 // Morph oldEl's subtree to match newEl, in place.
-export function morph(oldEl: Element, newEl: Element): void {
+export function morph(oldEl: Element, newEl: Element, opts: MorphOptions = {}): void {
+  const reusable = reusableIn(opts.preserveIslands === "all");
   syncAttrs(oldEl, newEl);
 
-  // Persistent live islands, by name — so one survives even if its slot moved.
-  const persist = new Map<string, Live>();
-  for (const c of Array.from(oldEl.children)) if (isLivePersist(c)) persist.set(islandName(c), c);
+  // Reusable live islands, by name — so one survives even if its slot MOVED
+  // (keyed reorder: the new fragment can list it anywhere).
+  const pool = new Map<string, Live>();
+  for (const c of Array.from(oldEl.children)) if (reusable(c)) pool.set(islandName(c), c);
 
   let o = oldEl.firstChild;
   for (let n = newEl.firstChild; n; n = n.nextSibling) {
     if (isIsland(n)) {
-      const live = persist.get(islandName(n as Element));
+      const name = islandName(n as Element);
+      const live = pool.get(name);
       const node = live ?? fresh(oldEl, n); // reuse the live island, else a fresh marker
       if (node !== o) placeBefore(oldEl, node, o); // moveBefore live / insert fresh before cursor
       else o = o.nextSibling; // already exactly here
-      if (live) persist.delete(islandName(n as Element));
+      if (live) pool.delete(name);
       continue;
     }
     // Static node: align the cursor past any old island sitting here (its fate is
     // decided by its own new-side entry, or the trailing cleanup).
     while (o && isIsland(o)) o = o.nextSibling;
     if (o && sameType(o, n) && !isIsland(o)) {
-      if (n.nodeType === 1) morph(o as Element, n as Element); // recurse static
+      if (n.nodeType === 1) morph(o as Element, n as Element, opts); // recurse, same mode
       else if (o.nodeValue !== n.nodeValue) o.nodeValue = n.nodeValue;
       o = o.nextSibling;
     } else {
@@ -86,12 +106,12 @@ export function morph(oldEl: Element, newEl: Element): void {
     }
   }
 
-  // Remove whatever old nodes are left after the cursor — EXCEPT live persistent
-  // islands we reused above (already moved into place; they're no longer in the
-  // `persist` map and won't be here, but guard anyway).
+  // Remove whatever old nodes are left after the cursor. A reusable island still
+  // in the pool wasn't referenced by the new tree → it's gone, remove it. Ones we
+  // reused were moved out already and aren't here.
   while (o) {
     const next = o.nextSibling;
-    if (!isLivePersist(o) || persist.has(islandName(o as Element))) oldEl.removeChild(o);
+    if (!reusable(o) || pool.has(islandName(o as Element))) oldEl.removeChild(o);
     o = next;
   }
 }

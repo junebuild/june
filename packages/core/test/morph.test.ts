@@ -87,6 +87,14 @@ describe("morph — islands are opaque", () => {
     expect((after as Live).__juneHydrated).toBeUndefined(); // a fresh node → caller hydrates it
   });
 
+  test("default (nav) mode: a NON-persist live island is still taken fresh", () => {
+    const old = el('<june-island data-june-island="C">old</june-island>');
+    (island(old) as Live).__juneHydrated = true;
+    const before = island(old);
+    morph(old, el('<june-island data-june-island="C">new</june-island>') as Element); // no opts
+    expect(island(old)).not.toBe(before); // fresh — the nav contract is unchanged
+  });
+
   test("a persistent island survives even when its slot shifts (matched by name)", () => {
     const old = el(
       '<june-island data-june-island="Live" data-june-persist>X</june-island><h1>old</h1>',
@@ -101,5 +109,91 @@ describe("morph — islands are opaque", () => {
     expect(island(old)).toBe(live); // same live node, reused into its new slot
     expect(island(old).textContent).toBe("X"); // interior preserved
     expect(old.querySelector("h1")!.textContent).toBe("new");
+  });
+});
+
+describe("morph — live-update mode (preserveIslands: 'all')", () => {
+  const byName = (e: Element, name: string): Live =>
+    e.querySelector(`june-island[data-june-island="${name}"]`) as Live;
+
+  test("a same-page re-render preserves EVERY live island's node + interior", () => {
+    const old = el(
+      '<h2>count: 3</h2>' +
+        '<june-island data-june-island="A">A-LIVE</june-island>' +
+        '<june-island data-june-island="B">B-LIVE</june-island>',
+    );
+    const a = byName(old, "A"), b = byName(old, "B");
+    a.__juneHydrated = true;
+    b.__juneHydrated = true;
+
+    // the server re-rendered: heading changed, island MARKERS are inert/new
+    morph(
+      old,
+      el(
+        '<h2>count: 4</h2>' +
+          '<june-island data-june-island="A">a-inert</june-island>' +
+          '<june-island data-june-island="B">b-inert</june-island>',
+      ) as Element,
+      { preserveIslands: "all" },
+    );
+
+    expect(old.querySelector("h2")!.textContent).toBe("count: 4"); // static morphed
+    expect(byName(old, "A")).toBe(a); // both live nodes reused — no reset
+    expect(byName(old, "B")).toBe(b);
+    expect(byName(old, "A").textContent).toBe("A-LIVE"); // interiors untouched (opaque)
+    expect(byName(old, "B").textContent).toBe("B-LIVE");
+  });
+
+  test("complete keyed reorder: two islands SWAP places, both reused (not rebuilt)", () => {
+    const old = el(
+      '<june-island data-june-island="A">A-LIVE</june-island>' +
+        '<june-island data-june-island="B">B-LIVE</june-island>',
+    );
+    const a = byName(old, "A"), b = byName(old, "B");
+    a.__juneHydrated = true;
+    b.__juneHydrated = true;
+
+    // new order: B then A
+    morph(
+      old,
+      el(
+        '<june-island data-june-island="B">b</june-island>' +
+          '<june-island data-june-island="A">a</june-island>',
+      ) as Element,
+      { preserveIslands: "all" },
+    );
+
+    const order = Array.from(old.querySelectorAll("june-island")).map((i) =>
+      i.getAttribute("data-june-island"),
+    );
+    expect(order).toEqual(["B", "A"]); // reordered
+    expect(byName(old, "A")).toBe(a); // SAME live nodes, just moved
+    expect(byName(old, "B")).toBe(b);
+    expect(byName(old, "A").textContent).toBe("A-LIVE"); // state intact through the move
+    expect(byName(old, "B").textContent).toBe("B-LIVE");
+  });
+
+  test("an island removed from the new tree is dropped; an added one comes fresh", () => {
+    const old = el(
+      '<june-island data-june-island="Keep">K-LIVE</june-island>' +
+        '<june-island data-june-island="Gone">G-LIVE</june-island>',
+    );
+    byName(old, "Keep").__juneHydrated = true;
+    byName(old, "Gone").__juneHydrated = true;
+    const keep = byName(old, "Keep");
+
+    morph(
+      old,
+      el(
+        '<june-island data-june-island="Keep">k</june-island>' +
+          '<june-island data-june-island="New">n</june-island>',
+      ) as Element,
+      { preserveIslands: "all" },
+    );
+
+    expect(byName(old, "Keep")).toBe(keep); // survived
+    expect(byName(old, "Gone")).toBeNull(); // removed
+    expect(byName(old, "New")).toBeTruthy(); // added (fresh → caller hydrates)
+    expect((byName(old, "New") as Live).__juneHydrated).toBeUndefined();
   });
 });
