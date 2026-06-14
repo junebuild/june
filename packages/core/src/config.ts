@@ -35,6 +35,18 @@ export type SpeculationConfig = {
   delivery?: "inline" | "header";
 };
 
+// An opt-in Tier-3 data layer (e.g. Juno). A generic seam — core names only this
+// shape, so config can declare a data layer without the framework depending on it.
+// The user's config imports the layer (`dataLayer: junoDataLayer()`); the framework
+// never does. `install()` is called once at boot (the dev host calls it directly);
+// `module` lets `june build` emit the same boot into the generated worker — it
+// imports `installDataLayer` from there. Both run the same wiring (Juno registers
+// its SQL tagger so the ambient `db` auto-tags).
+export interface DataLayer {
+  install(): void;
+  readonly module: string;
+}
+
 export type JuneConfig = {
   agent?: Partial<AgentConfig>;
   cache?: CacheStoreFactory; // memory() (default) | redis({ url }) | custom
@@ -42,6 +54,10 @@ export type JuneConfig = {
   // Cloudflare-branded; each has a zero-config local default and deploy
   // adapters. Omit one and it never exists. See docs/data-layer-boundary.md.
   resources?: ResourceConfig;
+  // Opt-in Tier-3 data layer (e.g. `junoDataLayer()`). Declared = its install()
+  // runs at boot. Omit it and the ambient `db` stays raw (Tier 1/2). Explicit, so
+  // there is no import-time global side-effect deciding behavior.
+  dataLayer?: DataLayer;
   speculation?: SpeculationConfig | false; // false = no speculation rules at all
   // Cross-document View Transitions (@view-transition CSS): MPA navigations
   // animate (default cross-fade) with ZERO JS; browsers without support (or

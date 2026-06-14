@@ -11,17 +11,12 @@
 import type { JuneDb, RunResult } from "@junejs/core/resources";
 import { recordTableRead, recordTableWrite } from "@junejs/core/instrumentation";
 
+import type { DataLayer } from "@junejs/core/config";
 import { db as ambientDb, requestLocal, registerSqlTagger } from "@junejs/db";
 
 import { tableLoader, tableListLoader, type Loader, type ListLoader } from "./batch";
 import { sqlite } from "./compiler";
 import { taggingDb, tagSql } from "./tag";
-
-// Importing Juno upgrades the canonical ambient `db` to auto-tag raw queries (a
-// raw read inside cache() then auto-invalidates). The framework re-exports that
-// same `db`, so `import { db } from "@junejs/server"` is the tagging one in a Juno
-// app — without the framework ever importing Juno.
-registerSqlTagger(tagSql);
 
 export { createLoader, createGroupLoader, tableLoader, tableListLoader, type Loader, type ListLoader } from "./batch";
 export { tablesFromSql, tagSql, taggingDb, type SqlTouch } from "./tag";
@@ -187,6 +182,20 @@ export function juno(db: JuneDb): Juno {
 // STRUCTURALLY per-request and unstashable — the leak A3 found can't happen.
 // Use inside a request scope (a loader/view/action); throws otherwise, like `db`.
 const LOADERS = Symbol.for("junejs.juno.loaders");
+
+// The boot wiring: register Juno's SQL tagger so the canonical ambient `db`
+// auto-tags raw queries. `june build` imports THIS by name into the worker.
+export function installDataLayer(): void {
+  registerSqlTagger(tagSql);
+}
+
+// Declare Juno as the app's data layer in june.config.ts: `dataLayer: junoDataLayer()`.
+// The dev host calls install() at boot; `june build` emits installDataLayer() into
+// the worker (via `module`). Explicit (config-declared), NOT an import-time global
+// side-effect — and the framework still never imports Juno (the user's config does).
+export function junoDataLayer(): DataLayer {
+  return { install: installDataLayer, module: "@junejs/juno" };
+}
 
 export function table<T extends Row = Row>(name: string): Table<T> {
   const loaders = requestLocal(LOADERS, () => new Map<string, unknown>());

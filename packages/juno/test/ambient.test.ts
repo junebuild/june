@@ -10,12 +10,13 @@ import { host } from "@junejs/server/host";
 import type { JuneDb } from "@junejs/core/resources";
 import { installTraceContext, runWithTrace, type RequestTrace } from "@junejs/core/instrumentation";
 
-import { table } from "../src"; // importing Juno registers the SQL tagger on @junejs/db's `db`
+import { table, installDataLayer, junoDataLayer } from "../src";
 
 installTraceContext(new AsyncLocalStorage<RequestTrace>());
 
 beforeAll(async () => {
   await ensureScope(); // wire AsyncLocalStorage (bun provides node:async_hooks)
+  installDataLayer(); // what the host calls at boot when dataLayer: junoDataLayer()
 });
 
 function counting(db: JuneDb): { db: JuneDb; queries: () => number } {
@@ -86,6 +87,12 @@ describe("canonical `db` auto-tags once Juno is imported (registered tagger)", (
     await runInScope({ resources: { db: seeded } }, () =>
       runWithTrace(trace, () => canonicalDb.query("select id from users")),
     );
-    expect([...(trace.reads ?? [])]).toContain("users"); // tagged because importing Juno registered tagSql
+    expect([...(trace.reads ?? [])]).toContain("users"); // tagged once the data layer is installed
+  });
+
+  test("junoDataLayer() declares the boot wiring (install + module for the build)", () => {
+    const dl = junoDataLayer();
+    expect(typeof dl.install).toBe("function");
+    expect(dl.module).toBe("@junejs/juno"); // `june build` imports installDataLayer from here
   });
 });

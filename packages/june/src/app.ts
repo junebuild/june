@@ -112,6 +112,12 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
 
   const resources = memoizeResources(config.resources);
 
+  // Boot the opt-in Tier-3 data layer (e.g. `dataLayer: junoDataLayer()`) once:
+  // its install() wires the ambient `db` (Juno registers its SQL tagger). Explicit
+  // and config-declared — no import-time side-effect, and the framework still never
+  // imports the data layer (the user's config does).
+  config.dataLayer?.install();
+
   // The app's not-found.tsx is part of the dev surface too (the build freezes
   // it into the manifest as `notFound`), and importing it is async — so the
   // pipeline is built lazily on first fetch, memoized after.
