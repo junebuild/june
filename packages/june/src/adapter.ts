@@ -7,7 +7,7 @@
 // `workers()` is the zero-config default (this file, no import). Other targets
 // are explicit `deploy: { adapter: vercel() }` from their own package.
 import { existsSync } from "node:fs";
-import { cp, copyFile, mkdir, rm, writeFile } from "node:fs/promises";
+import { cp, copyFile, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 
 import type { JuneConfig } from "@junejs/core/config";
@@ -181,12 +181,16 @@ export function vercel(opts?: { regions?: string[] }): JuneAdapter {
       await rm(out, { recursive: true, force: true }); // clean — no stale outputs
       await mkdir(fnDir, { recursive: true });
 
-      // the edge function = June's portable worker bundle, verbatim
-      await copyFile(join(outDir, "worker.js"), join(fnDir, "index.js"));
+      // the edge function = June's portable worker bundle. Rolldown code-splits
+      // (worker.js imports ./cache-*.js, ./instrumentation-*.js, …), so copy EVERY
+      // top-level .js — the chunks must sit beside the entry or Vercel rejects the
+      // function ("referencing unsupported modules"). assets/ is handled below.
+      const jsFiles = (await readdir(outDir)).filter((f) => f.endsWith(".js"));
+      for (const f of jsFiles) await copyFile(join(outDir, f), join(fnDir, f));
       await writeFile(
         join(fnDir, ".vc-config.json"),
         JSON.stringify(
-          { runtime: "edge", entrypoint: "index.js", ...(opts?.regions ? { regions: opts.regions } : {}) },
+          { runtime: "edge", entrypoint: "worker.js", ...(opts?.regions ? { regions: opts.regions } : {}) },
           null,
           2,
         ) + "\n",

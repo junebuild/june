@@ -39,10 +39,12 @@ describe("vercel() adapter — units", () => {
   test("emit writes a valid Build Output API v3 tree", async () => {
     const appRoot = await mkdtemp(join(tmpdir(), "june-vc-"));
     try {
-      // fake the build artifacts emit() consumes
+      // fake the build artifacts emit() consumes: worker.js + a code-split chunk
+      // (top-level), plus a hashed asset (under assets/)
       const outDir = join(appRoot, "dist");
       await mkdir(join(outDir, "assets", "_june"), { recursive: true });
-      await writeFile(join(outDir, "worker.js"), "export default () => new Response('ok');");
+      await writeFile(join(outDir, "worker.js"), "import './cache-abc123.js';\nexport default () => new Response('ok');");
+      await writeFile(join(outDir, "cache-abc123.js"), "export const c = 1;");
       await writeFile(join(outDir, "assets", "_june", "client.abcd1234.js"), "console.log(1)");
 
       await vercel().emit({
@@ -56,14 +58,17 @@ describe("vercel() adapter — units", () => {
       });
 
       const out = join(appRoot, ".vercel", "output");
-      // function: edge runtime, entrypoint = the verbatim worker bundle
-      const vc = JSON.parse(await readFile(join(out, "functions", "__june.func", ".vc-config.json"), "utf8"));
-      expect(vc).toMatchObject({ runtime: "edge", entrypoint: "index.js" });
-      const fn = await readFile(join(out, "functions", "__june.func", "index.js"), "utf8");
-      expect(fn).toContain("new Response('ok')"); // copied from worker.js
+      const fnDir = join(out, "functions", "__june.func");
+      // function: edge runtime, entrypoint = the worker bundle
+      const vc = JSON.parse(await readFile(join(fnDir, ".vc-config.json"), "utf8"));
+      expect(vc).toMatchObject({ runtime: "edge", entrypoint: "worker.js" });
+      expect(await readFile(join(fnDir, "worker.js"), "utf8")).toContain("new Response('ok')");
+      // the code-split chunk is copied beside the entry (else Vercel rejects it)
+      expect(existsSync(join(fnDir, "cache-abc123.js"))).toBe(true);
 
-      // static: only the hashed framework assets
+      // static: only the hashed framework assets (the chunk is NOT a static asset)
       expect(existsSync(join(out, "static", "_june", "client.abcd1234.js"))).toBe(true);
+      expect(existsSync(join(out, "static", "_june", "cache-abc123.js"))).toBe(false);
 
       // config.json: immutable /_june/, then filesystem, then catch-all → /__june
       const cfg = JSON.parse(await readFile(join(out, "config.json"), "utf8"));
@@ -85,7 +90,7 @@ describe("vercel() adapter — units", () => {
       await writeFile(join(outDir, "worker.js"), "export default () => {}");
       await vercel().emit({ appRoot, outDir, hasAssets: false, linkHeader: null, config: {}, plan: {}, defaultName: "d" });
       expect(existsSync(join(appRoot, ".vercel", "output", "static"))).toBe(false);
-      expect(existsSync(join(appRoot, ".vercel", "output", "functions", "__june.func", "index.js"))).toBe(true);
+      expect(existsSync(join(appRoot, ".vercel", "output", "functions", "__june.func", "worker.js"))).toBe(true);
     } finally {
       await rm(appRoot, { recursive: true, force: true });
     }
@@ -112,7 +117,7 @@ describe("vercel() adapter — e2e (real juneBuild)", () => {
 
     // the bundled edge function is the REAL worker, wrapped as the bare fetch
     // shim — env from process.env, NO withAssets (workers-only)
-    const fn = await readFile(join(out, "functions", "__june.func", "index.js"), "utf8");
+    const fn = await readFile(join(out, "functions", "__june.func", "worker.js"), "utf8");
     expect(fn).toContain("pipeline.fetch(request, __env)"); // the vercel entry shim
     expect(fn).toContain("typeof process"); // env via process.env, not a binding
     expect(fn).not.toContain("withAssets"); // workers-only
