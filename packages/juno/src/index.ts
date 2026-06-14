@@ -11,6 +11,8 @@
 import type { JuneDb, RunResult } from "@junejs/core/resources";
 import { recordTableRead, recordTableWrite } from "@junejs/core/instrumentation";
 
+import { db as ambientDb, requestLocal } from "@junejs/db";
+
 import { tableLoader, tableListLoader, type Loader, type ListLoader } from "./batch";
 import { sqlite } from "./compiler";
 import { taggingDb } from "./tag";
@@ -170,4 +172,25 @@ export function juno(db: JuneDb): Juno {
       for (const t of tables) recordTableWrite(t);
     },
   };
+}
+
+// --- Ambient surface (the framework-native way) --------------------------------
+// Matches June's ambient resources (`import { db } from "@junejs/db"`): no handle
+// to thread or mis-scope. `table()` reads the ambient `db` resource and a
+// per-request loader registry kept in the request scope, so batching is
+// STRUCTURALLY per-request and unstashable — the leak A3 found can't happen.
+// Use inside a request scope (a loader/view/action); throws otherwise, like `db`.
+const LOADERS = Symbol.for("junejs.juno.loaders");
+
+export function table<T extends Row = Row>(name: string): Table<T> {
+  const loaders = requestLocal(LOADERS, () => new Map<string, unknown>());
+  return new Table<T>(ambientDb, name, loaders);
+}
+
+// Explicit tag/invalidate hatch, ambiently (no handle needed — they only record).
+export function reads(...tables: string[]): void {
+  for (const t of tables) recordTableRead(t);
+}
+export function writes(...tables: string[]): void {
+  for (const t of tables) recordTableWrite(t);
 }

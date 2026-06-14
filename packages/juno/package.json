@@ -16,7 +16,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@junejs/core": "workspace:*"
+    "@junejs/core": "workspace:*",
+    "@junejs/db": "workspace:*"
   },
   "devDependencies": {
     "@junejs/server": "workspace:*"
