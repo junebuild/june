@@ -69,6 +69,51 @@ describe("wranglerD1 adapter (mocked transport)", () => {
   });
 });
 
+// Real wrangler 4.x `--json` payloads (captured from a live D1), so the parser is
+// exercised against the actual shape — full meta, not a minimal stub.
+const REAL_INSERT =
+  '[{"results":[],"success":true,"meta":{"changed_db":true,"changes":1,"duration":0.23,' +
+  '"last_row_id":1,"rows_read":0,"rows_written":1,"served_by":"v3-prod","size_after":12288,' +
+  '"total_attempts":1}}]';
+const REAL_SELECT =
+  '[{"results":[{"id":"0001_users.sql"},{"id":"0002_posts.sql"}],"success":true,' +
+  '"meta":{"changed_db":false,"changes":0,"duration":0.18,"last_row_id":0,"rows_read":2,"rows_written":0}}]';
+const staticExec = (stdout: string, exitCode = 0): D1Exec => async () => ({ stdout, stderr: "", exitCode });
+
+describe("parse real wrangler --json shapes", () => {
+  const db = (stdout: string) => wranglerD1({ database: "d", configPath: "w", cwd: ".", exec: staticExec(stdout) });
+
+  test("run reads changes/last_row_id out of the FULL real meta", async () => {
+    const r = await db(REAL_INSERT).run("insert into t values (?)", ["x"]);
+    expect(r).toEqual({ changes: 1, lastInsertRowid: 1 }); // ignores the other 8 meta keys
+  });
+
+  test("query returns rows from a real select payload", async () => {
+    const rows = await db(REAL_SELECT).query<{ id: string }>("select id from _june_migrations");
+    expect(rows.map((r) => r.id)).toEqual(["0001_users.sql", "0002_posts.sql"]);
+  });
+
+  test("tolerates a banner that itself contains a bracket, before the JSON", async () => {
+    const noisy = "▲ [WARNING] a new version of wrangler is available\n" + REAL_SELECT;
+    const rows = await db(noisy).query<{ id: string }>("select id");
+    expect(rows).toHaveLength(2); // the [WARNING] bracket didn't fool the parser
+  });
+
+  test("tolerates pretty-printed multi-line JSON", async () => {
+    const pretty = JSON.stringify([{ results: [{ id: "x" }], meta: { changes: 0 } }], null, 2);
+    expect(await db(pretty).query<{ id: string }>("select id")).toEqual([{ id: "x" }]);
+  });
+
+  test("reads only the FIRST statement's results (our --command calls are single-statement)", async () => {
+    const multi = '[{"results":[{"n":1}],"meta":{}},{"results":[{"n":2}],"meta":{}}]';
+    expect(await db(multi).query<{ n: number }>("select 1")).toEqual([{ n: 1 }]);
+  });
+
+  test("throws when there is no JSON array at all", async () => {
+    expect(db("Authentication error [code: 10000]").query("select 1")).rejects.toThrow(/no JSON array/);
+  });
+});
+
 // A fake remote D1: just enough to let migrate() run — it tracks the ledger and
 // answers the two ledger queries; everything else (DDL, migration bodies) is a
 // no-op success.

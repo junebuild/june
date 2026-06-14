@@ -42,17 +42,33 @@ export function inlineParams(sql: string, params: readonly unknown[]): string {
   });
 }
 
-// wrangler --json prints a `[{ results, success, meta }]` array on stdout. Be
-// lenient about a leading banner: parse from the first `[`.
+// wrangler --json prints a `[{ results, success, meta }]` array on stdout (one
+// element per statement; we read the first, since our --command calls are always
+// single-statement ledger ops). The clean case is pure JSON, but wrangler can
+// emit a banner/notice first — so fall back to parsing from the last line that
+// opens an array (the JSON is the last top-level value).
 function parseD1Json(stdout: string): { results: unknown[]; meta: Record<string, number> } {
-  const start = stdout.indexOf("[");
-  if (start === -1) throw new Error(`wrangler d1 execute: no JSON in output:\n${stdout}`);
-  const arr = JSON.parse(stdout.slice(start)) as Array<{
-    results?: unknown[];
-    meta?: Record<string, number>;
-  }>;
-  const first = arr[0] ?? {};
-  return { results: first.results ?? [], meta: first.meta ?? {} };
+  type Row = { results?: unknown[]; meta?: Record<string, number> };
+  const pick = (arr: Row[]) => {
+    const f = arr[0] ?? {};
+    return { results: f.results ?? [], meta: f.meta ?? {} };
+  };
+  const trimmed = stdout.trim();
+  try {
+    return pick(JSON.parse(trimmed) as Row[]); // common case: pure JSON
+  } catch {
+    const lines = trimmed.split("\n");
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (lines[i]!.trimStart().startsWith("[")) {
+        try {
+          return pick(JSON.parse(lines.slice(i).join("\n")) as Row[]);
+        } catch {
+          /* a nested array opener — keep scanning upward for the real one */
+        }
+      }
+    }
+    throw new Error(`wrangler d1 execute: no JSON array in output:\n${stdout}`);
+  }
 }
 
 // The default transport: build the real argv and spawn wrangler. database is the

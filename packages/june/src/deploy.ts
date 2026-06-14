@@ -11,7 +11,25 @@ import { join } from "node:path";
 import { juneBuild } from "./build";
 import { loadJuneConfig } from "./config-loader";
 import { blockedMessage } from "./migrate";
-import { migrateD1, resolveD1Database } from "./d1-migrate";
+import { migrateD1, resolveD1Database, type D1Exec } from "./d1-migrate";
+
+// The wrangler-deploy invocation, factored out so tests can drive juneDeploy's
+// orchestration (migrate-before-deploy ordering, the dry-run/destructive gates)
+// without spawning wrangler.
+type WranglerRun = (
+  args: string[],
+  cwd: string,
+) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
+
+const spawnWrangler: WranglerRun = async (args, cwd) => {
+  const proc = Bun.spawn(args, { cwd, stdout: "pipe", stderr: "pipe" });
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  return { stdout, stderr, exitCode };
+};
 
 export type DeployResult = {
   url: string | null;
@@ -27,6 +45,8 @@ export async function juneDeploy(
     skipBuild?: boolean;
     skipMigrate?: boolean;
     allowDestructive?: boolean;
+    d1Exec?: D1Exec; // test seam: the D1 transport (defaults to real wrangler)
+    runWrangler?: WranglerRun; // test seam: the deploy invocation
   } = {},
 ): Promise<DeployResult> {
   const cfg = await loadJuneConfig(appRoot);
@@ -61,6 +81,7 @@ export async function juneDeploy(
         database,
         configPath,
         allowDestructive: options.allowDestructive,
+        exec: options.d1Exec,
       });
       if (r.blocked) throw new Error(`D1 ${database}: ${blockedMessage(r.blocked)}`);
       migrated.push(...r.applied);
@@ -83,12 +104,10 @@ export async function juneDeploy(
   const args = ["bunx", "wrangler@4.99.0", "deploy", "--config", configPath];
   if (options.dryRun) args.push("--dry-run");
 
-  const proc = Bun.spawn(args, { cwd: appRoot, stdout: "pipe", stderr: "pipe" });
-  const [out, err, code] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ]);
+  const { stdout: out, stderr: err, exitCode: code } = await (options.runWrangler ?? spawnWrangler)(
+    args,
+    appRoot,
+  );
   if (out.trim()) console.log(out.trimEnd());
   if (code !== 0) {
     if (/authentication|login|10000/i.test(err + out)) {

@@ -1,0 +1,5 @@
+{
+  // emitted-shape config; resolveD1Database reads database_name from here
+  "name": "deploytest",
+  "d1_databases": [{ "binding": "DB", "database_name": "deploytest-db", "database_id": "" }]
+}
