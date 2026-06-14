@@ -322,3 +322,41 @@ correctness hinges on auto-tagging the LLM never verifies.
 **Caveats:** small N; juno's `cache(fn)` signature was under-specified and likely
 handicapped T2/T3 — but that itself is the signal (an under-specified magic API
 confuses LLMs). Re-run once the real `cache()` ergonomics are pinned down.
+
+---
+
+## Appendix 4 — eval v2 retest after the auto-invalidate redesign (2026-06-14)
+
+> Snapshot. Closes the implement → retest loop on A3's design input #2. Honest
+> result: the fix did what it targeted, and the eval found the *next* bottleneck.
+
+After implementing the redesign — raw `db.query/get/run` through the juno handle
+now auto-tag by parsed table name, plus an explicit `j.reads()/j.writes()` hatch
+(commit `6563ac9`) — re-ran v2's T1/T2/T3 with 3 juno instances on an accurate
+cheat sheet (the accurate, documented behavior is itself part of the fix — the A1
+"encode the facts" principle). Baseline was correct in v2 and unchanged, so it
+wasn't re-run.
+
+| task | v2 juno | retest juno | what changed |
+|---|---|---|---|
+| T1 scattered findBy | win | **win** | unchanged (auto-batch) |
+| T2 cache → write → re-read | lose (bypass cache) | **still lose** | all 3 again define a `cache()` then bypass it with direct queries — auto-tag is irrelevant when the read never goes through `cache()` |
+| T3 multi-table cached + write | lose (raw read silently un-tagged → stale) | **fixed** | the raw `db.get` inside `cache()` now parses `orders`/`line_items` and records the reads, so the `db.table().insert` writes invalidate it — correctly fresh, where v2 was silently stale |
+
+**Verdict — the fix is validated for its target, and not more.** T3 demonstrates
+the redesign working: a raw query inside `cache()` is now tagged and invalidated
+instead of going silently stale. But T2 shows the *next* bottleneck isn't
+invalidation robustness — it's **`cache()` ergonomics**: LLMs distrust the
+invisible "never call invalidate" magic for read-after-write and bypass `cache()`
+entirely, or invoke it with no stable per-key. Robust auto-tag was **necessary but
+not sufficient**.
+
+**Methodology confound (disclosed):** the cheat sheet described `cache(fn)` but the
+real API is `cache(fn, { key })`. Omitting the key let LLMs mis-key or bypass it —
+this muddies the T2/T3 *cache-usage* signal (shared with v2) but does **not** touch
+the auto-tag validation (T3's tagging is independent of the key).
+
+**Next design input (#4):** make `cache()` LLM-legible — key-explicit, or a
+juno-level cached-read helper (e.g. `j.table().cached()`) that makes "a
+read-after-write is still safe to cache" obvious, so the LLM trusts and uses it
+rather than bypassing. Then re-run T2/T3.
