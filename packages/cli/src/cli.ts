@@ -41,7 +41,7 @@ Usage: june <command> [dir] [options]
 Commands:
   dev      Start the dev server                 --port <n> --no-watch
   build    Build a workerd-ready bundle         --out <dir>
-  deploy   Build + migrate D1 + deploy          --dry-run --skip-migrate --allow-destructive
+  deploy   Build + deploy (workers/vercel)      --dry-run --prod --skip-migrate --allow-destructive
   gen      Freeze content/schema                --check
   db       Database tasks (db migrate)           --allow-destructive
   info     Show routes + the agent surface
@@ -128,6 +128,7 @@ export async function run(argv: string[]): Promise<number | undefined> {
         dryRun: !!flags["dry-run"],
         skipMigrate: !!flags["skip-migrate"],
         allowDestructive: !!flags["allow-destructive"],
+        prod: !!flags["prod"], // vercel: production deploy (default is a preview)
       });
       console.log(r.url ? `deployed → ${r.url}` : r.dryRun ? "dry-run ok" : "deployed");
       return 0;

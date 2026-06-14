@@ -3,7 +3,9 @@
 // so this drives the real control flow with no wrangler and no network. The risky
 // invariants: --dry-run never touches remote D1, and a destructive migration
 // halts BEFORE the worker ships.
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdir, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { juneDeploy } from "../src/deploy";
@@ -11,6 +13,7 @@ import type { D1Exec } from "../src/d1-migrate";
 
 const DB_APP = fileURLToPath(new URL("./fixtures/deploy-db", import.meta.url));
 const NODB_APP = fileURLToPath(new URL("./fixtures/deploy-nodb", import.meta.url));
+const VERCEL_APP = fileURLToPath(new URL("./fixtures/vercel-app", import.meta.url));
 
 // Records the ordered sequence of side effects so we can assert "migrate, THEN
 // deploy" and "deploy never happened".
@@ -37,11 +40,13 @@ function harness() {
     }
     return { stdout: JSON.stringify([{ results: [], meta: {} }]), stderr: "", exitCode: 0 };
   };
-  const runWrangler = async (args: string[]) => {
-    events.push(`deploy${args.includes("--dry-run") ? ":dry" : ""}`);
-    return { stdout: "Deployed\nhttps://deploytest.workers.dev", stderr: "", exitCode: 0 };
+  const runCli = async (args: string[]) => {
+    const tool = args[1]?.startsWith("vercel") ? "vercel" : "deploy";
+    events.push(`${tool}${args.includes("--dry-run") ? ":dry" : ""}`);
+    const url = tool === "vercel" ? "https://june-cake.vercel.app" : "https://deploytest.workers.dev";
+    return { stdout: `Deployed\n${url}`, stderr: "", exitCode: 0 };
   };
-  return { events, ledger, d1Exec, runWrangler };
+  return { events, ledger, d1Exec, runCli };
 }
 
 describe("juneDeploy orchestration", () => {
@@ -51,7 +56,7 @@ describe("juneDeploy orchestration", () => {
       skipBuild: true,
       allowDestructive: true, // so the destructive 0002 doesn't halt this happy path
       d1Exec: h.d1Exec,
-      runWrangler: h.runWrangler,
+      runCli: h.runCli,
     });
     expect(r.migrated).toEqual(["0001_init.sql", "0002_drop.sql"]);
     expect(r.url).toBe("https://deploytest.workers.dev");
@@ -66,7 +71,7 @@ describe("juneDeploy orchestration", () => {
       skipBuild: true,
       dryRun: true,
       d1Exec: h.d1Exec,
-      runWrangler: h.runWrangler,
+      runCli: h.runCli,
     });
     expect(r.migrated).toEqual([]);
     expect(h.events).toEqual(["deploy:dry"]); // no migrate:* events at all
@@ -75,7 +80,7 @@ describe("juneDeploy orchestration", () => {
   test("destructive migration HALTS before deploy (no consent)", async () => {
     const h = harness();
     await expect(
-      juneDeploy(DB_APP, { skipBuild: true, d1Exec: h.d1Exec, runWrangler: h.runWrangler }),
+      juneDeploy(DB_APP, { skipBuild: true, d1Exec: h.d1Exec, runCli: h.runCli }),
     ).rejects.toThrow(/destructive.*DROP TABLE/s);
     expect(h.events).not.toContain("deploy"); // the worker was never shipped
     expect(h.events).not.toContain("deploy:dry");
@@ -87,7 +92,7 @@ describe("juneDeploy orchestration", () => {
       skipBuild: true,
       skipMigrate: true,
       d1Exec: h.d1Exec,
-      runWrangler: h.runWrangler,
+      runCli: h.runCli,
     });
     expect(r.migrated).toEqual([]);
     expect(h.events).toEqual(["deploy"]);
@@ -98,9 +103,62 @@ describe("juneDeploy orchestration", () => {
     const r = await juneDeploy(NODB_APP, {
       skipBuild: true,
       d1Exec: h.d1Exec,
-      runWrangler: h.runWrangler,
+      runCli: h.runCli,
     });
     expect(r.migrated).toEqual([]);
     expect(h.events).toEqual(["deploy"]); // migrate never invoked
+  });
+});
+
+describe("juneDeploy → vercel target", () => {
+  // vercel-app's config uses the vercel adapter → deploy dispatches to the Vercel
+  // path. Stand in a prebuilt Build Output so skipBuild works.
+  afterEach(async () => {
+    await rm(join(VERCEL_APP, ".vercel"), { recursive: true, force: true });
+  });
+  const stubOutput = async () => {
+    await mkdir(join(VERCEL_APP, ".vercel", "output"), { recursive: true });
+    await writeFile(join(VERCEL_APP, ".vercel", "output", "config.json"), '{"version":3,"routes":[]}');
+  };
+
+  test("uploads the prebuilt output via vercel — never wrangler, never D1", async () => {
+    await stubOutput();
+    const h = harness();
+    const r = await juneDeploy(VERCEL_APP, { skipBuild: true, runCli: h.runCli });
+    expect(h.events).toEqual(["vercel"]); // the vercel CLI, not wrangler ("deploy")
+    expect(r.url).toBe("https://june-cake.vercel.app");
+    expect(r.migrated).toEqual([]); // no D1 on Vercel
+  });
+
+  test("--prod adds the production flag", async () => {
+    await stubOutput();
+    let captured: string[] = [];
+    const r = await juneDeploy(VERCEL_APP, {
+      skipBuild: true,
+      prod: true,
+      runCli: async (args) => {
+        captured = args;
+        return { stdout: "https://june-cake.vercel.app", stderr: "", exitCode: 0 };
+      },
+    });
+    expect(captured).toContain("--prebuilt");
+    expect(captured).toContain("--prod");
+    expect(r.url).toBe("https://june-cake.vercel.app");
+  });
+
+  test("--dry-run does NOT invoke the vercel CLI", async () => {
+    await stubOutput();
+    const h = harness();
+    const r = await juneDeploy(VERCEL_APP, { skipBuild: true, dryRun: true, runCli: h.runCli });
+    expect(h.events).toEqual([]); // CLI never called
+    expect(r.dryRun).toBe(true);
+    expect(r.url).toBeNull();
+  });
+
+  test("missing Build Output fails with a clear error", async () => {
+    const h = harness();
+    await expect(juneDeploy(VERCEL_APP, { skipBuild: true, runCli: h.runCli })).rejects.toThrow(
+      /no Vercel Build Output/,
+    );
   });
 });
