@@ -1,0 +1,10 @@
+{
+  "name": "bench-juno-compile-once",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "scripts": { "bench": "node bench.mjs" },
+  "dependencies": {
+    "better-sqlite3": "^12.10.1"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "name": "bench-sqlite-driver-libsql",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "scripts": { "bench": "node libsql.mjs" },
+  "dependencies": {
+    "better-sqlite3": "^12.10.1",
+    "libsql": "^0.5.29",
+    "@libsql/client": "^0.17.3"
+  }
+}

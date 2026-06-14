@@ -1,0 +1,18 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "juno-bench",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-06-01",
+  // Fill database_id from: wrangler d1 create juno-bench --location apac
+  // account_id is taken from CLOUDFLARE_ACCOUNT_ID env (or add it here).
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "juno-bench",
+      "database_id": "<DATABASE_ID>"
+    }
+  ],
+  "observability": { "enabled": true }
+  // To test Smart Placement (moves the Worker near the D1 primary when the
+  // request ingress is far from it), add: "placement": { "mode": "smart" }
+}
