@@ -71,7 +71,8 @@ automatically.
 - **[og:images as routes](https://june.build/docs/features-og-image)** — satori + resvg in the worker, CJK-ready
 - **[Server-first RSC](https://june.build/docs/features-rsc)** + **[islands](https://june.build/docs/features-islands)** — zero client JS until a subtree earns it
 - **[App Router](https://june.build/docs/features-app-router)** — `[slug]`, `[[optional]]`, `[...catchAll]`, `(groups)`, nested [layouts](https://june.build/docs/features-layouts)
-- **[Browser-native navigation](https://june.build/docs/features-navigation)** — Speculation Rules + View Transitions, no client router
+- **[Browser-native navigation](https://june.build/docs/features-navigation)** — Speculation Rules + View Transitions, no router by default
+- **[Opt-in client router](https://june.build/docs/features-client-router)** — `clientRouter: true` adds soft swaps + `<Island persist>` when state must outlive a navigation
 - **[Web Standards end to end](https://june.build/docs/features-web-standards)** — `fetch(Request) → Response` *is* the framework
 - **[Reload-on-save dev loop](https://june.build/docs/features-dx)** — server restarts, browser follows
 - **[Deploy](https://june.build/docs/04-deployment)** — `june deploy` → Cloudflare Workers today; the host seam makes other targets adapters
