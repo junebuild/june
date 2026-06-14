@@ -105,6 +105,27 @@ export class Table<T extends Row = Row> {
     );
   }
 
+  // Atomic insert-or-update: insert `values`; on a conflict of the `onConflict`
+  // column(s), update the other provided columns to the new values. Returns the
+  // upserted row (via RETURNING) in ONE round trip — the primitive that removes
+  // the findBy-then-insert footgun (eval A2/A3). If every provided column is a
+  // conflict key, it no-ops the update so RETURNING still yields the existing row
+  // (a get-or-create).
+  async upsert(values: Partial<T>, opts: { onConflict: string | string[] }): Promise<T | undefined> {
+    recordTableWrite(this.name);
+    const cols = Object.keys(values).map(ident);
+    const conflict = (Array.isArray(opts.onConflict) ? opts.onConflict : [opts.onConflict]).map(ident);
+    const placeholders = cols.map(() => "?").join(", ");
+    const updates = cols.filter((c) => !conflict.includes(c));
+    const setCols = updates.length ? updates : conflict;
+    const setClause = setCols.map((c) => `${c} = excluded.${c}`).join(", ");
+    return this.db.get<T>(
+      `insert into ${ident(this.name)} (${cols.join(", ")}) values (${placeholders}) ` +
+        `on conflict (${conflict.join(", ")}) do update set ${setClause} returning *`,
+      Object.values(values),
+    );
+  }
+
   async update(where: Partial<T>, values: Partial<T>): Promise<RunResult> {
     recordTableWrite(this.name);
     const set = Object.keys(values).map((k) => `${ident(k)} = ?`).join(", ");
