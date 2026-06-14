@@ -87,12 +87,14 @@ beforeAll(async () => {
 
   GlobalRegistrator.register({ url: ORIGIN + "/" });
 
-  // The router fetches full documents on navigation — serve them from the worker.
-  globalThis.fetch = (async (input: RequestInfo | URL) => {
+  // The router fetches the `fragment` projection on navigation — forward the
+  // request init (its Accept header) so the worker negotiates a fragment, not a
+  // full document.
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     const u = new URL(raw, location.href);
     if (delayPath && u.pathname === delayPath) await sleep(40);
-    return worker.fetch(new Request(new URL(u.pathname + u.search, ORIGIN)));
+    return worker.fetch(new Request(new URL(u.pathname + u.search, ORIGIN), init));
   }) as typeof fetch;
 });
 
@@ -133,8 +135,8 @@ describe("opt-in client router, end to end", () => {
     const liveCount = liveBtn.textContent;
     expect(liveCount).not.toBe("pings: 0");
 
-    // (1) Soft-navigate Home → About: the heading swaps in, the old one is gone
-    // (replaced, not appended) — no full document reload happened.
+    // (1) Soft-navigate Home → About: the heading morphs in, the old one is gone
+    // (the [data-june-root] was morphed in place) — no full document reload.
     clickNav("/about");
     await poll(() => document.querySelector('[data-page="about"]'), "about page");
     expect(document.querySelector('[data-page="home"]')).toBeNull();

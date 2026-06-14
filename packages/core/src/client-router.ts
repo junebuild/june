@@ -3,10 +3,10 @@
 // OFF by default (config.clientRouter). When on, the document wraps the page in
 // <div data-june-root> and the islands bundle calls startClientRouter() once.
 // From then on, same-origin left-clicks become SOFT navigations: fetch the next
-// URL — the SAME complete document the server already serves, no special payload
-// format — replace the [data-june-root] region, re-hydrate the new islands, and
-// carry any <Island persist> live node across. The agent surface is untouched:
-// every URL is still a full, projectable (.md/.json/mcp) document.
+// URL's `fragment` projection (the [data-june-root] inner HTML for the SAME url —
+// HTML-over-the-wire, the agent surface untouched), then MORPH it into the live
+// region — unchanged nodes keep focus/scroll/selection/input, and a persistent
+// island's live React root survives. New islands re-hydrate.
 //
 // It degrades safely: no JS, a failed fetch, or an unrecognized response shape
 // all fall back to a hard browser navigation — never a broken page.
@@ -15,11 +15,8 @@
 // (touches `document`/`history`/`fetch`), so — like islands-client — it is
 // exposed ONLY via the `@junejs/core/client-router` subpath and is NOT
 // re-exported from the barrel.
-import {
-  ISLAND_TAG,
-  ISLAND_NAME_ATTR,
-  ISLAND_PERSIST_ATTR,
-} from "./islands";
+import { morph } from "./morph";
+import { FRAGMENT_ACCEPT, TITLE_HEADER } from "./nav-protocol";
 
 // Called with each freshly swapped-in [data-june-root] so the host can hydrate
 // the new page's islands (islands-client binds this to its registry).
@@ -56,10 +53,15 @@ export function startClientRouter(rehydrate: Rehydrate): void {
     inflight = ac;
 
     let html: string;
+    let title: string | null = null;
     try {
-      const res = await fetch(href, { headers: { "x-june-nav": "1" }, signal: ac.signal });
+      const res = await fetch(href, {
+        headers: { accept: FRAGMENT_ACCEPT },
+        signal: ac.signal,
+      });
       if (!res.ok) throw new Error(`status ${res.status}`);
       html = await res.text();
+      title = res.headers.get(TITLE_HEADER);
     } catch (err) {
       // Aborted or superseded: a newer navigation owns the screen now — do
       // nothing. Otherwise the network/server actually failed: hand back to the
@@ -70,50 +72,31 @@ export function startClientRouter(rehydrate: Rehydrate): void {
     }
     if (mine !== token) return; // a newer navigation won the race — drop this result
 
-    const doc = new DOMParser().parseFromString(html, "text/html");
-    const incoming = doc.querySelector(`[${ROOT_ATTR}]`);
     const current = rootEl();
-    if (!incoming || !current) {
-      location.href = href; // a shape we don't recognize — let the browser handle it
+    if (!current) {
+      location.href = href; // no [data-june-root] — let the browser handle it
       return;
     }
+    // The fragment is the [data-june-root] INNER html. Parse it into an inert
+    // clone of the root, then morph the live root toward it in place.
+    const next = current.cloneNode(false) as Element;
+    next.innerHTML = html;
 
-    const next = adopt(incoming);
-    carryPersisted(current, next);
-
-    const swap = () => {
-      current.replaceWith(next);
-      document.title = doc.title;
-      rehydrate(next);
+    const apply = () => {
+      morph(current, next);
+      if (title !== null) document.title = title;
+      rehydrate(current); // hydrate the new island markers (idempotent — skips live ones)
       window.scrollTo?.(0, 0);
     };
     // View Transitions give the cross-fade for free where supported; elsewhere
-    // (and in test DOMs) swap directly.
+    // (and in test DOMs) apply directly.
     const startVT = (document as unknown as {
       startViewTransition?: (cb: () => void) => unknown;
     }).startViewTransition;
-    if (typeof startVT === "function") startVT.call(document, swap);
-    else swap();
+    if (typeof startVT === "function") startVT.call(document, apply);
+    else apply();
 
     if (push) history.pushState({ june: true }, "", href);
-  }
-
-  // Move each persistent island's LIVE node from the outgoing tree into the
-  // incoming one, replacing the freshly-parsed (inert) marker of the same name.
-  // The moved node keeps its React root — state, effects, and open connections
-  // (e.g. a websocket) survive the navigation. This is what June needs that the
-  // spike got "for free": here the layout is INSIDE the swap region, so without
-  // this nothing would persist.
-  function carryPersisted(current: Element, next: Element): void {
-    const sel = `${ISLAND_TAG}[${ISLAND_PERSIST_ATTR}]`;
-    for (const live of Array.from(current.querySelectorAll(sel))) {
-      const name = live.getAttribute(ISLAND_NAME_ATTR);
-      if (!name) continue;
-      const placeholder = next.querySelector(
-        `${ISLAND_TAG}[${ISLAND_PERSIST_ATTR}][${ISLAND_NAME_ATTR}="${escapeAttr(name)}"]`,
-      );
-      if (placeholder) placeholder.replaceWith(live);
-    }
   }
 
   document.addEventListener("click", (e) => {
@@ -132,17 +115,4 @@ export function startClientRouter(rehydrate: Rehydrate): void {
   window.addEventListener("popstate", () => {
     navigate(location.pathname + location.search + location.hash, false);
   });
-}
-
-// `replaceWith` auto-adopts in real browsers; adoptNode is belt-and-suspenders
-// and some test DOMs need it explicit. Guarded so a DOM without it still works.
-function adopt(node: Element): Element {
-  return typeof document.adoptNode === "function" ? (document.adoptNode(node) as Element) : node;
-}
-
-// Island names are identifier-ish, but escape for the attribute selector anyway.
-// Prefer the platform CSS.escape; fall back for older/test environments.
-function escapeAttr(value: string): string {
-  const css = (window as unknown as { CSS?: { escape?: (v: string) => string } }).CSS;
-  return css?.escape ? css.escape(value) : value.replace(/["\\]/g, "\\$&");
 }

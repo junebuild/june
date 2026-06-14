@@ -15,6 +15,8 @@
     "./islands": "./src/islands.tsx",
     "./islands-client": "./src/islands-client.ts",
     "./client-router": "./src/client-router.ts",
+    "./nav-protocol": "./src/nav-protocol.ts",
+    "./morph": "./src/morph.ts",
     "./agent": "./src/agent.ts",
     "./mcp": "./src/mcp.ts",
     "./discovery": "./src/discovery.ts",

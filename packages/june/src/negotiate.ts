@@ -8,12 +8,10 @@
 
 import type { RenderTarget } from "@junejs/core/route";
 
-// The client router asks for a fragment of the SAME url via this distinct media
-// type (a browser never sends it), so the fragment has no URL surface — Accept
-// only. The title rides back in a header so the client updates document.title
-// without parsing the body.
-export const FRAGMENT_ACCEPT = "text/vnd.june.fragment+html";
-export const TITLE_HEADER = "x-june-title";
+// The fragment media type + title header are the client-router wire protocol —
+// defined once in @junejs/core so the browser router and this negotiator share
+// the exact strings. Re-exported so existing server-side importers are unaffected.
+export { FRAGMENT_ACCEPT, TITLE_HEADER } from "@junejs/core/nav-protocol";
 
 const EXT_TARGET: Record<string, RenderTarget> = {
   ".json": "json",
