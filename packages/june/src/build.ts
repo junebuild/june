@@ -419,8 +419,9 @@ ${adapterEntry.wrap("pipeline")}
       return list.some((e) => id === e || id.startsWith(`${e}/`));
     },
     resolve: {
-      // Conditions BAKED at build (workerd has no runtime conditions, reminder #3).
-      conditionNames: ["workerd", "edge", "import", "default"],
+      // Conditions BAKED at build (the target has no runtime conditions, reminder
+      // #3). Adapter-owned: workers → workerd, vercel → edge-light.
+      conditionNames: adapter.conditions,
     },
   });
   const result = await bundle.write({ dir: outDir, format: "esm", entryFileNames: "worker.js" });

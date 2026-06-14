@@ -54,6 +54,10 @@ export type AdapterEmitContext = {
 export interface JuneAdapter {
   readonly name: string;
   readonly capabilities: AdapterCapabilities;
+  // Rolldown export conditions BAKED into the bundle at build time (the target
+  // runtime has none). Target-specific: workers → "workerd", vercel → "edge-light".
+  // The same portable graph, resolved for the platform's module surface.
+  readonly conditions: string[];
   // Wrap the portable pipeline into the platform's entry source.
   entry(opts: { linkHeader: string | null }): AdapterEntry;
   // Write the deploy structure (config files, asset placement, server entry).
@@ -67,6 +71,7 @@ export function workers(opts?: { name?: string; domain?: string }): JuneAdapter 
   return {
     name: "workers",
     capabilities: { runtime: "edge", persistentConnections: true, assets: "platform" },
+    conditions: ["workerd", "edge", "import", "default"],
 
     entry({ linkHeader }) {
       return {
