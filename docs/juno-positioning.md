@@ -155,3 +155,60 @@ typed-query-builder and the declarative-migration references.
 - It is built to be read and written by agents: a small, regular API and a
   machine-readable schema + query catalog, where the obvious way to write a query is
   also the fast and correct way.
+
+---
+
+## Appendix — what LLMs get right vs wrong about this design (blind test, 2026-06-14)
+
+> Snapshot. The design is still evolving; re-run and revise as it changes.
+
+We gave 8 fresh, parallel model instances this design's *shape* (no measured
+numbers, no external-fact answers) and 12 questions, required blind first-shot
+answers (no tools, no verification, no second-guessing), then scored against our
+measured ground truth. Purpose: gauge how accurately a model reasons about a
+design of this shape — which directly informs what an *agent-native* data layer's
+docs should contain.
+
+**Result:**
+
+- **Qualitative / directional reasoning — near-perfect (8/8), including the
+  counterintuitive.** Models reliably derived: compile-once ≈ raw floor; no native
+  engine needed; a typed query builder doesn't cache compiled SQL by default;
+  removing a native engine made a major ORM *faster*; and the two traps —
+  native-Rust ≈ better-sqlite3 on point reads, and WAL is a no-op on `:memory:`.
+  The *shape* is legible to models.
+- **Quantitative magnitudes — systematically wrong, biased toward "textbook
+  moderate" values.** Models guessed WAL insert ≈ 3–4× (real ~22×), session/replica
+  reads ≈ 2× (real ~19×), batch-of-100 = a clean 100× (real ~80× after overhead),
+  named-bind insert ≈ 90% of raw (real ~75–81%). Extreme real-world numbers (fsync
+  cliffs, network RTT) and real-world overhead both get smoothed toward the middle.
+- **Reputation overrode measurement.** All 8 said bun:sqlite > better-sqlite3 on
+  single-row `.get()`; our x86 measurement is the reverse. (Arch/workload-dependent —
+  but the model asserted, unanimously and confidently, what measurement contradicts.)
+- **The one non-obvious *consequence* split the model majority-wrong.** "Render
+  auto-batch vs naive *concurrent* reads" — 5/8 said large (>5×); real is ~1.6×,
+  because concurrency already amortizes the RTT (the catastrophe is *sequential*
+  N+1, not concurrent). This is the highest-value finding: a consequence that
+  follows from the design but that most model instances get backwards.
+- **Consistency ≠ correctness.** Unanimous answers included a unanimous *wrong* one.
+
+**Implication for the agent-native pillar.** Don't spend the machine-readable docs
+on the API shape — models derive that for free. Spend them on the **blind-spot
+list**: the calibrated magnitudes and counterintuitive consequences a model will
+otherwise assert wrong. Current list (revise as measured):
+
+1. WAL on a file DB (synchronous=NORMAL) is **~20× on autocommit single-row
+   inserts** (not ~3–4×); and a **no-op on `:memory:`**.
+2. Cross-region reads via a **per-request session route to a replica ~19×** faster
+   (230ms→12ms) — and **only** through the session; a plain `prepare()` still hits
+   primary.
+3. Render auto-batch beats naive **concurrent** reads only **~1.5–2×** at real
+   latency; it beats **sequential** N+1 by ~N. Credit batching for killing
+   *sequential*, not for beating *concurrent*.
+4. One `DB.batch()` of N collapses to ~1 RTT → speedup ≈ ~0.8·N (overhead), e.g.
+   ~80× at N=100, not a clean N×.
+5. On x86, **better-sqlite3 ≥ bun:sqlite** on single-row `.get()` (reputation says
+   otherwise; arch/workload-dependent).
+6. Named-bind insert is **~75–81% of raw positional** insert, not ~90%.
+7. An async/remote client per call is **~10–25× slower** than the same engine
+   synchronous — keep the hot path sync, batch the remote.
