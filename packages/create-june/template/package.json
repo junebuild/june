@@ -12,11 +12,13 @@
   },
   "dependencies": {
     "@junejs/core": "^0.0.9",
+    "@junejs/db": "^0.0.9",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },
   "devDependencies": {
     "@junejs/cli": "^0.0.9",
+    "@junejs/server": "^0.0.9",
     "@types/react": "^19.2.0",
     "typescript": "^5.9.0"
   }

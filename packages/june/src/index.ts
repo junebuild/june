@@ -23,6 +23,15 @@ export {
 // `import { db } from "@junejs/db"`. The host opens the resources and runs each
 // request in the scope they read (pipeline imports runInScope from @junejs/db).
 export { loadJuneConfig } from "./config-loader";
+export {
+  migrate,
+  migrateApp,
+  classify,
+  readMigrations,
+  blockedMessage,
+  type Migration,
+  type MigrateResult,
+} from "./migrate";
 export { collection, entry, type ContentEntry } from "./content";
 export {
   listRoutes,

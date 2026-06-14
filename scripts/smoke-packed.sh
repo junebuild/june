@@ -52,8 +52,10 @@ sleep 6
 curl -fsS http://localhost:4911/ >/dev/null
 curl -fsS http://localhost:4911/client.js >/dev/null
 curl -fsS http://localhost:4911/llms.txt >/dev/null
+# the data path: the 0001 migration ran on dev startup + seeded, ambient db reads it
+curl -fsS http://localhost:4911/users.json | grep -q Ada || { echo "users.json missing seeded data"; exit 1; }
 curl -fsS -X POST http://localhost:4911/mcp \
   -H 'content-type: application/json' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | grep -q createUser
 
-echo "packed e2e: OK (/, /client.js, /llms.txt, /mcp)"
+echo "packed e2e: OK (/, /client.js, /llms.txt, /users.json+db, /mcp)"

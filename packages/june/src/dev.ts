@@ -5,12 +5,14 @@
 // read), build the app, and serve through the detected JuneHost.
 
 import { createServer as createNetServer } from "node:net";
+import { dirname } from "node:path";
 
 import { loadJuneConfig } from "./config-loader";
 import { installAsyncContext } from "./instrumentation";
 import { createApp } from "./app";
 import { withLiveReload } from "./dev-reload";
 import { host as defaultHost, type JuneHost, type ServeHandle } from "./host";
+import { migrateApp, blockedMessage } from "./migrate";
 
 export type DevServerOptions = {
   appDir: string;
@@ -42,6 +44,14 @@ export async function startDevServer({
 }: DevServerOptions): Promise<DevServer> {
   await installAsyncContext();
   const config = await loadJuneConfig(appDir);
+
+  // Apply pending migrations before serving — dev auto-applies the SAFE ones; a
+  // destructive one is reported and skipped (the server still starts, but the
+  // route using the new schema will fail until you run it explicitly).
+  const m = await migrateApp(dirname(appDir), config);
+  if (m?.applied.length) console.log(`[june] migrated: ${m.applied.join(", ")}`);
+  if (m?.blocked) console.warn(`[june] ${blockedMessage(m.blocked)}`);
+
   const app = createApp({ appDir, config });
   await app.warmup();
 
