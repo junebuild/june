@@ -53,6 +53,24 @@ async function compileTailwind(
   return result.css;
 }
 
+// Dev-only memo. The dev server re-fetches /global.css on EVERY navigation, but
+// the CSS only changes on edit — so compiling each time wastes ~18ms a nav (and
+// ~145ms the first time, Tailwind's design-system build). Cache it; the .css
+// watcher calls invalidateCss() on edit, and a .tsx class change restarts the
+// whole dev process (cache starts empty there), so the cache never goes stale.
+let devCache: { appDir: string; css: string | null } | null = null;
+
+export async function processCssCached(appDir: string): Promise<string | null> {
+  if (devCache?.appDir === appDir) return devCache.css;
+  const css = await processCss(appDir);
+  devCache = { appDir, css };
+  return css;
+}
+
+export function invalidateCss(): void {
+  devCache = null;
+}
+
 // Read + process app/global.css → the CSS to serve/emit. null when absent.
 // build passes { minify: true } (optimized, deployable); dev leaves it readable.
 export async function processCss(

@@ -14,7 +14,7 @@ import { createApp } from "./app";
 import { withLiveReload, notifyCssChange } from "./dev-reload";
 import { host as defaultHost, type JuneHost, type ServeHandle } from "./host";
 import { migrateApp, blockedMessage } from "./migrate";
-import { findGlobalCss, processCss } from "./css";
+import { findGlobalCss, processCssCached, invalidateCss } from "./css";
 
 export type DevServerOptions = {
   appDir: string;
@@ -74,13 +74,17 @@ export async function startDevServer({
   // .tsx edit still restarts → full reload (its markup changed too).
   if (findGlobalCss(appDir)) {
     watch(appDir, { recursive: true }, (_event, file) => {
-      if (file && file.endsWith(".css")) notifyCssChange();
+      if (file && file.endsWith(".css")) {
+        invalidateCss(); // next /global.css recompiles fresh
+        notifyCssChange();
+      }
     });
-    // Warm the CSS engine in the background: Tailwind v4's native engine costs
-    // ~700ms to load ONCE. Doing it now (while the user reads the dev URL)
-    // overlaps that with startup, so the first page's stylesheet is instant
-    // instead of waiting on the cold compile. Recompiles after are ~10ms.
-    void processCss(appDir).catch(() => {});
+    // Warm + cache the stylesheet in the background: Tailwind v4's native engine
+    // costs ~700ms to load and ~145ms to build its design system ONCE. Doing it
+    // now (while the user reads the dev URL) overlaps that with startup AND
+    // populates the cache, so the first page's stylesheet is instant — and every
+    // later navigation serves from cache (recompile only after an edit).
+    void processCssCached(appDir).catch(() => {});
   }
 
   const url = `http://localhost:${handle.port}`;

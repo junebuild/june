@@ -22,7 +22,7 @@ import { findExtraFile, listRoutes, matchRouteTree, resolveNotFound, routeFiles,
 import { createPipeline, type ExtraHandler, type LayoutComponent, type Pipeline, type Resolved } from "./pipeline";
 import { memoizeResources } from "./resources";
 import { findClientEntry, bundleClientToString, CLIENT_SCRIPT_URL } from "./client-bundle";
-import { findGlobalCss, processCss, STYLES_URL } from "./css";
+import { findGlobalCss, processCssCached, STYLES_URL } from "./css";
 
 export type CreateAppOptions = {
   appDir: string;
@@ -156,7 +156,7 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
       // Dev serves the global stylesheet (build ships it as a static asset);
       // re-read+processed each hit so edits show on reload, like /client.js.
       if (cssEntry && new URL(request.url).pathname === STYLES_URL) {
-        return processCss(appDir).then(
+        return processCssCached(appDir).then(
           (css) =>
             new Response(css ?? "", {
               headers: { "content-type": "text/css; charset=utf-8" },
