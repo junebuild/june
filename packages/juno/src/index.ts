@@ -11,11 +11,17 @@
 import type { JuneDb, RunResult } from "@junejs/core/resources";
 import { recordTableRead, recordTableWrite } from "@junejs/core/instrumentation";
 
-import { db as ambientDb, requestLocal } from "@junejs/db";
+import { db as ambientDb, requestLocal, registerSqlTagger } from "@junejs/db";
 
 import { tableLoader, tableListLoader, type Loader, type ListLoader } from "./batch";
 import { sqlite } from "./compiler";
-import { taggingDb } from "./tag";
+import { taggingDb, tagSql } from "./tag";
+
+// Importing Juno upgrades the canonical ambient `db` to auto-tag raw queries (a
+// raw read inside cache() then auto-invalidates). The framework re-exports that
+// same `db`, so `import { db } from "@junejs/server"` is the tagging one in a Juno
+// app — without the framework ever importing Juno.
+registerSqlTagger(tagSql);
 
 export { createLoader, createGroupLoader, tableLoader, tableListLoader, type Loader, type ListLoader } from "./batch";
 export { tablesFromSql, tagSql, taggingDb, type SqlTouch } from "./tag";
@@ -187,12 +193,10 @@ export function table<T extends Row = Row>(name: string): Table<T> {
   return new Table<T>(ambientDb, name, loaders);
 }
 
-// The ambient raw escape hatch, auto-tagging. `import { db } from "@junejs/juno"`
-// is the ambient `db` resource wrapped so raw `db.query("... from posts")` inside
-// a cache() is invalidated by a posts write (vs the un-tagged `@junejs/db` `db`,
-// which would go silently stale). Stateless wrapper over the ambient Proxy, so a
-// module-scope export still resolves the per-request handle.
-export const db: JuneDb = taggingDb(ambientDb);
+// No separate ambient `db` export: the canonical `db` from `@junejs/db` (and
+// re-exported by `@junejs/server`) auto-tags once Juno is imported (above), so
+// there is exactly one `db` to import. `taggingDb` remains for the explicit
+// `juno(handle)` path, where it wraps a caller-supplied handle.
 
 // Explicit tag/invalidate hatch, ambiently (no handle needed — they only record).
 export function reads(...tables: string[]): void {

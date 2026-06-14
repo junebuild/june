@@ -20,9 +20,11 @@ export {
   type WorkerEnv,
   type ResourceFlags,
 } from "./resources";
-// Ambient data resources (db/kv/blob) live in their own package, `@junejs/db` —
-// `import { db } from "@junejs/db"`. The host opens the resources and runs each
-// request in the scope they read (pipeline imports runInScope from @junejs/db).
+// Ambient data resources (db/kv/blob) live in `@junejs/db`; re-exported here so
+// `import { db } from "@junejs/server"` is the ONE canonical handle. It auto-tags
+// raw queries when Juno is installed (Juno registers the tagger via @junejs/db) —
+// so the framework never imports Juno, yet `db` is the tagging one in a Juno app.
+export { db, kv, blob } from "@junejs/db";
 export { loadJuneConfig } from "./config-loader";
 export {
   migrate,

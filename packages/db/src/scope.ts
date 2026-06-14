@@ -109,7 +109,31 @@ function ambient<T extends object>(name: keyof Resources): T {
   });
 }
 
-// The ambient resources. `import { db } from "@junejs/db"` anywhere.
-export const db: JuneDb = ambient<JuneDb>("db");
+// A Tier-3 layer (Juno) registers a tagger so the ambient `db` records the tables
+// each RAW query touches — what lets a raw read inside cache() be auto-invalidated
+// instead of going silently stale. @junejs/db stays generic: it only CALLS the
+// registered fn, never imports it, so the dependency direction stays inward
+// (juno → db, never db → juno). Absent (no Juno) → `db` is raw, untagged.
+let sqlTagger: ((sql: string) => void) | null = null;
+export function registerSqlTagger(tag: (sql: string) => void): void {
+  sqlTagger = tag;
+}
+
+// The ambient resources. `import { db } from "@junejs/db"` anywhere. `db` is the
+// ONE canonical handle (the framework re-exports it); it auto-tags raw query/get/
+// run when a tagger is registered, so installing Juno upgrades it in place — no
+// second `db` to choose between.
+export const db: JuneDb = new Proxy({} as JuneDb, {
+  get(_t, prop) {
+    const handle = pick("db") as unknown as Record<string | symbol, unknown>;
+    const value = handle[prop];
+    if (typeof value !== "function") return value;
+    const fn = (value as (...a: unknown[]) => unknown).bind(handle);
+    if (sqlTagger && (prop === "query" || prop === "get" || prop === "run")) {
+      return (sql: string, params?: unknown[]) => (sqlTagger!(sql), fn(sql, params));
+    }
+    return fn;
+  },
+});
 export const kv: JuneKv = ambient<JuneKv>("kv");
 export const blob: JuneBlob = ambient<JuneBlob>("blob");

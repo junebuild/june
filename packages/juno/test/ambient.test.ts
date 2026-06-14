@@ -5,12 +5,12 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { beforeAll, describe, expect, test } from "bun:test";
-import { ensureScope, runInScope } from "@junejs/db";
+import { ensureScope, runInScope, db as canonicalDb } from "@junejs/db";
 import { host } from "@junejs/server/host";
 import type { JuneDb } from "@junejs/core/resources";
 import { installTraceContext, runWithTrace, type RequestTrace } from "@junejs/core/instrumentation";
 
-import { table, db as junoDb } from "../src";
+import { table } from "../src"; // importing Juno registers the SQL tagger on @junejs/db's `db`
 
 installTraceContext(new AsyncLocalStorage<RequestTrace>());
 
@@ -68,15 +68,15 @@ describe("ambient table — request-scoped, no handle", () => {
   });
 });
 
-describe("ambient `db` — the auto-tagging raw escape hatch (Proxy taggingDb)", () => {
-  test("forwards to the scoped handle, and exec/transaction are NOT dropped", async () => {
+describe("canonical `db` auto-tags once Juno is imported (registered tagger)", () => {
+  test("forwards to the scoped handle, exec/transaction intact", async () => {
     const seeded = await seed();
     await runInScope({ resources: { db: seeded } }, async () => {
-      const rows = await junoDb.query<{ id: number }>("select id from users where id = ?", [1]);
+      const rows = await canonicalDb.query<{ id: number }>("select id from users where id = ?", [1]);
       expect(rows).toHaveLength(1);
-      expect(typeof junoDb.exec).toBe("function"); // the Proxy fix — was undefined when spread
-      await junoDb.exec("create table t (id integer)");
-      expect(typeof junoDb.transaction).toBe("function");
+      expect(typeof canonicalDb.exec).toBe("function");
+      await canonicalDb.exec("create table t (id integer)");
+      expect(typeof canonicalDb.transaction).toBe("function");
     });
   });
 
@@ -84,8 +84,8 @@ describe("ambient `db` — the auto-tagging raw escape hatch (Proxy taggingDb)",
     const seeded = await seed();
     const trace: RequestTrace = { id: "amb", startedAt: 0, events: [] };
     await runInScope({ resources: { db: seeded } }, () =>
-      runWithTrace(trace, () => junoDb.query("select id from users")),
+      runWithTrace(trace, () => canonicalDb.query("select id from users")),
     );
-    expect([...(trace.reads ?? [])]).toContain("users");
+    expect([...(trace.reads ?? [])]).toContain("users"); // tagged because importing Juno registered tagSql
   });
 });

@@ -3,7 +3,7 @@
 // them outside a scope, or undeclared, throws actionable guidance.
 import { describe, expect, test, beforeAll } from "bun:test";
 
-import { db, kv, runInScope, ensureScope, requestLocal } from "../src/scope";
+import { db, kv, runInScope, ensureScope, requestLocal, registerSqlTagger } from "../src/scope";
 import type { JuneDb } from "@junejs/core/resources";
 
 beforeAll(async () => {
@@ -72,5 +72,16 @@ describe("requestLocal — generic per-request state (Juno's loader registry rid
 
   test("used outside a scope → throws the same guidance as ambient resources", () => {
     expect(() => requestLocal(KEY, () => new Map())).toThrow(/outside a request scope/);
+  });
+});
+
+// Last — registering a tagger is a process-global; keep it after the raw tests.
+describe("registerSqlTagger — a Tier-3 layer (Juno) makes the canonical db auto-tag", () => {
+  test("with a tagger registered, db.query calls it first, then still forwards", async () => {
+    const tagged: string[] = [];
+    registerSqlTagger((sql) => tagged.push(sql));
+    const rows = await runInScope({ resources: { db: fakeDb } }, () => db.query("select * from posts", [1]));
+    expect(tagged).toEqual(["select * from posts"]); // tagger saw the SQL
+    expect(rows).toEqual([{ sql: "select * from posts", params: [1] }]); // and the query forwarded
   });
 });
