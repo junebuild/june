@@ -20,6 +20,12 @@ import {
   ISLAND_PROPS_ATTR,
   deserializeIslandProps,
 } from "./islands";
+import { startClientRouter } from "./client-router";
+
+// Set on a marker once hydrated, so re-scanning a tree (the client router
+// re-hydrates each swapped page) never hydrates the same node twice — and a
+// persistent island carried across a navigation, already live, is skipped.
+type Marked = Element & { __juneHydrated?: boolean };
 
 // The app maps each island `name` to its component. v0.1 is explicit: the app
 // writes this by hand in its client entry. v0.2 generates it from `"use client"`.
@@ -34,6 +40,7 @@ export function hydrateIslands(
   const markers = root.querySelectorAll(`${ISLAND_TAG}[${ISLAND_NAME_ATTR}]`);
   let hydrated = 0;
   for (const el of markers) {
+    if ((el as Marked).__juneHydrated) continue; // already live (e.g. carried across a nav)
     const name = el.getAttribute(ISLAND_NAME_ATTR);
     if (!name) continue;
     const Component = registry[name];
@@ -46,7 +53,17 @@ export function hydrateIslands(
     }
     const props = deserializeIslandProps(el.getAttribute(ISLAND_PROPS_ATTR));
     hydrateRoot(el as Element, React.createElement(Component, props));
+    (el as Marked).__juneHydrated = true;
     hydrated++;
+  }
+
+  // Opt-in client router: the document renders [data-june-root] only when
+  // config.clientRouter is on, and only the full-document boot call (root ===
+  // document) should start it — re-hydrations of swapped subtrees pass the new
+  // root, not the document. Bind the router's re-hydrate to THIS registry so
+  // every soft-navigated page brings its islands to life.
+  if (root === document && document.querySelector("[data-june-root]")) {
+    startClientRouter((swapped) => hydrateIslands(registry, swapped));
   }
   return hydrated;
 }
