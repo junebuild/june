@@ -8,12 +8,21 @@
 
 import type { RenderTarget } from "@junejs/core/route";
 
+// The client router asks for a fragment of the SAME url via this distinct media
+// type (a browser never sends it), so the fragment has no URL surface — Accept
+// only. The title rides back in a header so the client updates document.title
+// without parsing the body.
+export const FRAGMENT_ACCEPT = "text/vnd.june.fragment+html";
+export const TITLE_HEADER = "x-june-title";
+
 const EXT_TARGET: Record<string, RenderTarget> = {
   ".json": "json",
   ".md": "md",
 };
 
 const ACCEPT_TARGET: Array<[test: RegExp, target: RenderTarget]> = [
+  // fragment first: its media type is exact + can't collide with browser Accepts.
+  [/text\/vnd\.june\.fragment\+html/, "fragment"],
   [/text\/markdown/, "md"],
   [/application\/json/, "json"],
 ];

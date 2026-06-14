@@ -11,10 +11,10 @@
 import type { JuneDb, RunResult } from "@junejs/core/resources";
 import { recordTableRead, recordTableWrite } from "@junejs/core/instrumentation";
 
-import { tableLoader, type Loader } from "./batch";
+import { tableLoader, tableListLoader, type Loader, type ListLoader } from "./batch";
 import { taggingDb } from "./tag";
 
-export { createLoader, tableLoader, type Loader } from "./batch";
+export { createLoader, createGroupLoader, tableLoader, tableListLoader, type Loader, type ListLoader } from "./batch";
 export { tablesFromSql, tagSql, taggingDb, type SqlTouch } from "./tag";
 
 export type Row = Record<string, unknown>;

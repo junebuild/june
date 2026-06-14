@@ -71,3 +71,72 @@ export function tableLoader<V extends Row = Row>(
     (row) => (row as Row)[key] as string | number,
   );
 }
+
+export type ListLoader<K, V> = {
+  load(key: K): Promise<V[]>;
+};
+
+// Like createLoader, but resolves ALL rows for a key — the list shape (e.g. a
+// user's posts), where `where key in (...)` returns many rows per key.
+export function createGroupLoader<K, V>(
+  batchFn: (keys: K[]) => Promise<V[]>,
+  keyOf: (value: V) => K,
+): ListLoader<K, V> {
+  let queue: { key: K; resolve: (v: V[]) => void; reject: (e: unknown) => void }[] = [];
+  let scheduled = false;
+
+  function flush() {
+    const batch = queue;
+    queue = [];
+    scheduled = false;
+    const keys = [...new Set(batch.map((b) => b.key))];
+    batchFn(keys).then(
+      (values) => {
+        const byKey = new Map<K, V[]>();
+        for (const v of values) {
+          const k = keyOf(v);
+          const list = byKey.get(k);
+          if (list) list.push(v);
+          else byKey.set(k, [v]);
+        }
+        for (const b of batch) b.resolve(byKey.get(b.key) ?? []);
+      },
+      (err) => {
+        for (const b of batch) b.reject(err);
+      },
+    );
+  }
+
+  return {
+    load(key: K) {
+      return new Promise<V[]>((resolve, reject) => {
+        queue.push({ key, resolve, reject });
+        if (!scheduled) {
+          scheduled = true;
+          queueMicrotask(flush);
+        }
+      });
+    },
+  };
+}
+
+// A by-key LIST loader over a JuneDb table: `loader.load(userId)` calls coalesce
+// into one `select * from <table> where <key> in (...)`, each resolving to that
+// key's rows. The list analog of tableLoader. Build one per request.
+export function tableListLoader<V extends Row = Row>(
+  db: JuneDb,
+  table: string,
+  key = "id",
+): ListLoader<string | number, V> {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(table) || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+    throw new Error(`unsafe SQL identifier: ${table}.${key}`);
+  }
+  return createGroupLoader<string | number, V>(
+    async (keys) => {
+      recordTableRead(table);
+      const placeholders = keys.map(() => "?").join(", ");
+      return db.query<V>(`select * from ${table} where ${key} in (${placeholders})`, keys);
+    },
+    (row) => (row as Row)[key] as string | number,
+  );
+}

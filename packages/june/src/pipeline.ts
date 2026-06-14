@@ -39,7 +39,7 @@ import { ensureScope, runInScope } from "@junejs/db";
 import type { AgentConfig } from "@junejs/core/config";
 import type { Resources } from "@junejs/core/resources";
 
-import { negotiate } from "./negotiate";
+import { negotiate, TITLE_HEADER } from "./negotiate";
 
 export type LayoutComponent = React.ComponentType<{ children: React.ReactNode }>;
 export type LoadingComponent = React.ComponentType;
@@ -191,6 +191,30 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
     return new Response(html, { status, headers: htmlHeaders() });
   }
 
+  // Route A: the [data-june-root] inner HTML for a soft-nav / live-apply request
+  // — the chain-wrapped view rendered WITHOUT the Document shell, so it is
+  // byte-identical to what a full load puts inside [data-june-root] (the morph
+  // parity contract). The title rides back in a header so the client updates
+  // document.title without parsing the body. allReady (no streamed fallback) so
+  // the applied DOM is complete.
+  async function renderFragment(
+    node: React.ReactNode,
+    metadata: Metadata | undefined,
+    chain: LayoutComponent[],
+  ): Promise<Response> {
+    const wrapped = chain.reduceRight<React.ReactNode>(
+      (acc, L) => React.createElement(L, null, acc),
+      node,
+    );
+    const stream = await renderToReadableStream(wrapped);
+    await stream.allReady;
+    const html = await new Response(stream).text();
+    const headers = new Headers({ "content-type": "text/html; charset=utf-8" });
+    const title = typeof metadata?.title === "string" ? metadata.title : undefined;
+    if (title) headers.set(TITLE_HEADER, title);
+    return new Response(html, { status: 200, headers });
+  }
+
   // WebMCP: register the app's actions as browser tools. Computed per render
   // from the live registry (stable after warmup), gated on agent.webmcp + mcp
   // (execute proxies to /mcp). No actions → no script → page stays zero-JS.
@@ -270,7 +294,11 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
   ): Promise<Response> {
     const { def, chain } = resolved;
     // A projection declared `false` is disabled → 404 (and absent from discovery).
-    if (def[target] === false) return notFoundResponse(target, ctx.url.pathname);
+    // "fragment" isn't a declarable projection (it's the view rendered without the
+    // shell), so it's never disabled — exclude it from the check.
+    if (target !== "fragment" && def[target] === false) {
+      return notFoundResponse(target, ctx.url.pathname);
+    }
 
     if (target === "md") return renderMarkdown(def, data, ctx);
     if (target === "json") {
@@ -279,7 +307,9 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
       return Response.json(payload);
     }
     const node = provideLoaderData(data, def.view ? def.view(data, ctx) : null);
-    return renderDocument(node, resolveMeta(def, data, ctx), 200, chain);
+    const meta = resolveMeta(def, data, ctx);
+    if (target === "fragment") return renderFragment(node, meta, chain);
+    return renderDocument(node, meta, 200, chain);
   }
 
   async function discovery(url: URL): Promise<Response | null> {

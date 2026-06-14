@@ -18,7 +18,10 @@ import React from "react";
 
 import type { Principal, Session } from "./context";
 
-export type RenderTarget = "view" | "json" | "md";
+// "fragment" is the soft-nav/live-apply transport (Route A): the [data-june-root]
+// inner HTML for the SAME url, morphed in on the client. Not an agent surface — a
+// client-router transport, signaled by Accept, never a URL suffix.
+export type RenderTarget = "view" | "json" | "md" | "fragment";
 
 // Per-route document metadata. Static metadata keeps the streaming shell;
 // a FUNCTION (deriving from load() data) forces an eager load — the <head>
@@ -163,12 +166,17 @@ export function routeFromModule(mod: unknown): BrandedRoute | null {
 // The order each requested target degrades through when a projection is absent.
 // An agent asking for /users.json on a route with no `json()` still gets the
 // view rather than a 406.
-const FALLBACK: Record<RenderTarget, RenderTarget[]> = {
+// Values are only the DECLARABLE projections (view/json/md) — "fragment" is never
+// a route export, so it can't be a fallback target (only a fallback key).
+const FALLBACK: Record<RenderTarget, Array<"view" | "json" | "md">> = {
   json: ["json", "view"],
   view: ["view", "json"],
   // `md` is handled specially (auto-derived from json when md() is absent);
   // this entry is only the last-resort fall-through.
   md: ["md", "json", "view"],
+  // a fragment is always the view rendered without the document shell; if the
+  // client can't get one it degrades to a full view (hard navigation).
+  fragment: ["view"],
 };
 
 export function resolveProjection(
