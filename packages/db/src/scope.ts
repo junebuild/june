@@ -21,7 +21,11 @@
 
 import type { Resources, JuneDb, JuneKv, JuneBlob } from "@junejs/core/resources";
 
-export type RequestScope = { resources: Resources };
+// `locals` is generic per-request state for layers built ON TOP of the resources
+// (e.g. Juno's batch-loader registry). This package never reads it — it just
+// carries it per request so such state is STRUCTURALLY request-scoped and can't be
+// stashed on a long-lived handle. Lazily created by requestLocal().
+export type RequestScope = { resources: Resources; locals?: Map<symbol, unknown> };
 
 // The minimal slice of AsyncLocalStorage we use — kept structural so this module
 // never statically names the runtime.
@@ -54,6 +58,24 @@ export async function ensureScope(): Promise<void> {
 // response that renders later still resolves the same handles.
 export function runInScope<T>(scope: RequestScope, fn: () => T): T {
   return als ? als.run(scope, fn) : fn();
+}
+
+// Per-request local state for a layer built on top of the resources, keyed by a
+// symbol that layer owns. Created once per request and discarded with the scope —
+// so the state is structurally request-scoped and unstashable, the property a
+// long-lived handle (e.g. a module-scope `juno(db)`) can't give. Throws outside a
+// scope, like the ambient resources.
+export function requestLocal<T>(key: symbol, make: () => T): T {
+  const store = als?.getStore();
+  if (!store) {
+    throw new Error(
+      "June: request-scoped state was used outside a request scope. It is only " +
+        "available while a request is being handled (a route loader/view or an action).",
+    );
+  }
+  const locals = (store.locals ??= new Map<symbol, unknown>());
+  if (!locals.has(key)) locals.set(key, make());
+  return locals.get(key) as T;
 }
 
 function pick<K extends keyof Resources>(name: K): NonNullable<Resources[K]> {
