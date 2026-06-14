@@ -21,6 +21,8 @@ import {
   deserializeIslandProps,
 } from "./islands";
 import { startClientRouter } from "./client-router";
+import { applyLiveUpdate } from "./client-live";
+import { FRAGMENT_ACCEPT, TITLE_HEADER } from "./nav-protocol";
 
 // Set on a marker once hydrated, so re-scanning a tree (the client router
 // re-hydrates each swapped page) never hydrates the same node twice — and a
@@ -63,7 +65,22 @@ export function hydrateIslands(
   // root, not the document. Bind the router's re-hydrate to THIS registry so
   // every soft-navigated page brings its islands to life.
   if (root === document && document.querySelector("[data-june-root]")) {
-    startClientRouter((swapped) => hydrateIslands(registry, swapped));
+    const rehydrate = (swapped: ParentNode) => hydrateIslands(registry, swapped);
+    startClientRouter(rehydrate);
+    // Dev push-HMR hook: the injected dev-reload script calls this on reconnect
+    // after a restart instead of location.reload() — re-fetch the current page's
+    // fragment and MORPH it (preserveIslands:"all"), so island state, focus, and
+    // scroll survive the edit. Returns false (caller hard-reloads) on any miss.
+    (window as unknown as { __juneLiveReload?: () => Promise<boolean> }).__juneLiveReload =
+      async () => {
+        try {
+          const res = await fetch(location.href, { headers: { accept: FRAGMENT_ACCEPT } });
+          if (!res.ok) return false;
+          return applyLiveUpdate(await res.text(), res.headers.get(TITLE_HEADER), rehydrate);
+        } catch {
+          return false;
+        }
+      };
   }
   return hydrated;
 }

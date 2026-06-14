@@ -1,9 +1,12 @@
 // Dev live-reload — the browser half of the watch story. The supervisor
 // (cli watch.ts) restarts the SERVER on save; this module makes the BROWSER
 // follow: every dev HTML page gets a tiny script that holds an SSE connection
-// to /__june/events. A restart drops the connection; the script reconnects
-// and reloads on success. No version tokens, no diffing — the dropped socket
-// IS the signal, which is exactly right for a process-restart reload model.
+// to /__june/events. A restart drops the connection; the script reconnects,
+// and on success it tries a push-HMR MORPH (window.__juneLiveReload, set by the
+// islands runtime when clientRouter is on): re-fetch the current page's fragment
+// from the fresh server and morph it in place — island state, focus, and scroll
+// survive the edit. It falls back to a full reload when there's no morph hook
+// (no clientRouter) or the morph can't apply. The dropped socket IS the signal.
 //
 // This lives in the startDevServer WRAPPER, never in the pipeline: dev/built
 // parity (parity.test.ts compares pipeline outputs byte-for-byte) stays
@@ -32,7 +35,15 @@ const RELOAD_JS = `// june dev live-reload: reconnect-after-drop → reload; "cs
   const connect = () => {
     const es = new EventSource(${JSON.stringify(EVENTS_PATH)});
     es.addEventListener("open", () => {
-      if (dropped) location.reload();
+      if (dropped) {
+        // push-HMR: morph the freshly-restarted page in place (state survives);
+        // hard-reload only if there's no morph hook or it can't apply.
+        const hot = window.__juneLiveReload;
+        (hot ? hot() : Promise.resolve(false)).then(
+          (ok) => { if (!ok) location.reload(); },
+          () => location.reload(),
+        );
+      }
       dropped = false;
     });
     es.addEventListener("css", swapCss); // stylesheet edit → swap, no reload
