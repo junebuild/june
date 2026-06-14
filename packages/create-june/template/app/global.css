@@ -1,0 +1,4 @@
+/* Your global stylesheet — auto-linked, no import needed. `june dev` recompiles
+   it on reload; `june build` ships it as a static asset. Tailwind v4 (CSS-first)
+   and your own plain CSS coexist here. */
+@import "tailwindcss";

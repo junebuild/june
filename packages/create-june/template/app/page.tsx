@@ -9,15 +9,18 @@ export const loader = () => ({ message: "Welcome to June" });
 
 export default function Home({ message }: Loaded<typeof loader>) {
   return (
-    <main>
-      <h1>__APP_NAME__</h1>
-      <p>{message}</p>
-      <p>
-        This page also answers as <a href="/.json">JSON</a> and <a href="/.md">Markdown</a>,
-        and exposes its actions to agents at <code>/mcp</code>.
+    <main className="mx-auto max-w-2xl p-8">
+      <h1 className="text-3xl font-bold">__APP_NAME__</h1>
+      <p className="mt-2 text-gray-600">{message}</p>
+      <p className="mt-4 text-gray-600">
+        This page also answers as <a className="underline" href="/.json">JSON</a> and{" "}
+        <a className="underline" href="/.md">Markdown</a>, and exposes its actions to agents at{" "}
+        <code className="rounded bg-gray-100 px-1">/mcp</code>.
       </p>
       {/* A client island: only this subtree hydrates (app/_client.tsx registers it). */}
-      <Island name="Counter" component={Counter} props={{ initial: 0 }} />
+      <div className="mt-6">
+        <Island name="Counter" component={Counter} props={{ initial: 0 }} />
+      </div>
     </main>
   );
 }

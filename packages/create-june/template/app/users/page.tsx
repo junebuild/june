@@ -23,9 +23,9 @@ export const loader = async () => ({
 
 export default function Users({ users }: Loaded<typeof loader>) {
   return (
-    <main>
-      <h1>Users</h1>
-      <ul>
+    <main className="mx-auto max-w-2xl p-8">
+      <h1 className="text-3xl font-bold">Users</h1>
+      <ul className="mt-4 space-y-1 text-gray-700">
         {users.map((u) => (
           <li key={u.id}>{u.name}</li>
         ))}

@@ -22,6 +22,7 @@ import { findExtraFile, listRoutes, matchRouteTree, resolveNotFound, routeFiles,
 import { createPipeline, type ExtraHandler, type LayoutComponent, type Pipeline, type Resolved } from "./pipeline";
 import { memoizeResources } from "./resources";
 import { findClientEntry, bundleClientToString, CLIENT_SCRIPT_URL } from "./client-bundle";
+import { findGlobalCss, processCss, STYLES_URL } from "./css";
 
 export type CreateAppOptions = {
   appDir: string;
@@ -82,12 +83,14 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
   // (bundled lazily, memoized). Detected the same way the build freezes it, so
   // dev and built surfaces agree.
   const clientEntry = findClientEntry(appDir);
+  const cssEntry = findGlobalCss(appDir);
   const docConfig: DocumentConfig = {
     site: config.site ?? {},
     speculationRules: resolveSpeculationRules(speculation ?? undefined),
     speculationDelivery: speculation ? speculation.delivery ?? "inline" : "inline",
     viewTransitions: config.viewTransitions ?? true,
     clientScript: clientEntry ? CLIENT_SCRIPT_URL : null,
+    styles: cssEntry ? STYLES_URL : null,
   };
 
   let clientBundle: Promise<string> | undefined;
@@ -150,6 +153,23 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
 
   return {
     fetch(request) {
+      // Dev serves the global stylesheet (build ships it as a static asset);
+      // re-read+processed each hit so edits show on reload, like /client.js.
+      if (cssEntry && new URL(request.url).pathname === STYLES_URL) {
+        return processCss(appDir).then(
+          (css) =>
+            new Response(css ?? "", {
+              headers: { "content-type": "text/css; charset=utf-8" },
+            }),
+          (err: unknown) => {
+            console.error("[june] global.css failed:", err);
+            return new Response(`/* global.css failed: ${err instanceof Error ? err.message : String(err)} */\n`, {
+              status: 500,
+              headers: { "content-type": "text/css; charset=utf-8" },
+            });
+          },
+        );
+      }
       // Dev serves the islands runtime itself (build ships it as a static
       // asset); bundled on first hit, memoized after.
       if (clientEntry && new URL(request.url).pathname === CLIENT_SCRIPT_URL) {

@@ -17,6 +17,11 @@ export type DocumentConfig = {
   // loads it as a deferred module so `"use client"` islands hydrate. Absent /
   // null → the page ships zero client JS.
   clientScript?: string | null;
+  // URL of the global stylesheet. Set by the host (dev serves it, build emits it
+  // as an asset) when `app/global.css` exists — auto-linked, no import. Absent /
+  // null → no stylesheet. CSS is a HUMAN-surface concern; agent projections
+  // (.md/.json/mcp) never carry it.
+  styles?: string | null;
   // WebMCP tool manifest (name/description/inputSchema) — the SAME actions the
   // server exposes at /mcp. When present, the document injects a tiny script
   // that registers each via navigator.modelContext.registerTool() so an
@@ -122,6 +127,9 @@ export function Document({
             padding: 2px 5px;
           }
         `}</style>
+        {/* The app's global.css — auto-linked, AFTER the inline base styles so it
+            (and a Tailwind reset) wins. Absent → no stylesheet. */}
+        {config.styles ? <link rel="stylesheet" href={config.styles} /> : null}
       </head>
       <body>
         {children}

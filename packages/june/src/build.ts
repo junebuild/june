@@ -33,6 +33,7 @@ import { createWorker, type WorkerManifest } from "./worker";
 import { findExtraFile } from "./router";
 import type { ExtraHandler, LayoutComponent, LoadingComponent } from "./pipeline";
 import { findClientEntry, bundleClientToFile, CLIENT_SCRIPT_URL } from "./client-bundle";
+import { findGlobalCss, processCss, STYLES_URL } from "./css";
 
 export type BuildResult = {
   outFile: string;
@@ -144,6 +145,7 @@ export async function freezeConfig(appRoot: string): Promise<{
   // which re-freezes through buildManifest — sets the SAME clientScript, keeping
   // prerendered pages byte-equivalent to the live worker (parity).
   const hasClient = findClientEntry(join(appRoot, "app")) !== undefined;
+  const hasCss = findGlobalCss(join(appRoot, "app")) !== null;
   return {
     document: {
       site: cfg.site ?? {},
@@ -151,6 +153,7 @@ export async function freezeConfig(appRoot: string): Promise<{
       speculationDelivery: "inline",
       viewTransitions: cfg.viewTransitions ?? true,
       clientScript: hasClient ? CLIENT_SCRIPT_URL : null,
+      styles: hasCss ? STYLES_URL : null,
     },
     agent: resolveAgent(cfg.agent),
     earlyHints: cfg.earlyHints ?? [],
@@ -422,6 +425,16 @@ ${adapterEntry.wrap("pipeline")}
   const clientEntry = findClientEntry(appDir);
   if (clientEntry) {
     await bundleClientToFile(clientEntry, appRoot, assetsDir);
+    hasAssets = true;
+  }
+
+  // ---- global stylesheet: app/global.css → assets/global.css ---------------
+  // Served at /global.css; the frozen document already <link>s it. Compiled
+  // (Tailwind) or passed through (plain CSS). No file → no asset.
+  const css = await processCss(appDir);
+  if (css !== null) {
+    await mkdir(assetsDir, { recursive: true });
+    await writeFile(join(assetsDir, "global.css"), css);
     hasAssets = true;
   }
 
