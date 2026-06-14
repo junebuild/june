@@ -102,12 +102,14 @@ not rebuild differential dataflow. But four things transfer:
 - **Edge / D1** → round-trip count is the axis: auto-batch the render wave into one
   `DB.batch()`; route reads through a per-request session (read replication). Both
   are framework-only wins a plain library can't do. (See perf doc.)
-- **Cache / invalidate / live** → keep pragmatic table-tag invalidate + live RSC
-  push; borrow the error-surfacing discipline; IVM is a future frontier. But
-  Appendix 3 found the *implicit* "never call invalidate" magic backfires with LLMs
-  (silent staleness when a raw query slips inside `cache()`): auto-tagging must cover
-  raw `query`/`get`, and keep an **explicit `invalidate` escape hatch** — explicit
-  beat implicit for LLM correctness.
+- **Cache / invalidate / live** → table-tag invalidate at the **action boundary**
+  (`invokeAction` → `invalidate(table:…)`) + live RSC push; IVM is a future frontier.
+  Validated end-to-end with LLM-written code under the real action model (Appendix 5):
+  zero ceremony, and multi-table cache dependencies auto-derive from what the read
+  touched — requires raw-query auto-tagging (`6563ac9`, load-bearing). Keep the
+  explicit `j.reads()/j.writes()` hatch for SQL the parser can't classify. Known
+  footgun: a write *outside* an action records no invalidation — mutations must be
+  actions (or use the explicit hatch).
 - **Agent-native** → the least-explored axis among references = the moat candidate.
   `llms.txt` + machine-readable schema/query catalog is step one. Refined by the
   codegen eval (Appendix 2): the moat is **not** "LLMs write better query code with
@@ -341,22 +343,58 @@ wasn't re-run.
 |---|---|---|---|
 | T1 scattered findBy | win | **win** | unchanged (auto-batch) |
 | T2 cache → write → re-read | lose (bypass cache) | **still lose** | all 3 again define a `cache()` then bypass it with direct queries — auto-tag is irrelevant when the read never goes through `cache()` |
-| T3 multi-table cached + write | lose (raw read silently un-tagged → stale) | **fixed** | the raw `db.get` inside `cache()` now parses `orders`/`line_items` and records the reads, so the `db.table().insert` writes invalidate it — correctly fresh, where v2 was silently stale |
+| T3 multi-table cached + write | lose (raw read silently un-tagged → stale) | **tag fixed** | the raw `db.get` inside `cache()` now parses `orders`/`line_items` and *tags* the entry — but see the Correction: a direct insert doesn't invalidate, so this alone isn't "fresh" |
 
-**Verdict — the fix is validated for its target, and not more.** T3 demonstrates
-the redesign working: a raw query inside `cache()` is now tagged and invalidated
-instead of going silently stale. But T2 shows the *next* bottleneck isn't
-invalidation robustness — it's **`cache()` ergonomics**: LLMs distrust the
-invisible "never call invalidate" magic for read-after-write and bypass `cache()`
-entirely, or invoke it with no stable per-key. Robust auto-tag was **necessary but
-not sufficient**.
+**Verdict at the time (superseded — see the Correction and Appendix 5).** Read then
+as: the fix tags correctly (T3), but cache() ergonomics is the next bottleneck (T2
+bypass). Both reads were framing artifacts.
 
-**Methodology confound (disclosed):** the cheat sheet described `cache(fn)` but the
-real API is `cache(fn, { key })`. Omitting the key let LLMs mis-key or bypass it —
-this muddies the T2/T3 *cache-usage* signal (shared with v2) but does **not** touch
-the auto-tag validation (T3's tagging is independent of the key).
+> **Correction (mechanism + Appendix 5).** Invalidation fires at the **action
+> boundary** — `invokeAction` reads `trace.writes` and calls `invalidate(table:…)` —
+> **not** on a direct insert. Two consequences: (1) T3's "tag fixed" is real but
+> insufficient on its own; a *direct* `createOrder` never invalidates, so freshness
+> needs the write to be an **action**. (2) T2's "bypass" was actually *correct* —
+> you can't cache a read you mutate and re-read in the same function with no action
+> between. The real June model is mutation = action; the eval used plain-function
+> inserts. So "cache() ergonomics is the next bottleneck" was wrong: re-run under
+> the action model (Appendix 5), the magic works end to end.
 
-**Next design input (#4):** make `cache()` LLM-legible — key-explicit, or a
-juno-level cached-read helper (e.g. `j.table().cached()`) that makes "a
-read-after-write is still safe to cache" obvious, so the LLM trusts and uses it
-rather than bypassing. Then re-run T2/T3.
+**Methodology confound (still valid):** the cheat sheet described `cache(fn)` but the
+real API is `cache(fn, { key })`. Omitting the key muddied the *cache-usage* signal
+— fixed in Appendix 5's cheat sheet.
+
+---
+
+## Appendix 5 — auto-invalidate retest under June's real action model (2026-06-14)
+
+> Snapshot. The fair retest A4 should have run: writes as **actions**, not plain
+> functions. Result: the auto-invalidate magic is validated end to end, and a new
+> API gap surfaced.
+
+Re-framed T2/T3 so each WRITE is a June action (`defineAction`/`invokeAction`) — how
+mutations actually flow — keeping cached reads as `cache(fn, { key })`. 3 juno + 3
+baseline (capability-equal but manual: `cache(key, fn)` + `invalidate(key)`).
+
+| task | juno (3) | baseline (3) |
+|---|---|---|
+| T2 cached list + addPost action | ✓✓✓ `cache` + action → posts write auto-invalidates, zero ceremony | ✓✓✓ correct, but manual `invalidate(key)` |
+| T3 cached multi-table dashboard + createOrder action | ✓✓✓ cache auto-tags BOTH orders+line_items (it read both); the action writing both auto-invalidates both — zero keys | ✓✓ correct manual invalidate; 1/3 also shipped a global-count query bug |
+
+**Verdict — auto-invalidate validated; v2's "juno loses" was a framing artifact.**
+Under the real action model, all 3 juno instances got correct, fresh data with
+**zero cache ceremony** — no keys, no `invalidate()` — including the hard multi-table
+T3, where the cache's dependency on *both* tables is auto-derived from what it read
+(this needs the `6563ac9` raw-query tagging — load-bearing here). The baseline was
+also correct this round (LLMs didn't forget to invalidate), so the edge is **not**
+"baseline forgets" — it is:
+1. **zero ceremony** — the action just writes; baseline needs key helpers + explicit `invalidate`;
+2. **can't-miss completeness** — juno tags exactly what the cache read, so a write to
+   any of those tables from anywhere invalidates it; manual keys are correct in a
+   two-function task but drift as the app grows;
+3. less surface for the kind of query bug 1/3 baseline shipped.
+
+**New gap (design input #5): no filtered-list read.** All 3 juno T2s used
+`findBy({ user_id })` for a *list* — but `findBy` is single-row (LIMIT 1). juno's
+table API has only `findBy` (one) and `all` (everything); a user's posts needs a
+`where`/list read. The LLMs reached for the wrong tool because the right one doesn't
+exist. Add a filtered-list read — and it should auto-batch + auto-tag like the rest.
