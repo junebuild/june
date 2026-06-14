@@ -35,21 +35,36 @@ export const NODE_SQLITE_MIN_ODD = "23.4.0";
 // synchronous, but the SURFACE is async, so swapping in D1 later is invisible to
 // every caller. (Moved here from host.ts with the driver it serves.)
 function asyncSqlite(db: SyncSqlite): JuneDb {
+  // Prepared-statement cache, keyed by SQL string — compile-once at the driver:
+  // parse + bytecode-compile each query ONCE, then re-bind. Essential on the
+  // node:sqlite path (`db.query` = `db.prepare`, which re-compiles every call);
+  // harmless on bun:sqlite (it already caches `query()` internally). The app's set
+  // of query SHAPES is finite (Juno compiles one per shape), so this stays bounded.
+  // Statements re-bind across calls — exactly what sqlite prepares are for.
+  const stmts = new Map<string, SyncStatement>();
+  const prep = (sql: string): SyncStatement => {
+    let s = stmts.get(sql);
+    if (!s) {
+      s = db.query(sql);
+      stmts.set(sql, s);
+    }
+    return s;
+  };
   const self: JuneDb = {
     async query<T>(sql: string, params: unknown[] = []) {
-      return db.query(sql).all(...params) as T[];
+      return prep(sql).all(...params) as T[];
     },
     async get<T>(sql: string, params: unknown[] = []) {
       // Normalize "no row" to undefined — bun:sqlite returns null, node:sqlite
       // returns undefined; the seam hides the difference.
-      return (db.query(sql).get(...params) ?? undefined) as T | undefined;
+      return (prep(sql).get(...params) ?? undefined) as T | undefined;
     },
     async run(sql: string, params: unknown[] = []) {
-      const r = db.query(sql).run(...params);
+      const r = prep(sql).run(...params);
       return { changes: Number(r.changes), lastInsertRowid: r.lastInsertRowid ?? 0 };
     },
     async exec(sql: string) {
-      db.exec(sql);
+      db.exec(sql); // DDL / multi-statement — not a cacheable prepared statement
     },
     async transaction<T>(fn: (tx: JuneDb) => Promise<T>) {
       db.exec("BEGIN");
@@ -63,6 +78,7 @@ function asyncSqlite(db: SyncSqlite): JuneDb {
       }
     },
     async close() {
+      stmts.clear();
       db.close();
     },
   };
