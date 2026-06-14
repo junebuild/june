@@ -57,9 +57,9 @@ paths. The signature becomes:
 defineAction({
   id: "deletePost",
   input: { /* json schema */ },
-  run: async ({ id }, ctx) => {        // ctx carries the scoped principal
+  run: async ({ id }, ctx) => {        // ctx carries the scoped principal (identity only)
     if (!ctx.user) throw new Unauthorized();
-    await juno(ctx.db).table("posts").delete({ id, ownerId: ctx.user.id });
+    await table("posts").delete({ id, ownerId: ctx.user.id }); // db/table are ambient
   },
 });
 ```

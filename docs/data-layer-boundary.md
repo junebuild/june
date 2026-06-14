@@ -5,6 +5,17 @@
 > contract; Prisma/Drizzle/raw SQL remain first-class. This doc is the binding
 > constraint for Phase 5 so the boundary is right from commit #1.
 
+> **Update (2026-06-14): the access model is now AMBIENT.** `db`/`kv`/`blob` are no
+> longer injected onto `ctx` — `ctx` is IDENTITY only (user/session/url/params). The
+> host runs each request inside a scope (`@junejs/db`'s AsyncLocalStorage) and the
+> resources are ambient accessors: `import { db } from "@junejs/db"`, usable in any
+> loader/view/model/action without threading the request object (the Express
+> `req.db` anti-pattern). The boundary, the three tiers, and the inward dependency
+> all still hold — only "injected on `RouteContext`" becomes "ambient via the request
+> scope." Juno now sits on this seam: it depends on `@junejs/db`, exposes an ambient
+> `table()` / `db`, and keeps its per-request batch loaders in the scope via
+> `requestLocal` (structurally per-request, so they can't leak across requests).
+
 ## The principle
 
 The framework depends on a **seam**, never on a query builder. Three layers,
@@ -21,7 +32,8 @@ dependency direction always inward:
 ```
 
 @junejs/core must stay `node:*`-free, so it never imports a driver. Resource handles
-are **injected by the host** into `RouteContext` (the Cloudflare `env` model);
+are **opened by the host** and made **ambient** for the request (read from an
+AsyncLocalStorage scope, not injected on `ctx` — `ctx` is identity-only);
 @junejs/core declares only the abstract type.
 
 ## Resources, not `openDb(path)`
@@ -53,8 +65,9 @@ export default defineJune({
 ```
 
 ```ts
-// Injected via RouteContext (the binding model), not a global import.
-route({ load: async (ctx) => ({ posts: await ctx.db.query("select * from posts") }) });
+// Ambient: `import { db }` and use it anywhere — `ctx` is identity-only.
+import { db } from "@junejs/db";
+route({ load: async () => ({ posts: await db.query("select * from posts") }) });
 ```
 
 ## On by default, removable, and compiled away for static
@@ -86,12 +99,12 @@ const db = drizzle(process.env.DATABASE_URL!);
 route({ load: () => db.select().from(posts) }); // works, plain
 ```
 
-**Tier 2 — your ORM over June's `db` resource.** The `db` resource hands you the
-raw async connection / D1 binding; wrap it with Drizzle (`drizzle(ctx.db)`). Now
-you share one config surface (D1/Postgres declared once), the wrangler binding,
-and the zero-config local SQLite — but the query API is Drizzle. Drizzle is a
-driver-over-builder, so `ctx.db` is a natural target; Prisma works too via its
-driver adapters (e.g. the D1 adapter).
+**Tier 2 — your ORM over June's `db` resource.** The ambient `db` hands you the
+raw async connection / D1 binding; wrap it with Drizzle (`drizzle(db)`). Now you
+share one config surface (D1/Postgres declared once), the wrangler binding, and the
+zero-config local SQLite — but the query API is Drizzle. Drizzle is a
+driver-over-builder, so the ambient `db` is a natural target; Prisma works too via
+its driver adapters (e.g. the D1 adapter).
 
 **Tier 3 — full magic, opt-in.** The agent-native magic (auto-invalidation /
 auto-batch / live-RSC) is a property of emitting the trace signals
@@ -108,13 +121,17 @@ Tier 3 out of the box.
 
 Juno is the ergonomic layer over the `db` resource (SQL-shaped typed builder,
 SQL-as-truth migrations + semantic overlay, every-surface-an-oracle — see
-data-philosophy.md). It is a SEPARATE package (`@junejs/juno`) that depends on
-the resource seam. `ctx.db` (raw) is always usable without Juno.
+data-philosophy.md). It is a SEPARATE package (`@junejs/juno`) on the resource seam
+(depends on `@junejs/core` + `@junejs/db`, inward). It mirrors the ambient model —
+`import { table, db } from "@junejs/juno"` — and keeps its per-request batch loaders
+in the request scope via `requestLocal`, so batching is structurally per-request and
+unstashable. The ambient `db` (raw) is always usable without Juno.
 
 ## Phase 5 constraints (do these from commit #1)
 
 1. Demote Phase-2 `openDb(path)` to an internal host primitive (the local SQLite
-   driver); expose data as config-declared resources injected on `RouteContext`.
+   driver); expose data as config-declared resources made **ambient** for the
+   request (read from the request scope), not injected on `ctx`.
 2. Reframe `cache.ts` as the `kv` resource (it already is one).
 3. Add the `blob` seam (local-dir default + R2/S3 adapters).
 4. `db`'s D1 adapter is the third `openDb` impl (rebuild-plan Phase 5).
