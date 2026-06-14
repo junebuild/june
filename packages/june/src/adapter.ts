@@ -7,7 +7,7 @@
 // `workers()` is the zero-config default (this file, no import). Other targets
 // are explicit `deploy: { adapter: vercel() }` from their own package.
 import { existsSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
+import { cp, copyFile, mkdir, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 
 import type { JuneConfig } from "@junejs/core/config";
@@ -58,6 +58,10 @@ export interface JuneAdapter {
   // runtime has none). Target-specific: workers → "workerd", vercel → "edge-light".
   // The same portable graph, resolved for the platform's module surface.
   readonly conditions: string[];
+  // Reject a config this target can't honor, BEFORE the expensive build — e.g.
+  // Vercel has no D1, so a declared db fails fast with a clear message instead of
+  // a cryptic prerender/runtime error. Optional; default is "accept everything".
+  validate?(ctx: { plan: ResourcePlan; config: JuneConfig }): void;
   // Wrap the portable pipeline into the platform's entry source.
   entry(opts: { linkHeader: string | null }): AdapterEntry;
   // Write the deploy structure (config files, asset placement, server entry).
@@ -121,6 +125,93 @@ export function workers(opts?: { name?: string; domain?: string }): JuneAdapter 
             ...(opts?.domain ?? deployCfg?.domain
               ? { routes: [{ pattern: opts?.domain ?? deployCfg?.domain, custom_domain: true }] }
               : {}),
+          },
+          null,
+          2,
+        ) + "\n",
+      );
+    },
+  };
+}
+
+// Vercel target — emits the Build Output API v3 tree (.vercel/output/). June's
+// worker is already a Web-standard fetch handler, so this is packaging, not a
+// re-bundle: the same portable graph, built with edge-light conditions, becomes a
+// Vercel Edge Function. v1 scope: SSR + static + the full agent surface. No db
+// (D1 is Cloudflare-only) — declaring one fails fast; an HTTP-driver db backend
+// for Vercel is a planned follow-up.
+//
+// Routing: only the hashed framework assets (/_june/*) are served statically by
+// the CDN (their exact-path URLs match June's scheme); every page + projection
+// (.md/.json/mcp/llms.txt) renders through the one edge function, so the
+// dual-audience surface is identical to Workers.
+const VERCEL_FUNCTION = "__june"; // → /__june, the catch-all SSR function
+
+export function vercel(opts?: { regions?: string[] }): JuneAdapter {
+  return {
+    name: "vercel",
+    capabilities: { runtime: "edge", persistentConnections: false, assets: "platform" },
+    conditions: ["edge-light", "worker", "browser", "import", "default"],
+
+    validate({ plan }) {
+      if (plan.db) {
+        throw new Error(
+          "vercel(): the Vercel adapter has no db backend yet (D1 is Cloudflare-only).\n" +
+            "  Remove the `db` resource from june.config.ts, or deploy to Workers.\n" +
+            "  An HTTP-driver db (Neon/Turso) for Vercel is planned.",
+        );
+      }
+    },
+
+    entry() {
+      // No withAssets: the CDN serves /_june/*; this function renders everything
+      // else. Resources arrive via process.env (Vercel injects env vars into the
+      // edge runtime); there are no platform bindings.
+      return {
+        imports: [],
+        wrap: (pipelineVar) =>
+          `const __env = typeof process !== "undefined" && process.env ? process.env : {};\n` +
+          `export default (request) => ${pipelineVar}.fetch(request, __env);`,
+      };
+    },
+
+    async emit({ appRoot, outDir, hasAssets }) {
+      const out = join(appRoot, ".vercel", "output");
+      const fnDir = join(out, "functions", `${VERCEL_FUNCTION}.func`);
+      await rm(out, { recursive: true, force: true }); // clean — no stale outputs
+      await mkdir(fnDir, { recursive: true });
+
+      // the edge function = June's portable worker bundle, verbatim
+      await copyFile(join(outDir, "worker.js"), join(fnDir, "index.js"));
+      await writeFile(
+        join(fnDir, ".vc-config.json"),
+        JSON.stringify(
+          { runtime: "edge", entrypoint: "index.js", ...(opts?.regions ? { regions: opts.regions } : {}) },
+          null,
+          2,
+        ) + "\n",
+      );
+
+      // static: only the hashed framework assets under /_june/ (exact-path URLs)
+      if (hasAssets) {
+        const src = join(outDir, "assets", "_june");
+        if (existsSync(src)) await cp(src, join(out, "static", "_june"), { recursive: true });
+      }
+
+      await writeFile(
+        join(out, "config.json"),
+        JSON.stringify(
+          {
+            version: 3,
+            routes: [
+              {
+                src: "^/_june/(.*)$",
+                headers: { "cache-control": "public, max-age=31536000, immutable" },
+                continue: true,
+              },
+              { handle: "filesystem" }, // serve any static file by exact path
+              { src: "^/.*$", dest: `/${VERCEL_FUNCTION}` }, // everything else → SSR
+            ],
           },
           null,
           2,

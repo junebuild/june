@@ -262,6 +262,14 @@ export async function juneBuild(
   const fullConfig = await loadJuneConfig(appRoot);
   const adapter = (fullConfig.deploy?.adapter as JuneAdapter | undefined) ?? workers();
 
+  // Fail fast on a config the target can't honor (e.g. Vercel has no D1) BEFORE
+  // the expensive bundle/prerender. The adapter only needs to know which
+  // resources are declared, so a presence-only plan suffices here.
+  adapter.validate?.({
+    plan: { db: fullConfig.resources?.db ? { binding: "DB", databaseName: "" } : undefined },
+    config: fullConfig,
+  });
+
   // Compile the global stylesheet ONCE and content-hash it: the built worker and
   // prerendered HTML link `/global.<hash>.css`, served immutable (cache forever,
   // a content change ships a new URL → no revalidation, no stale window). Dev

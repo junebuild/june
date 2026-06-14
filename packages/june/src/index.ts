@@ -3,6 +3,7 @@
 
 export {
   workers,
+  vercel,
   type JuneAdapter,
   type AdapterCapabilities,
   type ResourcePlan,
