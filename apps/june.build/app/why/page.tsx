@@ -7,13 +7,23 @@ export const prerender = true;
 export default function Why() {
   return (
     <main>
-      <h1>Why June</h1>
-      <h2>Vision</h2>
+      <header className="j-pagehead">
+        <div className="j-pagehead-in">
+          <p className="j-eyebrow">
+            <span className="j-num">—</span> The thesis
+          </p>
+          <h1>Why June</h1>
+          <p className="j-lead">{page.summary}</p>
+        </div>
+      </header>
+      <div className="j-post-read">
+        <div className="j-doc-body">
+          <h2>Vision</h2>
       <p>
         Software now has two audiences — people and agents — and two authors: people and agents.
         June is designed for that world end to end.
       </p>
-      <ul style={{ lineHeight: 1.8 }}>
+      <ul>
         <li>
           <strong>Serving agents:</strong> one <code>route()</code> = HTML + JSON + markdown.
           llms.txt, sitemap, MCP derive automatically. Tools are
@@ -35,7 +45,7 @@ export default function Why() {
         model; June wires the adapter, mounts the endpoints, and bridges identity into the agent
         surface. June is opinionated on purpose — these choices are made for you:
       </p>
-      <ul style={{ lineHeight: 1.8 }}>
+      <ul>
         <li>
           <strong>Convention over configuration.</strong> Presence is the API: a{" "}
           <code>page.tsx</code> is a route, an <code>app/_client.ts</code> enables hydration, a{" "}
@@ -75,8 +85,10 @@ export default function Why() {
         June is 0.0.x — the spec is still being drafted, and APIs will change. Benchmarks are
         dev-machine numbers with published methodology. The owned Rust+V8
         runtime and server-reactive live RSC are experimental roadmap items — today&apos;s host is
-        Bun/Node, deploying to Workers.
+        Bun/Node, deploying to Workers, Vercel, or Deno.
       </p>
+        </div>
+      </div>
     </main>
   );
 }

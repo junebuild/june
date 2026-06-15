@@ -1,33 +1,30 @@
-// Docs segment layout: wraps every route under /docs with a sidebar, NESTED
-// inside the root layout — the build freezes this chain into the worker manifest.
+// Docs segment layout: wraps every route under /docs with the design-system
+// sidebar, NESTED inside the root layout — the build freezes this chain into the
+// worker manifest. Active-link highlighting needs the path (layouts don't get
+// it), so the sidebar stays plain links; View Transitions cover the nav polish.
 import { docSections } from "./_sections";
 
 export default function DocsLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div data-layout="docs" style={{ display: "flex", gap: 32 }}>
-      <nav style={{ minWidth: 180, padding: "32px 0", borderRight: "1px solid #e4e2da" }}>
-        <p style={{ fontWeight: 700, marginTop: 0 }}>
-          <a href="/docs">Docs</a>
-        </p>
+    <div data-layout="docs" className="j-docs">
+      <aside className="j-docs-side">
+        <h4>
+          <a href="/docs" style={{ color: "var(--s-text)", textDecoration: "none", fontWeight: 600 }}>
+            Documentation
+          </a>
+        </h4>
         {docSections().map((section) => (
           <div key={section.title}>
-            {section.title && (
-              <p style={{ fontWeight: 700, fontSize: 13, color: "#86857e", marginBottom: 4 }}>
-                {section.title}
-              </p>
-            )}
-            <ul style={{ listStyle: "none", padding: 0, lineHeight: 2, marginTop: 0 }}>
-              {section.docs.map((d) => (
-                <li key={d.slug}>
-                  {/* nav: the short sidebar label; pages keep their full title */}
-                  <a href={`/docs/${d.slug}`} style={{ fontSize: 14 }}>{String(d.data.nav ?? d.data.title)}</a>
-                </li>
-              ))}
-            </ul>
+            {section.title && <h4>{section.title}</h4>}
+            {section.docs.map((d) => (
+              <a key={d.slug} href={`/docs/${d.slug}`}>
+                {String(d.data.nav ?? d.data.title)}
+              </a>
+            ))}
           </div>
         ))}
-      </nav>
-      <div style={{ flex: 1, minWidth: 0 }}>{children}</div>
+      </aside>
+      <div className="j-docs-main">{children}</div>
     </div>
   );
 }

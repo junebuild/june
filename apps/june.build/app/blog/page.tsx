@@ -5,16 +5,31 @@ export const prerender = true;
 export default function Blog() {
   return (
     <main>
-      <h1>Blog</h1>
-      <ul style={{ listStyle: "none", padding: 0 }}>
+      <header className="j-pagehead">
+        <div className="j-pagehead-in">
+          <p className="j-eyebrow">
+            <span className="j-num">—</span> Notes from building June
+          </p>
+          <h1>Blog</h1>
+          <p className="j-lead">Rendered for humans, verbatim markdown for agents — append <code>.md</code> to any post.</p>
+        </div>
+      </header>
+      <div className="j-bloglist">
         {POSTS.map((p) => (
-          <li key={p.slug} style={{ marginBottom: 18 }} lang={typeof p.data.lang === "string" ? p.data.lang : undefined}>
-            <a href={`/blog/${p.slug}`} style={{ fontSize: 18 }}>{String(p.data.title)}</a>
-            <br />
-            <small style={{ color: "#777" }}>{String(p.data.date)} — {String(p.data.description ?? "")}</small>
-          </li>
+          <a
+            key={p.slug}
+            href={`/blog/${p.slug}`}
+            className="j-post"
+            lang={typeof p.data.lang === "string" ? p.data.lang : undefined}
+          >
+            <div className="j-post-meta">
+              <span>{String(p.data.date)}</span>
+            </div>
+            <h3>{String(p.data.title)}</h3>
+            <p>{String(p.data.description ?? "")}</p>
+          </a>
         ))}
-      </ul>
+      </div>
     </main>
   );
 }

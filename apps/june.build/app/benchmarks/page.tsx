@@ -15,39 +15,48 @@ export const prerender = true;
 export default function Benchmarks() {
   return (
     <main>
-      <h1>Benchmarks</h1>
-      <p style={{ color: "#666" }}>
-        {RESULTS.machine}. Every number traces to a named script + date (
-        <a href="https://github.com/junebuild/june">repo</a>) — re-run it, don&apos;t trust it.
-        Runtime-section numbers come from the experimental native runtime track, not the v0.1
-        default host.
-      </p>
-      {sections.map((s) => (
-        <section key={s.title}>
-          <h2>{s.title}</h2>
-          <table style={{ borderCollapse: "collapse", width: "100%" }}>
-            <thead>
-              <tr>
-                {["metric", "value", "context", "run"].map((h) => (
-                  <th key={h} style={{ textAlign: "left", borderBottom: "2px solid #ddd", padding: 8 }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {s.rows.map((r) => (
-                <tr key={r.metric}>
-                  <td style={{ padding: 8, borderBottom: "1px solid #eee" }}>{r.metric}</td>
-                  <td style={{ padding: 8, borderBottom: "1px solid #eee" }}><strong>{r.value}</strong></td>
-                  <td style={{ padding: 8, borderBottom: "1px solid #eee", color: "#666" }}>{r.context}</td>
-                  <td style={{ padding: 8, borderBottom: "1px solid #eee", color: "#999", fontSize: 13 }}>
-                    <code>{r.script}</code> · {r.measured}
-                  </td>
+      <header className="j-pagehead">
+        <div className="j-pagehead-in">
+          <p className="j-eyebrow">
+            <span className="j-num">—</span> Measured, not marketing
+          </p>
+          <h1>Benchmarks</h1>
+          <p className="j-lead">
+            {RESULTS.machine}. Every number traces to a named script + date (
+            <a href="https://github.com/junebuild/june">repo</a>) — re-run it, don&apos;t trust it.
+            Runtime-section numbers come from the experimental native runtime track, not the v0.1
+            default host.
+          </p>
+        </div>
+      </header>
+      <div className="j-post-read">
+        {sections.map((s) => (
+          <section key={s.title}>
+            <div className="j-bench-group">{s.title}</div>
+            <table className="j-bench-table">
+              <thead>
+                <tr>
+                  {["metric", "value", "context", "run"].map((h) => (
+                    <th key={h}>{h}</th>
+                  ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </section>
-      ))}
+              </thead>
+              <tbody>
+                {s.rows.map((r) => (
+                  <tr key={r.metric}>
+                    <td>{r.metric}</td>
+                    <td className="v">{r.value}</td>
+                    <td>{r.context}</td>
+                    <td className="m">
+                      <code>{r.script}</code> · {r.measured}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </section>
+        ))}
+      </div>
     </main>
   );
 }

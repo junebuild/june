@@ -12,11 +12,18 @@ export default function Post({ entry }: Loaded<typeof loader>) {
   return (
     // CJK posts declare `lang` in frontmatter; the attribute makes the browser
     // pick the right Han glyphs (TC vs JP) from the layout's font stack.
-    <article lang={typeof entry.data.lang === "string" ? entry.data.lang : undefined}>
+    <article
+      className="j-post-read"
+      lang={typeof entry.data.lang === "string" ? entry.data.lang : undefined}
+    >
+      <a className="j-back" href="/blog">
+        ← all posts
+      </a>
       <h1>{String(entry.data.title)}</h1>
-      <p><small>{String(entry.data.date)}</small></p>
-      <div dangerouslySetInnerHTML={{ __html: entry.html }} />
-      <p><a href="/blog">← all posts</a></p>
+      <div className="j-post-meta" style={{ marginBottom: 24 }}>
+        <span>{String(entry.data.date)}</span>
+      </div>
+      <div className="j-doc-body" dangerouslySetInnerHTML={{ __html: entry.html }} />
     </article>
   );
 }

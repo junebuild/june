@@ -8,24 +8,25 @@ export const loader = () => ({ sections: docSections() });
 
 export default function Docs({ sections }: Loaded<typeof loader>) {
   return (
-    <main>
+    <article className="j-doc-body">
       <h1>Documentation</h1>
       {sections.map((section) => (
         <section key={section.title}>
           {section.title && <h2>{section.title}</h2>}
-          <ul style={{ lineHeight: 2 }}>
+          <ul style={{ lineHeight: 2, listStyle: "none", paddingLeft: 0 }}>
             {section.docs.map((d) => (
               <li key={d.slug}>
-                <a href={`/docs/${d.slug}`}>{String(d.data.title)}</a> — {String(d.data.description ?? "")}
+                <a href={`/docs/${d.slug}`}>{String(d.data.title)}</a>{" "}
+                <span style={{ color: "var(--s-secondary)" }}>— {String(d.data.description ?? "")}</span>
               </li>
             ))}
           </ul>
         </section>
       ))}
-      <p style={{ color: "#888", fontSize: 14 }}>
+      <p style={{ color: "var(--s-muted)", fontSize: 14 }}>
         Agents: every doc serves its authored markdown at <code>/docs/&lt;slug&gt;.md</code>.
       </p>
-    </main>
+    </article>
   );
 }
 
