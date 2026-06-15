@@ -24,7 +24,7 @@ describe("CSS Modules e2e", () => {
     const app = createApp({ appDir: APP, config: {} });
     const html = await (await app.fetch(new Request("http://june.test/"))).text();
 
-    const m = html.match(/class="(hero_[a-f0-9]{8})"/);
+    const m = html.match(/class="(hero_[A-Za-z0-9_-]+)"/);
     expect(m).toBeTruthy(); // the class was scoped, not the literal "hero"
     expect(html).not.toMatch(/class="hero"/);
     expect(html).toContain('<link rel="stylesheet" href="/_june/modules.css"');
@@ -39,7 +39,7 @@ describe("CSS Modules e2e", () => {
     // the dev scoped name, to assert dev == build
     const devApp = createApp({ appDir: APP, config: {} });
     const devHtml = await (await devApp.fetch(new Request("http://june.test/"))).text();
-    const devClass = devHtml.match(/class="(hero_[a-f0-9]{8})"/)![1];
+    const devClass = devHtml.match(/class="(hero_[A-Za-z0-9_-]+)"/)![1];
 
     out = await mkdtemp(join(tmpdir(), "june-cssmod-build-"));
     await juneBuild(ROOT, { outDir: out });

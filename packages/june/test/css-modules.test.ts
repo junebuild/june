@@ -1,18 +1,20 @@
-// The CSS-modules transform (postcss-modules + our deterministic scoper): scope
-// every local class, honor :global / composes, never touch url()/strings, and
-// stay deterministic so dev/build/client/Node agree.
+// The CSS-modules transform (Lightning CSS + our stable scoping key): scope every
+// local class, honor :global / composes (BY REFERENCE — composed rules are not
+// inlined, so they appear once with no dedup pass), normalize url()/strings safely,
+// and stay deterministic so dev/build/client/Node agree.
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { transformCssModule, buildModuleCss, stableKey } from "../src/css-modules";
+import { minifyCss } from "../src/css";
 import { initialize, load } from "../src/css-modules-loader.mjs";
 
 describe("transformCssModule", () => {
   let dir: string;
-  // Each transform reads a real file (postcss-modules needs `from` to resolve
-  // composes), so tests write a fixture and transform it.
+  // Each transform reads a real file (cross-file `composes` resolves the referenced
+  // file from disk), so tests write a fixture and transform it.
   const transform = async (name: string, css: string, appRoot = dir) => {
     await writeFile(join(dir, name), css);
     return transformCssModule(join(dir, name), appRoot);
@@ -29,7 +31,7 @@ describe("transformCssModule", () => {
     await setup();
     const { map, css } = await transform("x.module.css", ".button { color: red }");
     expect(Object.keys(map)).toEqual(["button"]);
-    expect(map.button).toMatch(/^button_[a-f0-9]{8}$/);
+    expect(map.button).toMatch(/^button_[A-Za-z0-9_-]+$/); // local_<hash>, Lightning's hash
     expect(css).toContain(`.${map.button}`);
     expect(css).toContain("color: red");
   });
@@ -51,7 +53,7 @@ describe("transformCssModule", () => {
     expect(css).toContain(`.${map.local}`);
   });
 
-  test("composes pulls in the referenced class (cross-file) and merges names", async () => {
+  test("composes (cross-file) merges names by REFERENCE — the rule is not inlined", async () => {
     await setup();
     await writeFile(join(dir, "base.module.css"), ".pad { padding: 4px }");
     const { map, css } = await transform(
@@ -61,18 +63,19 @@ describe("transformCssModule", () => {
     // styles.btn === "btn_<hash> pad_<hash>" — both classes applied
     const parts = map.btn!.split(" ");
     expect(parts).toHaveLength(2);
-    expect(parts[0]).toMatch(/^btn_[a-f0-9]{8}$/);
-    expect(parts[1]).toMatch(/^pad_[a-f0-9]{8}$/);
-    // the composed rule is inlined into this file's output
-    expect(css).toContain(`.${parts[1]}`);
-    expect(css).toContain("padding: 4px");
+    expect(parts[0]).toMatch(/^btn_[A-Za-z0-9_-]+$/);
+    expect(parts[1]).toMatch(/^pad_[A-Za-z0-9_-]+$/);
+    // the composed rule is NOT inlined here — it lives in base.module.css (so the
+    // combined sheet gets it once). This file only has its own declarations.
+    expect(css).toContain("color: red");
+    expect(css).not.toContain("padding: 4px");
   });
 
   test("does NOT scope class-like text inside url() — file extensions stay intact", async () => {
     await setup();
     const { map, css } = await transform("u.module.css", ".bg { background: url(hero.png) }");
     expect(Object.keys(map)).toEqual(["bg"]); // only .bg, NOT .png
-    expect(css).toContain("url(hero.png)");
+    expect(css).toContain('url("hero.png")'); // Lightning quotes urls; .png intact, not scoped
   });
 
   test("does NOT scope class-like text inside strings (content)", async () => {
@@ -147,49 +150,53 @@ describe("buildModuleCss (glob + collect)", () => {
     expect(css).toContain("border: 1px");
   });
 
-  test("dedup preserves cascade: keeps the LAST of interleaved identical rules", async () => {
+  test("interleaved :global rules preserve cascade (the last one wins)", async () => {
     // :global lets two files emit the same raw selector. Sorted a,b,c gives the
-    // cascade [red, blue, red]; the last (red) must keep winning. Keep-first dedup
-    // would drop c's red and let blue win — a behavior change. Keep-last is safe.
+    // cascade [red, blue, red]; the LAST (red) must win. We no longer dedup the
+    // sheet (Lightning references composes, so there's nothing to collapse here) —
+    // file order IS source order, so the cascade is correct by construction.
     dir = await mkdtemp(join(tmpdir(), "june-cssm-"));
     await mkdir(join(dir, "app"), { recursive: true });
     await writeFile(join(dir, "app", "a.module.css"), ":global(.g) { color: red }");
     await writeFile(join(dir, "app", "b.module.css"), ":global(.g) { color: blue }");
     await writeFile(join(dir, "app", "c.module.css"), ":global(.g) { color: red }");
     const { css } = await buildModuleCss(join(dir, "app"), dir);
-    expect((css!.match(/color: red/g) ?? []).length).toBe(1); // a's red deduped away
-    expect((css!.match(/color: blue/g) ?? []).length).toBe(1);
-    // red still comes AFTER blue → red wins, exactly as in the un-deduped cascade
-    expect(css!.indexOf("color: red")).toBeGreaterThan(css!.indexOf("color: blue"));
+    // red appears after blue → red wins, exactly as authored
+    expect(css!.lastIndexOf("color: red")).toBeGreaterThan(css!.lastIndexOf("color: blue"));
   });
 
-  test("dedup collapses identical :global rules across files to one copy", async () => {
+  test("identical :global rules across files collapse at BUILD (Lightning minify)", async () => {
+    // The dev/raw sheet keeps both (readable, deterministic); the build's minifyCss
+    // pass — already in the pipeline — collapses byte-identical rules. No custom
+    // dedup pass, no postcss.
     dir = await mkdtemp(join(tmpdir(), "june-cssm-"));
     await mkdir(join(dir, "app"), { recursive: true });
     await writeFile(join(dir, "app", "a.module.css"), ":global(.reset) { margin: 0 }");
     await writeFile(join(dir, "app", "b.module.css"), ":global(.reset) { margin: 0 }");
     const { css } = await buildModuleCss(join(dir, "app"), dir);
-    expect((css!.match(/margin: 0/g) ?? []).length).toBe(1);
+    const minified = await minifyCss(css!, "modules.css");
+    expect((minified.match(/margin/g) ?? []).length).toBe(1); // two copies → one
   });
 
-  test("dedup handles @media blocks: identical collapsed, distinct kept", async () => {
+  test("minify collapses identical @media blocks, keeps distinct ones", async () => {
     dir = await mkdtemp(join(tmpdir(), "june-cssm-"));
     await mkdir(join(dir, "app"), { recursive: true });
     const block = "@media (min-width: 600px) { :global(.w) { display: grid } }";
     await writeFile(join(dir, "app", "a.module.css"), block);
-    await writeFile(join(dir, "app", "b.module.css"), block); // identical → one
+    await writeFile(join(dir, "app", "b.module.css"), block); // identical
     await writeFile(
       join(dir, "app", "c.module.css"),
-      "@media (min-width: 900px) { :global(.w) { display: flex } }", // distinct → kept
+      "@media (min-width: 900px) { :global(.w) { display: flex } }", // distinct
     );
     const { css } = await buildModuleCss(join(dir, "app"), dir);
-    expect((css!.match(/display: grid/g) ?? []).length).toBe(1);
-    expect((css!.match(/min-width: 600px/g) ?? []).length).toBe(1);
-    expect(css).toContain("display: flex");
-    expect(css).toContain("min-width: 900px");
+    const minified = await minifyCss(css!, "modules.css");
+    // identical 600px blocks → one (Lightning also modernizes min-width → width>=)
+    expect((minified.match(/600px/g) ?? []).length).toBe(1);
+    expect(minified).toContain("grid");
+    expect(minified).toContain("flex"); // distinct 900px @media kept
   });
 
-  test("dedup does NOT collapse same selector with different declarations", async () => {
+  test("genuinely different declarations on the same selector both survive", async () => {
     dir = await mkdtemp(join(tmpdir(), "june-cssm-"));
     await mkdir(join(dir, "app"), { recursive: true });
     await writeFile(join(dir, "app", "a.module.css"), ":global(.h) { color: red }");

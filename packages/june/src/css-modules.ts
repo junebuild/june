@@ -3,22 +3,21 @@
 //
 // The hard constraint: the scoped names must be byte-identical in dev SSR
 // (un-bundled import), the worker build, and the client build (hydration must
-// match SSR). We guarantee that by NEVER deriving the name from a bundler
-// internal — `scopedName(stableKey, class)` is a pure hash of an app-relative
-// path + the class. One main-thread pass globs + transforms every .module.css
-// into a maps dict; the Bun plugin / Node loader / rolldown plugin are then dumb
-// lookups into it, and the served/emitted CSS comes from the SAME pass — so the
-// JS maps and the CSS agree by construction.
+// match SSR). One main-thread pass globs + transforms every .module.css into a
+// maps dict; the Bun plugin / Node loader / rolldown plugin are then dumb lookups
+// into it, and the served/emitted CSS comes from the SAME pass — so the JS maps
+// and the CSS agree by construction. Names stay machine-independent because the
+// transform is keyed on an APP-RELATIVE path (stableKey), not an absolute one.
 //
-// Transforms go through postcss-modules, so the full CSS-Modules surface works:
-// local scoping (the default), `:global(...)`, and cross-file `composes`. The one
-// thing we override is generateScopedName — it's our deterministic hash, not a
-// bundler internal, which is what makes dev/build/client/Node agree.
+// Engine: Lightning CSS (Rust) — local scoping (default), `:global(...)`, and
+// cross-file `composes`. Unlike postcss-modules, Lightning resolves `composes` by
+// REFERENCE (it records the composed scoped name; it does NOT inline the rule), so
+// a class composed across N files lands ONCE in the sheet with no dedup pass.
+// Lightning is imported lazily and only runs at build/dev time, so it never enters
+// the worker graph.
 
-import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
-import { join, relative, sep } from "node:path";
-import type { AcceptedPlugin, ChildNode } from "postcss";
+import { dirname, join, relative, resolve as resolvePath, sep } from "node:path";
 
 export const MODULE_STYLES_URL = "/_june/modules.css";
 
@@ -29,35 +28,89 @@ export function stableKey(appRoot: string, file: string): string {
   return relative(appRoot, file).split(sep).join("/");
 }
 
-function scopedName(key: string, cls: string): string {
-  const h = createHash("sha256").update(`${key}|${cls}`).digest("hex").slice(0, 8);
-  return `${cls}_${h}`;
+// One `composes` entry, as Lightning reports it: a class in this file (local, already
+// scoped), a global class (unscoped, applied as-is), or a class in another module
+// file (dependency — resolved against that file's exports).
+type Compose =
+  | { type: "local"; name: string }
+  | { type: "global"; name: string }
+  | { type: "dependency"; name: string; specifier: string };
+type ModuleExports = Record<string, { name: string; composes: Compose[] }>;
+type Transformed = { css: string; exports: ModuleExports };
+
+// Lightning-transform ONE file: deterministic scoped CSS + its exports. Cross-file
+// `composes` come back as unresolved `dependency` refs — the caller resolves them.
+async function transformOne(file: string, appRoot: string): Promise<Transformed> {
+  const { transform } = await import("lightningcss");
+  const { code, exports } = transform({
+    // The STABLE app-relative path drives Lightning's [hash], so names are
+    // machine-independent and identical across dev / worker build / client build.
+    filename: stableKey(appRoot, file),
+    code: Buffer.from(await readFile(file, "utf8")),
+    cssModules: { pattern: "[local]_[hash]" },
+  });
+  return { css: code.toString(), exports: (exports ?? {}) as ModuleExports };
 }
 
-// Transform one .module.css via postcss-modules — correct scoping, `:global`,
-// `composes` (cross-file), and url()/string safety — but with OUR deterministic
-// generateScopedName, so dev SSR / worker build / client build / Node all produce
-// identical names. postcss is imported lazily and only runs at build/dev time, so
-// it never enters the worker graph.
+// Transform `entry` and (recursively) every file it composes from, into `all`.
+async function transformGraph(
+  entry: string,
+  appRoot: string,
+  all: Record<string, Transformed> = {},
+): Promise<Record<string, Transformed>> {
+  if (all[entry]) return all;
+  const t = await transformOne(entry, appRoot);
+  all[entry] = t;
+  for (const exp of Object.values(t.exports)) {
+    for (const c of exp.composes) {
+      if (c.type === "dependency") {
+        await transformGraph(resolvePath(dirname(entry), c.specifier), appRoot, all);
+      }
+    }
+  }
+  return all;
+}
+
+// The space-joined scoped class string for one local name, following composes:
+//   local → already scoped · global → as-is · dependency → the target file's name.
+function resolveName(
+  file: string,
+  local: string,
+  all: Record<string, ModuleExports>,
+  seen = new Set<string>(),
+): string {
+  const exp = all[file]?.[local];
+  if (!exp) return local; // not a module class (shouldn't happen) → pass through
+  const parts = [exp.name];
+  for (const c of exp.composes) {
+    if (c.type === "dependency") {
+      const target = resolvePath(dirname(file), c.specifier);
+      const k = `${target}::${c.name}`;
+      if (seen.has(k)) continue; // guard against circular composes
+      seen.add(k);
+      parts.push(resolveName(target, c.name, all, seen));
+    } else {
+      parts.push(c.name); // local (already scoped) or global (unscoped)
+    }
+  }
+  return parts.join(" ");
+}
+
+const exportsOnly = (all: Record<string, Transformed>): Record<string, ModuleExports> =>
+  Object.fromEntries(Object.entries(all).map(([f, t]) => [f, t.exports]));
+
+// Transform one .module.css (+ its composes deps) → its class map and scoped CSS.
+// The CSS is THIS file's rules only; composed rules live in their own files (and so
+// appear once in the combined sheet), never inlined here.
 export async function transformCssModule(
   file: string,
   appRoot: string,
 ): Promise<{ map: Record<string, string>; css: string }> {
-  const postcss = (await import("postcss")).default;
-  const postcssModules = (await import("postcss-modules")).default as (opts: {
-    generateScopedName(name: string, filename: string): string;
-    getJSON(file: string, json: Record<string, string>): void;
-  }) => AcceptedPlugin;
-  let map: Record<string, string> = {};
-  const result = await postcss([
-    postcssModules({
-      generateScopedName: (name, filename) => scopedName(stableKey(appRoot, filename), name),
-      getJSON: (_f, json) => {
-        map = json;
-      },
-    }),
-  ]).process(await readFile(file, "utf8"), { from: file });
-  return { map, css: result.css };
+  const all = await transformGraph(file, appRoot);
+  const exports = exportsOnly(all);
+  const map: Record<string, string> = {};
+  for (const local of Object.keys(all[file]!.exports)) map[local] = resolveName(file, local, exports);
+  return { map, css: all[file]!.css };
 }
 
 // The JS a .module.css import resolves to.
@@ -85,50 +138,33 @@ async function findModuleCss(dir: string): Promise<string[]> {
   return out.sort();
 }
 
-// Drop byte-identical top-level rules. postcss-modules has no module graph, so
-// `composes: x from "./y"` INLINES y's rule into this file's output — and we also
-// emit y directly, so a composed rule lands N+1 times. Vite never duplicates
-// (composes is a graph edge there); we get the same one-copy result by deduping.
-//
-// Two safety points:
-//  - Exact-string match only. Our scoped names are deterministic, so the copies
-//    are byte-identical; we never collapse two genuinely different rules.
-//  - Keep the LAST occurrence, not the first. With :global, two files can write
-//    the same raw selector with different bodies, so the cascade can interleave
-//    (red, blue, red). The winner is the last declaration; dropping the EARLIER
-//    identical copies leaves the last one in place, so the computed result is
-//    unchanged. Keeping the first instead would change which rule wins.
-async function dedupeRules(css: string): Promise<string> {
-  const postcss = (await import("postcss")).default;
-  const root = postcss.parse(css);
-  const last = new Map<string, ChildNode>();
-  root.each((node) => {
-    if (node.type === "rule" || node.type === "atrule") last.set(node.toString(), node);
-  });
-  root.each((node) => {
-    if ((node.type === "rule" || node.type === "atrule") && last.get(node.toString()) !== node) {
-      node.remove();
-    }
-  });
-  return root.toString();
-}
-
 // One pass over app/**/*.module.css → the per-file class maps AND the combined
 // scoped stylesheet. null css when there are none. Deterministic, so the maps the
-// loaders hand out match the CSS that's served/emitted.
+// loaders hand out match the CSS that's served/emitted. composes are references
+// (not inlined), so each rule appears once — no dedup pass.
 export async function buildModuleCss(
   appDir: string,
   appRoot: string,
 ): Promise<{ maps: ModuleMaps; css: string | null }> {
   const files = await findModuleCss(appDir);
+  if (!files.length) return { maps: {}, css: null };
+
+  const all: Record<string, Transformed> = {};
+  for (const file of files) await transformGraph(file, appRoot, all); // picks up out-of-glob deps too
+  const exports = exportsOnly(all);
+
   const maps: ModuleMaps = {};
-  const parts: string[] = [];
   for (const file of files) {
-    const { map, css } = await transformCssModule(file, appRoot);
-    maps[file] = map;
-    parts.push(css);
+    maps[file] = {};
+    for (const local of Object.keys(all[file]!.exports)) maps[file][local] = resolveName(file, local, exports);
   }
-  return { maps, css: parts.length ? await dedupeRules(parts.join("\n")) : null };
+  // Emit each transformed file's CSS once (sorted), so a composed rule — which lives
+  // in its own file — appears exactly once in the combined sheet.
+  const css = Object.keys(all)
+    .sort()
+    .map((f) => all[f]!.css)
+    .join("\n");
+  return { maps, css };
 }
 
 // --- the three dumb interception points (all lookups into `maps`) ------------
