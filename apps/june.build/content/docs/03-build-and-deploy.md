@@ -1,7 +1,7 @@
 ---
-title: Build & deploy
-description: What june build generates, how prerender works, and the deploy adapters.
-date: 2026-06-12
+title: Build & prerender
+description: What june build freezes at build time, and how opt-in prerender ships exactly what was tested.
+date: 2026-06-15
 ---
 ## `june build`
 
@@ -25,8 +25,9 @@ Opt-in per route, static routes only. What ships is what was tested: the
 build renders through the bundled worker, not a parallel code path. Don't opt
 in routes whose output depends on `ctx.url.origin`.
 
-## `june deploy`
+## Then deploy
 
-The verb is fixed; the target is an adapter — `workers` today, more later.
-`june deploy` = build → resolve wrangler config → upload → URL.
-`--dry-run` validates everything without uploading — it's also the CI test.
+The same bundle ships to any target — the verb is fixed, the target is one line
+of config. `june deploy` = build → upload → URL, with `--dry-run` as the CI
+test. See [Deployment](/docs/04-deployment) for the adapters (Workers, Vercel,
+Deno) and what each maps your resources to.
