@@ -1,7 +1,8 @@
 // `db` resource adapters — implementations of the @junejs/core JuneDb contract.
 // Declared in june.config.ts (`resources.db: sqlite(...)` / `d1(...)`), opened
-// by the host, injected onto RouteContext as `ctx.db`. The framework depends on
-// the JuneDb contract; these adapters (and Juno on top) are swappable.
+// by the host and made ambient (`import { db } from "@junejs/db"`, via
+// runInScope — NOT on ctx). The framework depends on the JuneDb contract; these
+// adapters (and Juno on top) are swappable.
 //
 // sqlite() is host-coupled (node:fs + ./host) and DEV-only. The edge-safe d1()
 // adapter lives in ./d1 so the generated worker can import it without dragging

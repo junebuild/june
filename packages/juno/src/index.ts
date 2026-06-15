@@ -248,7 +248,7 @@ export type Juno = {
   writes(...tables: string[]): void;
 };
 
-// Wrap any JuneDb handle (ctx.db) in Juno's ergonomic surface. Build ONE per
+// Wrap any JuneDb handle (the ambient `db`) in Juno's ergonomic surface. Build ONE per
 // request: the ambient-loader registry it carries is what makes concurrent
 // findBy across components coalesce — and scoping it to the per-request handle
 // is what keeps keys from leaking across requests.

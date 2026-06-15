@@ -1,7 +1,9 @@
 // Resource resolution — open the handles declared in june.config.ts `resources`
-// and hand them to the pipeline, which injects them onto RouteContext (ctx.db /
-// ctx.kv / ctx.blob). A resource not declared is never opened (and, for static
-// apps, tree-shaken out — the build freeze knows which routes touch resources).
+// and hand them to the pipeline, which runs each request inside runInScope() so
+// they resolve AMBIENTLY (`import { db } from "@junejs/db"`). ctx never carries
+// them — ctx is identity-only (see route.ts). A resource not declared is never
+// opened (and, for static apps, tree-shaken out — the build freeze knows which
+// routes touch resources).
 
 import type { ResourceConfig, Resources } from "@junejs/core/resources";
 
@@ -48,7 +50,7 @@ export type ResourceFlags = { db?: boolean; kv?: boolean; blob?: boolean };
 // from env (env.DB → D1) — the prod half of "sqlite dev → D1 prod, one
 // declaration": the same `resources: { db: sqlite() }` runs on D1 at the edge,
 // because D1 *is* SQLite (same SQL, same Juno tables). No env binding → the
-// handle is absent and the route degrades (ctx.db undefined), never a crash.
+// handle is absent and the route degrades (ambient `db` unavailable), never a crash.
 // Memoized per isolate (env is stable across requests in a workerd isolate).
 //
 // env is typed `unknown` (it arrives untyped from the runtime) and narrowed to
