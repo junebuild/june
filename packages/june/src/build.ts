@@ -34,7 +34,7 @@ import { createWorker, type WorkerManifest } from "./worker";
 import { findExtraFile } from "./router";
 import type { ExtraHandler, LayoutComponent, LoadingComponent } from "./pipeline";
 import { findClientEntry, bundleClientToFile, CLIENT_SCRIPT_URL } from "./client-bundle";
-import { findGlobalCss, minifyCss, processCss, STYLES_URL } from "./css";
+import { cssTargets, findGlobalCss, minifyCss, processCss, STYLES_URL } from "./css";
 import { buildModuleCss, rolldownCssModulesPlugin, registerCssModules } from "./css-modules";
 
 export type BuildResult = {
@@ -290,7 +290,8 @@ export async function juneBuild(
   const { maps: cssModuleMaps, css: rawModuleCss } = await buildModuleCss(appDir, appRoot);
   // Minify for build (dev serves it readable). Scoped class names are untouched,
   // so the hashed sheet still matches the maps the bundlers/loaders hand out.
-  const moduleCss = rawModuleCss === null ? null : await minifyCss(rawModuleCss, "modules.css");
+  const moduleCss =
+    rawModuleCss === null ? null : await minifyCss(rawModuleCss, "modules.css", await cssTargets(appDir));
   let moduleCssAsset: string | null = null;
   if (moduleCss !== null) {
     const hash = createHash("sha256").update(moduleCss).digest("hex").slice(0, 8);

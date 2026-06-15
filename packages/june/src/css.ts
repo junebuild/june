@@ -15,6 +15,8 @@ import { createRequire } from "node:module";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import type { Targets } from "lightningcss"; // type-only — never enters the graph
+
 // Framework-emitted assets live under the reserved /_june/ prefix so they never
 // collide with — or squat on — a user's own paths (cf. Next /_next/, Astro
 // /_astro/). Build content-hashes the file under here; this is the dev URL.
@@ -37,6 +39,32 @@ function resolveFromApp(specifier: string, appDir: string): string | null {
   } catch {
     return null;
   }
+}
+
+// Browser targets for autoprefix + syntax lowering (CSS nesting, :is(), oklch,
+// logical properties, …). June adds NO dep here: if the app installs `browserslist`
+// its config (or the browserslist defaults) drives the targets; otherwise a baked,
+// broadly-supported baseline. Override per app the standard way — a `browserslist`
+// field in package.json or a .browserslistrc.
+const v = (major: number, minor = 0): number => (major << 16) | (minor << 8);
+const DEFAULT_TARGETS: Targets = { chrome: v(107), edge: v(107), firefox: v(104), safari: v(16) };
+
+let targetsCache: { appDir: string; targets: Targets } | null = null;
+export async function cssTargets(appDir: string): Promise<Targets> {
+  if (targetsCache?.appDir === appDir) return targetsCache.targets;
+  let targets: Targets = DEFAULT_TARGETS;
+  const blPath = resolveFromApp("browserslist", appDir);
+  if (blPath) {
+    try {
+      const browserslist = ((await import(blPath)) as { default: (q?: unknown, o?: unknown) => string[] }).default;
+      const { browserslistToTargets } = await import("lightningcss");
+      targets = browserslistToTargets(browserslist(undefined, { path: appDir }));
+    } catch {
+      /* malformed config / resolution race → keep the baked default */
+    }
+  }
+  targetsCache = { appDir, targets };
+  return targets;
 }
 
 async function compileTailwind(
@@ -76,16 +104,17 @@ export function invalidateCss(): void {
   devCache = null;
 }
 
-// Minify a finished stylesheet with Lightning CSS — the same engine Tailwind v4
-// optimizes with, so all of June's build-time CSS comes out consistently. It only
-// touches whitespace/comments/redundancy, never identifiers, so scoped CSS-module
-// class names survive intact (hydration stays byte-identical to SSR). Lazy import:
-// build/dev-time only, never in the worker graph. Falls back to the input if
-// Lightning CSS can't parse it, so minification can never break a build.
-export async function minifyCss(css: string, filename = "input.css"): Promise<string> {
+// Minify a finished stylesheet with Lightning CSS — and, given `targets`, ALSO
+// autoprefix + lower modern syntax (nesting, :is(), oklch, logical props) for the
+// target browsers. The same engine Tailwind v4 optimizes with, so all of June's
+// build-time CSS comes out consistently. It never touches identifiers, so scoped
+// CSS-module class names survive intact (hydration stays byte-identical to SSR).
+// Lazy import: build/dev-time only, never in the worker graph. Falls back to the
+// input if Lightning CSS can't parse it, so it can never break a build.
+export async function minifyCss(css: string, filename = "input.css", targets?: Targets): Promise<string> {
   try {
     const { transform } = await import("lightningcss");
-    const { code } = transform({ filename, code: Buffer.from(css), minify: true });
+    const { code } = transform({ filename, code: Buffer.from(css), minify: true, targets });
     return code.toString();
   } catch (e) {
     console.warn("[june] CSS minify failed; emitting unminified:", e);
@@ -112,7 +141,8 @@ export async function processCss(
       "[june] global.css uses Tailwind but @tailwindcss/postcss isn't installed — serving raw CSS.",
     );
   }
-  // Plain CSS (or the Tailwind fallback): minify here so the non-Tailwind path
-  // is optimized too, matching the Tailwind path.
-  return opts.minify ? await minifyCss(css, file) : css;
+  // Plain CSS (or the Tailwind fallback): minify + autoprefix/lower for the app's
+  // browser targets, so the non-Tailwind path is optimized too. (Tailwind v4 owns
+  // its own targeting; dev stays readable and untargeted.)
+  return opts.minify ? await minifyCss(css, file, await cssTargets(appDir)) : css;
 }

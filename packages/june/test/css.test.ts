@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { createApp } from "../src/app";
 import { juneBuild } from "../src/build";
 import { withAssets } from "../src/worker";
-import { processCss, findGlobalCss, STYLES_URL, minifyCss } from "../src/css";
+import { processCss, findGlobalCss, STYLES_URL, minifyCss, cssTargets } from "../src/css";
 
 const CSS_APP = fileURLToPath(new URL("./fixtures/css/app", import.meta.url));
 const CSS_ROOT = dirname(CSS_APP); // the app ROOT (juneBuild takes the root, not app/)
@@ -64,6 +64,29 @@ describe("minifyCss (Lightning CSS)", () => {
   test("returns the input unchanged when it can't be parsed (build never breaks)", async () => {
     const garbage = "@@@ this is not valid css @@@";
     expect(await minifyCss(garbage)).toBe(garbage);
+  });
+
+  test("with targets: autoprefixes for the target browsers", async () => {
+    const out = await minifyCss(".a { user-select: none }", "t.css", { safari: 14 << 16 });
+    expect(out).toContain("-webkit-user-select"); // old Safari needs the prefix
+    expect(out).toContain("user-select"); // unprefixed kept too
+  });
+
+  test("with targets: lowers modern syntax (CSS nesting → flat selectors)", async () => {
+    const out = await minifyCss(".x { .y { color: red } }", "t.css", { safari: 14 << 16 });
+    expect(out).toContain(".x .y"); // nesting flattened for browsers without it
+    expect(out).not.toMatch(/\.x\s*{\s*\.y/); // no nested block survives
+  });
+});
+
+describe("cssTargets", () => {
+  test("resolves usable browser targets (app's browserslist if present, else the baked default)", async () => {
+    const t = (await cssTargets(NOCSS_APP)) as Record<string, number>;
+    // a valid Lightning targets object — version ints autoprefix/lowering can use.
+    // (When `browserslist` is resolvable it drives this; otherwise it's the baked
+    // chrome 107 / safari 16 baseline. Either way: real numbers.)
+    expect(typeof t.chrome).toBe("number");
+    expect(t.chrome).toBeGreaterThan(0);
   });
 });
 
