@@ -45,5 +45,10 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/junebuild/june"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.20.0",
+    "mysql2": "^3.22.5",
+    "pg": "^8.21.0"
   }
 }

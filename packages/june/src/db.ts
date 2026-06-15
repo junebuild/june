@@ -16,6 +16,8 @@ import type { DbFactory } from "@junejs/core/resources";
 import { host } from "./host";
 
 export { d1, type D1Database } from "./d1";
+export { postgres, pgJuneDb, type PgClientLike } from "./postgres-driver";
+export { mysql, mysqlJuneDb, type MysqlConnLike } from "./mysql-driver";
 
 // Local SQLite — the zero-config dev default. A persistent FILE, not :memory:,
 // on purpose: `june dev` restarts the process on every save (the watch
