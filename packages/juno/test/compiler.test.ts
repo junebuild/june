@@ -4,7 +4,7 @@
 // subclass proves multi-dialect works off the same AST before a real Postgres one).
 
 import { describe, expect, test } from "bun:test";
-import { Dialect, SqliteDialect, PostgresDialect, sqlite, postgres } from "../src/compiler";
+import { Dialect, SqliteDialect, PostgresDialect, MysqlDialect, sqlite, postgres, mysql } from "../src/compiler";
 import type { Node } from "../src/ast";
 
 describe("SqliteDialect.compile — SQL per node kind", () => {
@@ -220,5 +220,67 @@ describe("PostgresDialect — $n placeholders + quoted identifiers", () => {
     const shape: Node = { kind: "select", from: "t", where: [{ col: "id", op: "eq" }] };
     expect(d.compile(shape)).toBe(d.compile({ ...shape }));
     expect(d.emits).toBe(1); // second call hit the cache
+  });
+});
+
+describe("MysqlDialect — `?` placeholders + backtick identifiers + ON DUPLICATE KEY", () => {
+  test("select / insert / update / delete: backticked identifiers, ? placeholders", () => {
+    expect(
+      mysql.compile({
+        kind: "select",
+        from: "users",
+        where: [{ col: "id", op: "in", arity: 2 }],
+        orderBy: [{ col: "created_at", dir: "desc" }],
+        limit: "param",
+        offset: "param",
+      }),
+    ).toBe("select * from `users` where `id` in (?, ?) order by `created_at` desc limit ? offset ?");
+    expect(mysql.compile({ kind: "insert", into: "users", columns: ["name", "email"] })).toBe(
+      "insert into `users` (`name`, `email`) values (?, ?)",
+    );
+    expect(mysql.compile({ kind: "update", table: "users", set: ["name"], where: ["id"] })).toBe(
+      "update `users` set `name` = ? where `id` = ?",
+    );
+    expect(mysql.compile({ kind: "delete", from: "users", where: ["id"] })).toBe(
+      "delete from `users` where `id` = ?",
+    );
+  });
+
+  test("upsert: INSERT ... AS new ON DUPLICATE KEY UPDATE (no ON CONFLICT, no RETURNING)", () => {
+    expect(
+      mysql.compile({
+        kind: "upsert",
+        into: "users",
+        columns: ["name", "email"],
+        conflict: ["email"], // ignored on MySQL — it keys off the violated unique index
+        update: ["name"],
+      }),
+    ).toBe(
+      "insert into `users` (`name`, `email`) values (?, ?) as new on duplicate key update `name` = new.`name`",
+    );
+  });
+
+  test("backtick-quotes a reserved word (e.g. `order`)", () => {
+    expect(
+      mysql.compile({ kind: "select", from: "order", where: [{ col: "key", op: "eq" }] }),
+    ).toBe("select * from `order` where `key` = ?");
+  });
+
+  test("still rejects unsafe identifiers", () => {
+    expect(() => mysql.compile({ kind: "insert", into: "t", columns: ["a`; drop"] })).toThrow(
+      "unsafe SQL identifier",
+    );
+  });
+
+  test("one AST, three dialects — ? / $n / ? but quoted three ways", () => {
+    const node: Node = { kind: "select", from: "users", where: [{ col: "id", op: "eq" }] };
+    expect(sqlite.compile(node)).toBe("select * from users where id = ?");
+    expect(postgres.compile(node)).toBe('select * from "users" where "id" = $1');
+    expect(mysql.compile(node)).toBe("select * from `users` where `id` = ?");
+  });
+
+  test("MysqlDialect is a Dialect with its own compile-once cache", () => {
+    expect(mysql).toBeInstanceOf(MysqlDialect);
+    expect(mysql).toBeInstanceOf(Dialect);
   });
 });

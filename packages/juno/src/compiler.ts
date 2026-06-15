@@ -151,7 +151,33 @@ export class PostgresDialect extends Dialect {
   }
 }
 
+// MySQL: positional `?` placeholders (like sqlite) but backtick-quoted identifiers,
+// and a different upsert — MySQL has no `ON CONFLICT`/`RETURNING`, it keys off any
+// unique/primary index with `ON DUPLICATE KEY UPDATE` and the 8.0.19+ row alias
+// (`AS new … new.col`). So `conflict` columns are ignored (MySQL picks the violated
+// key) and upsert returns no row — the Table layer must re-read if it needs one.
+export class MysqlDialect extends Dialect {
+  protected placeholder(): string {
+    return "?";
+  }
+  protected override quoteId(name: string): string {
+    return `\`${ident(name)}\``;
+  }
+  protected override emit(node: Node): string {
+    if (node.kind !== "upsert") return super.emit(node);
+    const q = (name: string) => this.quoteId(name);
+    const cols = node.columns.map(q);
+    const vals = node.columns.map(() => this.placeholder()); // `?` is positional — no index
+    const set = node.update.map((c) => `${q(c)} = new.${q(c)}`).join(", ");
+    return (
+      `insert into ${q(node.into)} (${cols.join(", ")}) values (${vals.join(", ")}) as new ` +
+      `on duplicate key update ${set}`
+    );
+  }
+}
+
 // Shared singletons so each dialect's compile-once cache is process-level. `sqlite`
-// (sqlite + D1) is Juno's default; `postgres` compiles the same nodes for PG.
+// (sqlite + D1) is Juno's default; `postgres` / `mysql` compile the same nodes for PG / MySQL.
 export const sqlite = new SqliteDialect();
 export const postgres = new PostgresDialect();
+export const mysql = new MysqlDialect();
