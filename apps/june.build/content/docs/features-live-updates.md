@@ -101,3 +101,13 @@ connection precisely where a surface earns it — one island, one `persist`, you
 transport. The hard part (keeping the live node alive across navigation) is the
 framework's job; the connection itself stays plain web-standard code you fully
 control.
+
+## See it live
+
+The [Cake Site demo](https://june-cake.vercel.app/recipes/chocolate-cake) runs this
+exact pattern on Vercel's edge: a 🔴 live feed in the header opens an `EventSource`
+to `/api/activity` from inside a `persist` island. Click between the two recipes and
+watch the event count keep climbing — the connection streams straight through the
+navigation instead of reconnecting. Source:
+[junebuild/cake](https://github.com/junebuild/cake) ([`StatusFeed.tsx`](https://github.com/junebuild/cake/blob/main/app/StatusFeed.tsx),
+[`_extra.tsx`](https://github.com/junebuild/cake/blob/main/app/_extra.tsx)).
