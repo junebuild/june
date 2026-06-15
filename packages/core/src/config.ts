@@ -11,7 +11,7 @@
 // — keeping the contract layer free of `node:*` (zero node:*/Bun.* in this layer).
 
 import type { CacheStoreFactory } from "./cache";
-import type { ResourceConfig } from "./resources";
+import type { JuneDb, ResourceConfig } from "./resources";
 
 export type AgentConfig = {
   enabled: boolean; // master switch
@@ -45,6 +45,11 @@ export type SpeculationConfig = {
 export interface DataLayer {
   install(): void;
   readonly module: string;
+  // Optional schema codegen. `june db types` opens the migrated db and calls this to
+  // get the type-declaration text (e.g. a `declare module` augmentation), then writes
+  // db/schema.d.ts. Type-only import of JuneDb keeps this layer node-free. Layers
+  // without typed schemas simply omit it.
+  emitTypes?(db: JuneDb): Promise<string>;
 }
 
 export type JuneConfig = {

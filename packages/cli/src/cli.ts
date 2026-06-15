@@ -3,6 +3,7 @@
 // process; the bin (june.ts) just forwards process.argv. See docs/cli.md.
 
 import { existsSync } from "node:fs";
+import { writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 export type Parsed = {
@@ -43,7 +44,7 @@ Commands:
   build    Build a workerd-ready bundle         --out <dir>
   deploy   Build + deploy (workers/vercel)      --dry-run --prod --skip-migrate --allow-destructive
   gen      Freeze content/schema                --check
-  db       Database tasks (db migrate)           --allow-destructive
+  db       Database tasks (db migrate, db types) --allow-destructive
   info     Show routes + the agent surface
   help     Show this help
 
@@ -140,28 +141,53 @@ export async function run(argv: string[]): Promise<number | undefined> {
       return 0;
     }
     case "db": {
-      // `june db migrate [dir] --allow-destructive`. The subcommand is
-      // positional[0], so the app dir (if any) is positional[1] — not `root`.
+      // `june db <migrate|types> [dir]`. The subcommand is positional[0], so the app
+      // dir (if any) is positional[1] — not `root`.
       const sub = positional[0];
-      if (sub !== "migrate") {
-        console.error(`june db: unknown subcommand "${sub ?? ""}" (try: june db migrate)`);
-        return 1;
-      }
       const dbRoot = positional[1] ? resolve(positional[1]) : process.cwd();
-      const { loadJuneConfig, migrateApp, blockedMessage } = await import("@junejs/server");
-      const config = await loadJuneConfig(dbRoot);
-      if (!config.resources?.db) {
-        console.error("june db migrate: no `db` resource declared in june.config.ts.");
-        return 1;
+      if (sub === "migrate") {
+        const { loadJuneConfig, migrateApp, blockedMessage } = await import("@junejs/server");
+        const config = await loadJuneConfig(dbRoot);
+        if (!config.resources?.db) {
+          console.error("june db migrate: no `db` resource declared in june.config.ts.");
+          return 1;
+        }
+        const r = await migrateApp(dbRoot, config, { allowDestructive: !!flags["allow-destructive"] });
+        if (r?.applied.length) console.log(`migrated: ${r.applied.join(", ")}`);
+        else if (r && !r.blocked) console.log("migrations up to date");
+        if (r?.blocked) {
+          console.error(blockedMessage(r.blocked));
+          return 1;
+        }
+        return 0;
       }
-      const r = await migrateApp(dbRoot, config, { allowDestructive: !!flags["allow-destructive"] });
-      if (r?.applied.length) console.log(`migrated: ${r.applied.join(", ")}`);
-      else if (r && !r.blocked) console.log("migrations up to date");
-      if (r?.blocked) {
-        console.error(blockedMessage(r.blocked));
-        return 1;
+      if (sub === "types") {
+        // Generate db/schema.d.ts from the migrated schema (Stage 3 inference).
+        const { loadJuneConfig, typesApp } = await import("@junejs/server");
+        const config = await loadJuneConfig(dbRoot);
+        if (!config.resources?.db) {
+          console.error("june db types: no `db` resource declared in june.config.ts.");
+          return 1;
+        }
+        if (!config.dataLayer?.emitTypes) {
+          console.error(
+            "june db types: the configured dataLayer doesn't generate types " +
+              "(declare `dataLayer: junoDataLayer()` in june.config.ts).",
+          );
+          return 1;
+        }
+        const text = await typesApp(dbRoot, config);
+        if (text == null) {
+          console.log("nothing to generate");
+          return 0;
+        }
+        const out = join(dbRoot, "db", "schema.d.ts");
+        await writeFile(out, text);
+        console.log("wrote db/schema.d.ts");
+        return 0;
       }
-      return 0;
+      console.error(`june db: unknown subcommand "${sub ?? ""}" (try: june db migrate | june db types)`);
+      return 1;
     }
     case "info":
       return info(root);

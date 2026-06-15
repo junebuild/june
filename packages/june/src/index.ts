@@ -29,6 +29,7 @@ export { loadJuneConfig } from "./config-loader";
 export {
   migrate,
   migrateApp,
+  typesApp,
   classify,
   readMigrations,
   blockedMessage,

@@ -18,10 +18,12 @@ import type { Predicate, SelectNode } from "./ast";
 import { tableLoader, tableListLoader, type Loader, type ListLoader } from "./batch";
 import { sqlite } from "./compiler";
 import { taggingDb, tagSql } from "./tag";
+import { emitSchemaTypes } from "./types";
 
 export { createLoader, createGroupLoader, tableLoader, tableListLoader, type Loader, type ListLoader } from "./batch";
 export { tablesFromSql, tagSql, taggingDb, type SqlTouch } from "./tag";
 export { Dialect, SqliteDialect, sqlite, ident } from "./compiler";
+export { emitSchemaTypes } from "./types";
 export type { Node, SelectNode, InsertNode, UpdateNode, DeleteNode, UpsertNode } from "./ast";
 
 export type Row = Record<string, unknown>;
@@ -283,7 +285,10 @@ export function installDataLayer(): void {
 // the worker (via `module`). Explicit (config-declared), NOT an import-time global
 // side-effect — and the framework still never imports Juno (the user's config does).
 export function junoDataLayer(): DataLayer {
-  return { install: installDataLayer, module: "@junejs/juno" };
+  // emitTypes: `june db types` introspects the migrated db through this hook and
+  // writes db/schema.d.ts — the framework calls it via the DataLayer seam, still
+  // never importing Juno. See src/types.ts.
+  return { install: installDataLayer, module: "@junejs/juno", emitTypes: emitSchemaTypes };
 }
 
 export function table<K extends TableNames>(name: K): Table<RowOf<K>>;

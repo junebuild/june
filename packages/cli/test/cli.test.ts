@@ -54,6 +54,23 @@ describe("june gen", () => {
   });
 });
 
+describe("june db", () => {
+  test("an unknown db subcommand lists the valid ones", async () => {
+    const code = await run(["db", "frobnicate", FIXTURE]);
+    expect(code).toBe(1);
+    expect(text()).toContain("unknown subcommand");
+    expect(text()).toContain("june db types");
+  });
+
+  test("db types without a db resource fails with a sentence", async () => {
+    // The basic fixture declares no `db` resource → the guard fires (returns 1),
+    // not an ENOENT. (Generation itself is covered e2e in @junejs/juno.)
+    const code = await run(["db", "types", FIXTURE]);
+    expect(code).toBe(1);
+    expect(text()).toContain("no `db` resource");
+  });
+});
+
 describe("june dev argument validation", () => {
   test("a digits positional (npm run dev -p 3001 → 'dev 3001') hints at --port", async () => {
     const code = await run(["dev", "3001"]);

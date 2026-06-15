@@ -112,6 +112,24 @@ export async function migrateApp(
   }
 }
 
+// `june db types`: open the declared db, bring it to head (safe migrations only, so
+// the schema is present even on a fresh checkout), then hand it to the data layer's
+// codegen hook for the type-declaration text. Returns null when there's no db or the
+// data layer doesn't generate types — the CLI owns the messaging. Introspection is
+// read-only; the safe migrate is idempotent (the ledger skips applied ones).
+export async function typesApp(root: string, config: JuneConfig): Promise<string | null> {
+  const factory = config.resources?.db;
+  const emit = config.dataLayer?.emitTypes;
+  if (!factory || !emit) return null;
+  const db = await factory.open();
+  try {
+    await migrate(db, join(root, "db", "migrations"), { allowDestructive: false });
+    return await emit(db);
+  } finally {
+    await db.close();
+  }
+}
+
 // The "this migration was gated" guidance, shared by dev (warns, keeps serving)
 // and `june db migrate` (exits non-zero).
 export function blockedMessage(m: ClassifiedMigration): string {
