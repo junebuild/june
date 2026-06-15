@@ -26,6 +26,22 @@ export type { Node, SelectNode, InsertNode, UpdateNode, DeleteNode, UpsertNode }
 
 export type Row = Record<string, unknown>;
 
+// The app's table → row-type registry (Stage 3). EMPTY by default, so `table(name)`
+// stays untyped and every existing call keeps working (back-compat). Apps augment it
+// via `declare module "@junejs/juno" { interface Schema { users: {...} } }` — a file
+// `june db types` generates by introspecting the live schema (Stage 3b). Once
+// augmented, `table("users")` autocompletes the name and infers the row, with no
+// inline generic and no handle. Kysely-style declaration merging: zero runtime, and
+// the schema of record stays in SQL (db/migrations/), never owned by Juno.
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export interface Schema {}
+
+// A known table name resolves to its declared row (intersected with Row so it always
+// satisfies the Table constraint); falls back to `never` when Schema is empty, which
+// makes the typed overload simply not match and the string overload take over.
+export type TableNames = keyof Schema & string;
+export type RowOf<K extends TableNames> = Schema[K] & Row;
+
 // A WHERE value is either an equality value or an operator object (Stage 2).
 // `{ age: { gte: 18 }, name: { like: "%a%" }, id: { in: [1, 2] } }` — AND-joined.
 export type Operators = {
@@ -206,6 +222,10 @@ export class Table<T extends Row = Row> {
 }
 
 export type Juno = {
+  // Schema-aware: a declared table name infers its row (and autocompletes). The
+  // string overload is the fallback for dynamic names / an empty Schema / an
+  // explicit inline generic (`table<Custom>("x")`).
+  table<K extends TableNames>(name: K): Table<RowOf<K>>;
   table<T extends Row = Row>(name: string): Table<T>;
   // Raw escape hatch. Reads/writes through it auto-tag by parsed table name, so a
   // `cache(() => db.query("select ... from posts"))` is invalidated by a posts
@@ -225,13 +245,16 @@ export type Juno = {
 // is what keeps keys from leaking across requests.
 export function juno(db: JuneDb): Juno {
   const loaders = new Map<string, unknown>();
+  function table<K extends TableNames>(name: K): Table<RowOf<K>>;
+  function table<T extends Row = Row>(name: string): Table<T>;
+  function table(name: string): Table {
+    return new Table(db, name, loaders);
+  }
   return {
     // Table API uses the raw db and tags explicitly (precise, parser-independent);
     // the exposed handle wraps it so the raw escape hatch auto-tags too.
     db: taggingDb(db),
-    table<T extends Row = Row>(name: string) {
-      return new Table<T>(db, name, loaders);
-    },
+    table,
     reads(...tables: string[]) {
       for (const t of tables) recordTableRead(t);
     },
@@ -263,9 +286,11 @@ export function junoDataLayer(): DataLayer {
   return { install: installDataLayer, module: "@junejs/juno" };
 }
 
-export function table<T extends Row = Row>(name: string): Table<T> {
+export function table<K extends TableNames>(name: K): Table<RowOf<K>>;
+export function table<T extends Row = Row>(name: string): Table<T>;
+export function table(name: string): Table {
   const loaders = requestLocal(LOADERS, () => new Map<string, unknown>());
-  return new Table<T>(ambientDb, name, loaders);
+  return new Table(ambientDb, name, loaders);
 }
 
 // No separate ambient `db` export: the canonical `db` from `@junejs/db` (and
