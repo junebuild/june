@@ -28,11 +28,13 @@ describe("vercel() adapter — units", () => {
     expect(vercel({ runtime: "edge" }).capabilities.runtime).toBe("edge");
   });
 
-  test("validate fails fast when a db resource is declared", () => {
-    expect(() => vercel().validate!({ plan: { db: { binding: "DB", databaseName: "x" } }, config: {} })).toThrow(
-      /no db backend yet/,
-    );
-    expect(() => vercel().validate!({ plan: {}, config: {} })).not.toThrow(); // no db → ok
+  test("validate: turso() allowed, sqlite()/d1() rejected (D1 is Cloudflare-only), no db ok", () => {
+    const v = vercel().validate!;
+    const cfg = (kind?: string) => ({ plan: {}, config: kind ? { resources: { db: { kind } } } : {} }) as never;
+    expect(() => v(cfg("turso"))).not.toThrow(); // libsql over HTTPS → runs on Vercel
+    expect(() => v(cfg("sqlite"))).toThrow(/isn't supported on Vercel/);
+    expect(() => v(cfg("d1"))).toThrow(/isn't supported on Vercel/);
+    expect(() => v(cfg())).not.toThrow(); // no db → ok
   });
 
   test("node entry is the fetch Web Standard export; edge entry is the bare function", () => {
@@ -139,6 +141,28 @@ describe("vercel() adapter — units", () => {
     } finally {
       await rm(appRoot, { recursive: true, force: true });
     }
+  });
+});
+
+describe("vercel() + turso() — e2e (real juneBuild, the libsql db path)", () => {
+  const ROOT = dirname(fileURLToPath(new URL("./fixtures/vercel-turso/app", import.meta.url)));
+  let outDir: string | undefined;
+  afterAll(async () => {
+    if (outDir) await rm(outDir, { recursive: true, force: true });
+    await rm(join(ROOT, ".vercel"), { recursive: true, force: true });
+    await rm(join(ROOT, ".june"), { recursive: true, force: true });
+  });
+
+  test("a declared turso() db wires memoizeResources(turso()) and bundles the web client", async () => {
+    outDir = await mkdtemp(join(tmpdir(), "june-vc-turso-"));
+    await juneBuild(ROOT, { outDir });
+
+    const fn = await readFile(join(ROOT, ".vercel", "output", "functions", "__june.func", "worker.js"), "utf8");
+    // the resource provider opens the DECLARED factory (→ ambient `import { db }`),
+    // NOT a D1 binding — and the pure-fetch libsql client is bundled INTO the function
+    expect(fn).toContain("memoizeResources"); // opens the declared factory
+    expect(fn).not.toContain("bindWorkerResources"); // NOT the D1 binding path
+    expect(/libsql|hrana|createClient/i.test(fn)).toBe(true); // web client bundled, not external
   });
 });
 

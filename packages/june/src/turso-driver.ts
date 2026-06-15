@@ -80,8 +80,11 @@ export function turso(opts: { url?: string; authToken?: string } = {}): DbFactor
           "turso(): no database url — pass { url } or set TURSO_DATABASE_URL in the environment.",
         );
       }
+      // The pure-fetch web client: works in dev (Bun) AND bundles into the one
+      // deployed function (the node client would pull native bindings). Turso is
+      // remote (libsql:// over HTTPS), which is exactly what the web client speaks.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const mod = (await import("@libsql/client")) as any;
+      const mod = (await import("@libsql/client/web")) as any;
       const createClient = (mod.default ?? mod).createClient;
       return libsqlJuneDb(createClient({ url, authToken }));
     },

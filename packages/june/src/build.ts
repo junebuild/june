@@ -378,12 +378,25 @@ export async function juneBuild(
     kv: !!resourcesCfg?.kv,
     blob: !!resourcesCfg?.blob,
   };
-  if (hasResources) {
+  // Two SQLite-dialect defaults, picked by the declared db's kind:
+  //   turso()         → libsql over HTTPS, connected from env (TURSO_*) via the
+  //                     bundled web client. Open the declared factory directly so it
+  //                     feeds the ambient `import { db }` scope (re-emitted by kind,
+  //                     not imported from the app config, to avoid the host barrel).
+  //   sqlite()/d1()   → a D1 binding from env (env.DB), via bindWorkerResources.
+  // (kv/blob on a turso deploy aren't wired yet — db-only.)
+  const tursoDb = resourcesCfg?.db?.kind === "turso";
+  if (tursoDb) {
+    imports.push(`import { turso } from "@junejs/server/db";`);
+    imports.push(`import { memoizeResources } from "@junejs/server/resources";`);
+  } else if (hasResources) {
     imports.push(`import { bindWorkerResources } from "@junejs/server/resources";`);
   }
-  const resourcesField = hasResources
-    ? `\n  resources: bindWorkerResources(${JSON.stringify(resourceFlags)}),`
-    : "";
+  const resourcesField = tursoDb
+    ? `\n  resources: memoizeResources({ db: turso() }),`
+    : hasResources
+      ? `\n  resources: bindWorkerResources(${JSON.stringify(resourceFlags)}),`
+      : "";
 
   // Opt-in Tier-3 data layer: import its installDataLayer from the declared module
   // and call it at worker boot — the prod twin of the dev host's dataLayer.install()
@@ -521,10 +534,12 @@ ${adapterEntry.wrap("pipeline")}
     ? (JSON.parse(await Bun.file(pkgPath).text()) as { name?: string }).name
     : undefined;
   const defaultName = (pkgName ?? basename(appRoot)).replace(/[^a-z0-9-]/gi, "-").toLowerCase();
-  // A declared `db` → a D1 binding named DB (the name bindWorkerResources reads).
-  const plan: ResourcePlan = resourcesCfg?.db
-    ? { db: { binding: "DB", databaseName: `${defaultName}-db` } }
-    : {};
+  // A declared D1-backed db (sqlite/d1) → a D1 binding named DB (the name
+  // bindWorkerResources reads). turso() connects from env, not a binding — no plan.
+  const plan: ResourcePlan =
+    resourcesCfg?.db && resourcesCfg.db.kind !== "turso"
+      ? { db: { binding: "DB", databaseName: `${defaultName}-db` } }
+      : {};
   await adapter.emit({ appRoot, outDir, hasAssets, linkHeader, config: fullConfig, plan, defaultName });
   if (plan.db) {
     console.log(

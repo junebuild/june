@@ -143,14 +143,14 @@ export function workers(opts?: { name?: string; domain?: string }): JuneAdapter 
 // deprecated the Edge Functions *product* and officially recommends the Node
 // runtime for performance + reliability, and Fluid compute (in-function
 // concurrency) closed the cold-start gap edge used to win on. Node also lifts
-// edge's limits (no 1–4MB code cap, full API) and is the substrate a future
-// HTTP/TCP db backend (Neon/Turso) needs. `vercel({ runtime: "edge" })` still
+// edge's limits (no 1–4MB code cap, full API). `vercel({ runtime: "edge" })` still
 // emits an Edge Function for latency-critical global cases — the runtime is not
 // removed, just discouraged. BOTH run the SAME bundle; only the .func packaging
 // (.vc-config.json + the export shape) differs.
 //
-// No db yet (D1 is Cloudflare-only) — declaring one still fails fast; the Node
-// runtime makes a real backend possible but it isn't wired here.
+// db: turso() works (libsql over HTTPS — the build bundles the web client, the
+// request opens it from env → ambient `import { db }`). sqlite()/d1() are
+// Cloudflare-only (a D1 binding); validate() rejects them with that guidance.
 //
 // Routing: only the hashed framework assets (/_june/*) are served statically by
 // the CDN (their exact-path URLs match June's scheme); every page + projection
@@ -176,12 +176,15 @@ export function vercel(opts?: { runtime?: "node" | "edge"; regions?: string[] })
     // and runs on workerd AND Node alike. Mirrors workers()'s shape.
     conditions: ["edge-light", "edge", "import", "default"],
 
-    validate({ plan }) {
-      if (plan.db) {
+    validate({ config }) {
+      // turso() is libsql over HTTPS — it runs on Vercel (the build bundles the web
+      // client; the request opens it from env → ambient `import { db }`). sqlite()/
+      // d1() need a D1 binding, which is Cloudflare-only.
+      const kind = config.resources?.db?.kind;
+      if (kind && kind !== "turso") {
         throw new Error(
-          "vercel(): the Vercel adapter has no db backend yet (D1 is Cloudflare-only).\n" +
-            "  Remove the `db` resource from june.config.ts, or deploy to Workers.\n" +
-            "  An HTTP-driver db (Neon/Turso) for Vercel is planned.",
+          `vercel(): the '${kind}' db isn't supported on Vercel (D1 is Cloudflare-only).\n` +
+            "  Use turso() (libsql over HTTPS) for a Vercel db, or deploy to Workers.",
         );
       }
     },
