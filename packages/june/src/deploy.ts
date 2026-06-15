@@ -84,26 +84,28 @@ async function deployDeno(
   }
   if (!process.env.DENO_DEPLOY_TOKEN) {
     console.log(
-      "note: DENO_DEPLOY_TOKEN not set — deployctl will use its own login\n" +
-        "      (run `deployctl login` once, or export the token).",
+      "note: DENO_DEPLOY_TOKEN not set — `deno deploy` will use its own login\n" +
+        "      (run `deno deploy login` once, or export the token).",
     );
   }
-  // `deno run -A jsr:@deno/deployctl` needs only deno installed (no global
-  // deployctl). Ships the cwd (dist/: worker.js + chunks + assets/) with worker.js
-  // as the entrypoint. --prod targets production (default is a preview).
-  const project = (cfg.deploy?.adapter as { project?: string } | undefined)?.project ?? cfg.deploy?.name;
-  const args = ["deno", "run", "-A", "jsr:@deno/deployctl", "deploy", "--entrypoint=worker.js"];
-  if (project) args.push(`--project=${project}`);
+  // Deno Deploy (the current platform; Classic + deployctl retire 2026-07-20). The
+  // emitted deno.json carries deploy.{org,app,runtime.entrypoint}, so `deno deploy`
+  // ships dist/ (worker.js + chunks + assets/) with no extra flags. --prod targets
+  // production (default is a preview). Auth from DENO_DEPLOY_TOKEN.
+  const args = ["deno", "deploy"];
   if (options.prod) args.push("--prod");
-  if (process.env.DENO_DEPLOY_TOKEN) args.push(`--token=${process.env.DENO_DEPLOY_TOKEN}`);
 
   const { stdout, stderr, exitCode } = await run(args, dist);
   if (stdout.trim()) console.log(stdout.trimEnd());
   if (exitCode !== 0) {
-    if (/login|token|unauthorized|forbidden/i.test(stderr + stdout)) {
-      throw new Error("Deno Deploy auth failed — set DENO_DEPLOY_TOKEN or run `deployctl login`.\n" + stderr.trim());
+    if (/token|login|unauthorized|forbidden|organization was not found/i.test(stderr + stdout)) {
+      throw new Error(
+        "Deno Deploy auth/org failed — set DENO_DEPLOY_TOKEN (or `deno deploy login`) and the\n" +
+          "  org/app in deno({ org, app }).\n" +
+          stderr.trim(),
+      );
     }
-    throw new Error(`deployctl deploy failed (exit ${exitCode})\n${stderr.trim()}`);
+    throw new Error(`deno deploy failed (exit ${exitCode})\n${stderr.trim()}`);
   }
   const url = stdout.match(/https:\/\/\S+\.deno\.dev\S*/)?.[0] ?? null;
   return { url, dryRun: false, configPath: dist, migrated: [] };

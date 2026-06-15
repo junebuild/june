@@ -278,7 +278,7 @@ export function vercel(opts?: { runtime?: "node" | "edge"; regions?: string[] })
 //
 // db: turso() works (libsql over HTTPS, env-driven). sqlite()/d1() are
 // Cloudflare-only; validate() rejects them.
-export function deno(opts?: { project?: string }): JuneAdapter {
+export function deno(opts?: { org?: string; app?: string }): JuneAdapter {
   return {
     name: "deno",
     capabilities: { runtime: "edge", persistentConnections: true, assets: "server" },
@@ -297,21 +297,36 @@ export function deno(opts?: { project?: string }): JuneAdapter {
     },
 
     entry() {
-      // Deno.serve takes the static-serving handler; no withAssets binding, no env
-      // glue (withDenoAssets reads Deno.env). The bundle self-starts on load.
+      // The `export default { fetch }` Web Standard export — what `deno serve` (and
+      // Deno Deploy's runtime) invokes, and the same shape vercel()'s Node runtime
+      // uses. (A top-level `Deno.serve()` only works under `deno run`, not the
+      // platform.) No env glue: withDenoAssets reads Deno.env itself.
       return {
         imports: [`import { withDenoAssets } from "@junejs/server/worker";`],
-        wrap: (pipelineVar) => `Deno.serve(withDenoAssets(${pipelineVar}));`,
+        wrap: (pipelineVar) => `export default { fetch: withDenoAssets(${pipelineVar}) };`,
       };
     },
 
     async emit({ outDir }) {
-      // The bundle (worker.js + chunks) and assets/ already sit in outDir; deployctl
-      // ships the dir with worker.js as the entrypoint. A deno.json marks it a
-      // self-contained Deno project (and is where future deploy config can live).
+      // The bundle (worker.js + chunks) and assets/ already sit in outDir. The
+      // deno.json declares the Deno Deploy target (org/app) + runtime entrypoint
+      // (the `{ fetch }` export `deno serve` runs); source config takes precedence
+      // over the dashboard, so the deploy is reproducible. `deno deploy` ships the
+      // dir. org/app come from deno({ org, app }) — without them, `deno deploy`
+      // prompts for the target.
       await writeFile(
         join(outDir, "deno.json"),
-        JSON.stringify({ ...(opts?.project ? { name: opts.project } : {}) }, null, 2) + "\n",
+        JSON.stringify(
+          {
+            deploy: {
+              ...(opts?.org ? { org: opts.org } : {}),
+              ...(opts?.app ? { app: opts.app } : {}),
+              runtime: { entrypoint: "worker.js" },
+            },
+          },
+          null,
+          2,
+        ) + "\n",
       );
     },
   };

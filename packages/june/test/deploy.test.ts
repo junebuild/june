@@ -14,6 +14,7 @@ import type { D1Exec } from "../src/d1-migrate";
 const DB_APP = fileURLToPath(new URL("./fixtures/deploy-db", import.meta.url));
 const NODB_APP = fileURLToPath(new URL("./fixtures/deploy-nodb", import.meta.url));
 const VERCEL_APP = fileURLToPath(new URL("./fixtures/vercel-app", import.meta.url));
+const DENO_APP = fileURLToPath(new URL("./fixtures/deno-app", import.meta.url));
 
 // Records the ordered sequence of side effects so we can assert "migrate, THEN
 // deploy" and "deploy never happened".
@@ -160,5 +161,56 @@ describe("juneDeploy → vercel target", () => {
     await expect(juneDeploy(VERCEL_APP, { skipBuild: true, runCli: h.runCli })).rejects.toThrow(
       /no Vercel Build Output/,
     );
+  });
+});
+
+describe("juneDeploy → deno target", () => {
+  // deno-app's config uses the deno() adapter → deploy dispatches to `deno deploy`.
+  // The CLI is injected, so this drives the dispatch with no real deploy / network.
+  afterEach(async () => {
+    await rm(join(DENO_APP, "dist"), { recursive: true, force: true });
+  });
+  const stubBundle = async () => {
+    await mkdir(join(DENO_APP, "dist"), { recursive: true });
+    await writeFile(join(DENO_APP, "dist", "worker.js"), "export default { fetch: () => new Response('ok') };");
+  };
+
+  test("ships dist via `deno deploy` (EA) — never deployctl/vercel/wrangler, never D1", async () => {
+    await stubBundle();
+    let captured: string[] = [];
+    const r = await juneDeploy(DENO_APP, {
+      skipBuild: true,
+      prod: true,
+      runCli: async (args) => {
+        captured = args;
+        return { stdout: "View at https://june-deno-app.deno.dev", stderr: "", exitCode: 0 };
+      },
+    });
+    expect(captured.slice(0, 2)).toEqual(["deno", "deploy"]); // the EA CLI, not deployctl
+    expect(captured).toContain("--prod");
+    expect(captured).not.toContain("deployctl"); // classic is retired
+    expect(r.url).toBe("https://june-deno-app.deno.dev");
+    expect(r.migrated).toEqual([]); // no D1 on Deno
+  });
+
+  test("--dry-run does NOT invoke the CLI", async () => {
+    await stubBundle();
+    let called = false;
+    const r = await juneDeploy(DENO_APP, {
+      skipBuild: true,
+      dryRun: true,
+      runCli: async () => {
+        called = true;
+        return { stdout: "", stderr: "", exitCode: 0 };
+      },
+    });
+    expect(called).toBe(false);
+    expect(r.dryRun).toBe(true);
+  });
+
+  test("missing bundle fails with a clear error", async () => {
+    await expect(
+      juneDeploy(DENO_APP, { skipBuild: true, runCli: async () => ({ stdout: "", stderr: "", exitCode: 0 }) }),
+    ).rejects.toThrow(/no built bundle/);
   });
 });

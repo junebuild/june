@@ -35,22 +35,22 @@ describe("deno() adapter — units", () => {
   test("entry: Deno.serve(withDenoAssets(pipeline)), helper imported from ./worker", () => {
     const e = deno().entry({ linkHeader: null });
     expect(e.imports).toContain(`import { withDenoAssets } from "@junejs/server/worker";`);
-    expect(e.wrap("pipeline")).toBe("Deno.serve(withDenoAssets(pipeline));");
+    expect(e.wrap("pipeline")).toBe("export default { fetch: withDenoAssets(pipeline) };");
   });
 
-  test("emit writes a deno.json", async () => {
+  test("emit writes deno.json with the Deno Deploy target (org/app) + runtime entrypoint", async () => {
     const dir = await mkdtemp(join(tmpdir(), "june-deno-"));
     try {
-      await deno({ project: "my-deno-app" }).emit({
-        appRoot: dir,
-        outDir: dir,
-        hasAssets: false,
-        linkHeader: null,
-        config: {},
-        plan: {},
-        defaultName: "d",
+      const ctx = { appRoot: dir, outDir: dir, hasAssets: false, linkHeader: null, config: {}, plan: {}, defaultName: "d" };
+      await deno({ org: "acme", app: "site" }).emit(ctx);
+      expect(JSON.parse(await readFile(join(dir, "deno.json"), "utf8"))).toEqual({
+        deploy: { org: "acme", app: "site", runtime: { entrypoint: "worker.js" } },
       });
-      expect(JSON.parse(await readFile(join(dir, "deno.json"), "utf8"))).toEqual({ name: "my-deno-app" });
+      // without org/app: just the entrypoint (deno deploy prompts for the target)
+      await deno().emit(ctx);
+      expect(JSON.parse(await readFile(join(dir, "deno.json"), "utf8"))).toEqual({
+        deploy: { runtime: { entrypoint: "worker.js" } },
+      });
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -71,15 +71,8 @@ describe("withDenoAssets (fake Deno global)", () => {
         if (p.toString().includes("global.abc123.css")) return new TextEncoder().encode(".a{color:red}");
         throw new Error("ENOENT"); // any other path "doesn't exist" → fall through
       },
-      env: { toObject: () => ({ FOO: "bar" }) },
     };
-    let pipelineEnv: unknown;
-    const pipeline = {
-      fetch: async (_req: Request, env?: unknown) => {
-        pipelineEnv = env;
-        return new Response("rendered", { status: 200 });
-      },
-    };
+    const pipeline = { fetch: async () => new Response("rendered", { status: 200 }) };
     const handler = withDenoAssets(pipeline);
 
     // a hashed asset → served from disk, immutable, css content-type
@@ -92,11 +85,9 @@ describe("withDenoAssets (fake Deno global)", () => {
     // a missing asset → falls through to the pipeline
     const miss = await handler(new Request("http://x/_june/nope.css"));
     expect(await miss.text()).toBe("rendered"); // pipeline handled it
-
-    // a page → straight to the pipeline, env from Deno.env
+    // a page → straight to the pipeline
     const page = await handler(new Request("http://x/about"));
     expect(await page.text()).toBe("rendered");
-    expect(pipelineEnv).toEqual({ FOO: "bar" });
   });
 });
 
@@ -113,7 +104,10 @@ describe("deno() adapter — e2e (real juneBuild)", () => {
     await juneBuild(ROOT, { outDir });
 
     const fn = await readFile(join(outDir, "worker.js"), "utf8");
-    expect(fn).toContain("Deno.serve(withDenoAssets("); // the entry self-starts on Deno
+    // the default export is a `{ fetch }` Web Standard handler (rolldown hoists it
+    // to a var + `export { … as default }`) — what `deno serve` / Deno Deploy runs
+    expect(fn).toContain("fetch: withDenoAssets(");
+    expect(/as default|export default/.test(fn)).toBe(true);
     expect(fn).toContain("pipeline.fetch(request"); // the portable pipeline is wrapped
     expect(existsSync(join(outDir, "deno.json"))).toBe(true);
     // hashed framework assets sit beside the bundle for withDenoAssets to serve

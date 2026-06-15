@@ -224,7 +224,6 @@ export function withAssets(
 // referenced only inside the body, so non-Deno bundles tree-shake this out.
 declare const Deno: {
   readFile(path: string | URL): Promise<Uint8Array>;
-  env: { toObject(): Record<string, string> };
 };
 
 const ASSET_CONTENT_TYPES: Record<string, string> = {
@@ -260,6 +259,9 @@ export function withDenoAssets(pipeline: FetchPipeline): (request: Request) => P
         /* not on disk → fall through (the pipeline 404s) */
       }
     }
-    return pipeline.fetch(request, Deno.env.toObject());
+    // No env arg: Deno has no platform bindings (unlike D1/KV on workers); env-
+    // driven resources (turso) read process.env / Deno.env themselves. Keeps the
+    // function off the --allow-env permission too.
+    return pipeline.fetch(request);
   };
 }
