@@ -9,6 +9,12 @@
 
 export type RunResult = { changes: number; lastInsertRowid: number | bigint };
 
+// The SQL dialect a JuneDb handle speaks, so a data layer (Juno) can compile the
+// right SQL — placeholders (`?` vs `$n`), identifier quoting, upsert syntax — for the
+// handle it's given. A pure string tag (no driver import), keeping this contract
+// layer host-free. Absent ⇒ treated as "sqlite" (the default; D1 is sqlite too).
+export type SqlDialect = "sqlite" | "postgres" | "mysql";
+
 // The async database surface. SELECT → query()/get(); writes → run(); DDL or
 // multi-statement scripts → exec(). Async from day one so D1/edge slot in behind
 // the same interface (the PoC's sync surface was the one dead end).
@@ -19,6 +25,9 @@ export interface JuneDb {
   exec(sql: string): Promise<void>;
   transaction<T>(fn: (tx: JuneDb) => Promise<T>): Promise<T>;
   close(): Promise<void>;
+  // The dialect this handle speaks (default "sqlite" when absent). Set by the driver
+  // so Juno picks the matching compiler without the framework knowing about dialects.
+  readonly dialect?: SqlDialect;
 }
 
 // --- kv (key-value / cache) -------------------------------------------------

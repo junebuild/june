@@ -51,6 +51,7 @@ function asyncSqlite(db: SyncSqlite): JuneDb {
     return s;
   };
   const self: JuneDb = {
+    dialect: "sqlite",
     async query<T>(sql: string, params: unknown[] = []) {
       return prep(sql).all(...params) as T[];
     },

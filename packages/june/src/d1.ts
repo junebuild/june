@@ -26,6 +26,7 @@ export interface D1Database {
 // already-bound D1Database.
 export function d1(binding: D1Database): DbFactory {
   const db: JuneDb = {
+    dialect: "sqlite", // D1 *is* sqlite — same SQL, same Juno compiler
     async query<T>(sql: string, params: unknown[] = []) {
       return (await binding.prepare(sql).bind(...params).all<T>()).results;
     },

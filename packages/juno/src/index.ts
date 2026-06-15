@@ -22,7 +22,7 @@ import { emitSchemaTypes } from "./types";
 
 export { createLoader, createGroupLoader, tableLoader, tableListLoader, type Loader, type ListLoader } from "./batch";
 export { tablesFromSql, tagSql, taggingDb, type SqlTouch } from "./tag";
-export { Dialect, SqliteDialect, PostgresDialect, MysqlDialect, sqlite, postgres, mysql, ident } from "./compiler";
+export { Dialect, SqliteDialect, PostgresDialect, MysqlDialect, sqlite, postgres, mysql, dialectFor, ident } from "./compiler";
 export { emitSchemaTypes } from "./types";
 export type { Node, SelectNode, InsertNode, UpdateNode, DeleteNode, UpsertNode } from "./ast";
 

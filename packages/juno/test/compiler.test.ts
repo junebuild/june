@@ -4,7 +4,8 @@
 // subclass proves multi-dialect works off the same AST before a real Postgres one).
 
 import { describe, expect, test } from "bun:test";
-import { Dialect, SqliteDialect, PostgresDialect, MysqlDialect, sqlite, postgres, mysql } from "../src/compiler";
+import { host } from "@junejs/server/host";
+import { Dialect, SqliteDialect, PostgresDialect, MysqlDialect, sqlite, postgres, mysql, dialectFor } from "../src/compiler";
 import type { Node } from "../src/ast";
 
 describe("SqliteDialect.compile — SQL per node kind", () => {
@@ -282,5 +283,25 @@ describe("MysqlDialect — `?` placeholders + backtick identifiers + ON DUPLICAT
   test("MysqlDialect is a Dialect with its own compile-once cache", () => {
     expect(mysql).toBeInstanceOf(MysqlDialect);
     expect(mysql).toBeInstanceOf(Dialect);
+  });
+});
+
+describe("dialectFor — resolve the compiler from a JuneDb's dialect tag (the keystone)", () => {
+  test("maps each tag to its singleton compiler", () => {
+    expect(dialectFor({ dialect: "sqlite" })).toBe(sqlite);
+    expect(dialectFor({ dialect: "postgres" })).toBe(postgres);
+    expect(dialectFor({ dialect: "mysql" })).toBe(mysql);
+  });
+
+  test("an untagged handle defaults to sqlite (edge-first floor)", () => {
+    expect(dialectFor({})).toBe(sqlite);
+    expect(dialectFor({ dialect: undefined })).toBe(sqlite);
+  });
+
+  test("the real sqlite driver tags itself, and resolves to the sqlite compiler", async () => {
+    const db = await host.openDb(":memory:");
+    expect(db.dialect).toBe("sqlite");
+    expect(dialectFor(db)).toBe(sqlite);
+    await db.close();
   });
 });

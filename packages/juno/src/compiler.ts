@@ -9,6 +9,8 @@
 // every later call reuses the string — what Kysely-style builders don't do (they
 // recompile per execute). Param VALUES are bound by the caller, never cached.
 
+import type { JuneDb, SqlDialect } from "@junejs/core/resources";
+
 import type { CmpOp, Node, Predicate } from "./ast";
 
 const SYM: Record<CmpOp, string> = {
@@ -181,3 +183,14 @@ export class MysqlDialect extends Dialect {
 export const sqlite = new SqliteDialect();
 export const postgres = new PostgresDialect();
 export const mysql = new MysqlDialect();
+
+// The dialect-tag → compiler registry. This is the keystone of multi-dialect runtime:
+// a JuneDb handle declares the SQL it speaks (`db.dialect`), and Juno resolves the
+// matching compiler here — without the framework ever knowing about dialects.
+const BY_DIALECT: Record<SqlDialect, Dialect> = { sqlite, postgres, mysql };
+
+// Resolve the compiler for a JuneDb handle. An untagged handle (an older driver, or
+// the contract's optional `dialect`) defaults to sqlite — the safe, edge-first floor.
+export function dialectFor(db: Pick<JuneDb, "dialect">): Dialect {
+  return BY_DIALECT[db.dialect ?? "sqlite"];
+}
