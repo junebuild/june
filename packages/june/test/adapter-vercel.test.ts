@@ -12,16 +12,20 @@ import { vercel } from "../src/adapter";
 import { juneBuild } from "../src/build";
 
 describe("vercel() adapter — units", () => {
-  test("targets edge-light, not workerd", () => {
+  test("defaults to the node runtime; the bundle still targets edge-light", () => {
     const a = vercel();
     expect(a.name).toBe("vercel");
+    // The bundle conditions are unchanged regardless of runtime. NOT
+    // "worker"/"browser": react-dom maps "worker" → its browser SSR build, which
+    // crashes — must reach "edge-light" → server.edge.js, which runs on Node too.
     expect(a.conditions[0]).toBe("edge-light");
     expect(a.conditions).not.toContain("workerd");
-    // NOT "worker"/"browser": react-dom maps "worker" → its browser SSR build,
-    // which crashes the edge function — must reach "edge-light" → server.edge.
     expect(a.conditions).not.toContain("worker");
     expect(a.conditions).not.toContain("browser");
-    expect(a.capabilities.runtime).toBe("edge");
+    // Node (Fluid compute) is the default; edge is opt-in.
+    expect(a.capabilities.runtime).toBe("node");
+    expect(a.capabilities.persistentConnections).toBe(true);
+    expect(vercel({ runtime: "edge" }).capabilities.runtime).toBe("edge");
   });
 
   test("validate fails fast when a db resource is declared", () => {
@@ -31,13 +35,19 @@ describe("vercel() adapter — units", () => {
     expect(() => vercel().validate!({ plan: {}, config: {} })).not.toThrow(); // no db → ok
   });
 
-  test("entry is the bare pipeline (no withAssets) and reads env from process", () => {
-    const e = vercel().entry({ linkHeader: null });
-    expect(e.imports).toEqual([]); // no withAssets import
-    const wrapped = e.wrap("pipeline");
-    expect(wrapped).toContain("export default (request) => pipeline.fetch(request,");
-    expect(wrapped).toContain("process"); // env via process.env
-    expect(wrapped).not.toContain("withAssets");
+  test("node entry is the fetch Web Standard export; edge entry is the bare function", () => {
+    const node = vercel().entry({ linkHeader: null });
+    expect(node.imports).toEqual([]); // no withAssets import
+    const nodeWrap = node.wrap("pipeline");
+    // Node runtime captures `export default { fetch }`
+    expect(nodeWrap).toContain("export default { fetch: (request) => pipeline.fetch(request,");
+    expect(nodeWrap).toContain("process"); // env via process.env
+    expect(nodeWrap).not.toContain("withAssets");
+
+    // Edge runtime takes a bare default function
+    const edgeWrap = vercel({ runtime: "edge" }).entry({ linkHeader: null }).wrap("pipeline");
+    expect(edgeWrap).toContain("export default (request) => pipeline.fetch(request,");
+    expect(edgeWrap).not.toContain("{ fetch:");
   });
 
   test("emit writes a valid Build Output API v3 tree", async () => {
@@ -63,9 +73,16 @@ describe("vercel() adapter — units", () => {
 
       const out = join(appRoot, ".vercel", "output");
       const fnDir = join(out, "functions", "__june.func");
-      // function: edge runtime, entrypoint = the worker bundle
+      // function: node runtime (default), the worker bundle as the ESM handler
       const vc = JSON.parse(await readFile(join(fnDir, ".vc-config.json"), "utf8"));
-      expect(vc).toMatchObject({ runtime: "edge", entrypoint: "worker.js" });
+      expect(vc).toMatchObject({
+        runtime: "nodejs22.x",
+        handler: "worker.js",
+        launcherType: "Nodejs",
+        supportsResponseStreaming: true, // else a streamed Response is buffered
+      });
+      // the ESM bundle needs the function dir marked as a module or Node loads CJS
+      expect(JSON.parse(await readFile(join(fnDir, "package.json"), "utf8"))).toEqual({ type: "module" });
       expect(await readFile(join(fnDir, "worker.js"), "utf8")).toContain("new Response('ok')");
       // the code-split chunk is copied beside the entry (else Vercel rejects it)
       expect(existsSync(join(fnDir, "cache-abc123.js"))).toBe(true);
@@ -81,6 +98,30 @@ describe("vercel() adapter — units", () => {
       expect(cfg.routes[0].headers["cache-control"]).toContain("immutable");
       expect(cfg.routes).toContainEqual({ handle: "filesystem" });
       expect(cfg.routes[cfg.routes.length - 1]).toEqual({ src: "^/.*$", dest: "/__june" });
+    } finally {
+      await rm(appRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("runtime: 'edge' emits an Edge Function (entrypoint, no launcher / package.json)", async () => {
+    const appRoot = await mkdtemp(join(tmpdir(), "june-vc-"));
+    try {
+      const outDir = join(appRoot, "dist");
+      await mkdir(outDir, { recursive: true });
+      await writeFile(join(outDir, "worker.js"), "export default () => new Response('ok')");
+      await vercel({ runtime: "edge" }).emit({
+        appRoot,
+        outDir,
+        hasAssets: false,
+        linkHeader: null,
+        config: {},
+        plan: {},
+        defaultName: "d",
+      });
+      const fnDir = join(appRoot, ".vercel", "output", "functions", "__june.func");
+      const vc = JSON.parse(await readFile(join(fnDir, ".vc-config.json"), "utf8"));
+      expect(vc).toEqual({ runtime: "edge", entrypoint: "worker.js" });
+      expect(existsSync(join(fnDir, "package.json"))).toBe(false); // edge sources are ESM already
     } finally {
       await rm(appRoot, { recursive: true, force: true });
     }
@@ -109,20 +150,24 @@ describe("vercel() adapter — e2e (real juneBuild)", () => {
     await rm(join(ROOT, ".vercel"), { recursive: true, force: true }); // emit() writes here
   });
 
-  test("builds the Vercel output: edge function from the real bundle, no withAssets", async () => {
+  test("builds the Vercel output: node function from the real bundle, no withAssets", async () => {
     outDir = await mkdtemp(join(tmpdir(), "june-vc-build-"));
     await juneBuild(ROOT, { outDir });
 
     const out = join(ROOT, ".vercel", "output");
     expect(existsSync(join(out, "config.json"))).toBe(true);
 
-    const vc = JSON.parse(await readFile(join(out, "functions", "__june.func", ".vc-config.json"), "utf8"));
-    expect(vc.runtime).toBe("edge");
+    const fnDir = join(out, "functions", "__june.func");
+    const vc = JSON.parse(await readFile(join(fnDir, ".vc-config.json"), "utf8"));
+    expect(vc.runtime).toBe("nodejs22.x");
+    expect(vc.supportsResponseStreaming).toBe(true); // SSE / streamed SSR
+    expect(JSON.parse(await readFile(join(fnDir, "package.json"), "utf8"))).toEqual({ type: "module" });
 
-    // the bundled edge function is the REAL worker, wrapped as the bare fetch
-    // shim — env from process.env, NO withAssets (workers-only)
-    const fn = await readFile(join(out, "functions", "__june.func", "worker.js"), "utf8");
+    // the bundled function is the REAL worker, wrapped as the fetch Web Standard
+    // export — env from process.env, NO withAssets (workers-only)
+    const fn = await readFile(join(fnDir, "worker.js"), "utf8");
     expect(fn).toContain("pipeline.fetch(request, __env)"); // the vercel entry shim
+    expect(fn).toContain("fetch:"); // the { fetch } node export shape
     expect(fn).toContain("typeof process"); // env via process.env, not a binding
     expect(fn).not.toContain("withAssets"); // workers-only
     expect(fn.length).toBeGreaterThan(1000); // a real bundle, not a stub

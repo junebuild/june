@@ -136,26 +136,44 @@ export function workers(opts?: { name?: string; domain?: string }): JuneAdapter 
 
 // Vercel target — emits the Build Output API v3 tree (.vercel/output/). June's
 // worker is already a Web-standard fetch handler, so this is packaging, not a
-// re-bundle: the same portable graph, built with edge-light conditions, becomes a
-// Vercel Edge Function. v1 scope: SSR + static + the full agent surface. No db
-// (D1 is Cloudflare-only) — declaring one fails fast; an HTTP-driver db backend
-// for Vercel is a planned follow-up.
+// re-bundle: the same portable graph (built with edge-light conditions, so
+// react-dom resolves to server.edge.js) packaged for the platform.
+//
+// Default runtime is "node" — a Vercel Function on Fluid compute. Vercel
+// deprecated the Edge Functions *product* and officially recommends the Node
+// runtime for performance + reliability, and Fluid compute (in-function
+// concurrency) closed the cold-start gap edge used to win on. Node also lifts
+// edge's limits (no 1–4MB code cap, full API) and is the substrate a future
+// HTTP/TCP db backend (Neon/Turso) needs. `vercel({ runtime: "edge" })` still
+// emits an Edge Function for latency-critical global cases — the runtime is not
+// removed, just discouraged. BOTH run the SAME bundle; only the .func packaging
+// (.vc-config.json + the export shape) differs.
+//
+// No db yet (D1 is Cloudflare-only) — declaring one still fails fast; the Node
+// runtime makes a real backend possible but it isn't wired here.
 //
 // Routing: only the hashed framework assets (/_june/*) are served statically by
 // the CDN (their exact-path URLs match June's scheme); every page + projection
-// (.md/.json/mcp/llms.txt) renders through the one edge function, so the
-// dual-audience surface is identical to Workers.
+// (.md/.json/mcp/llms.txt) renders through the one function, so the dual-audience
+// surface is identical to Workers.
 const VERCEL_FUNCTION = "__june"; // → /__june, the catch-all SSR function
 
-export function vercel(opts?: { regions?: string[] }): JuneAdapter {
+export function vercel(opts?: { runtime?: "node" | "edge"; regions?: string[] }): JuneAdapter {
+  const isEdge = (opts?.runtime ?? "node") === "edge";
   return {
     name: "vercel",
-    capabilities: { runtime: "edge", persistentConnections: false, assets: "platform" },
-    // NO "worker"/"browser": react-dom's ./server exports map "worker" → the
-    // BROWSER SSR build (server.browser.js), listed BEFORE "edge-light", so
-    // requesting "worker" pulls the wrong renderer and the edge function crashes
-    // at invocation. "edge-light" → server.edge.js (the same build workerd gets
-    // via "workerd"). Mirrors workers()'s shape: <runtime>, edge, import, default.
+    capabilities: {
+      // Node on Fluid holds streamed/SSE connections; the edge variant keeps the
+      // conservative flag it shipped with.
+      runtime: isEdge ? "edge" : "node",
+      persistentConnections: !isEdge,
+      assets: "platform",
+    },
+    // The bundle is identical for both runtimes. NO "worker"/"browser": react-dom's
+    // ./server exports map "worker" → the BROWSER SSR build (server.browser.js),
+    // listed BEFORE "edge-light", so requesting "worker" pulls the wrong renderer.
+    // "edge-light" → server.edge.js, which uses Web Streams (renderToReadableStream)
+    // and runs on workerd AND Node alike. Mirrors workers()'s shape.
     conditions: ["edge-light", "edge", "import", "default"],
 
     validate({ plan }) {
@@ -170,13 +188,17 @@ export function vercel(opts?: { regions?: string[] }): JuneAdapter {
 
     entry() {
       // No withAssets: the CDN serves /_june/*; this function renders everything
-      // else. Resources arrive via process.env (Vercel injects env vars into the
-      // edge runtime); there are no platform bindings.
+      // else. Resources arrive via process.env (Vercel injects env vars); there
+      // are no platform bindings. The Node runtime captures the `fetch` Web
+      // Standard export (an object with a fetch method); the Edge runtime takes a
+      // bare default function. Same pipeline call either way.
+      const env = `const __env = typeof process !== "undefined" && process.env ? process.env : {};\n`;
       return {
         imports: [],
         wrap: (pipelineVar) =>
-          `const __env = typeof process !== "undefined" && process.env ? process.env : {};\n` +
-          `export default (request) => ${pipelineVar}.fetch(request, __env);`,
+          isEdge
+            ? env + `export default (request) => ${pipelineVar}.fetch(request, __env);`
+            : env + `export default { fetch: (request) => ${pipelineVar}.fetch(request, __env) };`,
       };
     },
 
@@ -192,14 +214,28 @@ export function vercel(opts?: { regions?: string[] }): JuneAdapter {
       // function ("referencing unsupported modules"). assets/ is handled below.
       const jsFiles = (await readdir(outDir)).filter((f) => f.endsWith(".js"));
       for (const f of jsFiles) await copyFile(join(outDir, f), join(fnDir, f));
-      await writeFile(
-        join(fnDir, ".vc-config.json"),
-        JSON.stringify(
-          { runtime: "edge", entrypoint: "worker.js", ...(opts?.regions ? { regions: opts.regions } : {}) },
-          null,
-          2,
-        ) + "\n",
-      );
+
+      const regions = opts?.regions ? { regions: opts.regions } : {};
+      const vcConfig = isEdge
+        ? { runtime: "edge", entrypoint: "worker.js", ...regions }
+        : {
+            // A Vercel Function on Fluid compute. handler = the ESM bundle entry;
+            // launcherType Nodejs invokes its default `fetch` export.
+            // supportsResponseStreaming is REQUIRED or a streamed Response (our SSE
+            // live feed, streamed SSR) is buffered instead of flushed.
+            runtime: "nodejs22.x",
+            handler: "worker.js",
+            launcherType: "Nodejs",
+            supportsResponseStreaming: true,
+            ...regions,
+          };
+      await writeFile(join(fnDir, ".vc-config.json"), JSON.stringify(vcConfig, null, 2) + "\n");
+      // The bundle is ESM (worker.js + ./chunk-*.js all use `export`/`import`).
+      // The Node runtime loads the .func as CommonJS by default, so mark the whole
+      // function dir as ESM. (The edge runtime always treats sources as ESM.)
+      if (!isEdge) {
+        await writeFile(join(fnDir, "package.json"), JSON.stringify({ type: "module" }, null, 2) + "\n");
+      }
 
       // static: only the hashed framework assets under /_june/ (exact-path URLs)
       if (hasAssets) {
