@@ -73,8 +73,8 @@ describe("mcpHandler()", () => {
     defineAction({
       id: "add",
       description: "Add two numbers",
-      input: { type: "object", properties: {} },
-      run: (input: { a: number; b: number }) => ({ sum: input.a + input.b }),
+      input: { type: "object", properties: { a: { type: "number" }, b: { type: "number" } }, required: ["a", "b"] },
+      run: (input) => ({ sum: input.a + input.b }),
     });
     const res = await mcpHandler(
       rpc({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "add", arguments: { a: 2, b: 3 } } }),

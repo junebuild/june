@@ -16,8 +16,78 @@ import type { ActionContext } from "./context";
 export type JsonSchema = {
   type: "object";
   properties: Record<string, { type: string; description?: string }>;
-  required?: string[];
+  // readonly so an `as const` schema (which an extracted schema variable needs to
+  // keep its literals for InferInput) still satisfies the constraint. Inline
+  // schema literals infer via the `const` type param without `as const`.
+  required?: readonly string[];
 };
+
+// Map June's flat JSON-Schema subset → a TS type. June's schema is intentionally
+// minimal (type:"object" + flat properties + required[]), so this is a small
+// in-house mapped type — no json-schema-to-ts, no recursive constraint, no
+// TS2589, no new dependency. `defineAction` captures the schema as a `const`
+// literal so the property `type` strings survive as literals for this to read.
+type JsonPrimitive<T> = T extends "string"
+  ? string
+  : T extends "number" | "integer"
+    ? number
+    : T extends "boolean"
+      ? boolean
+      : T extends "array"
+        ? unknown[]
+        : T extends "object"
+          ? Record<string, unknown>
+          : unknown;
+
+type RequiredName<S extends JsonSchema> = S["required"] extends readonly string[]
+  ? S["required"][number]
+  : never;
+
+export type InferInput<S extends JsonSchema> = {
+  [K in keyof S["properties"] as K extends RequiredName<S> ? K : never]: JsonPrimitive<
+    S["properties"][K]["type"]
+  >;
+} & {
+  [K in keyof S["properties"] as K extends RequiredName<S> ? never : K]?: JsonPrimitive<
+    S["properties"][K]["type"]
+  >;
+};
+
+// In-house runtime validation matching the schema's expressiveness: required keys
+// present + each declared property's primitive type. Extra keys are allowed
+// (June's schema has no additionalProperties). Returns an error string, or null
+// when valid. Lives in core (pure, no deps) — the dispatch boundary that needs it
+// is here, and June's flat schema needs no ajv.
+export function validateInput(schema: JsonSchema, input: unknown): string | null {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    return "input must be an object";
+  }
+  const obj = input as Record<string, unknown>;
+  for (const key of schema.required ?? []) {
+    if (obj[key] === undefined) return `missing required property "${key}"`;
+  }
+  for (const [key, prop] of Object.entries(schema.properties)) {
+    const v = obj[key];
+    if (v === undefined) continue; // absent optional (absent required caught above)
+    const t = prop.type;
+    const ok =
+      t === "string"
+        ? typeof v === "string"
+        : t === "number"
+          ? typeof v === "number"
+          : t === "integer"
+            ? typeof v === "number" && Number.isInteger(v)
+            : t === "boolean"
+              ? typeof v === "boolean"
+              : t === "array"
+                ? Array.isArray(v)
+                : t === "object"
+                  ? typeof v === "object" && v !== null && !Array.isArray(v)
+                  : true; // unknown declared type → don't reject
+    if (!ok) return `property "${key}" must be ${t}`;
+  }
+  return null;
+}
 
 export type ActionDefinition<I = unknown, O = unknown> = {
   id: string;
@@ -58,12 +128,24 @@ export function setServerReferenceRegistrar(fn: ServerReferenceRegistrar) {
   serverReferenceRegistrar = fn;
 }
 
-export function defineAction<I, O>(
-  def: ActionDefinition<I, O>,
-): ActionDefinition<I, O> {
-  ACTION_REGISTRY.set(def.id, def);
+// `input` is the SINGLE source: run()'s param type is INFERRED from the schema
+// (no second hand-written type), and invokeAction validates against the SAME
+// schema. `const S` captures the schema literal so InferInput can read it.
+export function defineAction<const S extends JsonSchema, O>(def: {
+  id: string;
+  description: string;
+  input: S;
+  run: (input: InferInput<S>, ctx: ActionContext) => O | Promise<O>;
+}): ActionDefinition<InferInput<S>, O> {
+  const action = def as unknown as ActionDefinition<InferInput<S>, O>;
+  const existing = ACTION_REGISTRY.get(def.id);
+  if (existing && existing !== (action as unknown as AnyAction)) {
+    // Don't silently overwrite — a clashing id is almost always a bug.
+    console.warn(`[june] defineAction: id "${def.id}" is already registered — overwriting.`);
+  }
+  ACTION_REGISTRY.set(def.id, action as unknown as AnyAction);
   serverReferenceRegistrar?.(def.run as (...args: unknown[]) => unknown, def.id);
-  return def;
+  return action;
 }
 
 // JSON dispatch path (agent / MCP): invoke an action by id with a single input
@@ -76,6 +158,10 @@ export async function invokeAction(
 ): Promise<unknown> {
   const action = ACTION_REGISTRY.get(id);
   if (!action) throw new Error(`Unknown action: ${id}`);
+  // Enforce the schema at the dispatch boundary — /mcp is untrusted input. This
+  // used to be a no-op (the schema only described, never enforced).
+  const invalid = validateInput(action.input, input);
+  if (invalid) throw new Error(`Invalid input for "${id}": ${invalid}`);
   const result = await action.run(input, ctx);
 
   // Cache coherence is a property of the ACTION, not of one dispatch path:

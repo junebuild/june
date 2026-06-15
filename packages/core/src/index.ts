@@ -75,11 +75,13 @@ export {
 export {
   defineAction,
   invokeAction,
+  validateInput,
   setServerReferenceRegistrar,
   ACTION_REGISTRY,
   type ActionDefinition,
   type AnyAction,
   type JsonSchema,
+  type InferInput,
 } from "./agent";
 
 // Agent discovery emitters

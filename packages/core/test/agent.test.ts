@@ -3,15 +3,16 @@ import {
   ACTION_REGISTRY,
   defineAction,
   invokeAction,
-  type JsonSchema,
 } from "@junejs/core/agent";
 import type { ActionContext } from "@junejs/core/context";
 
-const schema: JsonSchema = {
+// `as const` so an extracted schema keeps its literals for InferInput (inline
+// schemas don't need it — the `const` type param captures them).
+const schema = {
   type: "object",
   properties: { name: { type: "string" } },
   required: ["name"],
-};
+} as const;
 
 // Empty registry per test, restored after — see discovery.test.ts: a cleared
 // registry cannot be repopulated by re-import (module cache), which breaks
@@ -81,5 +82,25 @@ describe("invokeAction()", () => {
 
   test("throws on an unknown action id", () => {
     expect(invokeAction("missing", {})).rejects.toThrow("Unknown action: missing");
+  });
+
+  test("validates input against the schema before run() — /mcp is untrusted input", async () => {
+    let ran = false;
+    defineAction({
+      id: "needsName",
+      description: "Needs a name",
+      input: { type: "object", properties: { name: { type: "string" } }, required: ["name"] },
+      run: (input) => {
+        ran = true;
+        return { ok: input.name };
+      },
+    });
+    // missing required → rejected, run() never called
+    await expect(invokeAction("needsName", {})).rejects.toThrow(/required property "name"/);
+    // wrong type → rejected
+    await expect(invokeAction("needsName", { name: 123 })).rejects.toThrow(/must be string/);
+    expect(ran).toBe(false);
+    // valid → runs
+    expect(await invokeAction("needsName", { name: "Ada" })).toEqual({ ok: "Ada" });
   });
 });
