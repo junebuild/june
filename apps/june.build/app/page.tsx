@@ -15,7 +15,7 @@ const cw = { fontFamily: "var(--font-mono)", fontSize: "0.86em", color: "var(--s
 
 const SURFACES = [
   { mime: "text/html", h: "Human view", p: "Server-streamed RSC, zero client JS by default.", live: false },
-  { mime: "text/markdown", h: "Agent reads", p: "Your authored bytes, verbatim — append .md to any page.", live: false },
+  { mime: "text/markdown", h: "Agent reads", p: "The same route(), as clean markdown — append .md to any page.", live: false },
   { mime: "application/json", h: "Machine API", p: "The same route() as structured data.", live: false },
   { mime: "/mcp", h: "Agent acts", p: "Every defineAction() is a callable tool, one auth gate.", live: true },
 ];
@@ -129,6 +129,13 @@ function NoGlue() {
                   llms.txt.
                 </span>
               </li>
+              <li>
+                <span className="j-fk">auth</span>
+                <span className="j-fb">
+                  <b>Better Auth</b> is the blessed default <i>(a first-class integration is coming soon)</i> — or
+                  bring your own. Either way the gate is the same.
+                </span>
+              </li>
             </ul>
           </div>
           <div className="j-panel">
@@ -137,7 +144,11 @@ function NoGlue() {
               <span className="lg">ts</span>
             </div>
             <pre>
-              {"export const "}
+              {"import { db } from "}
+              <span className="tk-str">"@junejs/db"</span>
+              {";  "}
+              <span className="tk-mut">{"// ambient + scoped — never on ctx"}</span>
+              {"\n\nexport const "}
               <span className="tk-key">createUser</span>
               {" = "}
               <span className="tk-key">defineAction</span>
@@ -150,10 +161,8 @@ function NoGlue() {
               {"\n  input: { name: "}
               <span className="tk-str">"string"</span>
               {" },\n  run: (input, ctx) => {\n    "}
-              <span className="tk-mut">{"// ctx carries the principal — UI or agent."}</span>
-              {"\n    return ctx.db.insert("}
-              <span className="tk-str">"users"</span>
-              {", input);\n  },\n});"}
+              <span className="tk-mut">{"// ctx is the principal (user/session) — UI or agent."}</span>
+              {"\n    return db.users.insert(input);\n  },\n});"}
             </pre>
           </div>
         </div>
@@ -259,14 +268,29 @@ function DataMagic() {
         <div className="j-split is-rev">
           <div className="j-split-text">
             <p className="j-eyebrow">
-              <span className="j-num">04</span> — Data magic
+              <span className="j-num">04</span> — Data
             </p>
-            <h2 className="j-h2">No manual revalidate(). Ever.</h2>
+            <h2 className="j-h2">Declare it once. The layer does the rest.</h2>
             <p className="j-lead">
-              A write auto-invalidates exactly the cache entries it touched; component reads on a render
-              auto-batch into one round trip. The SQL you read is the SQL that runs.
+              Declare <code style={cw}>db</code> / <code style={cw}>kv</code> / <code style={cw}>blob</code> in
+              your config; reach them ambiently with <code style={cw}>import &#123; db &#125;</code> — scoped per
+              request, plain SQL, no ORM ceremony. It maps to D1, Turso, or local SQLite per target — or bring
+              your own.
             </p>
             <ul className="j-feature-list">
+              <li>
+                <span className="j-fk">ambient db</span>
+                <span className="j-fb">
+                  <b>import &#123; db &#125;</b>, scoped per request — <b>ctx is identity-only</b> (user/session),
+                  never the database.
+                </span>
+              </li>
+              <li>
+                <span className="j-fk">plain SQL</span>
+                <span className="j-fb">
+                  the <b>SQL you read is the SQL that runs</b> — no DSL for a human or an agent to misread.
+                </span>
+              </li>
               <li>
                 <span className="j-fk">writes</span>
                 <span className="j-fb">
@@ -377,8 +401,24 @@ function CtaBand() {
       <div className="j-cta-in">
         <h2>Your app is the agent's API.</h2>
         <p>
-          One React framework for both audiences. 0.0.x preview — the APIs will change, and we'll tell you when.
+          One React framework for both audiences. 0.0.x preview — APIs will change, and we'll tell you when.
         </p>
+        <div className="j-status">
+          <span>
+            <b className="ok">Stable</b>routes · projections · actions · MCP
+          </span>
+          <span>
+            <b className="warn">Changing</b>data layer · auth
+          </span>
+          <span>
+            <b className="exp">Experimental</b>native runtime · live RSC
+          </span>
+        </div>
+        <div style={{ marginTop: 14 }}>
+          <a className="j-secondary-link" href="/docs/05-stability">
+            Stability &amp; roadmap →
+          </a>
+        </div>
         <div className="j-install">
           <Island name="InstallCmd" component={InstallCmd} />
         </div>
