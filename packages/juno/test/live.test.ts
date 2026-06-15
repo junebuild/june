@@ -1,94 +1,71 @@
-// Live-dialect tests — run juno's COMPILED SQL against real Postgres / MySQL servers,
-// not just string assertions. Skipped by default; set a connection string to enable:
+// Live end-to-end — the FULL path: juno's `table()` → dialectFor → the real
+// postgres()/mysql() adapter → a live server. Skipped by default; set a connection
+// string to enable:
 //
 //   JUNO_LIVE_PG="postgres://user:pass@host:port/db"   bun test live
 //   JUNO_LIVE_MYSQL="mysql://user:pass@host:port/db"    bun test live
 //
-// (Each was verified against PostgreSQL 16 and MySQL 8 via an ephemeral `dew up
-// --with postgres` / a host-network mysql container.) The drivers (pg, mysql2) are
-// devDependencies and only imported when the matching env var is set.
+// Verified against PostgreSQL 16 + MySQL 8 (via `dew up --with postgres` / a
+// host-network mysql container). The drivers (pg, mysql2) are devDependencies, loaded
+// only when the adapter opens (i.e. only when the env var is set).
 
 import { describe, expect, test } from "bun:test";
-import { postgres, mysql as mysqlDialect } from "../src/compiler";
-import type { Node } from "../src/ast";
+import { postgres, mysql as mysqlResource } from "@junejs/server";
+import type { JuneDb } from "@junejs/core/resources";
+
+import { juno } from "../src";
 
 const PG_URL = process.env.JUNO_LIVE_PG;
 const MY_URL = process.env.JUNO_LIVE_MYSQL;
 
-// The shared shape matrix — built once, compiled per dialect at the call site.
-const insert: Node = { kind: "insert", into: "juno_live", columns: ["name", "age", "email"] };
-const selGtDesc: Node = { kind: "select", from: "juno_live", where: [{ col: "age", op: "gt" }], orderBy: [{ col: "age", dir: "desc" }] };
-const selIn: Node = { kind: "select", from: "juno_live", where: [{ col: "name", op: "in", arity: 2 }], orderBy: [{ col: "id", dir: "asc" }], limit: "param", offset: "param" };
-const upsert: Node = { kind: "upsert", into: "juno_live", columns: ["name", "age", "email"], conflict: ["email"], update: ["name", "age"] };
-const updAge: Node = { kind: "update", table: "juno_live", set: ["age"], where: ["email"] };
-const selByEmail: Node = { kind: "select", from: "juno_live", where: [{ col: "email", op: "eq" }] };
-const delByEmail: Node = { kind: "delete", from: "juno_live", where: ["email"] };
+type Person = { id: number; name: string; age: number; email: string };
 
-(PG_URL ? describe : describe.skip)("live: PostgreSQL — juno's compiled SQL executes", () => {
-  test("CRUD + operators + upsert(ON CONFLICT … RETURNING *)", async () => {
-    const { default: pg } = await import("pg");
-    const c = new pg.Client({ connectionString: PG_URL });
-    await c.connect();
-    const run = (node: Node, params: unknown[] = []) => c.query(postgres.compile(node), params);
+// The shared CRUD matrix, run through table() over whatever live db is given.
+async function runMatrix(db: JuneDb, ddl: string, expectUpsertRow: boolean) {
+  const t = juno(db).table<Person>("juno_live");
+  await db.exec("drop table if exists juno_live");
+  await db.exec(ddl);
+
+  await t.insert({ name: "Ada", age: 36, email: "a@x" });
+  await t.insert({ name: "Linus", age: 54, email: "l@x" });
+  await t.insert({ name: "Grace", age: 85, email: "g@x" });
+
+  expect((await t.all({ age: { gt: 40 } }, { orderBy: { age: "desc" } })).map((r) => r.name)).toEqual(["Grace", "Linus"]);
+  expect(await t.all({ name: { in: ["Ada", "Grace"] } })).toHaveLength(2);
+
+  const up = await t.upsert({ name: "Ada Lovelace", age: 37, email: "a@x" }, { onConflict: "email" });
+  if (expectUpsertRow) expect(up?.name).toBe("Ada Lovelace"); // PG RETURNING
+  const ada = await t.findBy({ email: "a@x" }); // MySQL has no RETURNING → verify by read
+  expect(ada?.name).toBe("Ada Lovelace");
+  expect(ada?.age).toBe(37);
+
+  await t.update({ email: "l@x" }, { age: 99 });
+  expect((await t.findBy({ email: "l@x" }))?.age).toBe(99);
+
+  await t.delete({ email: "g@x" });
+  expect(await t.all()).toHaveLength(2);
+}
+
+(PG_URL ? describe : describe.skip)("live: PostgreSQL — table() through postgres() adapter", () => {
+  test("CRUD + operators + upsert(RETURNING) end to end", async () => {
+    const db = await postgres({ url: PG_URL as string }).open();
     try {
-      await c.query("drop table if exists juno_live");
-      await c.query("create table juno_live (id serial primary key, name text not null, age int, email text unique)");
-
-      await run(insert, ["Ada", 36, "a@x"]);
-      await run(insert, ["Linus", 54, "l@x"]);
-      await run(insert, ["Grace", 85, "g@x"]);
-
-      const gt = await run(selGtDesc, [40]);
-      expect(gt.rows.map((r) => r.name)).toEqual(["Grace", "Linus"]);
-
-      const inq = await run(selIn, ["Ada", "Grace", 5, 0]);
-      expect(inq.rows).toHaveLength(2);
-
-      const up = await run(upsert, ["Ada Lovelace", 37, "a@x"]); // returns the updated row
-      expect(up.rows[0].name).toBe("Ada Lovelace");
-      expect(up.rows[0].age).toBe(37);
-
-      await run(updAge, [99, "l@x"]);
-      expect((await run(selByEmail, ["l@x"])).rows[0].age).toBe(99);
-
-      await run(delByEmail, ["g@x"]);
-      expect((await c.query("select count(*)::int n from juno_live")).rows[0].n).toBe(2);
+      await runMatrix(db, "create table juno_live (id serial primary key, name text not null, age int, email text unique)", true);
     } finally {
-      await c.query("drop table if exists juno_live").catch(() => {});
-      await c.end();
+      await db.exec("drop table if exists juno_live").catch(() => {});
+      await db.close();
     }
   });
 });
 
-(MY_URL ? describe : describe.skip)("live: MySQL — juno's compiled SQL executes", () => {
-  test("CRUD + operators + upsert(ON DUPLICATE KEY UPDATE, verified by SELECT)", async () => {
-    const mysql = await import("mysql2/promise");
-    const c = await mysql.createConnection(MY_URL as string);
-    const run = async (node: Node, params: unknown[] = []) => (await c.query(mysqlDialect.compile(node), params))[0] as any;
+(MY_URL ? describe : describe.skip)("live: MySQL — table() through mysql() adapter", () => {
+  test("CRUD + operators + upsert(ON DUPLICATE KEY, verified by read) end to end", async () => {
+    const db = await mysqlResource({ url: MY_URL as string }).open();
     try {
-      await c.query("drop table if exists juno_live");
-      await c.query("create table juno_live (id int auto_increment primary key, name varchar(64) not null, age int, email varchar(128) unique)");
-
-      await run(insert, ["Ada", 36, "a@x"]);
-      await run(insert, ["Linus", 54, "l@x"]);
-      await run(insert, ["Grace", 85, "g@x"]);
-
-      expect((await run(selGtDesc, [40])).map((r: any) => r.name)).toEqual(["Grace", "Linus"]);
-      expect(await run(selIn, ["Ada", "Grace", 5, 0])).toHaveLength(2);
-
-      await run(upsert, ["Ada Lovelace", 37, "a@x"]); // no RETURNING on MySQL
-      const ada = (await run(selByEmail, ["a@x"]))[0];
-      expect(ada.name).toBe("Ada Lovelace");
-      expect(ada.age).toBe(37);
-
-      await run(updAge, [99, "l@x"]);
-      expect((await run(selByEmail, ["l@x"]))[0].age).toBe(99);
-
-      await run(delByEmail, ["g@x"]);
-      expect((await run({ kind: "select", from: "juno_live", where: [] }))).toHaveLength(2);
+      await runMatrix(db, "create table juno_live (id int auto_increment primary key, name varchar(64) not null, age int, email varchar(128) unique)", false);
     } finally {
-      await c.query("drop table if exists juno_live").catch(() => {});
-      await c.end();
+      await db.exec("drop table if exists juno_live").catch(() => {});
+      await db.close();
     }
   });
 });

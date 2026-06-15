@@ -7,7 +7,18 @@
 import type { JuneDb } from "@junejs/core/resources";
 import { recordTableRead } from "@junejs/core/instrumentation";
 
+import type { SelectNode } from "./ast";
+import { dialectFor } from "./compiler";
 import type { Row } from "./index";
+
+// The batched `where <key> in (?, ?, …)` read as an operation node, compiled per
+// batch with the db's dialect (sqlite `?` / Postgres `$n` / MySQL backticks) — so the
+// auto-batch path is multi-dialect like the rest of the Table API. arity = batch size.
+function inQuery<V extends Row>(db: JuneDb, table: string, key: string, keys: unknown[]): Promise<V[]> {
+  recordTableRead(table); // batched read still participates in cache auto-tagging
+  const node: SelectNode = { kind: "select", from: table, where: [{ col: key, op: "in", arity: keys.length }] };
+  return db.query<V>(dialectFor(db).compile(node), keys);
+}
 
 export type Loader<K, V> = {
   load(key: K): Promise<V | null>;
@@ -63,11 +74,7 @@ export function tableLoader<V extends Row = Row>(
     throw new Error(`unsafe SQL identifier: ${table}.${key}`);
   }
   return createLoader<string | number, V>(
-    async (keys) => {
-      recordTableRead(table); // batched read still participates in cache auto-tagging
-      const placeholders = keys.map(() => "?").join(", ");
-      return db.query<V>(`select * from ${table} where ${key} in (${placeholders})`, keys);
-    },
+    (keys) => inQuery<V>(db, table, key, keys),
     (row) => (row as Row)[key] as string | number,
   );
 }
@@ -132,11 +139,7 @@ export function tableListLoader<V extends Row = Row>(
     throw new Error(`unsafe SQL identifier: ${table}.${key}`);
   }
   return createGroupLoader<string | number, V>(
-    async (keys) => {
-      recordTableRead(table);
-      const placeholders = keys.map(() => "?").join(", ");
-      return db.query<V>(`select * from ${table} where ${key} in (${placeholders})`, keys);
-    },
+    (keys) => inQuery<V>(db, table, key, keys),
     (row) => (row as Row)[key] as string | number,
   );
 }

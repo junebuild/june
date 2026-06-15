@@ -16,7 +16,7 @@ import { db as ambientDb, requestLocal, registerSqlTagger } from "@junejs/db";
 
 import type { Predicate, SelectNode } from "./ast";
 import { tableLoader, tableListLoader, type Loader, type ListLoader } from "./batch";
-import { sqlite } from "./compiler";
+import { dialectFor, type Dialect } from "./compiler";
 import { taggingDb, tagSql } from "./tag";
 import { emitSchemaTypes } from "./types";
 
@@ -77,6 +77,13 @@ export class Table<T extends Row = Row> {
     private readonly loaders: Map<string, unknown> = new Map(),
   ) {}
 
+  // The compiler for THIS table's db — picked from the handle's dialect tag (sqlite
+  // by default). So `table()` emits the right SQL whether db is sqlite/D1, Postgres,
+  // or MySQL, off the same operation-node AST. Cheap map lookup; called per query.
+  private get compiler(): Dialect {
+    return dialectFor(this.db);
+  }
+
   // No `where` → every row. With a `where`, the list of rows matching it (the list
   // counterpart of findBy, same where syntax). A single-column filter ambient-
   // batches like findBy — concurrent `all({user_id})` across components coalesce
@@ -131,7 +138,7 @@ export class Table<T extends Row = Row> {
     };
     if (opts?.limit != null) params.push(opts.limit);
     if (opts?.offset != null) params.push(opts.offset);
-    return this.db.query<T>(sqlite.compile(node), params);
+    return this.db.query<T>(this.compiler.compile(node), params);
   }
 
   async findBy(where: Partial<T>): Promise<T | undefined> {
@@ -148,7 +155,7 @@ export class Table<T extends Row = Row> {
       return (hit ?? undefined) as T | undefined;
     }
     const where2: Predicate[] = keys.map((k) => ({ col: k, op: "eq" }));
-    const sql = sqlite.compile({ kind: "select", from: this.name, where: where2, limit: 1 });
+    const sql = this.compiler.compile({ kind: "select", from: this.name, where: where2, limit: 1 });
     return this.db.get<T>(sql, Object.values(where));
   }
 
@@ -178,7 +185,7 @@ export class Table<T extends Row = Row> {
 
   async insert(values: Partial<T>): Promise<RunResult> {
     recordTableWrite(this.name); // auto-invalidate: invokeAction drops table:<name>
-    const sql = sqlite.compile({ kind: "insert", into: this.name, columns: Object.keys(values) });
+    const sql = this.compiler.compile({ kind: "insert", into: this.name, columns: Object.keys(values) });
     return this.db.run(sql, Object.values(values));
   }
 
@@ -194,13 +201,13 @@ export class Table<T extends Row = Row> {
     const conflict = Array.isArray(opts.onConflict) ? opts.onConflict : [opts.onConflict];
     const updates = columns.filter((c) => !conflict.includes(c));
     const update = updates.length ? updates : conflict;
-    const sql = sqlite.compile({ kind: "upsert", into: this.name, columns, conflict, update });
+    const sql = this.compiler.compile({ kind: "upsert", into: this.name, columns, conflict, update });
     return this.db.get<T>(sql, Object.values(values));
   }
 
   async update(where: Partial<T>, values: Partial<T>): Promise<RunResult> {
     recordTableWrite(this.name);
-    const sql = sqlite.compile({
+    const sql = this.compiler.compile({
       kind: "update",
       table: this.name,
       set: Object.keys(values),
@@ -211,7 +218,7 @@ export class Table<T extends Row = Row> {
 
   async delete(where: Partial<T>): Promise<RunResult> {
     recordTableWrite(this.name);
-    const sql = sqlite.compile({ kind: "delete", from: this.name, where: Object.keys(where) });
+    const sql = this.compiler.compile({ kind: "delete", from: this.name, where: Object.keys(where) });
     return this.db.run(sql, Object.values(where));
   }
 
