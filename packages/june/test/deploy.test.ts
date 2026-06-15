@@ -183,13 +183,14 @@ describe("juneDeploy → deno target", () => {
       prod: true,
       runCli: async (args) => {
         captured = args;
-        return { stdout: "View at https://june-deno-app.deno.dev", stderr: "", exitCode: 0 };
+        // EA serves on *.deno.net (Classic used *.deno.dev)
+        return { stdout: "Production url:\n  https://june-deno.junejs.deno.net", stderr: "", exitCode: 0 };
       },
     });
     expect(captured.slice(0, 2)).toEqual(["deno", "deploy"]); // the EA CLI, not deployctl
     expect(captured).toContain("--prod");
     expect(captured).not.toContain("deployctl"); // classic is retired
-    expect(r.url).toBe("https://june-deno-app.deno.dev");
+    expect(r.url).toBe("https://june-deno.junejs.deno.net");
     expect(r.migrated).toEqual([]); // no D1 on Deno
   });
 

@@ -220,7 +220,8 @@ export function withAssets(
 // the handler serves the hashed framework assets (/_june/*) from the bundle's
 // co-located assets/ dir and falls through to the pipeline for everything else —
 // the same split vercel() gets from the CDN, but in-process. The deno() adapter
-// bakes `Deno.serve(withDenoAssets(pipeline))` into the entry. Deno globals are
+// bakes `export default { fetch: withDenoAssets(pipeline) }` into the entry (the
+// Web Standard handler `deno serve` / Deno Deploy runs). Deno globals are
 // referenced only inside the body, so non-Deno bundles tree-shake this out.
 declare const Deno: {
   readFile(path: string | URL): Promise<Uint8Array>;

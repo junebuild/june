@@ -1,7 +1,7 @@
-// The deno() adapter (Deno Deploy): same portable bundle, an entry that wraps the
-// pipeline in Deno.serve + withDenoAssets (in-process static serving). Units drive
-// the pieces; one e2e runs a real juneBuild; withDenoAssets is exercised with a
-// fake Deno global (no real Deno needed in `bun test`).
+// The deno() adapter (Deno Deploy): same portable bundle, an entry that exports a
+// `{ fetch }` Web Standard handler wrapped in withDenoAssets (in-process static
+// serving). Units drive the pieces; one e2e runs a real juneBuild; withDenoAssets
+// is exercised with a fake Deno global (no real Deno needed in `bun test`).
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
@@ -32,7 +32,7 @@ describe("deno() adapter — units", () => {
     expect(() => v(cfg())).not.toThrow();
   });
 
-  test("entry: Deno.serve(withDenoAssets(pipeline)), helper imported from ./worker", () => {
+  test("entry: export default { fetch: withDenoAssets(pipeline) }, helper from ./worker", () => {
     const e = deno().entry({ linkHeader: null });
     expect(e.imports).toContain(`import { withDenoAssets } from "@junejs/server/worker";`);
     expect(e.wrap("pipeline")).toBe("export default { fetch: withDenoAssets(pipeline) };");
@@ -44,12 +44,12 @@ describe("deno() adapter — units", () => {
       const ctx = { appRoot: dir, outDir: dir, hasAssets: false, linkHeader: null, config: {}, plan: {}, defaultName: "d" };
       await deno({ org: "acme", app: "site" }).emit(ctx);
       expect(JSON.parse(await readFile(join(dir, "deno.json"), "utf8"))).toEqual({
-        deploy: { org: "acme", app: "site", runtime: { entrypoint: "worker.js" } },
+        deploy: { org: "acme", app: "site", runtime: { type: "dynamic", entrypoint: "worker.js" } },
       });
       // without org/app: just the entrypoint (deno deploy prompts for the target)
       await deno().emit(ctx);
       expect(JSON.parse(await readFile(join(dir, "deno.json"), "utf8"))).toEqual({
-        deploy: { runtime: { entrypoint: "worker.js" } },
+        deploy: { runtime: { type: "dynamic", entrypoint: "worker.js" } },
       });
     } finally {
       await rm(dir, { recursive: true, force: true });

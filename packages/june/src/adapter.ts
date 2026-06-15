@@ -309,11 +309,14 @@ export function deno(opts?: { org?: string; app?: string }): JuneAdapter {
 
     async emit({ outDir }) {
       // The bundle (worker.js + chunks) and assets/ already sit in outDir. The
-      // deno.json declares the Deno Deploy target (org/app) + runtime entrypoint
-      // (the `{ fetch }` export `deno serve` runs); source config takes precedence
-      // over the dashboard, so the deploy is reproducible. `deno deploy` ships the
-      // dir. org/app come from deno({ org, app }) — without them, `deno deploy`
-      // prompts for the target.
+      // deno.json declares the Deno Deploy target (org/app) + the runtime block.
+      // `type: "dynamic"` is REQUIRED — it's the tag that tells EA "run this
+      // entrypoint as a server" (the `{ fetch }` export `deno serve` runs). Omit
+      // it and EA falls back to framework auto-detection ("internally optimized"),
+      // finds nothing, and the revision dies with "No runtime entrypoint provided".
+      // (The other arm is `type: "static"` + cwd/spa for a prebuilt SPA.) Source
+      // config takes precedence over the dashboard, so the deploy is reproducible.
+      // org/app come from deno({ org, app }) — without them, `deno deploy` prompts.
       await writeFile(
         join(outDir, "deno.json"),
         JSON.stringify(
@@ -321,7 +324,7 @@ export function deno(opts?: { org?: string; app?: string }): JuneAdapter {
             deploy: {
               ...(opts?.org ? { org: opts.org } : {}),
               ...(opts?.app ? { app: opts.app } : {}),
-              runtime: { entrypoint: "worker.js" },
+              runtime: { type: "dynamic", entrypoint: "worker.js" },
             },
           },
           null,

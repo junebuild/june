@@ -67,7 +67,21 @@ export async function juneDeploy(appRoot: string, options: DeployOptions = {}): 
   return deployWorkers(appRoot, cfg, options, run);
 }
 
-// --- Deno Deploy: deployctl ships the built dir (worker.js + assets/) ----------
+// --- Deno Deploy: `deno deploy` ships the built dir (worker.js + assets/) -------
+// ONE-TIME app provisioning (the trap): the app must be created in DYNAMIC mode
+// with worker.js as the entrypoint, or Deno Deploy auto-detects a framework
+// ("internally optimized"), finds none, and every build dies with "No runtime
+// entrypoint provided". The emitted deno.json's deploy.runtime.type="dynamic"
+// only takes precedence AFTER a successful source-config build — a chicken-and-egg
+// the first build can't satisfy. So provision once with the config forced:
+//   deno deploy create --org=<org> --app=<app> --source=local \
+//     --do-not-use-detected-build-config --runtime-mode=dynamic --entrypoint=worker.js
+// After that, plain `deno deploy` re-uses the stuck-free config on every ship.
+const DENO_CREATE_HINT =
+  "first deploy? provision the app in dynamic mode (auto-detect won't find an entrypoint):\n" +
+  "  deno deploy create --org=<org> --app=<app> --source=local \\\n" +
+  "    --do-not-use-detected-build-config --runtime-mode=dynamic --entrypoint=worker.js";
+
 async function deployDeno(
   appRoot: string,
   cfg: Awaited<ReturnType<typeof loadJuneConfig>>,
@@ -79,7 +93,7 @@ async function deployDeno(
     throw new Error(`no built bundle (expected ${join(dist, "worker.js")}) — run june build first`);
   }
   if (options.dryRun) {
-    console.log(`dry-run: built ${dist} (skipping deployctl)`);
+    console.log(`dry-run: built ${dist} (skipping deno deploy)`);
     return { url: null, dryRun: true, configPath: dist, migrated: [] };
   }
   if (!process.env.DENO_DEPLOY_TOKEN) {
@@ -89,25 +103,33 @@ async function deployDeno(
     );
   }
   // Deno Deploy (the current platform; Classic + deployctl retire 2026-07-20). The
-  // emitted deno.json carries deploy.{org,app,runtime.entrypoint}, so `deno deploy`
-  // ships dist/ (worker.js + chunks + assets/) with no extra flags. --prod targets
-  // production (default is a preview). Auth from DENO_DEPLOY_TOKEN.
+  // emitted deno.json carries deploy.{org,app,runtime}, so `deno deploy` ships dist/
+  // (worker.js + chunks + assets/) with no extra flags onto an already-provisioned
+  // app. --prod targets production (default is a preview). Auth from DENO_DEPLOY_TOKEN.
   const args = ["deno", "deploy"];
   if (options.prod) args.push("--prod");
 
   const { stdout, stderr, exitCode } = await run(args, dist);
   if (stdout.trim()) console.log(stdout.trimEnd());
   if (exitCode !== 0) {
-    if (/token|login|unauthorized|forbidden|organization was not found/i.test(stderr + stdout)) {
+    const out = stderr + stdout;
+    if (/token|login|unauthorized|forbidden|organization was not found|app.*not found/i.test(out)) {
       throw new Error(
         "Deno Deploy auth/org failed — set DENO_DEPLOY_TOKEN (or `deno deploy login`) and the\n" +
-          "  org/app in deno({ org, app }).\n" +
+          "  org/app in deno({ org, app }).\n  " +
+          DENO_CREATE_HINT +
+          "\n" +
           stderr.trim(),
       );
     }
+    if (/no runtime entrypoint|build config/i.test(out)) {
+      throw new Error("Deno Deploy build failed — " + DENO_CREATE_HINT + "\n" + stderr.trim());
+    }
     throw new Error(`deno deploy failed (exit ${exitCode})\n${stderr.trim()}`);
   }
-  const url = stdout.match(/https:\/\/\S+\.deno\.dev\S*/)?.[0] ?? null;
+  // EA serves on *.deno.net (the prod alias <app>.<org>.deno.net + the per-revision
+  // preview); Classic used *.deno.dev. Match both so the URL is always surfaced.
+  const url = stdout.match(/https:\/\/\S+\.deno\.(net|dev)\S*/)?.[0] ?? null;
   return { url, dryRun: false, configPath: dist, migrated: [] };
 }
 
