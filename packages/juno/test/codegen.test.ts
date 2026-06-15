@@ -38,15 +38,15 @@ describe("emitSchemaTypes (introspection → declare module)", () => {
     expect(out).toContain('import "@junejs/juno";');
 
     // users table, column by column.
-    expect(out).toContain("  users: {");
-    expect(out).toContain("    id: number;"); // INTEGER PK → not null
-    expect(out).toContain("    email: string;"); // TEXT NOT NULL
-    expect(out).toContain("    name: string | null;"); // TEXT nullable
-    expect(out).toContain("    age: number | null;"); // INTEGER nullable
-    expect(out).toContain("    balance: number;"); // REAL NOT NULL
-    expect(out).toContain("    avatar: Uint8Array | null;"); // BLOB nullable
-    expect(out).toContain("    nick: string | null;"); // varchar → CHAR affinity
-    expect(out).toContain("    is_admin: number;"); // boolean → NUMERIC affinity
+    expect(out).toContain("    users: {");
+    expect(out).toContain("      id: number;"); // INTEGER PK → not null
+    expect(out).toContain("      email: string;"); // TEXT NOT NULL
+    expect(out).toContain("      name: string | null;"); // TEXT nullable
+    expect(out).toContain("      age: number | null;"); // INTEGER nullable
+    expect(out).toContain("      balance: number;"); // REAL NOT NULL
+    expect(out).toContain("      avatar: Uint8Array | null;"); // BLOB nullable
+    expect(out).toContain("      nick: string | null;"); // varchar → CHAR affinity
+    expect(out).toContain("      is_admin: number;"); // boolean → NUMERIC affinity
   });
 
   test("skips the migration ledger and sqlite internals", async () => {
@@ -57,8 +57,8 @@ describe("emitSchemaTypes (introspection → declare module)", () => {
 
   test("quotes table/column names that aren't safe identifiers", async () => {
     const out = await emitSchemaTypes(await seed());
-    expect(out).toContain('"weird-name": {'); // hyphen → quoted key
-    expect(out).toContain("    from: string;"); // reserved word is fine bare in a TS member
+    expect(out).toContain('    "weird-name": {'); // hyphen → quoted key
+    expect(out).toContain("      from: string;"); // reserved word is fine bare in a TS member
   });
 
   test("tables are emitted in stable (alphabetical) order", async () => {

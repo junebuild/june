@@ -34,6 +34,21 @@ await table("users").upsert({ email: "ada@x.dev", name: "Ada" }, { onConflict: "
 await db.query("select * from users where age > ?", [18]);   // raw escape hatch (auto-tags)
 ```
 
+## Typed tables (zero config)
+
+`table("users")` infers its row — the table name autocompletes, columns and their
+types flow through `findBy` / `all` / `where` / `orderBy` — with **no inline generic**.
+Run it once and after every migration:
+
+```sh
+june db types   # introspects the migrated db → writes db/schema.d.ts
+```
+
+That file is a `declare module "@junejs/juno"` augmentation generated from your SQL
+schema (`db/migrations/`), so types can't drift from the database and you maintain no
+schema DSL. Without it, `table()` is still fully usable — it just returns the untyped
+`Row` (or pass an inline generic: `table<User>("users")`).
+
 ## Non-obvious facts (the easy-to-get-wrong bits)
 
 The API shape is self-explanatory; these are the things models and humans get

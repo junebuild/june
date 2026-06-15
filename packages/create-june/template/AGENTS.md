@@ -26,7 +26,9 @@ React framework; its npm scope is `@junejs/*` (NOT `june`, NOT `@june`).
   Schema is explicit in `db/migrations/`, applied on `june dev`.
 - Want a typed table API + auto-batch + auto-invalidation? Add `@junejs/juno` and
   `dataLayer: junoDataLayer()` to `june.config.ts`, then `import { table } from
-  "@junejs/juno"`. Read `@junejs/juno`'s README "non-obvious facts" before using it.
+  "@junejs/juno"`. Run `june db types` to generate `db/schema.d.ts` so `table("users")`
+  is typed with no inline generic (re-run after each migration). Read `@junejs/juno`'s
+  README "non-obvious facts" before using it.
 
 ## Conventions
 

@@ -48,9 +48,9 @@ export async function emitSchemaTypes(db: JuneDb): Promise<string> {
       [name],
     );
     const fields = cols
-      .map((c) => `    ${propKey(c.name)}: ${tsType(c.type, c.nn, c.pk)};`)
+      .map((c) => `      ${propKey(c.name)}: ${tsType(c.type, c.nn, c.pk)};`)
       .join("\n");
-    ifaces.push(`  ${propKey(name)}: {\n${fields}\n  };`);
+    ifaces.push(`    ${propKey(name)}: {\n${fields}\n    };`);
   }
 
   return (
