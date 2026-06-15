@@ -20,7 +20,10 @@
     "@junejs/db": "workspace:*"
   },
   "devDependencies": {
-    "@junejs/server": "workspace:*"
+    "@junejs/server": "workspace:*",
+    "@types/pg": "^8.20.0",
+    "mysql2": "^3.22.5",
+    "pg": "^8.21.0"
   },
   "repository": {
     "type": "git",
