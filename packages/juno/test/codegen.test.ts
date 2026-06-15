@@ -66,3 +66,95 @@ describe("emitSchemaTypes (introspection → declare module)", () => {
     expect(out.indexOf("users:")).toBeLessThan(out.indexOf('"weird-name":'));
   });
 });
+
+// A fake information_schema db: answers the tables query and the per-table columns
+// query from a fixture, so the PG/MySQL type maps are tested without a live server.
+function catalogDb(
+  dialect: "postgres" | "mysql",
+  tables: Record<string, { name: string; type: string; nullable: "YES" | "NO" }[]>,
+): JuneDb {
+  const db = {
+    dialect,
+    async query(sql: string, params: unknown[] = []) {
+      if (/information_schema\.tables/.test(sql)) return Object.keys(tables).sort().map((name) => ({ name }));
+      if (/information_schema\.columns/.test(sql)) return tables[params[0] as string] ?? [];
+      return [];
+    },
+    async get() {
+      return undefined;
+    },
+    async run() {
+      return { changes: 0, lastInsertRowid: 0 };
+    },
+    async exec() {},
+    async transaction<T>(fn: (tx: JuneDb) => Promise<T>) {
+      return fn(db);
+    },
+    async close() {},
+  } as JuneDb;
+  return db;
+}
+
+describe("emitSchemaTypes — Postgres (information_schema)", () => {
+  test("maps PG data_types to the types node-postgres returns; nullability from is_nullable", async () => {
+    const out = await emitSchemaTypes(
+      catalogDb("postgres", {
+        users: [
+          { name: "id", type: "integer", nullable: "NO" },
+          { name: "big", type: "bigint", nullable: "NO" }, // pg returns as string
+          { name: "email", type: "character varying", nullable: "NO" },
+          { name: "bio", type: "text", nullable: "YES" },
+          { name: "balance", type: "numeric", nullable: "YES" }, // string
+          { name: "active", type: "boolean", nullable: "NO" },
+          { name: "created_at", type: "timestamp with time zone", nullable: "NO" }, // Date
+          { name: "avatar", type: "bytea", nullable: "YES" },
+          { name: "meta", type: "jsonb", nullable: "YES" },
+        ],
+      }),
+    );
+    expect(out).toContain('declare module "@junejs/juno"');
+    expect(out).toContain("    users: {");
+    expect(out).toContain("      id: number;");
+    expect(out).toContain("      big: string;");
+    expect(out).toContain("      email: string;");
+    expect(out).toContain("      bio: string | null;");
+    expect(out).toContain("      balance: string | null;");
+    expect(out).toContain("      active: boolean;");
+    expect(out).toContain("      created_at: Date;");
+    expect(out).toContain("      avatar: Uint8Array | null;");
+    expect(out).toContain("      meta: unknown | null;");
+  });
+});
+
+describe("emitSchemaTypes — MySQL (information_schema)", () => {
+  test("maps MySQL data_types to mysql2's defaults; nullability from is_nullable", async () => {
+    const out = await emitSchemaTypes(
+      catalogDb("mysql", {
+        posts: [
+          { name: "id", type: "int", nullable: "NO" },
+          { name: "views", type: "bigint", nullable: "NO" },
+          { name: "title", type: "varchar", nullable: "NO" },
+          { name: "body", type: "text", nullable: "YES" },
+          { name: "price", type: "decimal", nullable: "YES" }, // string
+          { name: "published_at", type: "datetime", nullable: "YES" }, // Date
+          { name: "data", type: "json", nullable: "YES" },
+          { name: "thumb", type: "blob", nullable: "YES" },
+        ],
+      }),
+    );
+    expect(out).toContain("    posts: {");
+    expect(out).toContain("      id: number;");
+    expect(out).toContain("      views: number;");
+    expect(out).toContain("      title: string;");
+    expect(out).toContain("      body: string | null;");
+    expect(out).toContain("      price: string | null;");
+    expect(out).toContain("      published_at: Date | null;");
+    expect(out).toContain("      data: unknown | null;");
+    expect(out).toContain("      thumb: Uint8Array | null;");
+  });
+
+  test("skips the _june_migrations ledger via the WHERE clause (not in fixture → absent)", async () => {
+    const out = await emitSchemaTypes(catalogDb("mysql", { posts: [{ name: "id", type: "int", nullable: "NO" }] }));
+    expect(out).not.toContain("_june_migrations");
+  });
+});

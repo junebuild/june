@@ -13,7 +13,7 @@ import { describe, expect, test } from "bun:test";
 import { postgres, mysql as mysqlResource } from "@junejs/server";
 import type { JuneDb } from "@junejs/core/resources";
 
-import { juno } from "../src";
+import { emitSchemaTypes, juno } from "../src";
 
 const PG_URL = process.env.JUNO_LIVE_PG;
 const MY_URL = process.env.JUNO_LIVE_MYSQL;
@@ -44,6 +44,12 @@ async function runMatrix(db: JuneDb, ddl: string, expectUpsertRow: boolean) {
 
   await t.delete({ email: "g@x" });
   expect(await t.all()).toHaveLength(2);
+
+  // step 4: emitSchemaTypes over the live information_schema (PG/MySQL) — the real
+  // introspection queries + type maps, not a mock.
+  const types = await emitSchemaTypes(db);
+  expect(types).toContain("juno_live: {");
+  expect(types).toContain("name: string;");
 }
 
 (PG_URL ? describe : describe.skip)("live: PostgreSQL — table() through postgres() adapter", () => {
