@@ -14,7 +14,7 @@ export const prerender = true;
 
 export default function Benchmarks() {
   return (
-    <main>
+    <>
       <header className="j-pagehead">
         <div className="j-pagehead-in">
           <p className="j-eyebrow">
@@ -57,7 +57,7 @@ export default function Benchmarks() {
           </section>
         ))}
       </div>
-    </main>
+    </>
   );
 }
 

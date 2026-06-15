@@ -4,7 +4,7 @@ export const prerender = true;
 
 export default function Blog() {
   return (
-    <main>
+    <>
       <header className="j-pagehead">
         <div className="j-pagehead-in">
           <p className="j-eyebrow">
@@ -30,7 +30,7 @@ export default function Blog() {
           </a>
         ))}
       </div>
-    </main>
+    </>
   );
 }
 

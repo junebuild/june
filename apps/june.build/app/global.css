@@ -54,6 +54,10 @@
   /* density rhythm + wordmark face (baked to Inter for brand) */
   --rhythm: 1;
   --wm-font: var(--font-brand); --wm-weight: 800; --wm-track: -0.03em;
+
+  /* content columns — layout sections run wide/fluid; prose stays readable */
+  --col-wide: min(1400px, 92vw);
+  --col-prose: 760px;
 }
 
 /* ── Surface layer — warm light is the default (no JS needed) ───────────────── */
@@ -91,9 +95,15 @@ body {
 a { color: var(--s-accent); }
 
 .j-app { min-height: 100vh; display: flex; flex-direction: column; }
-.j-main { flex: 1 0 auto; }
-.j-wrap { max-width: 1080px; margin: 0 auto; padding: 0 32px; }
+/* override June's Document base `main { width: min(720px…); margin: 72px auto }`
+   — this site is full-bleed and owns its own column widths (the .j-*-in wrappers). */
+.j-main { flex: 1 0 auto; width: auto; max-width: none; margin: 0; }
+.j-wrap { max-width: var(--col-wide); margin: 0 auto; padding: 0 32px; }
 .j-mono { font-family: var(--font-mono); }
+/* inline code: the framework's base rule hardcodes a light background, which is
+   wrong in dark — remap it to the surface tokens (loads after, so this wins). */
+code { background: var(--s-bg-subtle); color: var(--s-strong); }
+pre code { background: transparent; }
 
 /* shared atoms */
 .j-eyebrow { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase;
@@ -108,7 +118,7 @@ a { color: var(--s-accent); }
 .j-nav { position: sticky; top: 0; z-index: 60; background: var(--s-nav-bg);
   -webkit-backdrop-filter: saturate(150%) blur(12px); backdrop-filter: saturate(150%) blur(12px);
   border-bottom: 1px solid var(--s-line); }
-.j-nav-in { max-width: 1080px; margin: 0 auto; padding: 0 32px; height: 60px; display: flex; align-items: center; gap: 28px; }
+.j-nav-in { max-width: var(--col-wide); margin: 0 auto; padding: 0 32px; height: 60px; display: flex; align-items: center; gap: 28px; }
 .j-wm { font-family: var(--wm-font); font-weight: var(--wm-weight); letter-spacing: var(--wm-track); font-size: 22px;
   color: var(--s-text); cursor: pointer; line-height: 1; background: none; border: none; padding: 0; margin-right: 4px;
   text-decoration: none; }
@@ -144,7 +154,7 @@ a { color: var(--s-accent); }
   background-size: 34px 34px;
   -webkit-mask-image: radial-gradient(115% 80% at 50% 0%, #000 30%, transparent 78%);
   mask-image: radial-gradient(115% 80% at 50% 0%, #000 30%, transparent 78%); }
-.j-hero-in { position: relative; z-index: 1; max-width: 1080px; margin: 0 auto;
+.j-hero-in { position: relative; z-index: 1; max-width: var(--col-wide); margin: 0 auto;
   padding: calc(64px * var(--rhythm) + 16px) 32px calc(64px * var(--rhythm));
   display: grid; grid-template-columns: 1fr 1.02fr; gap: 52px; align-items: center; }
 .j-hero-eyebrow { display: inline-flex; align-items: center; gap: 9px; font-family: var(--font-mono); font-size: 12px;
@@ -240,7 +250,7 @@ a { color: var(--s-accent); }
 
 /* ── Generic section frame ─────────────────────────────────────────────────── */
 .j-section { border-bottom: 1px solid var(--s-line); }
-.j-section-in { max-width: 1080px; margin: 0 auto; padding: calc(64px * var(--rhythm)) 32px; }
+.j-section-in { max-width: var(--col-wide); margin: 0 auto; padding: calc(64px * var(--rhythm)) 32px; }
 .j-section-head { margin-bottom: calc(40px * var(--rhythm)); max-width: 760px; }
 
 /* four surfaces grid */
@@ -282,7 +292,7 @@ a { color: var(--s-accent); }
 .j-agentband { background: var(--agent-bg); border-bottom: 1px solid var(--s-line); position: relative; overflow: hidden; }
 .j-agentband-glow { position: absolute; left: 50%; top: -160px; width: 640px; height: 480px; transform: translateX(-50%);
   background: radial-gradient(circle, var(--agent-green-glow), transparent 65%); pointer-events: none; }
-.j-agentband-in { position: relative; max-width: 1080px; margin: 0 auto; padding: calc(64px * var(--rhythm)) 32px;
+.j-agentband-in { position: relative; max-width: var(--col-wide); margin: 0 auto; padding: calc(64px * var(--rhythm)) 32px;
   display: grid; grid-template-columns: 0.92fr 1.08fr; gap: 48px; align-items: center; }
 .j-agentband .j-eyebrow, .j-agentband .j-eyebrow .j-num { color: var(--agent-green); }
 .j-agentband h2 { font-family: var(--font-agent-display); font-weight: 700; font-size: 31px; letter-spacing: -0.02em; color: var(--agent-text); margin: 0 0 14px; max-width: 18ch; line-height: 1.15; }
@@ -335,32 +345,41 @@ a { color: var(--s-accent); }
 
 /* ── CTA band ──────────────────────────────────────────────────────────────── */
 .j-cta-band { border-bottom: 1px solid var(--s-line); }
-.j-cta-in { max-width: 1080px; margin: 0 auto; padding: calc(76px * var(--rhythm)) 32px; text-align: center; }
+.j-cta-in { max-width: var(--col-wide); margin: 0 auto; padding: calc(76px * var(--rhythm)) 32px; text-align: center; }
 .j-cta-in h2 { font-family: var(--wm-font); font-weight: var(--wm-weight); letter-spacing: var(--wm-track); font-size: 42px; color: var(--s-text); margin: 0 0 14px; text-wrap: balance; }
 .j-cta-in p { font-size: 17px; color: var(--s-body); margin: 0 auto 28px; max-width: 52ch; }
-.j-cta-in .j-install { justify-content: center; }
+.j-cta-in .j-install { justify-content: center; margin-top: 24px; }
+/* honest stability status — stable / changing / experimental */
+.j-status { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 24px; margin: 22px auto 0;
+  font-family: var(--font-mono); font-size: 12.5px; color: var(--s-secondary); max-width: 64ch; }
+.j-status b { font-weight: 600; text-transform: uppercase; font-size: 10.5px; letter-spacing: 0.05em; margin-right: 7px; }
+.j-status .ok { color: var(--green-500); }
+.j-status .warn { color: var(--amber-500); }
+.j-status .exp { color: var(--s-faint); }
+:root[data-theme="dark"] .j-status .ok { color: var(--agent-green); }
+:root[data-theme="dark"] .j-status .warn { color: #d9a441; }
 
 /* ── Footer ────────────────────────────────────────────────────────────────── */
 .j-footer { background: var(--s-bg); }
-.j-footer-in { max-width: 1080px; margin: 0 auto; padding: 48px 32px; display: grid; grid-template-columns: 1.4fr 1fr 1fr 1fr; gap: 32px; }
+.j-footer-in { max-width: var(--col-wide); margin: 0 auto; padding: 48px 32px; display: grid; grid-template-columns: 1.4fr 1fr 1fr 1fr; gap: 32px; }
 .j-footer-brand .j-wm { font-size: 20px; margin-bottom: 12px; display: inline-block; }
 .j-footer-tag { font-size: 13px; line-height: 1.55; color: var(--s-secondary); max-width: 30ch; }
 .j-footer-col h4 { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--s-muted); margin: 0 0 14px; font-weight: 500; }
 .j-footer-col a { display: block; font-size: 13.5px; color: var(--s-secondary); text-decoration: none; padding: 4px 0; cursor: pointer; }
 .j-footer-col a:hover { color: var(--s-text); }
 .j-footer-bar { border-top: 1px solid var(--s-line); }
-.j-footer-bar-in { max-width: 1080px; margin: 0 auto; padding: 18px 32px; display: flex; justify-content: space-between; align-items: center; font-family: var(--font-mono); font-size: 12px; color: var(--s-muted); flex-wrap: wrap; gap: 10px; }
+.j-footer-bar-in { max-width: var(--col-wide); margin: 0 auto; padding: 18px 32px; display: flex; justify-content: space-between; align-items: center; font-family: var(--font-mono); font-size: 12px; color: var(--s-muted); flex-wrap: wrap; gap: 10px; }
 .j-footer-bar-in a { color: var(--s-muted); text-decoration: none; }
 .j-footer-bar-in a:hover { color: var(--s-text); }
 
 /* ── Page header (interior pages) ──────────────────────────────────────────── */
 .j-pagehead { border-bottom: 1px solid var(--s-line); }
-.j-pagehead-in { max-width: 1080px; margin: 0 auto; padding: calc(56px * var(--rhythm)) 32px calc(40px * var(--rhythm)); }
+.j-pagehead-in { max-width: var(--col-wide); margin: 0 auto; padding: calc(56px * var(--rhythm)) 32px calc(40px * var(--rhythm)); }
 .j-pagehead h1 { font-family: var(--s-display); font-weight: 600; font-size: 38px; letter-spacing: -0.02em; color: var(--s-text); margin: 8px 0 12px; }
 .j-pagehead .j-lead { max-width: 64ch; }
 
 /* ── Docs layout ───────────────────────────────────────────────────────────── */
-.j-docs { max-width: 1080px; margin: 0 auto; padding: 0 32px; display: grid; grid-template-columns: 200px 1fr; gap: 48px; }
+.j-docs { max-width: var(--col-wide); margin: 0 auto; padding: 0 32px; display: grid; grid-template-columns: 200px 1fr; gap: 48px; }
 .j-docs-side { padding: 40px 0; border-right: 1px solid var(--s-line); position: sticky; top: 60px; align-self: start; }
 .j-docs-side h4 { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--s-muted); margin: 22px 0 8px; font-weight: 500; }
 .j-docs-side h4:first-child { margin-top: 0; }
@@ -369,7 +388,7 @@ a { color: var(--s-accent); }
 .j-docs-side a:hover { color: var(--s-text); }
 .j-docs-side a.is-active { color: var(--s-text); font-weight: 500; border-left-color: var(--s-accent); }
 .j-docs-main { padding: 40px 0 80px; min-width: 0; }
-.j-doc-body { max-width: 720px; }
+.j-doc-body { max-width: var(--col-prose); }
 .j-doc-body h1 { font-family: var(--s-display); font-size: 32px; font-weight: 600; letter-spacing: -0.02em; color: var(--s-text); margin: 0 0 14px; }
 .j-doc-body h2 { font-family: var(--s-display); font-size: 24px; font-weight: 600; letter-spacing: -0.01em; color: var(--s-text); margin: 36px 0 14px; }
 .j-doc-body h3 { font-family: var(--s-display); font-size: 18px; font-weight: 600; color: var(--s-text); margin: 28px 0 10px; }
@@ -380,13 +399,16 @@ a { color: var(--s-accent); }
 .j-doc-body code { font-family: var(--font-mono); font-size: 0.86em; color: var(--s-strong); background: var(--s-bg-subtle); padding: 1px 5px; border-radius: var(--radius-xs); border: 1px solid var(--s-line); }
 .j-doc-body pre { background: var(--s-bg-sunken); border: 1px solid var(--s-line); border-radius: var(--radius-md); padding: 16px 18px; overflow-x: auto; margin: 18px 0; }
 .j-doc-body pre code { background: none; border: none; padding: 0; font-size: 13px; line-height: 1.7; color: var(--s-strong); }
+/* media never overflows the reading column (images, video, embeds) */
+.j-doc-body img, .j-doc-body video, .j-doc-body iframe { max-width: 100%; height: auto; display: block; margin: 20px 0; }
+.j-doc-body img { border: 1px solid var(--s-line); border-radius: var(--radius-md); }
 .j-doc-body table { width: 100%; border-collapse: collapse; margin: 18px 0; font-size: 14px; }
 .j-doc-body th { text-align: left; border-bottom: 2px solid var(--s-line-strong); padding: 8px 10px; color: var(--s-muted); font-weight: 600; }
 .j-doc-body td { border-bottom: 1px solid var(--s-line-faint); padding: 8px 10px; color: var(--s-body); }
 .j-doc-body blockquote { border-left: 3px solid var(--s-line-strong); margin: 18px 0; padding: 2px 0 2px 16px; color: var(--s-secondary); }
 
 /* ── Blog ──────────────────────────────────────────────────────────────────── */
-.j-bloglist { max-width: 820px; margin: 0 auto; padding: calc(48px * var(--rhythm)) 32px 80px; }
+.j-bloglist { max-width: min(900px, 92vw); margin: 0 auto; padding: calc(48px * var(--rhythm)) 32px 80px; }
 .j-post { display: block; text-decoration: none; padding: 26px 0; border-bottom: 1px solid var(--s-line); cursor: pointer; }
 .j-post:first-child { border-top: 1px solid var(--s-line); }
 .j-post-meta { font-family: var(--font-mono); font-size: 12px; color: var(--s-muted); margin-bottom: 8px; display: flex; gap: 12px; flex-wrap: wrap; }
@@ -395,7 +417,7 @@ a { color: var(--s-accent); }
 .j-post h3 { font-family: var(--s-display); font-size: 23px; font-weight: 600; letter-spacing: -0.01em; color: var(--s-text); margin: 0 0 7px; }
 .j-post:hover h3 { color: var(--s-accent); }
 .j-post p { font-size: 15px; line-height: 1.55; color: var(--s-secondary); margin: 0; max-width: 64ch; }
-.j-post-read { max-width: 720px; margin: 0 auto; padding: calc(48px * var(--rhythm)) 32px 80px; }
+.j-post-read { max-width: var(--col-prose); margin: 0 auto; padding: calc(48px * var(--rhythm)) 32px 80px; }
 .j-post-read h1 { font-family: var(--s-display); font-size: 36px; font-weight: 600; letter-spacing: -0.02em; color: var(--s-text); margin: 14px 0 12px; line-height: 1.15; }
 .j-back { font-family: var(--font-mono); font-size: 12.5px; color: var(--s-muted); text-decoration: none; cursor: pointer; }
 .j-back:hover { color: var(--s-text); }

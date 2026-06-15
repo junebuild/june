@@ -6,7 +6,7 @@ export const prerender = true;
 
 export default function Why() {
   return (
-    <main>
+    <>
       <header className="j-pagehead">
         <div className="j-pagehead-in">
           <p className="j-eyebrow">
@@ -89,7 +89,7 @@ export default function Why() {
       </p>
         </div>
       </div>
-    </main>
+    </>
   );
 }
 
