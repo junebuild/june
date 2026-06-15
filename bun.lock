@@ -109,9 +109,15 @@
         "pg": "^8.21.0",
       },
       "peerDependencies": {
+        "mysql2": "^3.0.0",
+        "pg": "^8.0.0",
         "react": "^19.2.0",
         "react-dom": "^19.2.0",
       },
+      "optionalPeers": [
+        "mysql2",
+        "pg",
+      ],
     },
     "packages/juno": {
       "name": "@junejs/juno",

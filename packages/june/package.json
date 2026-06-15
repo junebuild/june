@@ -40,7 +40,17 @@
   },
   "peerDependencies": {
     "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "react-dom": "^19.2.0",
+    "pg": "^8.0.0",
+    "mysql2": "^3.0.0"
+  },
+  "peerDependenciesMeta": {
+    "pg": {
+      "optional": true
+    },
+    "mysql2": {
+      "optional": true
+    }
   },
   "repository": {
     "type": "git",
