@@ -4,7 +4,7 @@ nav: "Navigation"
 description: Hover prerenders the next page (Speculation Rules), the click is zero-network, View Transitions animate the swap — the browser is the router.
 date: 2026-06-12
 section: Features
-order: "9"
+order: "23"
 ---
 ## The feature
 

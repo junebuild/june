@@ -4,7 +4,7 @@ nav: "Client Router"
 description: Off by default — turn it on for app-like surfaces that need in-memory state to survive navigation. Soft swaps over the same HTML the server already serves, with <Island persist> for websockets.
 date: 2026-06-14
 section: Features
-order: "9.5"
+order: "24"
 ---
 ## The feature
 

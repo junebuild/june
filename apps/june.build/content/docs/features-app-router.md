@@ -4,7 +4,7 @@ nav: "App Router"
 description: page.tsx is a route, [slug] is a param, (group) shapes the tree without the URL, _anything colocates — one matcher drives dev and the build.
 date: 2026-06-12
 section: Features
-order: "6"
+order: "20"
 ---
 ## The conventions
 

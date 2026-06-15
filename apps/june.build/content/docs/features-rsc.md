@@ -3,8 +3,8 @@ title: "React Server Components, server-first"
 nav: "RSC"
 description: Every page is a server component tree rendered on the server; client code is an explicit island; actions are server functions with one authorization gate.
 date: 2026-06-12
-section: Features
-order: "5"
+section: Concepts
+order: "12"
 ---
 ## What June does today
 

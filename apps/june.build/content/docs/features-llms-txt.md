@@ -4,7 +4,7 @@ nav: "llms.txt"
 description: The agent discovery surface — llms.txt, sitemap, robots, api-catalog, and per-route manifests — derives from your routes automatically.
 date: 2026-06-12
 section: Features
-order: "2"
+order: "29"
 ---
 ## The feature
 

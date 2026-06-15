@@ -4,7 +4,7 @@ nav: "Markdown"
 description: Append .md to any page and get markdown — for authored content it's your source file byte-for-byte, never a lossy HTML reconstruction.
 date: 2026-06-12
 section: Features
-order: "3"
+order: "27"
 ---
 ## The feature
 

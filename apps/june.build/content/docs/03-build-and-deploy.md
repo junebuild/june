@@ -2,6 +2,8 @@
 title: Build & prerender
 description: What june build freezes at build time, and how opt-in prerender ships exactly what was tested.
 date: 2026-06-15
+section: Get started
+order: "2"
 ---
 ## `june build`
 

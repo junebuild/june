@@ -4,7 +4,7 @@ nav: "Styling"
 description: app/global.css is auto-linked (no import); Tailwind v4 is the blessed default; *.module.css scopes deterministically. Dev serves readable CSS with HMR, build ships hashed, immutable, minified.
 date: 2026-06-13
 section: Features
-order: "8.5"
+order: "26"
 ---
 ## The feature
 

@@ -4,7 +4,7 @@ nav: "Live updates"
 description: Put a server-push connection (SSE or WebSocket) inside a persist island — it keeps streaming across soft navigations instead of reconnecting on every click. Plus what to know about connection limits when you deploy.
 date: 2026-06-15
 section: Features
-order: "9.6"
+order: "25"
 ---
 ## The feature
 

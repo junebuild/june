@@ -4,7 +4,7 @@ nav: "Layouts"
 description: layout.tsx wraps its segment and everything below; chains compose root → leaf, and the build freezes the same chain dev resolves.
 date: 2026-06-12
 section: Features
-order: "7"
+order: "21"
 ---
 ## The feature
 

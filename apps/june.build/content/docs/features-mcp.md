@@ -4,7 +4,7 @@ nav: "MCP"
 description: Every June app is an MCP server — defineAction() is simultaneously a server action, an MCP tool, and a manifest entry, behind one authorization gate.
 date: 2026-06-12
 section: Features
-order: "1"
+order: "28"
 ---
 ## The feature
 

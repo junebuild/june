@@ -3,8 +3,8 @@ title: "Runtime: Bun-first toolchain, runtime-agnostic core"
 nav: "Runtime"
 description: One tool runs install/test/dev; the core assumes no runtime at all — which is why the same app serves from Bun, Node, and workerd.
 date: 2026-06-12
-section: Features
-order: "12"
+section: Concepts
+order: "14"
 ---
 ## The feature
 

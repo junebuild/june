@@ -3,7 +3,7 @@ title: "Web Standards end to end"
 nav: "Standards"
 description: The whole framework is one fetch handler — Request in, Response out, Web Streams in between. Standards are the portability mechanism, not a checkbox.
 date: 2026-06-12
-section: Features
+section: Concepts
 order: "11"
 ---
 ## The feature

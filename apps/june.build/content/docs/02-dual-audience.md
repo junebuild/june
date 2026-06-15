@@ -2,6 +2,8 @@
 title: Dual audience
 description: One page definition serves humans (HTML) and agents (markdown, JSON, MCP).
 date: 2026-06-12
+section: Concepts
+order: "10"
 ---
 ## One definition, four surfaces
 

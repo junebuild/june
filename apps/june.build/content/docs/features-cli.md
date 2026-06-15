@@ -4,7 +4,7 @@ nav: "CLI"
 description: Five verbs — dev, build, deploy, gen, info — installed locally by the scaffold, version-pinned per project, with --dry-run as the CI contract.
 date: 2026-06-12
 section: Features
-order: "14"
+order: "32"
 ---
 ## The feature
 

@@ -4,7 +4,7 @@ nav: "Islands"
 description: Pages ship no JavaScript unless a subtree opts in — one <Island> hydrates against an explicit registry while the rest stays server-rendered HTML.
 date: 2026-06-12
 section: Features
-order: "8"
+order: "22"
 ---
 ## The feature
 

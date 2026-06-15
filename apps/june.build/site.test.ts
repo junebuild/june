@@ -101,6 +101,9 @@ describe("docs", () => {
 
   test("Features section: grouped in the index, each page renders with a demo", async () => {
     const index = await (await get("/docs")).text();
+    // the three-section information architecture
+    expect(index).toContain("<h2>Get started</h2>");
+    expect(index).toContain("<h2>Concepts</h2>");
     expect(index).toContain("<h2>Features</h2>");
 
     const indexMd = await (await get("/docs.md")).text();
@@ -132,7 +135,7 @@ describe("docs", () => {
     const anyDoc = await (await get("/docs/features-mcp")).text();
     expect(anyDoc).toContain(">MCP</a>");
     expect(anyDoc).toContain(">OG Image</a>");
-    expect(anyDoc).toContain(">Data magic</a>");
+    expect(anyDoc).toContain(">Data model</a>");
 
     // the verbatim guarantee features-markdown.md demos holds for itself
     const served = await (await get("/docs/features-markdown.md")).text();

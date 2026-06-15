@@ -4,7 +4,7 @@ nav: "OG Image"
 description: Social cards as a route that returns a PNG — satori + resvg in the worker, with runtime font subsetting so CJK titles work.
 date: 2026-06-12
 section: Features
-order: "4"
+order: "31"
 ---
 ## The feature
 

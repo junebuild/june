@@ -2,6 +2,8 @@
 title: "Deployment"
 description: One portable core, one host seam, one adapter per target — Workers, Vercel, and Deno Deploy ship today on the same bundle.
 date: 2026-06-15
+section: Get started
+order: "3"
 ---
 ## The design
 

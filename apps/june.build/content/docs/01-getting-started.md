@@ -2,6 +2,8 @@
 title: Getting started
 description: Scaffold, develop, build, and deploy a June app in four commands.
 date: 2026-06-12
+section: Get started
+order: "1"
 ---
 ## Install
 
