@@ -49,7 +49,7 @@ export interface JuneHost {
   // this with the in-isolate dual-graph loader; the seam stays for the fallback.
   spawnModule(entry: string, args: string[], opts: { conditions?: string[] }): SpawnedModule;
   // Open a LOCAL SQLite database — the internal primitive the `sqlite()` db
-  // adapter builds on (docs/data-layer.md: openDb is demoted from the
+  // adapter builds on (docs/data-layer-boundary.md: openDb is demoted from the
   // user-facing API to a host primitive; apps declare `resources.db` instead).
   openDb(path: string): Promise<JuneDb>;
 }

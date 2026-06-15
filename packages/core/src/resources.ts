@@ -3,7 +3,7 @@
 // `node:*`, no driver. The implementations (sqlite/d1/postgres, local/r2/s3,
 // memory/redis) live in @junejs/server's adapters and behind them, Juno; this
 // layer only names the contract so RouteContext can carry injected handles and
-// any ORM can target the same shape. See docs/data-layer.md.
+// any ORM can target the same shape. See docs/data-layer-boundary.md.
 
 // --- db (relational / SQL) --------------------------------------------------
 
