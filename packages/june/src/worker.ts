@@ -215,3 +215,51 @@ export function withAssets(
     },
   };
 }
+
+// The Deno-target twin of withAssets. Deno Deploy has NO CDN / asset binding, so
+// the handler serves the hashed framework assets (/_june/*) from the bundle's
+// co-located assets/ dir and falls through to the pipeline for everything else —
+// the same split vercel() gets from the CDN, but in-process. The deno() adapter
+// bakes `Deno.serve(withDenoAssets(pipeline))` into the entry. Deno globals are
+// referenced only inside the body, so non-Deno bundles tree-shake this out.
+declare const Deno: {
+  readFile(path: string | URL): Promise<Uint8Array>;
+  env: { toObject(): Record<string, string> };
+};
+
+const ASSET_CONTENT_TYPES: Record<string, string> = {
+  css: "text/css; charset=utf-8",
+  js: "text/javascript; charset=utf-8",
+  json: "application/json; charset=utf-8",
+  map: "application/json; charset=utf-8",
+  svg: "image/svg+xml",
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  webp: "image/webp",
+  avif: "image/avif",
+  ico: "image/x-icon",
+  woff2: "font/woff2",
+  woff: "font/woff",
+};
+
+export function withDenoAssets(pipeline: FetchPipeline): (request: Request) => Promise<Response> {
+  return async (request) => {
+    const url = new URL(request.url);
+    if (request.method === "GET" && url.pathname.startsWith("/_june/")) {
+      try {
+        const file = await Deno.readFile(new URL(`./assets${url.pathname}`, import.meta.url));
+        const ext = url.pathname.split(".").pop()?.toLowerCase() ?? "";
+        return new Response(file as BodyInit, {
+          headers: {
+            "content-type": ASSET_CONTENT_TYPES[ext] ?? "application/octet-stream",
+            "cache-control": "public, max-age=31536000, immutable",
+          },
+        });
+      } catch {
+        /* not on disk → fall through (the pipeline 404s) */
+      }
+    }
+    return pipeline.fetch(request, Deno.env.toObject());
+  };
+}

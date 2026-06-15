@@ -268,3 +268,51 @@ export function vercel(opts?: { runtime?: "node" | "edge"; regions?: string[] })
     },
   };
 }
+
+// Deno Deploy target. The SAME portable bundle as workers/vercel (edge-light →
+// react-dom server.edge.js, which Deno's web-standard runtime runs); the entry
+// wraps the pipeline in `Deno.serve(withDenoAssets(...))`. Deno Deploy has no CDN,
+// so the handler serves /_june/* from the co-located assets/ dir itself (like
+// vercel()'s split, but in-process). `june build` produces dist/{worker.js,assets}
+// and `deployctl deploy` ships the dir — no Build Output tree to construct.
+//
+// db: turso() works (libsql over HTTPS, env-driven). sqlite()/d1() are
+// Cloudflare-only; validate() rejects them.
+export function deno(opts?: { project?: string }): JuneAdapter {
+  return {
+    name: "deno",
+    capabilities: { runtime: "edge", persistentConnections: true, assets: "server" },
+    // "deno" first (a dep may ship a Deno-specific build); else edge-light →
+    // server.edge.js (Web Streams + fetch, which Deno has).
+    conditions: ["deno", "edge-light", "edge", "import", "default"],
+
+    validate({ config }) {
+      const kind = config.resources?.db?.kind;
+      if (kind && kind !== "turso") {
+        throw new Error(
+          `deno(): the '${kind}' db isn't supported on Deno Deploy (D1 is Cloudflare-only).\n` +
+            "  Use turso() (libsql over HTTPS) for a Deno db, or deploy to Workers.",
+        );
+      }
+    },
+
+    entry() {
+      // Deno.serve takes the static-serving handler; no withAssets binding, no env
+      // glue (withDenoAssets reads Deno.env). The bundle self-starts on load.
+      return {
+        imports: [`import { withDenoAssets } from "@junejs/server/worker";`],
+        wrap: (pipelineVar) => `Deno.serve(withDenoAssets(${pipelineVar}));`,
+      };
+    },
+
+    async emit({ outDir }) {
+      // The bundle (worker.js + chunks) and assets/ already sit in outDir; deployctl
+      // ships the dir with worker.js as the entrypoint. A deno.json marks it a
+      // self-contained Deno project (and is where future deploy config can live).
+      await writeFile(
+        join(outDir, "deno.json"),
+        JSON.stringify({ ...(opts?.project ? { name: opts.project } : {}) }, null, 2) + "\n",
+      );
+    },
+  };
+}

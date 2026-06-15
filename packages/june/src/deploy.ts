@@ -52,7 +52,7 @@ export async function juneDeploy(appRoot: string, options: DeployOptions = {}): 
   // fallback. workers() is the default when neither names one.
   const adapterName = (cfg.deploy?.adapter as { name?: string } | undefined)?.name;
   const target = adapterName ?? cfg.deploy?.target ?? "workers";
-  if (target !== "workers" && target !== "vercel") {
+  if (target !== "workers" && target !== "vercel" && target !== "deno") {
     throw new Error(`unknown deploy target: ${target}`);
   }
 
@@ -62,9 +62,51 @@ export async function juneDeploy(appRoot: string, options: DeployOptions = {}): 
   }
 
   const run = options.runCli ?? spawnCli;
-  return target === "vercel"
-    ? deployVercel(appRoot, options, run)
-    : deployWorkers(appRoot, cfg, options, run);
+  if (target === "vercel") return deployVercel(appRoot, options, run);
+  if (target === "deno") return deployDeno(appRoot, cfg, options, run);
+  return deployWorkers(appRoot, cfg, options, run);
+}
+
+// --- Deno Deploy: deployctl ships the built dir (worker.js + assets/) ----------
+async function deployDeno(
+  appRoot: string,
+  cfg: Awaited<ReturnType<typeof loadJuneConfig>>,
+  options: DeployOptions,
+  run: CliRun,
+): Promise<DeployResult> {
+  const dist = join(appRoot, "dist");
+  if (!existsSync(join(dist, "worker.js"))) {
+    throw new Error(`no built bundle (expected ${join(dist, "worker.js")}) — run june build first`);
+  }
+  if (options.dryRun) {
+    console.log(`dry-run: built ${dist} (skipping deployctl)`);
+    return { url: null, dryRun: true, configPath: dist, migrated: [] };
+  }
+  if (!process.env.DENO_DEPLOY_TOKEN) {
+    console.log(
+      "note: DENO_DEPLOY_TOKEN not set — deployctl will use its own login\n" +
+        "      (run `deployctl login` once, or export the token).",
+    );
+  }
+  // `deno run -A jsr:@deno/deployctl` needs only deno installed (no global
+  // deployctl). Ships the cwd (dist/: worker.js + chunks + assets/) with worker.js
+  // as the entrypoint. --prod targets production (default is a preview).
+  const project = (cfg.deploy?.adapter as { project?: string } | undefined)?.project ?? cfg.deploy?.name;
+  const args = ["deno", "run", "-A", "jsr:@deno/deployctl", "deploy", "--entrypoint=worker.js"];
+  if (project) args.push(`--project=${project}`);
+  if (options.prod) args.push("--prod");
+  if (process.env.DENO_DEPLOY_TOKEN) args.push(`--token=${process.env.DENO_DEPLOY_TOKEN}`);
+
+  const { stdout, stderr, exitCode } = await run(args, dist);
+  if (stdout.trim()) console.log(stdout.trimEnd());
+  if (exitCode !== 0) {
+    if (/login|token|unauthorized|forbidden/i.test(stderr + stdout)) {
+      throw new Error("Deno Deploy auth failed — set DENO_DEPLOY_TOKEN or run `deployctl login`.\n" + stderr.trim());
+    }
+    throw new Error(`deployctl deploy failed (exit ${exitCode})\n${stderr.trim()}`);
+  }
+  const url = stdout.match(/https:\/\/\S+\.deno\.dev\S*/)?.[0] ?? null;
+  return { url, dryRun: false, configPath: dist, migrated: [] };
 }
 
 // --- Vercel: upload the prebuilt Build Output (.vercel/output/) ---------------
