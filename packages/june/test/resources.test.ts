@@ -1,7 +1,7 @@
 // The resource seam: a config-declared `db` resource is injected onto
 // RouteContext as ctx.db; not declaring it leaves ctx.db undefined. Proves the
 // binding model (declare in config → injected handle) end-to-end, plus the D1
-// adapter mapping. See docs/data-layer-boundary.md.
+// adapter mapping. See docs/data-layer.md.
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";

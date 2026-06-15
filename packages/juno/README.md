@@ -77,7 +77,7 @@ backwards. High-signal on purpose — read these, skip re-deriving the obvious.
 The framework works fully without Juno. **Tier 1** = bring your own (Prisma/Drizzle),
 untouched. **Tier 2** = your ORM over the ambient `db` resource. **Tier 3** = Juno
 (or any thin shim emitting `recordTableRead`/`recordTableWrite`) for the
-auto-invalidate / auto-batch / live-RSC magic. See `docs/data-layer-boundary.md`.
+auto-invalidate / auto-batch / live-RSC magic. See `docs/data-layer.md`.
 
 For tests or bring-your-own wiring, the explicit handle still works:
 `const j = juno(someDb); await j.table("users").all()`.

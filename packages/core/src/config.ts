@@ -57,7 +57,7 @@ export type JuneConfig = {
   cache?: CacheStoreFactory; // memory() (default) | redis({ url }) | custom
   // Data resources (db / blob / kv), declared = enabled. Generic names, not
   // Cloudflare-branded; each has a zero-config local default and deploy
-  // adapters. Omit one and it never exists. See docs/data-layer-boundary.md.
+  // adapters. Omit one and it never exists. See docs/data-layer.md.
   resources?: ResourceConfig;
   // Opt-in Tier-3 data layer (e.g. `junoDataLayer()`). Declared = its install()
   // runs at boot. Omit it and the ambient `db` stays raw (Tier 1/2). Explicit, so

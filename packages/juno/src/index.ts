@@ -1,6 +1,6 @@
 // Juno — June's ergonomic data layer. A typed table API over the @junejs/core
 // JuneDb contract (so it works over sqlite / D1 / Postgres alike), depending ONLY
-// on @junejs/core (inward; @junejs/core never imports Juno). docs/data-layer-boundary.md.
+// on @junejs/core (inward; @junejs/core never imports Juno). docs/data-layer.md.
 //
 // THE MAGIC (Tier 3): every read calls recordTableRead, every write
 // recordTableWrite — @junejs/core's PUBLIC trace contract. That is what makes cache

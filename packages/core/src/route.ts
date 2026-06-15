@@ -58,7 +58,7 @@ export type RouteContext<
   //
   // ctx is IDENTITY only — db/kv/blob are NOT here. Data resources are ambient:
   // `import { db } from '@junejs/server'` and use it anywhere, so models/helpers
-  // never thread ctx. See @junejs/server's scope.ts (docs/data-layer-boundary.md).
+  // never thread ctx. See @junejs/server's scope.ts (docs/data-layer.md).
   user?: Principal;
   session?: Session;
 };
