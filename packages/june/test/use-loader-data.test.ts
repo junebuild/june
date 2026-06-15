@@ -25,7 +25,7 @@ describe("useLoaderData", () => {
 
   test(".json still derives from the loader (the view's hook does not change projections)", async () => {
     const app = createApp({ appDir: APP_DIR, config: {} });
-    const json = await (await app.fetch(new Request("http://june.test/.json"))).json();
+    const json = await (await app.fetch(new Request("http://june.test/index.json"))).json();
     expect(json).toEqual({ greeting: "hook-and-props" });
   });
 });

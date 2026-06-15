@@ -487,10 +487,11 @@ ${adapterEntry.wrap("pipeline")}
     const def = manifest.routes[r.path];
     if (!def || !def.prerender) continue;
     const stem = r.path === "/" ? "index" : r.path.slice(1);
-    // The homepage's projection requests are `/.md` / `/.json` (negotiate strips
-    // the ext back to `/`); withAssets serves them for `Accept: text/markdown`.
-    const mdReq = r.path === "/" ? "/.md" : `${r.path}.md`;
-    const jsonReq = r.path === "/" ? "/.json" : `${r.path}.json`;
+    // The homepage's projection requests are `/index.md` / `/index.json` (negotiate
+    // treats `/index` as the alias for `/`); these become the `index.md` /
+    // `index.json` assets the worker serves at the same intuitive paths.
+    const mdReq = r.path === "/" ? "/index.md" : `${r.path}.md`;
+    const jsonReq = r.path === "/" ? "/index.json" : `${r.path}.json`;
     const targets: Array<[string, string]> = [
       [r.path, `${stem}.html`],
       [mdReq, `${stem}.md`],

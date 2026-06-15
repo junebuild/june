@@ -48,7 +48,7 @@ describe("worker env → ambient db", () => {
     manifest.resources = bindWorkerResources({ db: true });
     const worker = withAssets(createWorker(manifest));
 
-    expect(await jsonAt(worker, "/.json", { DB: fakeD1() })).toEqual({
+    expect(await jsonAt(worker, "/index.json", { DB: fakeD1() })).toEqual({
       users: [{ name: "FromD1" }],
     });
   });
@@ -58,12 +58,12 @@ describe("worker env → ambient db", () => {
     manifest.resources = bindWorkerResources({ db: true });
     const worker = withAssets(createWorker(manifest));
 
-    expect(await statusAt(worker, "/.json")).toBe(404);
+    expect(await statusAt(worker, "/index.json")).toBe(404);
   });
 
   test("no resources provider → ambient db throws → load 404s (env ignored)", async () => {
     const manifest = await buildManifest(FIXTURE_ROOT);
     const worker = withAssets(createWorker(manifest));
-    expect(await statusAt(worker, "/.json", { DB: fakeD1() })).toBe(404);
+    expect(await statusAt(worker, "/index.json", { DB: fakeD1() })).toBe(404);
   });
 });

@@ -39,7 +39,7 @@ const json = async (app: ReturnType<typeof createApp>, path: string) =>
 describe("ambient db (the binding model — decoupled from ctx)", () => {
   test("a declared sqlite resource is reachable via ambient db and queryable", async () => {
     const app = createApp({ appDir: APP_DIR, config: { resources: { db: sqlite({ path: dbPath }) } } });
-    expect(await json(app, "/.json")).toEqual({ users: [{ name: "Ada" }, { name: "Linus" }] });
+    expect(await json(app, "/index.json")).toEqual({ users: [{ name: "Ada" }, { name: "Linus" }] });
   });
 
   test("sqlite() creates missing parent dirs and persists across reopen (the watch-restart shape)", async () => {
@@ -61,14 +61,14 @@ describe("ambient db (the binding model — decoupled from ctx)", () => {
     // loud (the load boundary turns the thrown guidance into a 404), not return
     // silent empty data the way the old optional ctx.db did.
     const app = createApp({ appDir: APP_DIR, config: {} });
-    const res = await app.fetch(new Request("http://june.test/.json"));
+    const res = await app.fetch(new Request("http://june.test/index.json"));
     expect(res.status).toBe(404);
   });
 
   test("the same handle is reused across requests (memoized, one connection)", async () => {
     const app = createApp({ appDir: APP_DIR, config: { resources: { db: sqlite({ path: dbPath }) } } });
-    const a = await json(app, "/.json");
-    const b = await json(app, "/.json");
+    const a = await json(app, "/index.json");
+    const b = await json(app, "/index.json");
     expect(a).toEqual(b);
   });
 });
