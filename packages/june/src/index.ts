@@ -11,7 +11,7 @@ export {
   type AdapterEmitContext,
 } from "./adapter";
 export { host, type JuneHost, type JuneDb, type RunResult, type ServeHandle, type SpawnedModule } from "./host";
-export { sqlite, d1, postgres, mysql, type D1Database } from "./db";
+export { sqlite, d1, postgres, mysql, turso, type D1Database } from "./db";
 export { memoryKv, redisKv } from "./kv";
 export { localBlob, r2, type R2Bucket } from "./blob";
 export {
