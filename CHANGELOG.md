@@ -15,9 +15,17 @@ of truth; this file summarizes what matters per release.
   returns the variant when present, falling back to the default file otherwise (a
   dev-time warning flags a partial translation); a `posts(locale)` lister returns
   the collection localized. A collection with no `<locale>/` subdir emits exactly
-  the previous shape, so single-locale apps are byte-identical. The agent surfaces
-  stay canonical: a page's `.md`/`.json` follow its locale, but `llms.txt` / `/mcp`
-  remain single-language by design (tool contracts don't get translated).
+  the previous shape, so single-locale apps are byte-identical. Pass
+  `{ fallback: false }` to the finder for STRICT resolution — a missing variant
+  returns null so a route can 404 rather than serve default-language content.
+
+- **Experimental — hreflang + localized sitemap (i18n phase 4 SEO).** With `i18n`
+  configured, every document head gets `rel="alternate" hreflang` links for its
+  locale variants (incl. `x-default`, cross-origin absolute), and `/sitemap.xml`
+  gains `xhtml:link` alternates per URL. These are the SEO CONTENT surface; the
+  agent surfaces stay canonical single-language by design — a page's `.md`/`.json`
+  follow its locale, but `llms.txt` / `/mcp` are not translated (tool contracts
+  don't get translated). A new `examples/i18n` app dogfoods the whole stack.
 
 ### Changed
 
