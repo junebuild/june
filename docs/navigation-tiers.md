@@ -116,6 +116,26 @@ The whole-chain morph is the only row that gets **both** for free — that is
 exactly the cost the segment-scoped optimization trades away: a shell outside the
 swap region has to move its own highlight. Decide per surface, eyes open.
 
+### The active-link reconciliation rule (segment-scoped)
+
+The `location`-driven hook (`updateActiveLinks` in `client-router.ts`) sets
+`aria-current` on shell links using a fixed convention: a link is **`"page"`**
+when its path equals the current path, **`"true"`** when the current path is
+under it (an ancestor/section link), and cleared otherwise. Trailing slashes are
+normalized first (June doesn't redirect `/guide/` → `/guide`). The shell-link set
+is scanned once and cached while the shell stays mounted.
+
+This is a **client-side default**, and it is a *second* source of truth alongside
+whatever the shell's SSR template emitted on the hard load — the two can disagree
+when the author's intent isn't "exact-or-ancestor" (e.g. exact-only, a curated
+set, or aliased routes). The server can't be the authority here without rendering
+the shell on every soft-nav, which is exactly the cost segment-scoping removes. So
+the exact-or-ancestor heuristic is the default, and the planned escape hatch for
+the minority that needs a different rule is **declarative, per-link** — a marker
+like `data-june-active="exact"` or `data-june-active="/guide/*"` the hook honors —
+rather than server-emitted active state. Not yet built; the default covers the
+common docs/nav convention.
+
 ## Minimal path to segment-scoped fragments
 
 When a large nested-layout surface justifies it:
