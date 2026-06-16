@@ -21,6 +21,9 @@ beforeAll(() => {
   writeFileSync(join(docs, "intro.md"), md("Intro", "2026-01-01", "Intro EN"));
   writeFileSync(join(docs, "guide.md"), md("Guide", "2026-01-02", "Guide EN"));
   writeFileSync(join(docs, "de", "intro.md"), md("Einführung", "2026-01-01", "Intro DE"));
+  // a NON-locale subdir — must not become a phantom locale
+  mkdirSync(join(docs, "images"));
+  writeFileSync(join(docs, "images", "diagram.md"), md("Diagram", "2026-01-03", "Diagram"));
   const posts = join(root, "posts"); // flat-only collection (no locale subdirs)
   mkdirSync(posts);
   writeFileSync(join(posts, "hello.md"), md("Hello", "2026-02-01", "Hello"));
@@ -41,6 +44,17 @@ describe("scanCollection", () => {
 
   test("a flat-only collection has no byLocale", () => {
     expect(Object.keys(scanCollection(join(root, "posts")).byLocale)).toEqual([]);
+  });
+
+  test("a non-locale-shaped subdir is NOT a phantom locale", () => {
+    // 'images' isn't BCP-47-shaped → ignored; only 'de' is a bucket.
+    expect(Object.keys(scanCollection(docsDir()).byLocale)).toEqual(["de"]);
+  });
+
+  test("knownLocales restricts buckets to the configured set (exact)", () => {
+    expect(Object.keys(scanCollection(docsDir(), ["de"]).byLocale)).toEqual(["de"]);
+    // a config without 'de' → 'de/' is not a bucket (treated as non-locale)
+    expect(Object.keys(scanCollection(docsDir(), ["fr"]).byLocale)).toEqual([]);
   });
 });
 

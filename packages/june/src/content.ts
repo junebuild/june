@@ -94,12 +94,24 @@ export type ScannedCollection = {
   byLocale: Record<string, ContentEntry[]>;
 };
 
-export function scanCollection(dir: string): ScannedCollection {
+// BCP-47-shaped tag (language + optional script/region/variant subtags). Used to
+// decide whether a subdir is a locale bucket WITHOUT the i18n config: it accepts
+// `de`, `fr`, `zh-TW`, `pt-BR` and rejects `images`, `drafts`, `assets` — so a
+// stray folder can't become a phantom locale. Pass `knownLocales` for exact,
+// config-driven validation (the stronger check once the locale set is threaded in).
+const LOCALE_DIR = /^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$/;
+function isLocaleDir(name: string, known?: readonly string[]): boolean {
+  return known ? known.includes(name) : LOCALE_DIR.test(name);
+}
+
+export function scanCollection(dir: string, knownLocales?: readonly string[]): ScannedCollection {
   const def: ContentEntry[] = [];
   const byLocale: Record<string, ContentEntry[]> = {};
   for (const ent of readdirSync(dir, { withFileTypes: true })) {
     if (ent.isDirectory()) {
-      // Any subdirectory is a locale bucket (the only subdir convention).
+      // Only a configured locale (or, without a list, a BCP-47-shaped name) is a
+      // locale bucket — a stray content/<col>/images/ is NOT a phantom "images".
+      if (!isLocaleDir(ent.name, knownLocales)) continue;
       const locale = ent.name;
       const sub = join(dir, locale);
       byLocale[locale] = readdirSync(sub)
@@ -171,7 +183,10 @@ export function entry(
 // locale-aware `post(slug, locale?)` finder (variant → flat default, dev-warn on a
 // partial-translation miss, tree-shaken in production), and a locale-merged
 // `posts(locale?)` lister.
-export function generateContentModule(contentDir: string): { code: string; names: string[] } {
+export function generateContentModule(
+  contentDir: string,
+  knownLocales?: readonly string[],
+): { code: string; names: string[] } {
   const strip = (e: ContentEntry) => ({
     slug: e.slug,
     data: e.data,
@@ -185,7 +200,7 @@ export function generateContentModule(contentDir: string): { code: string; names
   let anyLocale = false;
   let body = "";
   for (const d of dirs) {
-    const { default: def, byLocale } = scanCollection(join(contentDir, d.name));
+    const { default: def, byLocale } = scanCollection(join(contentDir, d.name), knownLocales);
     const CONST = d.name.replace(/[^A-Za-z0-9]/g, "_").toUpperCase();
     // Singular finder name: posts → post, otherwise <name>Entry.
     const finder = d.name.endsWith("s") ? d.name.slice(0, -1) : `${d.name}Entry`;
