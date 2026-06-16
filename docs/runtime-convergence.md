@@ -110,6 +110,33 @@ against it.
   Flight is a capability, not the default; reach for it per route, eyes open to
   the coupling.
 
+### Two axes, not one — format vs granularity
+
+The Route A fork above is about wire *format* (HTML-morph vs Flight-VDOM). It is
+**orthogonal** to wire *granularity* — how much of the chain a nav re-renders and
+ships. The plan forks on the first axis and has held the second constant; naming
+it keeps the next optimization from being mistaken for a Flight decision.
+
+| axis | options | where it's decided | today |
+| --- | --- | --- | --- |
+| **format** | HTML fragment (morph) · Flight (reconcile) | the Route A fork above | morph default |
+| **granularity** | whole `[data-june-root]` chain · changed segment only | the fragment projection | fixed at whole chain |
+
+Today the fragment projection flattens the whole layout chain into one
+`[data-june-root]` payload and morphs it wholesale (`renderFragment`,
+`pipeline.ts`). That is correct for most sites — a short shell re-walked is cheap
+— but it taxes a large nested-layout site: a docs route with a 1000-link sidebar
+re-serializes and re-walks that sidebar on every soft-nav, even though only the
+content segment changed. The sidebar survives (morph identity), but the wire +
+server-render + walk are all O(shell).
+
+Crucially, finer granularity does NOT require Flight. A **segment-scoped
+fragment** — render only the changed segment below the persistent layout
+boundary, morph only the content region — is per-segment granularity on the
+HTML-morph track: RSC's docs-relevant benefit without `react-server-dom`. The
+two axes compose: pick format per route (morph default), pick granularity per
+layout boundary (whole-chain default, segment-scoped opt-in).
+
 ### What this changes in the frontier below
 
 - The **Flight projection** (step 2) stays, but as the OPT-IN apply path, not the
@@ -157,6 +184,19 @@ The native runtime today renders its OWN file-routed RSC demo (ported `js/` +
    the React Compiler pre-pass; point it at the @junejs/core app dir; keep ONE funnel.
 5. **Demote the Bun dev server.** `june dev` dispatches to the native binary when
    present, falling back to `@junejs/server`'s `startDevServer`.
+6. **Segment-scoped fragment (granularity, not format).** Teach the fragment
+   projection to render only the changed segment below a persistent layout
+   boundary, so a soft-nav morphs the content region and never touches the shell
+   — sidebar scroll / expanded-state preserved for free, the wire shrinks to the
+   content. The boundary is a property of the layout chain, orthogonal to
+   morph-vs-Flight; see
+   [Two axes](#two-axes-not-one--format-vs-granularity). Minimal path: a layout
+   declares the boundary (a `<JuneOutlet>` slot instead of `document.tsx`
+   wrapping all children), `renderFragment` renders the leaf + the layouts INSIDE
+   the boundary (not the full `chain.reduceRight`), and the router moves the
+   active highlight with a `location`-driven `aria-current` hook (the whole-chain
+   morph gets that free by re-rendering the shell — this is the trade the
+   optimization makes). Full design: [`navigation-tiers.md`](./navigation-tiers.md).
 
 ## Parity is the acceptance test
 

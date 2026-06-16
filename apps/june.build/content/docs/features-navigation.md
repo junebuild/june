@@ -21,7 +21,11 @@ browser already has one. Every HTML page carries three things:
 3. **View Transitions.** `@view-transition { navigation: auto }` animates
    the document swap (and respects `prefers-reduced-motion`). Cross-document
    navigation stops looking like a full reload because the browser paints it
-   as one continuous surface.
+   as one continuous surface. It is pure CSS — no JavaScript, no
+   `document.startViewTransition()` (that API is for same-document SPAs) —
+   and it requires **both** the outgoing and incoming page to carry the
+   opt-in, on a **same-origin** navigation. June emits the rule on every
+   page, so both ends always qualify.
 
 The agent surfaces are deliberately excluded: `.md`, `.json`, and `/mcp`
 never prerender — machines don't hover.
@@ -49,6 +53,24 @@ enhancement — off by default, and this site keeps it off.
 
 Configured by `speculation` in `june.config.ts`, on by default — the config
 exists to turn it off.
+
+## The fine print
+
+This default leans on a few browser behaviors. They are load-bearing and easy
+to get subtly wrong, so they are stated here rather than left implicit:
+
+- **Back/forward is instant via bfcache** — the browser restores a live page
+  snapshot, no re-render. But a page served with `Cache-Control: no-store` is
+  **disqualified** from bfcache in Chrome and Firefox, so don't reach for
+  `no-store` on HTML to force revalidation; use `no-cache` or a short
+  `max-age`. (Chrome is trialing a conditional relaxation — verify against
+  your targets; behavior is in flux as of 2026-06.)
+- **Speculative requests are detectable server-side** — a prerender carries
+  `Sec-Purpose: prefetch;prerender` (a prefetch, just `Sec-Purpose: prefetch`),
+  so a route can skip side effects until the page is actually activated.
+- **Hashed assets are served `immutable`** ([the worker sets it](/docs/features-runtime)),
+  so the browser skips even the conditional revalidation request within the
+  asset's lifetime — the per-navigation cost stays at the document, not its CSS/JS.
 
 ## Why it matters
 

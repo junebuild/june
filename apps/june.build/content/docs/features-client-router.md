@@ -48,6 +48,16 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 }
 ```
 
+How it survives rests on two platform facts. React forbids outside code from
+mutating DOM it owns, so the morph treats every island as **opaque** — it
+reconciles the document *around* the islands and never diffs into their
+interior. And the persisted island's live node is relocated with `moveBefore()`,
+a **same-document** state-preserving move that keeps its React state, focus, and
+open connections intact. That same-document boundary is exactly why this is a
+Tier 1 (soft-swap) capability: a real cross-document navigation tears the old
+document down, so there is no live node to carry — which is what the floor
+([Navigation](/docs/features-navigation)) trades away for zero JS.
+
 ## Pure progressive enhancement
 
 The router only ever *adds* behavior on top of pages that already work:
