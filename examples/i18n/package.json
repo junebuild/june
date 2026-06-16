@@ -1,0 +1,12 @@
+{
+  "name": "@june-examples/i18n",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@junejs/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@junejs/server": "workspace:*"
+  }
+}
