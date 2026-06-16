@@ -56,9 +56,19 @@ export type Resolved = {
   loading?: React.ComponentType;
 };
 
+// A RESOURCE route (app/**/route.*): a handler returning a raw Response — binary,
+// custom content-type, webhook — resolved by the SAME matcher (params from the
+// path), so it lives in the route table instead of a hand-rolled url branch.
+export type ResourceHandler = (
+  request: Request,
+  ctx: RouteContext,
+) => Response | Promise<Response>;
+export type ResolvedResource = { handler: ResourceHandler; params: Record<string, string> };
+
 // The one thing dev and worker do differently: turn a clean pathname into a
 // matched route. Dev walks the filesystem; the worker reads the frozen manifest.
-export type RouteResolver = (pathname: string) => Promise<Resolved | null>;
+// A match is either a page (Resolved) or a resource route (ResolvedResource).
+export type RouteResolver = (pathname: string) => Promise<Resolved | ResolvedResource | null>;
 
 export type PipelineConfig = {
   docConfig: DocumentConfig;
@@ -80,10 +90,18 @@ export type PipelineConfig = {
   extra?: ExtraHandler;
 };
 
-export type ExtraHandler = (
+// app/_middleware.* default export. Runs after the agent surface, before route
+// resolution; return null to pass through, a Response to short-circuit.
+//   ⚠ Don't authorize here — authorization is the single defineAction
+//     run(input, ctx) gate; a check here is a second, ungoverned path.
+//   ⚠ It runs BEFORE routes, so over-broad url matching shadows a page. For a
+//     custom endpoint (binary, webhook) prefer a route.* resource route.
+export type MiddlewareHandler = (
   request: Request,
   url: URL,
 ) => Promise<Response | null> | Response | null;
+/** @deprecated the former name (app/_extra); use {@link MiddlewareHandler}. */
+export type ExtraHandler = MiddlewareHandler;
 
 export type Pipeline = { fetch(request: Request): Promise<Response> };
 
@@ -379,6 +397,10 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
         target,
         speculative,
       };
+
+      // Resource route (route.*): a raw-Response handler — no projection, no doc
+      // shell. It's matched like any route, so it can't shadow a page.
+      if ("handler" in resolved) return resolved.handler(request, ctx);
       // Streaming Suspense: a view request on a route with loading.tsx AND
       // static metadata flushes the shell + fallback before load() resolves.
       // (data-derived metadata can't stream — the <head> needs the title.)

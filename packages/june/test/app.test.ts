@@ -113,6 +113,15 @@ describe("agent discovery surface", () => {
     const xml = await (await get("/sitemap.xml")).text();
     expect(xml).toContain("<loc>http://june.test/users</loc>");
     expect(xml).not.toContain("[slug]");
+    // resource routes (app/og/[slug]/route.ts) are machine endpoints, not pages
+    expect(xml).not.toContain("/og");
+  });
+
+  test("resource route (route.*) returns a raw Response, with params from the path", async () => {
+    const res = await get("/og/hello.png");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("image/png");
+    expect(await res.text()).toBe("og:hello"); // [slug] = "hello.png" → handler stripped .png
   });
 
   test("/robots.txt and /.well-known/api-catalog and the mcp server-card", async () => {

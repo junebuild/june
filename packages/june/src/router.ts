@@ -31,13 +31,26 @@ export type RouteTreeMatch = {
 
 const routeExtensions = new Set([".tsx", ".jsx", ".ts", ".js"]);
 
-// app/_extra.* — the pre-route escape hatch (a `_` file, so never a route).
-// Dev and the build look it up through this ONE helper so the conventions
-// cannot drift.
-export function findExtraFile(appDir: string): string | null {
+// app/_middleware.* — the pre-route middleware seam (a `_` file, so never a
+// route): runs after the agent surface, before route resolution. Return null to
+// pass; return a Response to short-circuit. Two cautions (see MiddlewareHandler):
+// don't authorize here (that's the single run(input, ctx) gate), and because it
+// runs BEFORE routes, over-broad matching can shadow a page. For a custom
+// endpoint (binary, webhook), prefer a route.* resource route instead.
+// `_extra` is the deprecated former name (warned + still honored for one cycle).
+// Dev and the build look it up through this ONE helper so the conventions can't
+// drift.
+export function findMiddlewareFile(appDir: string): string | null {
+  for (const ext of routeExtensions) {
+    const f = join(appDir, `_middleware${ext}`);
+    if (existsSync(f)) return f;
+  }
   for (const ext of routeExtensions) {
     const f = join(appDir, `_extra${ext}`);
-    if (existsSync(f)) return f;
+    if (existsSync(f)) {
+      console.warn("[june] app/_extra is deprecated — rename it to app/_middleware.");
+      return f;
+    }
   }
   return null;
 }
@@ -56,6 +69,14 @@ function baseName(file: string) {
 function isPageFile(file: string) {
   const base = baseName(file);
   return base === "page" || base === "index";
+}
+
+// app/**/route.* — a RESOURCE route: a handler returning a raw Response (binary,
+// custom content-type, webhook), not a React page. It's a first-class route (in
+// the route table, params from the path, resolved by the SAME matcher), so it
+// can't shadow pages by accident and doesn't need hand-rolled url matching.
+export function isResourceFile(file: string): boolean {
+  return baseName(file) === "route";
 }
 
 // Special (never-a-route) files that shape the segment tree.
@@ -118,7 +139,7 @@ function routePath(appDir: string, file: string) {
   // Route groups shape the filesystem, not the URL.
   const parts = withoutExtension.split("/").filter((p) => !isRouteGroup(p));
 
-  if (parts.at(-1) === "page" || parts.at(-1) === "index") {
+  if (parts.at(-1) === "page" || parts.at(-1) === "index" || parts.at(-1) === "route") {
     parts.pop();
   }
 
@@ -146,9 +167,12 @@ export async function matchRouteTree(
     const entries = await listDir(dir);
     const segments = [...chain, segmentAt(dir, entries)];
 
-    // Terminal: URL consumed → find the page in this dir.
+    // Terminal: URL consumed → find the page (or resource route) in this dir.
     if (rest.length === 0) {
-      const page = fileFor(entries, dir, "page") ?? fileFor(entries, dir, "index");
+      const page =
+        fileFor(entries, dir, "page") ??
+        fileFor(entries, dir, "index") ??
+        fileFor(entries, dir, "route");
       if (page) return { file: page, params, segments };
     } else if (!options.pageConvention) {
       // Legacy flat convention: a non-special leaf FILE names the final segment
@@ -251,17 +275,19 @@ export async function routeFiles(
     if (!routeExtensions.has(file.match(/\.[^.]+$/)?.[0] ?? "")) return false;
     if (isSpecialFile(file)) return false;
     if (file.split(sep).some((p) => p.startsWith("_"))) return false;
-    if (options.pageConvention && !isPageFile(file)) return false;
+    if (options.pageConvention && !isPageFile(file) && !isResourceFile(file)) return false;
     return true;
   });
 }
 
-// All route paths under appDir (for sitemap / llms.txt / api-catalog).
+// All PAGE route paths under appDir (for sitemap / llms.txt / api-catalog).
+// Resource routes (route.*) are excluded — they're machine endpoints (og images,
+// webhooks), not pages, so they don't belong in the human/agent sitemap.
 export async function listRoutes(
   appDir: string,
   options: MatchOptions = {},
 ): Promise<string[]> {
-  const files = await routeFiles(appDir, options);
+  const files = (await routeFiles(appDir, options)).filter((file) => !isResourceFile(file));
   return [...new Set(files.map((file) => routePath(appDir, file)))].sort();
 }
 

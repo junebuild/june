@@ -31,8 +31,8 @@ import { workers, type JuneAdapter, type ResourcePlan } from "./adapter";
 import type { DocumentConfig } from "@junejs/core/document";
 import { collection } from "./content";
 import { createWorker, type WorkerManifest } from "./worker";
-import { findExtraFile } from "./router";
-import type { ExtraHandler, LayoutComponent, LoadingComponent } from "./pipeline";
+import { findMiddlewareFile } from "./router";
+import type { ExtraHandler, LayoutComponent, LoadingComponent, ResourceHandler } from "./pipeline";
 import { findClientEntry, bundleClientToFile, CLIENT_SCRIPT_URL } from "./client-bundle";
 import { cssTargets, findGlobalCss, minifyCss, processCss, STYLES_URL } from "./css";
 import { buildModuleCss, rolldownCssModulesPlugin, registerCssModules } from "./css-modules";
@@ -51,6 +51,7 @@ type RouteEntry = {
   path: string;
   file: string;
   dynamic: boolean;
+  resource?: boolean; // a route.* resource route (raw-Response handler), not a page
   layouts: string[];
   loading?: string; // nearest loading.tsx up the tree → streaming Suspense fallback
 };
@@ -87,7 +88,9 @@ export async function scanRoutes(
     }
     const ext = e.name.match(/\.[^.]+$/)?.[0] ?? "";
     if (!ROUTE_EXTS.includes(ext)) continue;
-    if (!PAGE_BASENAMES.has(basename(e.name, ext))) continue;
+    const base = basename(e.name, ext);
+    const resource = base === "route";
+    if (!PAGE_BASENAMES.has(base) && !resource) continue;
     const relDir = relative(appDir, dir);
     const segments = relDir === "" ? [] : relDir.split(sep).filter((s) => !isRouteGroup(s));
     const path = "/" + segments.join("/");
@@ -95,6 +98,7 @@ export async function scanRoutes(
       path: path === "/" ? "/" : path,
       file: full,
       dynamic: /\[.+\]/.test(path),
+      resource,
       layouts: chain,
       loading: nearestLoading,
     });
@@ -197,11 +201,18 @@ export async function buildManifest(appRoot: string): Promise<WorkerManifest> {
 
   const routes: Record<string, BrandedRoute> = {};
   const dynamicRoutes: Array<{ pattern: string; def: BrandedRoute }> = [];
+  const resourceRoutes: Array<{ pattern: string; handler: ResourceHandler }> = [];
   const layoutChains: Record<string, LayoutComponent[]> = {};
   const loadings: Record<string, LoadingComponent> = {};
 
   for (const r of scanned) {
     const mod = await import(pathToFileURL(r.file).href);
+    // Resource route (route.*): the default export is the Response handler.
+    if (r.resource) {
+      const handler = (mod as { default?: unknown }).default;
+      if (typeof handler === "function") resourceRoutes.push({ pattern: r.path, handler: handler as ResourceHandler });
+      continue;
+    }
     const def = routeFromModule(mod);
     if (!def) continue;
     const chain = await componentsFor(r.layouts);
@@ -217,7 +228,7 @@ export async function buildManifest(appRoot: string): Promise<WorkerManifest> {
   }
 
   let extra: ExtraHandler | undefined;
-  const extraFile = findExtraFile(appDir);
+  const extraFile = findMiddlewareFile(appDir);
   if (extraFile) {
     const mod = (await import(pathToFileURL(extraFile).href)) as { default?: unknown };
     if (typeof mod.default === "function") extra = mod.default as ExtraHandler;
@@ -226,6 +237,7 @@ export async function buildManifest(appRoot: string): Promise<WorkerManifest> {
   return {
     routes,
     dynamicRoutes,
+    resourceRoutes,
     layoutChains,
     loadings,
     document: frozen.document,
@@ -350,15 +362,26 @@ export async function juneBuild(
   };
   const chains: string[] = [];
   const loadings: string[] = [];
+  const resources: string[] = [];
   routes.forEach((r, i) => {
+    // Resource route (route.*): the default export IS the handler — import it
+    // directly (no routeFromModule, no layout chain).
+    if (r.resource) {
+      imports.push(`import h${i} from ${JSON.stringify(importPath(genDir, r.file))};`);
+      resources.push(`    { pattern: ${JSON.stringify(r.path)}, handler: h${i} },`);
+      return;
+    }
     imports.push(`import * as r${i} from ${JSON.stringify(importPath(genDir, r.file))};`);
     if (r.dynamic) dynamics.push(`    { pattern: ${JSON.stringify(r.path)}, def: routeFromModule(r${i}) },`);
     else statics.push(`    ${JSON.stringify(r.path)}: routeFromModule(r${i}),`);
     chains.push(`    ${JSON.stringify(r.path)}: [${r.layouts.map(layoutId).join(", ")}],`);
     if (r.loading) loadings.push(`    ${JSON.stringify(r.path)}: ${loadingId(r.loading)},`);
   });
+  const resourceRoutesField = resources.length
+    ? `\n  resourceRoutes: [\n${resources.join("\n")}\n  ],`
+    : "";
 
-  const builtExtraFile = findExtraFile(appDir);
+  const builtExtraFile = findMiddlewareFile(appDir);
   if (builtExtraFile) {
     imports.push(`import extra from ${JSON.stringify(importPath(genDir, builtExtraFile))};`);
   }
@@ -418,7 +441,7 @@ ${statics.join("\n")}
   },
   dynamicRoutes: [
 ${dynamics.join("\n")}
-  ],
+  ],${resourceRoutesField}
   layoutChains: {
 ${chains.join("\n")}
   },

@@ -16,13 +16,16 @@ import type { AgentConfig } from "@junejs/core/config";
 import type { DocumentConfig } from "@junejs/core/document";
 import type { Resources } from "@junejs/core/resources";
 
-import { createPipeline, type ExtraHandler, type LayoutComponent, type LoadingComponent, type Resolved } from "./pipeline";
+import { createPipeline, type ExtraHandler, type LayoutComponent, type LoadingComponent, type Resolved, type ResolvedResource, type ResourceHandler } from "./pipeline";
 
 export type WorkerManifest = {
   // Static paths → route definitions ("/", "/users", ...).
   routes: Record<string, BrandedRoute>;
   // Dynamic patterns in file-route syntax ("/posts/[slug]", "/docs/[...path]").
   dynamicRoutes?: Array<{ pattern: string; def: BrandedRoute }>;
+  // Resource routes (app/**/route.*): a raw-Response handler keyed by its pattern
+  // (static or dynamic). Matched after pages, so a page never gets shadowed.
+  resourceRoutes?: Array<{ pattern: string; handler: ResourceHandler }>;
   // Layout chains (root→leaf) keyed by route path / dynamic pattern. The build
   // freezes the same chain the dev server loads from app/layout.* files.
   layoutChains?: Record<string, LayoutComponent[]>;
@@ -93,6 +96,11 @@ export function createWorker(
     def: d.def,
     pattern: d.pattern,
   }));
+  const resources = (manifest.resourceRoutes ?? []).map((r) => ({
+    ...compilePattern(r.pattern),
+    handler: r.handler,
+    pattern: r.pattern,
+  }));
   const routeList = [
     ...Object.keys(manifest.routes),
     ...(manifest.dynamicRoutes ?? []).map((d) => d.pattern),
@@ -116,7 +124,7 @@ export function createWorker(
     notFoundComponent: manifest.notFound,
     extra: manifest.extra,
     resources: provider ? () => provider(currentEnv) : undefined,
-    resolve: async (pathname): Promise<Resolved | null> => {
+    resolve: async (pathname): Promise<Resolved | ResolvedResource | null> => {
       const staticDef = manifest.routes[pathname];
       if (staticDef)
         return { def: staticDef, params: {}, chain: chainFor(pathname), loading: loadingFor(pathname) };
@@ -132,6 +140,19 @@ export function createWorker(
             }),
           );
           return { def: d.def, params, chain: chainFor(d.pattern), loading: loadingFor(d.pattern) };
+        }
+      }
+      // Resource routes after pages (so a page is never shadowed by one).
+      for (const r of resources) {
+        const m = pathname.match(r.regex);
+        if (m) {
+          const params = Object.fromEntries(
+            r.names.flatMap((n, i) => {
+              const v = m[i + 1];
+              return v === undefined ? [] : [[n, decodeURIComponent(v)]];
+            }),
+          );
+          return { handler: r.handler, params };
         }
       }
       return null;

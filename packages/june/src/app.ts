@@ -18,8 +18,8 @@ import { resolveAgent, resolveSpeculationRules, type JuneConfig } from "@junejs/
 import type { DocumentConfig } from "@junejs/core/document";
 import { runWithTrace, type RequestTrace } from "@junejs/core/instrumentation";
 
-import { findExtraFile, listRoutes, matchRouteTree, resolveNotFound, routeFiles, type SegmentMatch } from "./router";
-import { createPipeline, type ExtraHandler, type LayoutComponent, type Pipeline, type Resolved } from "./pipeline";
+import { findMiddlewareFile, isResourceFile, listRoutes, matchRouteTree, resolveNotFound, routeFiles, type SegmentMatch } from "./router";
+import { createPipeline, type ExtraHandler, type LayoutComponent, type Pipeline, type Resolved, type ResourceHandler } from "./pipeline";
 import { memoizeResources } from "./resources";
 import { findClientEntry, bundleClientToString, CLIENT_SCRIPT_URL } from "./client-bundle";
 import { findGlobalCss, processCssCached, STYLES_URL } from "./css";
@@ -140,7 +140,7 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
       }
     }
     let extra: ExtraHandler | undefined;
-    const extraFile = findExtraFile(appDir);
+    const extraFile = findMiddlewareFile(appDir);
     if (extraFile) {
       const mod = (await import(pathToFileURL(extraFile).href)) as { default?: unknown };
       if (typeof mod.default === "function") extra = mod.default as ExtraHandler;
@@ -153,10 +153,16 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
       earlyHints: config.earlyHints,
       resources,
       notFoundComponent,
-      resolve: async (pathname): Promise<Resolved | null> => {
+      resolve: async (pathname) => {
         const match = await matchRouteTree(appDir, pathname, { pageConvention: true });
         if (!match) return null;
         const mod = await import(pathToFileURL(match.file).href);
+        // Resource route (route.*): the default export is the Response handler.
+        if (isResourceFile(match.file)) {
+          const handler = (mod as { default?: unknown }).default;
+          if (typeof handler !== "function") return null;
+          return { handler: handler as ResourceHandler, params: match.params };
+        }
         const def = routeFromModule(mod);
         if (!def) return null;
         return {
@@ -164,7 +170,7 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
           params: match.params,
           chain: await loadChain(match.segments),
           loading: await nearestLoading(match.segments),
-        };
+        } satisfies Resolved;
       },
     });
   }
