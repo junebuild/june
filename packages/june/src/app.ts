@@ -20,6 +20,7 @@ import { runWithTrace, type RequestTrace } from "@junejs/core/instrumentation";
 
 import { findMiddlewareFile, isResourceFile, listRoutes, matchRouteTree, resolveNotFound, routeFiles, type SegmentMatch } from "./router";
 import { createPipeline, type ExtraHandler, type LayoutComponent, type Pipeline, type Resolved, type ResourceHandler } from "./pipeline";
+import { resolveBoundary } from "./segment";
 import { memoizeResources } from "./resources";
 import { findClientEntry, bundleClientToString, CLIENT_SCRIPT_URL } from "./client-bundle";
 import { findGlobalCss, processCssCached, STYLES_URL } from "./css";
@@ -74,30 +75,20 @@ async function nearestLoading(segments: SegmentMatch[]): Promise<React.Component
   return mod.default;
 }
 
-// The layout chain (root→leaf) plus the segment boundary: the index of the
-// DEEPEST layout that exports `segmentBoundary` (smallest fragment wins). null →
-// no boundary (whole-chain fragment). Two boundaries in one chain is almost
-// certainly a mistake, so warn and take the deepest.
+// The layout chain (root→leaf) plus the segment boundary, via the shared
+// resolver (the one place the deepest-wins rule + shell key live, so dev and the
+// frozen manifest can't drift).
 async function loadChain(
   segments: SegmentMatch[],
-): Promise<{ chain: LayoutComponent[]; boundaryIndex: number | null }> {
-  const chain: LayoutComponent[] = [];
-  let boundaryIndex: number | null = null;
+): Promise<{ chain: LayoutComponent[]; boundaryIndex: number | null; boundaryKey: string | null }> {
+  const items = [];
   for (const seg of segments) {
     if (!seg.layout) continue;
     const L = await loadLayout(seg.layout);
-    if (!L) continue;
-    if (L.boundary) {
-      if (boundaryIndex !== null) {
-        console.warn(
-          `[june] multiple segmentBoundary layouts in one chain (${seg.layout}); using the deepest.`,
-        );
-      }
-      boundaryIndex = chain.length;
-    }
-    chain.push(L.component);
+    items.push({ file: seg.layout, entry: L?.component ?? null, boundary: !!L?.boundary });
   }
-  return { chain, boundaryIndex };
+  const { chain, boundaryIndex, key } = resolveBoundary(items);
+  return { chain, boundaryIndex, boundaryKey: key };
 }
 
 export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions): JuneApp {
@@ -192,12 +183,13 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
         }
         const def = routeFromModule(mod);
         if (!def) return null;
-        const { chain, boundaryIndex } = await loadChain(match.segments);
+        const { chain, boundaryIndex, boundaryKey } = await loadChain(match.segments);
         return {
           def,
           params: match.params,
           chain,
           boundaryIndex,
+          boundaryKey,
           loading: await nearestLoading(match.segments),
         } satisfies Resolved;
       },

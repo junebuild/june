@@ -20,6 +20,14 @@
 //
 // With no boundary declared, <JuneOutlet> is a harmless plain wrapper and the
 // whole [data-june-root] stays the swap region (the default).
+//
+// CONSTRAINT: a soft-nav fragment renders ONLY the content below the boundary, so
+// the boundary layout (and anything above it) is NOT re-rendered. Keep the shell
+// to route-independent chrome — DOM, sidebars, nav. Any React Context Provider
+// (or state) that the *page* depends on must live AT OR BELOW the boundary
+// (inside <JuneOutlet>), not in the shell above it: a provider in the shell is
+// present on a hard load but absent in the fragment, so the page would read the
+// context default after a soft navigation.
 import React from "react";
 
 import { OUTLET_ATTR } from "./nav-protocol";

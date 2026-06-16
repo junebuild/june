@@ -102,6 +102,7 @@ export function Document({
   config,
   lang,
   dir,
+  shellKey,
 }: {
   children: React.ReactNode;
   metadata?: Metadata;
@@ -111,6 +112,10 @@ export function Document({
   // only when "rtl", so LTR pages stay byte-identical to a single-locale app.
   lang?: string;
   dir?: "ltr" | "rtl";
+  // The mounted shell's identity (a segment-boundary route's key), stamped on
+  // [data-june-root] as data-june-shell so the client router can tell whether a
+  // soft-nav fragment belongs to this shell. Absent on non-boundary routes.
+  shellKey?: string | null;
 }) {
   const title = documentTitle(metadata, config.site);
   const description = metadata?.description ?? config.site.description;
@@ -178,7 +183,13 @@ export function Document({
         {/* clientRouter on → wrap the page in the swap region. Its presence is
             also the router's activation signal (the islands bundle starts the
             router iff [data-june-root] exists). Off → bytes are unchanged. */}
-        {config.clientRouter ? <div data-june-root>{children}</div> : children}
+        {config.clientRouter ? (
+          <div data-june-root data-june-shell={shellKey ?? undefined}>
+            {children}
+          </div>
+        ) : (
+          children
+        )}
         {/* type="module" defers automatically: the island runtime runs after the
             markup is parsed, so markers exist when it scans for them. */}
         {config.clientScript ? <script type="module" src={config.clientScript} /> : null}

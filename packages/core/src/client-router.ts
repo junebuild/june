@@ -16,36 +16,38 @@
 // exposed ONLY via the `@junejs/core/client-router` subpath and is NOT
 // re-exported from the barrel.
 import { morph } from "./morph";
-import { FRAGMENT_ACCEPT, OUTLET_ATTR, SEGMENT_HEADER, TITLE_HEADER } from "./nav-protocol";
+import { FRAGMENT_ACCEPT, OUTLET_ATTR, SEGMENT_HEADER, SHELL_ATTR, TITLE_HEADER } from "./nav-protocol";
 
-// Called with each freshly swapped-in [data-june-root] so the host can hydrate
-// the new page's islands (islands-client binds this to its registry).
+// Called with each freshly swapped-in region so the host can hydrate the new
+// page's islands (islands-client binds this to its registry). In whole-chain
+// mode this is [data-june-root]; in segment mode it is the [data-june-outlet].
 export type Rehydrate = (root: ParentNode) => void;
 
 const ROOT_ATTR = "data-june-root";
 const rootEl = () => document.querySelector(`[${ROOT_ATTR}]`);
 const outletEl = () => document.querySelector(`[${OUTLET_ATTR}]`);
+// The key of the shell currently mounted (stamped on [data-june-root]). Null in
+// whole-chain mode / non-boundary pages.
+const mountedShellKey = () => rootEl()?.getAttribute(SHELL_ATTR) ?? null;
 
 // Segment-scoped mode moves the shell (sidebar/nav, with its active-link state)
 // OUTSIDE the swapped region, so morph no longer re-renders aria-current. This
 // reconciles it from location.pathname — the trade the granularity optimization
 // makes. No-op in whole-chain mode (no outlet), where morph already re-renders
-// the shell; scoped to links OUTSIDE the outlet, which morph owns.
+// the shell. A shell link is active when it points at the current page OR an
+// ancestor of it (section highlight), matching the common SSR convention. Uses
+// the anchor's own parsed .origin/.pathname — no per-link allocation.
 function updateActiveLinks(): void {
   const outlet = outletEl();
   if (!outlet) return; // whole-chain mode — morph carries aria-current for free
   const here = location.pathname;
-  for (const a of Array.from(document.querySelectorAll("a[href]"))) {
+  for (const a of document.querySelectorAll<HTMLAnchorElement>("a[href]")) {
     if (outlet.contains(a)) continue; // inside the swap region — morph owns it
-    let url: URL;
-    try {
-      url = new URL((a as HTMLAnchorElement).href, location.href);
-    } catch {
-      continue;
-    }
-    if (url.origin !== location.origin) continue;
-    if (url.pathname === here) a.setAttribute("aria-current", "page");
-    else if (a.getAttribute("aria-current") === "page") a.removeAttribute("aria-current");
+    if (a.origin !== location.origin) continue;
+    const p = a.pathname;
+    const active = p === here || (p !== "/" && here.startsWith(p.endsWith("/") ? p : p + "/"));
+    if (active) a.setAttribute("aria-current", p === here ? "page" : "true");
+    else if (a.hasAttribute("aria-current")) a.removeAttribute("aria-current");
   }
 }
 
@@ -78,7 +80,7 @@ export function startClientRouter(rehydrate: Rehydrate): void {
 
     let html: string;
     let title: string | null = null;
-    let segmented = false;
+    let fragmentShell: string | null = null; // SEGMENT_HEADER: the fragment's shell key (null = whole-chain)
     try {
       const res = await fetch(href, {
         headers: { accept: FRAGMENT_ACCEPT },
@@ -87,7 +89,7 @@ export function startClientRouter(rehydrate: Rehydrate): void {
       if (!res.ok) throw new Error(`status ${res.status}`);
       html = await res.text();
       title = res.headers.get(TITLE_HEADER);
-      segmented = res.headers.get(SEGMENT_HEADER) === "1";
+      fragmentShell = res.headers.get(SEGMENT_HEADER);
     } catch (err) {
       // Aborted or superseded: a newer navigation owns the screen now — do
       // nothing. Otherwise the network/server actually failed: hand back to the
@@ -98,12 +100,15 @@ export function startClientRouter(rehydrate: Rehydrate): void {
     }
     if (mine !== token) return; // a newer navigation won the race — drop this result
 
-    // A segment-scoped fragment morphs INTO the live [data-june-outlet]; a
-    // whole-chain fragment into [data-june-root]. If the server segment-scoped
-    // but there is no live outlet (a layout exported segmentBoundary yet forgot
-    // to render <JuneOutlet>), morphing content-only HTML into the root would
-    // wipe the shell — hard-navigate instead, never a broken page.
-    const current = segmented ? outletEl() : rootEl();
+    // A segment-scoped fragment (SEGMENT_HEADER = the fragment's shell key) is
+    // content-only — it morphs INTO the live [data-june-outlet], but ONLY when it
+    // belongs to the shell currently mounted (its key matches [data-june-root]'s
+    // data-june-shell). A cross-shell navigation, or a layout that declared
+    // segmentBoundary yet forgot to render <JuneOutlet>, fails the match — we
+    // hard-navigate so the correct shell loads instead of corrupting this one. A
+    // whole-chain fragment (no header) morphs the whole [data-june-root].
+    const segmented = fragmentShell !== null && fragmentShell === mountedShellKey();
+    const current = segmented ? outletEl() : fragmentShell === null ? rootEl() : null;
     if (!current) {
       location.href = href;
       return;

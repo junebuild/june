@@ -28,13 +28,23 @@ describe("segment-scoped fragment", () => {
   test("the fragment is the CONTENT only — the shell/sidebar is excluded", async () => {
     const res = await get("/", { accept: FRAGMENT_ACCEPT });
     expect(res.status).toBe(200);
-    expect(res.headers.get(SEGMENT_HEADER)).toBe("1"); // signals segment-scoped
+    expect(res.headers.get(SEGMENT_HEADER)).toBeTruthy(); // a shell key signals segment-scoped
     expect(res.headers.get(TITLE_HEADER)).toBe("Home");
     const frag = await res.text();
     expect(frag).toContain('data-page="home"'); // content is there
     expect(frag).not.toContain("data-sidebar"); // shell is NOT
     expect(frag).not.toContain("data-shell");
     expect(frag).not.toContain("data-june-outlet"); // the outlet wrapper itself is the boundary layout's, not re-sent
+  });
+
+  test("the fragment's shell key matches [data-june-root]'s data-june-shell, and is shared across the shell's routes", async () => {
+    const full = await (await get("/")).text();
+    const key = (await get("/", { accept: FRAGMENT_ACCEPT })).headers.get(SEGMENT_HEADER);
+    expect(key).toBeTruthy();
+    expect(full).toContain(`data-june-shell="${key}"`); // full load stamps the same key for the client to match
+    // routes under the SAME boundary layout carry the SAME key
+    const guideKey = (await get("/guide", { accept: FRAGMENT_ACCEPT })).headers.get(SEGMENT_HEADER);
+    expect(guideKey).toBe(key);
   });
 
   test("parity: the fragment equals the full document's [data-june-outlet] inner HTML", async () => {

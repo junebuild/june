@@ -16,10 +16,18 @@ of truth; this file summarizes what matters per release.
   docs with a big sidebar) this drops the per-navigation cost from O(shell) to
   O(content), without Flight/RSC (a granularity move, not a format one). The
   `segmentBoundary` export is a STATIC signal, so the server slices the layout
-  chain without rendering the shell. Trade-off: the shell now sits outside the
-  swap region, so the router reconciles its active-nav highlight (`aria-current`)
-  from `location.pathname`. Deepest boundary wins; a second boundary in one chain
-  warns. Whole-chain morph stays the default — existing sites are unaffected.
+  chain without rendering the shell. Each shell has an identity KEY: the server
+  stamps it on `[data-june-root]` (`data-june-shell`) and sends it as the soft-nav
+  header, so the client morphs a content-only fragment into the outlet ONLY when
+  it belongs to the shell currently mounted — a cross-shell navigation (docs →
+  blog), or a layout that declared `segmentBoundary` but forgot `<JuneOutlet>`,
+  hard-navigates instead of corrupting the page. The dev/HMR live-update path is
+  shell-aware for the same reason. The shell's active-nav highlight is reconciled
+  from `location.pathname` (exact → `aria-current="page"`, ancestor →
+  `aria-current="true"`). Deepest boundary wins; a second boundary in one chain
+  warns. A boundary layout must keep route-dependent context AT OR BELOW
+  `<JuneOutlet>` (the shell isn't re-rendered on soft-nav). Whole-chain morph
+  stays the default — existing sites are unaffected.
 
 ### Changed
 

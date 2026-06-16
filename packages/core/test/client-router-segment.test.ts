@@ -1,9 +1,9 @@
-// Segment-scoped client navigation: a soft-nav whose fragment is marked
-// segment-scoped (x-june-segment) morphs into the live [data-june-outlet] ONLY —
-// the shell (sidebar) outside the outlet is never touched — and the shell's
-// active-nav highlight is reconciled from location.pathname. If the server marks
-// a fragment segment-scoped but no live outlet exists, the router hard-navigates
-// rather than corrupting the page.
+// Segment-scoped client navigation: a soft-nav whose fragment carries a shell
+// KEY (x-june-segment) morphs into the live [data-june-outlet] ONLY when that key
+// matches the mounted shell ([data-june-root]'s data-june-shell). It leaves the
+// shell untouched and reconciles its active-nav highlight from location.pathname.
+// A cross-shell key, or a missing outlet, hard-navigates rather than corrupting
+// the page.
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 
@@ -25,6 +25,9 @@ const flush = async () => {
   for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
 };
 
+const fragment = (html: string, headers: Record<string, string>) =>
+  (async () => new Response(html, { headers })) as unknown as typeof fetch;
+
 // A real base URL so the click handler's `new URL(a.href, location.href)` and the
 // active-link origin check resolve; then one router per process (it's idempotent).
 beforeAll(() => {
@@ -39,52 +42,79 @@ function clickLink(href: string) {
   a.dispatchEvent(new window.MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
 }
 
-describe("segment-scoped client navigation", () => {
-  test("morphs the outlet only, leaves the shell, and moves aria-current", async () => {
-    document.body.innerHTML =
-      '<div data-june-root>' +
-      '<nav data-sidebar>' +
-      '<a href="/" aria-current="page">Home</a>' +
-      '<a href="/guide">Guide</a>' +
-      "</nav>" +
-      '<div data-june-outlet><main><h1 data-page="home">Home</h1></main></div>' +
-      "</div>";
-    const sidebar = document.querySelector("[data-sidebar]")!;
+// A docs shell (key "docs") with a sidebar and an outlet holding the home page.
+const docsShell = (outletInner: string) =>
+  '<div data-june-root data-june-shell="docs">' +
+  '<nav data-sidebar>' +
+  '<a href="/" aria-current="page">Home</a>' +
+  '<a href="/guide">Guide</a>' +
+  '<a href="/blog/post">Blog</a>' +
+  "</nav>" +
+  `<div data-june-outlet>${outletInner}</div>` +
+  "</div>";
 
-    globalThis.fetch = (async () =>
-      new Response('<main><h1 data-page="guide">Guide</h1></main>', {
-        headers: { [SEGMENT_HEADER]: "1", [TITLE_HEADER]: "Guide" },
-      })) as unknown as typeof fetch;
+describe("segment-scoped client navigation", () => {
+  test("matching shell key: morphs the outlet, leaves the shell, moves aria-current", async () => {
+    document.body.innerHTML = docsShell('<main><h1 data-page="home">Home</h1></main>');
+    const sidebar = document.querySelector("[data-sidebar]")!;
+    globalThis.fetch = fragment('<main><h1 data-page="guide">Guide</h1></main>', {
+      [SEGMENT_HEADER]: "docs", // same shell key as the mounted [data-june-shell]
+      [TITLE_HEADER]: "Guide",
+    });
 
     clickLink("/guide");
     await flush();
 
-    // outlet content swapped...
     expect(document.querySelector("[data-june-outlet]")!.innerHTML).toContain('data-page="guide"');
-    // ...sidebar (outside the outlet) is the SAME node, untouched
-    expect(document.querySelector("[data-sidebar]")).toBe(sidebar);
-    // active highlight moved Home → Guide
-    expect((document.querySelector('a[href="/guide"]') as Element).getAttribute("aria-current")).toBe("page");
+    expect(document.querySelector("[data-sidebar]")).toBe(sidebar); // shell untouched (same node)
+    expect(document.querySelector('a[href="/guide"]')!.getAttribute("aria-current")).toBe("page");
     expect(document.querySelector('a[href="/"]')!.hasAttribute("aria-current")).toBe(false);
     expect(document.title).toBe("Guide");
     expect(location.pathname).toBe("/guide");
   });
 
+  test("ancestor link stays highlighted (section match) on a nested soft-nav", async () => {
+    // Sidebar has a section link (/guide) and a nested page link (/guide/faq).
+    document.body.innerHTML =
+      '<div data-june-root data-june-shell="docs">' +
+      '<nav data-sidebar><a href="/guide">Guide</a><a href="/guide/faq">FAQ</a></nav>' +
+      '<div data-june-outlet><main data-page="guide">g</main></div>' +
+      "</div>";
+    history.replaceState({}, "", "/guide");
+    globalThis.fetch = fragment('<main data-page="faq">f</main>', { [SEGMENT_HEADER]: "docs" });
+
+    clickLink("/guide/faq");
+    await flush();
+
+    // /guide is an ANCESTOR of /guide/faq → stays active ("true"); the exact page link is "page".
+    expect(document.querySelector('a[href="/guide"]')!.getAttribute("aria-current")).toBe("true");
+    expect(document.querySelector('a[href="/guide/faq"]')!.getAttribute("aria-current")).toBe("page");
+  });
+
+  test("cross-shell key: hard-navigates instead of morphing the wrong shell", async () => {
+    document.body.innerHTML = docsShell('<main><h1 data-page="home">keep</h1></main>');
+    const outlet = document.querySelector("[data-june-outlet]")!;
+    globalThis.fetch = fragment('<main data-page="blog">blog</main>', {
+      [SEGMENT_HEADER]: "blog", // DIFFERENT shell than the mounted "docs"
+    });
+
+    clickLink("/blog/post");
+    await flush();
+
+    // key mismatch → no morph into the docs outlet (blog content must NOT land here)
+    expect(outlet.innerHTML).toContain('data-page="home"');
+    expect(outlet.innerHTML).not.toContain('data-page="blog"');
+  });
+
   test("guard: segment-scoped fragment with no live outlet does not morph the root", async () => {
     document.body.innerHTML =
-      '<div data-june-root><nav data-sidebar><a href="/x">X</a></nav><main data-page="keep">keep</main></div>';
+      '<div data-june-root data-june-shell="docs"><nav data-sidebar><a href="/x">X</a></nav><main data-page="keep">keep</main></div>';
     const root = document.querySelector("[data-june-root]")!;
-
-    // server says segment-scoped, but the DOM has NO [data-june-outlet]
-    globalThis.fetch = (async () =>
-      new Response('<main data-page="swapped">swapped</main>', {
-        headers: { [SEGMENT_HEADER]: "1" },
-      })) as unknown as typeof fetch;
+    globalThis.fetch = fragment('<main data-page="swapped">swapped</main>', { [SEGMENT_HEADER]: "docs" });
 
     clickLink("/x");
     await flush();
 
-    // no outlet → router bailed to a hard navigation; the root was NOT morphed
     expect(root.innerHTML).toContain('data-page="keep"');
     expect(root.innerHTML).not.toContain('data-page="swapped"');
   });
