@@ -8,3 +8,14 @@
 // without parsing the body.
 export const FRAGMENT_ACCEPT = "text/vnd.june.fragment+html";
 export const TITLE_HEADER = "x-june-title";
+
+// Segment-scoped fragments (the granularity optimization): when a route's layout
+// chain declares a boundary (`export const segmentBoundary = true` on a layout
+// that renders <JuneOutlet>), the server renders only the chain BELOW the
+// boundary — the persistent shell (sidebar/nav) is excluded. The marker
+// attribute is the element <JuneOutlet> renders; the client morphs INTO it
+// instead of [data-june-root]. The response header tells the client the fragment
+// is segment-scoped, so it targets the outlet (and hard-navigates if the author
+// declared the boundary but forgot to render <JuneOutlet> — no live outlet).
+export const OUTLET_ATTR = "data-june-outlet";
+export const SEGMENT_HEADER = "x-june-segment";

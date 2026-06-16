@@ -14,6 +14,7 @@
     "./context": "./src/context.ts",
     "./document": "./src/document.tsx",
     "./islands": "./src/islands.tsx",
+    "./outlet": "./src/outlet.tsx",
     "./islands-client": "./src/islands-client.ts",
     "./client-router": "./src/client-router.ts",
     "./client-live": "./src/client-live.ts",

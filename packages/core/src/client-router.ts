@@ -16,7 +16,7 @@
 // exposed ONLY via the `@junejs/core/client-router` subpath and is NOT
 // re-exported from the barrel.
 import { morph } from "./morph";
-import { FRAGMENT_ACCEPT, TITLE_HEADER } from "./nav-protocol";
+import { FRAGMENT_ACCEPT, OUTLET_ATTR, SEGMENT_HEADER, TITLE_HEADER } from "./nav-protocol";
 
 // Called with each freshly swapped-in [data-june-root] so the host can hydrate
 // the new page's islands (islands-client binds this to its registry).
@@ -24,6 +24,30 @@ export type Rehydrate = (root: ParentNode) => void;
 
 const ROOT_ATTR = "data-june-root";
 const rootEl = () => document.querySelector(`[${ROOT_ATTR}]`);
+const outletEl = () => document.querySelector(`[${OUTLET_ATTR}]`);
+
+// Segment-scoped mode moves the shell (sidebar/nav, with its active-link state)
+// OUTSIDE the swapped region, so morph no longer re-renders aria-current. This
+// reconciles it from location.pathname — the trade the granularity optimization
+// makes. No-op in whole-chain mode (no outlet), where morph already re-renders
+// the shell; scoped to links OUTSIDE the outlet, which morph owns.
+function updateActiveLinks(): void {
+  const outlet = outletEl();
+  if (!outlet) return; // whole-chain mode — morph carries aria-current for free
+  const here = location.pathname;
+  for (const a of Array.from(document.querySelectorAll("a[href]"))) {
+    if (outlet.contains(a)) continue; // inside the swap region — morph owns it
+    let url: URL;
+    try {
+      url = new URL((a as HTMLAnchorElement).href, location.href);
+    } catch {
+      continue;
+    }
+    if (url.origin !== location.origin) continue;
+    if (url.pathname === here) a.setAttribute("aria-current", "page");
+    else if (a.getAttribute("aria-current") === "page") a.removeAttribute("aria-current");
+  }
+}
 
 // Agent surfaces + non-HTML stay hard navigations — the same exclusions the
 // speculation rules use (humans soft-navigate; a link to llms.txt must not).
@@ -54,6 +78,7 @@ export function startClientRouter(rehydrate: Rehydrate): void {
 
     let html: string;
     let title: string | null = null;
+    let segmented = false;
     try {
       const res = await fetch(href, {
         headers: { accept: FRAGMENT_ACCEPT },
@@ -62,6 +87,7 @@ export function startClientRouter(rehydrate: Rehydrate): void {
       if (!res.ok) throw new Error(`status ${res.status}`);
       html = await res.text();
       title = res.headers.get(TITLE_HEADER);
+      segmented = res.headers.get(SEGMENT_HEADER) === "1";
     } catch (err) {
       // Aborted or superseded: a newer navigation owns the screen now — do
       // nothing. Otherwise the network/server actually failed: hand back to the
@@ -72,20 +98,31 @@ export function startClientRouter(rehydrate: Rehydrate): void {
     }
     if (mine !== token) return; // a newer navigation won the race — drop this result
 
-    const current = rootEl();
+    // A segment-scoped fragment morphs INTO the live [data-june-outlet]; a
+    // whole-chain fragment into [data-june-root]. If the server segment-scoped
+    // but there is no live outlet (a layout exported segmentBoundary yet forgot
+    // to render <JuneOutlet>), morphing content-only HTML into the root would
+    // wipe the shell — hard-navigate instead, never a broken page.
+    const current = segmented ? outletEl() : rootEl();
     if (!current) {
-      location.href = href; // no [data-june-root] — let the browser handle it
+      location.href = href;
       return;
     }
-    // The fragment is the [data-june-root] INNER html. Parse it into an inert
-    // clone of the root, then morph the live root toward it in place.
+    // The fragment is the target's INNER html. Parse it into an inert clone of
+    // the target, then morph the live target toward it in place.
     const next = current.cloneNode(false) as Element;
     next.innerHTML = html;
+
+    // Push history BEFORE applying so location.pathname is the NEW url when the
+    // active-link hook reads it (popstate already has it updated). Whole-chain
+    // morph doesn't read location, so this reorder is invisible there.
+    if (push) history.pushState({ june: true }, "", href);
 
     const apply = () => {
       morph(current, next);
       if (title !== null) document.title = title;
       rehydrate(current); // hydrate the new island markers (idempotent — skips live ones)
+      updateActiveLinks(); // segment mode: move the shell's aria-current (no-op otherwise)
       window.scrollTo?.(0, 0);
     };
     // View Transitions give the cross-fade for free where supported; elsewhere
@@ -95,8 +132,6 @@ export function startClientRouter(rehydrate: Rehydrate): void {
     }).startViewTransition;
     if (typeof startVT === "function") startVT.call(document, apply);
     else apply();
-
-    if (push) history.pushState({ june: true }, "", href);
   }
 
   document.addEventListener("click", (e) => {

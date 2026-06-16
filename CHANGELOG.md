@@ -5,6 +5,22 @@ of truth; this file summarizes what matters per release.
 
 ## [Unreleased]
 
+### Added
+
+- **Segment-scoped fragments — `<JuneOutlet>`.** A layout can opt into being a
+  persistent shell: `export const segmentBoundary = true` and render
+  `<JuneOutlet>` (`@junejs/core` / `@junejs/core/outlet`) around its `children`.
+  With the opt-in client router on, a soft navigation then renders, sends, and
+  morphs ONLY the content inside the outlet — the shell (sidebar/nav) is never
+  re-rendered, re-serialized, or walked. For a large nested-layout site (e.g.
+  docs with a big sidebar) this drops the per-navigation cost from O(shell) to
+  O(content), without Flight/RSC (a granularity move, not a format one). The
+  `segmentBoundary` export is a STATIC signal, so the server slices the layout
+  chain without rendering the shell. Trade-off: the shell now sits outside the
+  swap region, so the router reconciles its active-nav highlight (`aria-current`)
+  from `location.pathname`. Deepest boundary wins; a second boundary in one chain
+  warns. Whole-chain morph stays the default — existing sites are unaffected.
+
 ### Changed
 
 - **`@junejs/core` — tunable View Transition duration.** Cross-document View
