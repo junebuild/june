@@ -80,6 +80,12 @@ describe("entry(dir, slug, locale) — variant else flat", () => {
   test("missing slug → null", () => {
     expect(entry(docsDir(), "nope", "de")).toBeNull();
   });
+
+  test("strict (fallback: false) → null instead of default-language bleed", () => {
+    expect(entry(docsDir(), "guide", "de", { fallback: false })).toBeNull();
+    // a present variant is still returned under strict
+    expect(entry(docsDir(), "intro", "de", { fallback: false })!.locale).toBe("de");
+  });
 });
 
 describe("generateContentModule — the frozen _content.ts", () => {
@@ -87,7 +93,7 @@ describe("generateContentModule — the frozen _content.ts", () => {
     const { code, names } = generateContentModule(root);
     expect(names.sort()).toEqual(["docs", "posts"]);
     expect(code).toContain("const DOCS_L: Record<string, Record<string, ContentEntry>>");
-    expect(code).toContain("export const doc = (slug: string, locale?: string)");
+    expect(code).toContain("export const doc = (slug: string, locale?: string, opts?:");
     expect(code).toContain("export const docs = (locale?: string)");
     expect(code).toContain("locale?: string }"); // the type gained the field
   });
@@ -104,13 +110,18 @@ describe("generateContentModule — the frozen _content.ts", () => {
     const file = join(root, "_content.ts");
     writeFileSync(file, code);
     const mod = (await import(pathToFileURL(file).href)) as {
-      doc: (slug: string, locale?: string) => { slug: string; locale?: string } | null;
+      doc: (
+        slug: string,
+        locale?: string,
+        opts?: { fallback?: boolean },
+      ) => { slug: string; locale?: string } | null;
       docs: (locale?: string) => Array<{ slug: string; locale?: string }>;
       post: (slug: string) => { slug: string } | null;
     };
     expect(mod.doc("intro", "de")!.locale).toBe("de"); // variant
     expect(mod.doc("guide", "de")!.slug).toBe("guide"); // fallback
     expect(mod.doc("guide", "de")!.locale).toBeUndefined();
+    expect(mod.doc("guide", "de", { fallback: false })).toBeNull(); // strict
     expect(mod.doc("intro")!.locale).toBeUndefined(); // no locale → default
     expect(mod.docs("de").find((e) => e.slug === "intro")!.locale).toBe("de");
     expect(mod.post("hello")!.slug).toBe("hello"); // flat collection still works

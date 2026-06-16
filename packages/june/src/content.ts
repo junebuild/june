@@ -137,13 +137,21 @@ function probe(dir: string, slug: string, locale?: string): ContentEntry | null 
 }
 
 /** One entry by slug, or null. With a `locale`, prefer `<dir>/<locale>/<slug>`,
- *  falling back to the flat default (a dev-warn flags a partial translation). */
-export function entry(dir: string, slug: string, locale?: string): ContentEntry | null {
+ *  falling back to the flat default (a dev-warn flags a partial translation).
+ *  `fallback: false` is STRICT — a missing variant returns null (so a route can
+ *  404 rather than serve default-language content). */
+export function entry(
+  dir: string,
+  slug: string,
+  locale?: string,
+  opts?: { fallback?: boolean },
+): ContentEntry | null {
   // Guard the slug — it comes from the URL.
   if (!/^[A-Za-z0-9._-]+$/.test(slug)) return null;
   if (!locale) return probe(dir, slug);
   const variant = probe(join(dir, locale), slug, locale);
   if (variant) return variant;
+  if (opts?.fallback === false) return null; // strict — no default-language bleed
   const fallback = probe(dir, slug);
   // The locale is otherwise translated here, but not this slug → a gap worth a
   // dev signal (silent in production builds, where NODE_ENV is baked).
@@ -192,9 +200,10 @@ export function generateContentModule(contentDir: string): { code: string; names
       }
       body += `const ${CONST}_L: Record<string, Record<string, ContentEntry>> = ${JSON.stringify(map, null, 2)};\n`;
       body +=
-        `export const ${finder} = (slug: string, locale?: string): ContentEntry | null => {\n` +
+        `export const ${finder} = (slug: string, locale?: string, opts?: { fallback?: boolean }): ContentEntry | null => {\n` +
         `  const v = locale ? ${CONST}_L[locale]?.[slug] : undefined;\n` +
         `  if (v) return v;\n` +
+        `  if (opts?.fallback === false) return null;\n` +
         `  const d = ${CONST}.find((p) => p.slug === slug) ?? null;\n` +
         `  if (process.env.NODE_ENV !== "production" && locale && ${CONST}_L[locale] && d) console.warn(\`[june content] ${d.name}/\${slug}: no "\${locale}" variant — served default\`);\n` +
         `  return d;\n};\n`;
