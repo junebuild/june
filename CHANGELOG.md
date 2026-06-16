@@ -15,6 +15,19 @@ of truth; this file summarizes what matters per release.
   injected reload client now closes its `EventSource` on `pagehide`, releasing
   the slot before the next page opens its own.
 
+## [Unreleased]
+
+### Changed
+
+- **`@junejs/core` — cheaper segment-scoped active-link reconciliation.** The
+  shell's `aria-current` hook now caches the shell-link set while the shell stays
+  mounted instead of re-scanning the whole document (`querySelectorAll` +
+  per-link `contains()`) on every soft navigation — an `O(all links)` per-nav cost
+  on a large sidebar becomes a one-time scan reused across navigations. Behavior
+  is unchanged (exact → `aria-current="page"`, ancestor → `"true"`, trailing
+  slashes normalized). The active-link rule and its planned per-link declarative
+  override (`data-june-active`) are documented in `docs/navigation-tiers.md`.
+
 ## [0.0.23] — 2026-06-16
 
 ### Added

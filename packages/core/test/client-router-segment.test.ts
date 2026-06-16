@@ -91,6 +91,23 @@ describe("segment-scoped client navigation", () => {
     expect(document.querySelector('a[href="/guide/faq"]')!.getAttribute("aria-current")).toBe("page");
   });
 
+  test("aria-current moves correctly across consecutive soft-navs (cached shell links)", async () => {
+    document.body.innerHTML = docsShell('<main data-page="home">h</main>');
+    globalThis.fetch = fragment('<main data-page="guide">g</main>', { [SEGMENT_HEADER]: "docs" });
+    clickLink("/guide");
+    await flush();
+    expect(document.querySelector('a[href="/guide"]')!.getAttribute("aria-current")).toBe("page");
+    expect(document.querySelector('a[href="/"]')!.hasAttribute("aria-current")).toBe(false);
+
+    // second nav within the SAME shell — the cached shell-link list is reused;
+    // aria-current must move off /guide and onto / (Home).
+    globalThis.fetch = fragment('<main data-page="home">h</main>', { [SEGMENT_HEADER]: "docs" });
+    clickLink("/");
+    await flush();
+    expect(document.querySelector('a[href="/"]')!.getAttribute("aria-current")).toBe("page");
+    expect(document.querySelector('a[href="/guide"]')!.hasAttribute("aria-current")).toBe(false);
+  });
+
   test("cross-shell key: hard-navigates instead of morphing the wrong shell", async () => {
     document.body.innerHTML = docsShell('<main><h1 data-page="home">keep</h1></main>');
     const outlet = document.querySelector("[data-june-outlet]")!;

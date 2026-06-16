@@ -29,20 +29,34 @@ export type Rehydrate = (root: ParentNode) => void;
 // "/guide/" to "/guide", so both reach the client verbatim.
 const trimSlash = (p: string): string => (p.length > 1 && p.endsWith("/") ? p.slice(0, -1) : p);
 
+// The shell links (a[href] OUTSIDE the outlet) reconciled on each nav, cached
+// while the SAME outlet is mounted. In segment mode morph never touches the shell
+// and the outlet element keeps its identity across same-shell soft-navs, so the
+// list is stable; a new shell (or a fresh document) yields a different outlet
+// element and rebuilds. This turns a per-nav `querySelectorAll` + per-link
+// `contains()` (O(all links) on a 1000-link sidebar) into a one-time scan reused
+// across navigations. (A shell island that mutates its own nav links at runtime
+// won't be re-scanned until the shell remounts — docs sidebars are static.)
+let cachedOutlet: Element | null = null;
+let cachedShellLinks: HTMLAnchorElement[] = [];
+
 // Segment-scoped mode moves the shell (sidebar/nav, with its active-link state)
 // OUTSIDE the swapped region, so morph no longer re-renders aria-current. This
 // reconciles it from location.pathname — the trade the granularity optimization
 // makes. No-op in whole-chain mode (no outlet), where morph already re-renders
 // the shell. A shell link is active when it points at the current page OR an
-// ancestor of it (section highlight), matching the common SSR convention. Uses
-// the anchor's own parsed .origin/.pathname — no per-link allocation.
+// ancestor of it (section highlight), matching the common SSR convention.
 function updateActiveLinks(): void {
   const outlet = outletEl();
   if (!outlet) return; // whole-chain mode — morph carries aria-current for free
+  if (cachedOutlet !== outlet) {
+    cachedOutlet = outlet;
+    cachedShellLinks = Array.from(
+      document.querySelectorAll<HTMLAnchorElement>("a[href]"),
+    ).filter((a) => !outlet.contains(a) && a.origin === location.origin);
+  }
   const here = trimSlash(location.pathname);
-  for (const a of document.querySelectorAll<HTMLAnchorElement>("a[href]")) {
-    if (outlet.contains(a)) continue; // inside the swap region — morph owns it
-    if (a.origin !== location.origin) continue;
+  for (const a of cachedShellLinks) {
     const p = trimSlash(a.pathname);
     const exact = p === here;
     const active = exact || (p !== "/" && here.startsWith(p + "/"));
