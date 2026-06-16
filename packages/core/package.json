@@ -1,6 +1,6 @@
 {
   "name": "@junejs/core",
-  "version": "0.0.23",
+  "version": "0.0.24",
   "description": "June — the agent-native React framework. Contract layer (pure, host-free).",
   "type": "module",
   "license": "MIT",

@@ -3,7 +3,7 @@
 User-facing changes, newest first. The conventional-commit history is the source
 of truth; this file summarizes what matters per release.
 
-## [Unreleased]
+## [0.0.24] — 2026-06-16
 
 ### Fixed
 
