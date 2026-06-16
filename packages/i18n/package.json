@@ -6,7 +6,8 @@
   "license": "MIT",
   "homepage": "https://june.build",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./codegen": "./src/codegen.ts"
   },
   "files": [
     "src"
