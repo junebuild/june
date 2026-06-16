@@ -19,10 +19,11 @@
 // via the scope, not a direct dependency.
 import { currentLocale } from "@junejs/db";
 
-import { formatMessage, type CompiledCatalog } from "./compile";
+// Runtime only — format.ts does NOT reach the @formatjs parser (that's build-only
+// in compile.ts / codegen.ts), so the request bundle never ships an ICU parser.
+import { formatMessage, type CompiledCatalog, type CompiledMessage } from "./format";
 
-// parseMessage / compileCatalog / formatMessage / deriveParams + the AST types.
-export * from "./compile";
+export { formatMessage, type CompiledCatalog, type CompiledMessage } from "./format";
 
 export type MessagesConfig = {
   catalogs: Record<string, CompiledCatalog>;

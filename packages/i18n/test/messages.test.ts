@@ -5,7 +5,8 @@
 import { beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { ensureScope, runInScope, setRequestLocale } from "@junejs/db";
 
-import { __resetMessages, compileCatalog, createTranslator, defineMessages, t } from "../src/index";
+import { __resetMessages, createTranslator, defineMessages, t } from "../src/index";
+import { compileCatalog } from "../src/compile"; // build-time parse (not in the runtime index)
 
 // Catalogs ship COMPILED (parsed ASTs); compileCatalog is the build-time parse.
 const catalogs = {
