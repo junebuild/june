@@ -14,6 +14,17 @@ permissions:
   id-token: write # required for OIDC
   contents: read
 
+# Serialize releases. Two v* tags pushed together (e.g. catching npm up across
+# versions) would otherwise run two Publish jobs at once, both PUTting the SAME
+# packages' npm packuments — npm rejects the loser with E409 "Failed to save
+# packument" and that release aborts mid-way (a partial publish). One run at a
+# time; never cancel an in-flight release (a half-published version is worse than
+# a queued one). Still prefer pushing release tags one at a time — this is the
+# safety net, not a license to fire them simultaneously.
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
 jobs:
   publish:
     runs-on: ubuntu-latest
