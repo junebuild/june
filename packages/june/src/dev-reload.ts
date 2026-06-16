@@ -18,6 +18,7 @@ const SCRIPT_PATH = "/__june/reload.js";
 const RELOAD_JS = `// june dev live-reload: reconnect-after-drop → reload; "css" event → hot-swap
 (() => {
   let dropped = false;
+  let es;
   const swapCss = () => {
     document.querySelectorAll('link[rel="stylesheet"]').forEach((old) => {
       const u = new URL(old.href);
@@ -33,7 +34,7 @@ const RELOAD_JS = `// june dev live-reload: reconnect-after-drop → reload; "cs
     });
   };
   const connect = () => {
-    const es = new EventSource(${JSON.stringify(EVENTS_PATH)});
+    es = new EventSource(${JSON.stringify(EVENTS_PATH)});
     es.addEventListener("open", () => {
       if (dropped) {
         // push-HMR: morph the freshly-restarted page in place (state survives);
@@ -58,6 +59,11 @@ const RELOAD_JS = `// june dev live-reload: reconnect-after-drop → reload; "cs
       }
     });
   };
+  // Release the SSE on navigation. In MPA mode every click is a full reload that
+  // opens a fresh EventSource; without this the old connection lingers and, since
+  // each held SSE consumes one of the browser's ~6 HTTP/1.1 slots per host, rapid
+  // navigation saturates them — further page loads stall (pending) / 503.
+  addEventListener("pagehide", () => { try { es && es.close(); } catch (e) {} });
   connect();
 })();
 `;

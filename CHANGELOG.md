@@ -3,6 +3,18 @@
 User-facing changes, newest first. The conventional-commit history is the source
 of truth; this file summarizes what matters per release.
 
+## [Unreleased]
+
+### Fixed
+
+- **Dev live-reload no longer saturates the browser's connection pool.** In MPA
+  mode every navigation is a full reload that opens a fresh live-reload
+  `EventSource`; the old connection was never closed, and since each held SSE
+  consumes one of the browser's ~6 HTTP/1.1 slots per host, rapid navigation
+  exhausted them — subsequent page loads stalled (pending) or 503'd. The
+  injected reload client now closes its `EventSource` on `pagehide`, releasing
+  the slot before the next page opens its own.
+
 ## [0.0.23] — 2026-06-16
 
 ### Added
