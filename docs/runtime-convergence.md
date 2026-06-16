@@ -198,6 +198,23 @@ The native runtime today renders its OWN file-routed RSC demo (ported `js/` +
    morph gets that free by re-rendering the shell — this is the trade the
    optimization makes). Full design: [`navigation-tiers.md`](./navigation-tiers.md).
 
+## Frontier status — gap analysis (as of 0.0.24)
+
+A snapshot of code vs. aspiration. The recurring theme: **almost everything on
+the native side is gated on #1**, which is still doc-only.
+
+| Item | Status | Where it stands |
+| --- | --- | --- |
+| **#1** render entry | ❌ not started | Zero code. `apploader` expects `runtime/app/entry-server.mjs` / `entry-ssr.mjs` (`src/bin/apploader.rs:855`), but they don't exist; the demo hardcodes its own `<App>` (`runtime/js/server-entry.tsx`). The runtime still renders its OWN file-routed RSC demo, not `@junejs/core` `route()` definitions. **This is the single unlock.** |
+| **#2** fragment + flight projections (native) | ❌ not started | No projection logic in the runtime. The JS pipeline already has both (`renderFragment` below), so this is a port-behind-the-isolate, not a design. Blocked on #1. |
+| **#3** live-RSC HMR over the route table | ⚠️ skeleton exists, mis-keyed | The proven watcher + epoch + push loop is REAL and running in the native runtime (`apploader.rs:1322–1451`: epoch at `1379`/`1492`, per-route Flight broadcast `rsc-flight:{json}` at `1437`, `/__june/hmr` SSE at `1129`). But it's keyed by the demo's **file routing** (`route_url` → `…/page.tsx`, `1523`), not `@junejs/core`'s route table. Completing #3 = re-key the watcher to the core route table once #1 lands. The JS dev server's HMR is a separate, simpler "restart-and-refetch" model (`src/dev.ts:66`, `src/dev-reload.ts`) — not route-keyed and not the target design. |
+| **#4** transpile funnel | ✅ ready | The one funnel (type-strip + React Compiler pre-pass + JSX) works in `apploader.rs:118–149`. Points at `runtime/app` (file routing) today; will work unchanged once #1 points it at the real app dir. |
+| **#5** demote the Bun dev server | ❌ not started | Premature — there's no native parity to dispatch to until #1. |
+| **#6** segment-scoped fragment | ✅ JS shipped / ❌ native not started | The JS reference implementation shipped in 0.0.23: `renderFragment` slices the chain BELOW the boundary (`packages/june/src/pipeline.ts:251–282`, `const inside = chain.slice(boundaryIndex!+1)`), with `<JuneOutlet>` (`packages/core/src/outlet.tsx`), deepest-wins boundary resolution + shell-identity key (`packages/june/src/segment.ts`), and a parity test (`test/segment-fragment.test.ts`). The native runtime has zero fragment logic — frontier #6 (the native projection) is blocked on #1/#2. |
+
+**Critical path:** `#1 → (#2, #6-native, #3 re-key) → #5`. #4 rides along for free.
+#1 is the only true unlock and the only hard prerequisite still at zero code.
+
 ## Parity is the acceptance test
 
 Every step above is gated by the same contract: the native runtime's surfaces
