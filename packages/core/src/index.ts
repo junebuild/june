@@ -55,7 +55,7 @@ export type { Principal, Session, ActionContext } from "./context";
 export {
   Document,
   documentTitle,
-  VIEW_TRANSITION_CSS,
+  viewTransitionCss,
   PREFETCH_FALLBACK,
   type DocumentConfig,
 } from "./document";

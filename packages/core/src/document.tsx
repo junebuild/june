@@ -11,7 +11,7 @@ export type DocumentConfig = {
   site: { name?: string; titleTemplate?: string; description?: string; icon?: string };
   speculationRules: string | null;
   speculationDelivery: "inline" | "header";
-  viewTransitions: boolean;
+  viewTransitions: boolean | "instant" | number;
   // Opt-in client router (config.clientRouter). When true the page is wrapped in
   // <div data-june-root> — the region the router swaps on soft navigation — and
   // that element's presence is the runtime signal the islands bundle reads to
@@ -39,15 +39,37 @@ export type DocumentConfig = {
 };
 
 // Cross-document View Transitions: same-origin MPA navigations cross-fade
-// (and pair with prerender: activation + smooth transition = SPA feel, no
-// SPA). prefers-reduced-motion users get instant cuts — accessibility first.
-export const VIEW_TRANSITION_CSS = `
+// (and pair with prerender: activation + smooth transition = SPA feel, no SPA).
+//
+// The browser-default cross-fade runs ~250ms. On a PRERENDERED navigation the
+// page is already there, so the fade isn't masking a load — it's pure tax played
+// AFTER the new page is ready, with a hazy double-exposure mid-cross-fade that
+// reads as lag. We override only animation-duration on the UA cross-fade
+// (author > UA, so the browser's own keyframes still drive it — the most robust
+// baseline) and default to a snappy 120ms: motion as polish, not manufactured
+// delay. prefers-reduced-motion always collapses to an instant cut.
+const VIEW_TRANSITION_DEFAULT_MS = 120;
+
+// Build the View Transition CSS for the resolved setting:
+//   true      → cross-fade at the default duration
+//   number    → cross-fade at that many ms (0 = instant cut)
+//   "instant" → cross-document activation with no animation (instant cut)
+//   false     → "" (no @view-transition rule; the caller drops it entirely)
+export function viewTransitionCss(opt: boolean | "instant" | number): string {
+  if (opt === false) return "";
+  const ms =
+    opt === true ? VIEW_TRANSITION_DEFAULT_MS : opt === "instant" ? 0 : Math.max(0, opt);
+  return `
           @view-transition { navigation: auto; }
+          ::view-transition-group(root),
+          ::view-transition-old(root),
+          ::view-transition-new(root) { animation-duration: ${ms}ms; }
           @media (prefers-reduced-motion: reduce) {
             ::view-transition-group(*),
             ::view-transition-old(*),
             ::view-transition-new(*) { animation: none !important; }
           }`;
+}
 
 export const PREFETCH_FALLBACK = `(function(){if(HTMLScriptElement.supports&&HTMLScriptElement.supports('speculationrules'))return;var seen=new Set();document.addEventListener('pointerover',function(e){var a=e.target&&e.target.closest&&e.target.closest('a[href]');if(!a)return;var u=new URL(a.href,location.href);if(u.origin!==location.origin||seen.has(u.pathname)||u.pathname===location.pathname)return;if(/\.(md|json)$/.test(u.pathname)||u.pathname==='/mcp')return;seen.add(u.pathname);var l=document.createElement('link');l.rel='prefetch';l.href=u.pathname+u.search;document.head.appendChild(l);},{passive:true});})();`;
 
@@ -117,7 +139,7 @@ export function Document({
         {config.speculationRules ? (
           <script dangerouslySetInnerHTML={{ __html: PREFETCH_FALLBACK }} />
         ) : null}
-        <style>{`${config.viewTransitions ? VIEW_TRANSITION_CSS : ""}
+        <style>{`${viewTransitionCss(config.viewTransitions)}
           body {
             margin: 0;
             font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;

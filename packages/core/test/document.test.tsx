@@ -58,6 +58,44 @@ describe("Document", () => {
     expect(html).toContain(`property="og:image" content="/og.png"`);
   });
 
+  test("view transitions: default cross-fade is a snappy 120ms, not the UA default", () => {
+    const html = renderToStaticMarkup(
+      <Document config={baseConfig}>
+        <main />
+      </Document>,
+    );
+    expect(html).toContain("@view-transition");
+    expect(html).toContain("animation-duration: 120ms");
+  });
+
+  test("view transitions: a number sets the cross-fade duration", () => {
+    const html = renderToStaticMarkup(
+      <Document config={{ ...baseConfig, viewTransitions: 250 }}>
+        <main />
+      </Document>,
+    );
+    expect(html).toContain("animation-duration: 250ms");
+  });
+
+  test("view transitions: 'instant' activates with no animation (0ms)", () => {
+    const html = renderToStaticMarkup(
+      <Document config={{ ...baseConfig, viewTransitions: "instant" }}>
+        <main />
+      </Document>,
+    );
+    expect(html).toContain("@view-transition");
+    expect(html).toContain("animation-duration: 0ms");
+  });
+
+  test("view transitions: false drops the @view-transition rule entirely", () => {
+    const html = renderToStaticMarkup(
+      <Document config={{ ...baseConfig, viewTransitions: false }}>
+        <main />
+      </Document>,
+    );
+    expect(html).not.toContain("@view-transition");
+  });
+
   test("inlines speculation rules only with inline delivery", () => {
     const withRules: DocumentConfig = {
       ...baseConfig,

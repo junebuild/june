@@ -65,9 +65,14 @@ export type JuneConfig = {
   dataLayer?: DataLayer;
   speculation?: SpeculationConfig | false; // false = no speculation rules at all
   // Cross-document View Transitions (@view-transition CSS): MPA navigations
-  // animate (default cross-fade) with ZERO JS; browsers without support (or
-  // users with prefers-reduced-motion) get instant navigation — the floor.
-  viewTransitions?: boolean; // default true
+  // animate with ZERO JS; browsers without support (or users with
+  // prefers-reduced-motion) get instant navigation — the floor.
+  //   true (default) → snappy 120ms cross-fade (not the hazy ~250ms UA default,
+  //                    which reads as lag on a prerendered/instant navigation)
+  //   number         → cross-fade duration in ms (0 = instant cut)
+  //   "instant"      → cross-document activation with no animation
+  //   false          → no @view-transition rule at all
+  viewTransitions?: boolean | "instant" | number; // default true
   // Opt-in client router. OFF by default — June's floor is browser-native MPA
   // navigation (speculation prerender + View Transitions = SPA feel, zero JS).
   // Turn it on for app-like surfaces (dashboards) that need in-memory state to
