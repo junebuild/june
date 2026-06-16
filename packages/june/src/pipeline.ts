@@ -46,7 +46,7 @@ import {
 } from "@junejs/core/i18n";
 import type { Resources } from "@junejs/core/resources";
 
-import { negotiate, TITLE_HEADER } from "./negotiate";
+import { negotiate, TITLE_HEADER, SEGMENT_HEADER } from "./negotiate";
 
 // Minimal Cookie-header read for the locale negotiation chain (no dependency on
 // an auth/cookie integration — i18n must stand alone).
@@ -74,6 +74,13 @@ export type Resolved = {
   // into streaming Suspense: the shell + this fallback flush before load()
   // resolves, then the view streams in.
   loading?: React.ComponentType;
+  // Segment-scoped fragments: the index in `chain` of the boundary layout (the
+  // one exporting `segmentBoundary` and rendering <JuneOutlet>), deepest wins.
+  // A soft-nav fragment then renders only chain.slice(boundaryIndex + 1) — the
+  // boundary layout's own markup (the persistent shell) is NOT re-rendered.
+  // null/undefined → whole-chain fragment (the default). Full documents always
+  // render the whole chain regardless, so a hard load is unaffected.
+  boundaryIndex?: number | null;
 };
 
 // A RESOURCE route (app/**/route.*): a handler returning a raw Response — binary,
@@ -239,8 +246,15 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
     node: React.ReactNode,
     metadata: Metadata | undefined,
     chain: LayoutComponent[],
+    boundaryIndex?: number | null,
   ): Promise<Response> {
-    const wrapped = chain.reduceRight<React.ReactNode>(
+    // Segment-scoped: render ONLY the chain below the boundary layout (its
+    // children = the <JuneOutlet> contents on a full load), so the boundary
+    // layout's shell markup is never produced. Whole-chain (no boundary) wraps
+    // the entire chain, byte-identical to today.
+    const segmented = typeof boundaryIndex === "number";
+    const inside = segmented ? chain.slice(boundaryIndex! + 1) : chain;
+    const wrapped = inside.reduceRight<React.ReactNode>(
       (acc, L) => React.createElement(L, null, acc),
       node,
     );
@@ -250,6 +264,7 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
     const headers = new Headers({ "content-type": "text/html; charset=utf-8" });
     const title = typeof metadata?.title === "string" ? metadata.title : undefined;
     if (title) headers.set(TITLE_HEADER, title);
+    if (segmented) headers.set(SEGMENT_HEADER, "1");
     return new Response(html, { status: 200, headers });
   }
 
@@ -341,7 +356,7 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
     data: unknown,
     ctx: RouteContext,
   ): Promise<Response> {
-    const { def, chain } = resolved;
+    const { def, chain, boundaryIndex } = resolved;
     // A projection declared `false` is disabled → 404 (and absent from discovery).
     // "fragment" isn't a declarable projection (it's the view rendered without the
     // shell), so it's never disabled — exclude it from the check.
@@ -349,7 +364,7 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
       return notFoundResponse(target, ctx.url.pathname, ctx.locale);
     }
 
-    const res = await renderTarget(target, def, data, ctx, chain);
+    const res = await renderTarget(target, def, data, ctx, chain, boundaryIndex);
     // Every projection here is chosen by the Accept header at the SAME url (a full
     // page, its fragment, its .md and .json all live at the clean path). Without
     // Vary, a shared/browser cache can hand a soft-nav fragment to a real page
@@ -365,6 +380,7 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
     data: unknown,
     ctx: RouteContext,
     chain: LayoutComponent[],
+    boundaryIndex?: number | null,
   ): Promise<Response> {
     if (target === "md") return renderMarkdown(def, data, ctx);
     if (target === "json") {
@@ -374,7 +390,9 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
     }
     const node = provideLoaderData(data, def.view ? def.view(data, ctx) : null);
     const meta = resolveMeta(def, data, ctx);
-    if (target === "fragment") return renderFragment(node, meta, chain);
+    // Only the fragment projection narrows to a segment; the full document always
+    // renders the whole chain (a hard load of the URL is never segment-scoped).
+    if (target === "fragment") return renderFragment(node, meta, chain, boundaryIndex);
     return renderDocument(node, meta, 200, chain, ctx.locale);
   }
 

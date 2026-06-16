@@ -39,15 +39,25 @@ export type JuneApp = {
   earlyHints(): string[];
 };
 
-// Import a layout file's default export as a layout component (memoized).
-const layoutCache = new Map<string, LayoutComponent>();
-async function loadLayout(file: string): Promise<LayoutComponent | null> {
+// Import a layout file's default export as a layout component (memoized), plus
+// its static `segmentBoundary` flag — read from the module export WITHOUT
+// rendering the component, which is what lets the server slice the chain for a
+// segment-scoped fragment without paying the shell's render cost.
+type LoadedLayout = { component: LayoutComponent; boundary: boolean };
+const layoutCache = new Map<string, LoadedLayout | null>();
+async function loadLayout(file: string): Promise<LoadedLayout | null> {
   const cached = layoutCache.get(file);
-  if (cached) return cached;
-  const mod = (await import(pathToFileURL(file).href)) as { default?: LayoutComponent };
-  if (typeof mod.default !== "function") return null;
-  layoutCache.set(file, mod.default);
-  return mod.default;
+  if (cached !== undefined) return cached;
+  const mod = (await import(pathToFileURL(file).href)) as {
+    default?: LayoutComponent;
+    segmentBoundary?: unknown;
+  };
+  const result: LoadedLayout | null =
+    typeof mod.default === "function"
+      ? { component: mod.default, boundary: mod.segmentBoundary === true }
+      : null;
+  layoutCache.set(file, result);
+  return result;
 }
 
 // The nearest loading.tsx up the segment chain (deepest wins) → the streaming
@@ -64,14 +74,30 @@ async function nearestLoading(segments: SegmentMatch[]): Promise<React.Component
   return mod.default;
 }
 
-async function loadChain(segments: SegmentMatch[]): Promise<LayoutComponent[]> {
+// The layout chain (root→leaf) plus the segment boundary: the index of the
+// DEEPEST layout that exports `segmentBoundary` (smallest fragment wins). null →
+// no boundary (whole-chain fragment). Two boundaries in one chain is almost
+// certainly a mistake, so warn and take the deepest.
+async function loadChain(
+  segments: SegmentMatch[],
+): Promise<{ chain: LayoutComponent[]; boundaryIndex: number | null }> {
   const chain: LayoutComponent[] = [];
+  let boundaryIndex: number | null = null;
   for (const seg of segments) {
     if (!seg.layout) continue;
     const L = await loadLayout(seg.layout);
-    if (L) chain.push(L);
+    if (!L) continue;
+    if (L.boundary) {
+      if (boundaryIndex !== null) {
+        console.warn(
+          `[june] multiple segmentBoundary layouts in one chain (${seg.layout}); using the deepest.`,
+        );
+      }
+      boundaryIndex = chain.length;
+    }
+    chain.push(L.component);
   }
-  return chain;
+  return { chain, boundaryIndex };
 }
 
 export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions): JuneApp {
@@ -166,10 +192,12 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
         }
         const def = routeFromModule(mod);
         if (!def) return null;
+        const { chain, boundaryIndex } = await loadChain(match.segments);
         return {
           def,
           params: match.params,
-          chain: await loadChain(match.segments),
+          chain,
+          boundaryIndex,
           loading: await nearestLoading(match.segments),
         } satisfies Resolved;
       },
