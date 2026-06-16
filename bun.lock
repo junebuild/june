@@ -43,6 +43,16 @@
         "@junejs/server": "workspace:*",
       },
     },
+    "examples/i18n": {
+      "name": "@june-examples/i18n",
+      "version": "0.0.0",
+      "dependencies": {
+        "@junejs/core": "workspace:*",
+      },
+      "devDependencies": {
+        "@junejs/server": "workspace:*",
+      },
+    },
     "examples/juno-crud": {
       "name": "@june-examples/juno-crud",
       "version": "0.0.0",
@@ -57,7 +67,7 @@
     },
     "packages/cli": {
       "name": "@junejs/cli",
-      "version": "0.0.24",
+      "version": "0.0.25",
       "bin": {
         "june": "./bin.mjs",
       },
@@ -68,7 +78,7 @@
     },
     "packages/core": {
       "name": "@junejs/core",
-      "version": "0.0.24",
+      "version": "0.0.25",
       "peerDependencies": {
         "react": "^19.2.0",
         "react-dom": "^19.2.0",
@@ -79,21 +89,21 @@
     },
     "packages/create-june": {
       "name": "create-june",
-      "version": "0.0.24",
+      "version": "0.0.25",
       "bin": {
         "create-june": "./bin.mjs",
       },
     },
     "packages/db": {
       "name": "@junejs/db",
-      "version": "0.0.24",
+      "version": "0.0.25",
       "dependencies": {
         "@junejs/core": "workspace:*",
       },
     },
     "packages/june": {
       "name": "@junejs/server",
-      "version": "0.0.24",
+      "version": "0.0.25",
       "dependencies": {
         "@junejs/core": "workspace:*",
         "@junejs/db": "workspace:*",
@@ -122,7 +132,7 @@
     },
     "packages/juno": {
       "name": "@junejs/juno",
-      "version": "0.0.24",
+      "version": "0.0.25",
       "dependencies": {
         "@junejs/core": "workspace:*",
         "@junejs/db": "workspace:*",
@@ -197,6 +207,8 @@
     "@happy-dom/global-registrator": ["@happy-dom/global-registrator@20.10.4", "", { "dependencies": { "@types/node": ">=20.0.0", "happy-dom": "^20.10.4" } }, "sha512-d1iWnYgb20MuHYyXVcjkEdFkUy5+myq8RyLAFK9Sy4PVNy/cU5xrM5JM/MMMR3KDZQ6YNVj9puy96lcfEaKh8Q=="],
 
     "@june-examples/basic": ["@june-examples/basic@workspace:examples/basic"],
+
+    "@june-examples/i18n": ["@june-examples/i18n@workspace:examples/i18n"],
 
     "@june-examples/juno-crud": ["@june-examples/juno-crud@workspace:examples/juno-crud"],
 

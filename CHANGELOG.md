@@ -5,6 +5,8 @@ of truth; this file summarizes what matters per release.
 
 ## [Unreleased]
 
+## [0.0.25] — 2026-06-16
+
 ### Added
 
 - **Experimental — per-locale content collections (i18n phase 4).** A content
@@ -37,6 +39,13 @@ of truth; this file summarizes what matters per release.
   is unchanged (exact → `aria-current="page"`, ancestor → `"true"`, trailing
   slashes normalized). The active-link rule and its planned per-link declarative
   override (`data-june-active`) are documented in `docs/navigation-tiers.md`.
+
+### Fixed
+
+- **Content: a stray subdir can't become a phantom locale.** The content scanner
+  now treats a `content/<collection>/<sub>/` directory as a locale bucket only
+  when `<sub>` is a BCP-47-shaped tag (`de`, `fr`, `zh-TW` — not `images`,
+  `drafts`, `assets`), so a misplaced folder no longer invents a ghost locale.
 
 ## [0.0.24] — 2026-06-16
 
