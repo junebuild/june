@@ -5,11 +5,12 @@
 import { beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { ensureScope, runInScope, setRequestLocale } from "@junejs/db";
 
-import { __resetMessages, createTranslator, defineMessages, t } from "../src/index";
+import { __resetMessages, compileCatalog, createTranslator, defineMessages, t } from "../src/index";
 
+// Catalogs ship COMPILED (parsed ASTs); compileCatalog is the build-time parse.
 const catalogs = {
-  en: { hi: "Hello, {name}!", bye: "Bye" },
-  de: { hi: "Hallo, {name}!" }, // no `bye` → falls back to en
+  en: compileCatalog({ hi: "Hello, {name}!", bye: "Bye" }),
+  de: compileCatalog({ hi: "Hallo, {name}!" }), // no `bye` → falls back to en
 };
 
 describe("createTranslator (pure)", () => {
