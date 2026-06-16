@@ -4,6 +4,7 @@
 
 import { ACTION_REGISTRY } from "./agent";
 import type { AgentConfig } from "./config";
+import { localeAlternates, type I18nConfig } from "./i18n";
 
 const PROTOCOL_VERSION = "2025-06-18";
 
@@ -84,12 +85,26 @@ export function robotsTxt(origin: string) {
   );
 }
 
-export function sitemapXml(origin: string, routes: string[]) {
-  const urls = routes
-    .filter((r) => !r.includes("[")) // skip dynamic templates — not enumerable
-    .map((r) => `  <url><loc>${origin}${r}</loc></url>`)
+export function sitemapXml(origin: string, routes: string[], i18n?: I18nConfig) {
+  const enumerable = routes.filter((r) => !r.includes("[")); // skip dynamic templates
+  // With i18n, each page carries xhtml:link rel="alternate" hreflang for its
+  // locale variants (the SEO content surface; llms.txt / /mcp stay canonical).
+  const host = i18n ? new URL(origin).host : "";
+  const protocol = i18n ? new URL(origin).protocol.replace(":", "") : "";
+  const abs = (href: string) => (href.startsWith("http") ? href : `${origin}${href}`);
+  const urls = enumerable
+    .map((r) => {
+      if (!i18n) return `  <url><loc>${origin}${r}</loc></url>`;
+      const links = localeAlternates(i18n, r, { currentHost: host, protocol })
+        .map((a) => `    <xhtml:link rel="alternate" hreflang="${a.hreflang}" href="${abs(a.href)}"/>`)
+        .join("\n");
+      return `  <url>\n    <loc>${origin}${r}</loc>\n${links}\n  </url>`;
+    })
     .join("\n");
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls}\n</urlset>\n`;
+  const ns =
+    `xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"` +
+    (i18n ? ` xmlns:xhtml="http://www.w3.org/1999/xhtml"` : "");
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset ${ns}>\n${urls}\n</urlset>\n`;
 }
 
 // RFC 9727 API Catalog (linkset+json).

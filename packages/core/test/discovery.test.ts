@@ -86,6 +86,20 @@ describe("sitemapXml()", () => {
     const xml = sitemapXml(ORIGIN, ["/", "/posts", "/posts/[slug]"]);
     expect(xml).toContain(`<loc>${ORIGIN}/posts</loc>`);
     expect(xml).not.toContain("[slug]");
+    expect(xml).not.toContain("xhtml"); // no i18n → no alternates namespace
+  });
+
+  test("with i18n, each url carries xhtml:link hreflang alternates", () => {
+    const xml = sitemapXml(ORIGIN, ["/about"], {
+      defaultLocale: "en",
+      locales: { en: {}, de: { path: "/de" }, fr: { domain: "example.fr" } },
+    });
+    expect(xml).toContain('xmlns:xhtml="http://www.w3.org/1999/xhtml"');
+    expect(xml).toContain(`<loc>${ORIGIN}/about</loc>`);
+    expect(xml).toContain(`<xhtml:link rel="alternate" hreflang="de" href="${ORIGIN}/de/about"/>`);
+    // a cross-origin locale stays absolute on its own host
+    expect(xml).toContain('<xhtml:link rel="alternate" hreflang="fr" href="https://example.fr/about"/>');
+    expect(xml).toContain('hreflang="x-default"');
   });
 });
 

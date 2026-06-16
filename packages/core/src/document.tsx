@@ -102,6 +102,7 @@ export function Document({
   config,
   lang,
   dir,
+  alternates,
   shellKey,
 }: {
   children: React.ReactNode;
@@ -112,6 +113,10 @@ export function Document({
   // only when "rtl", so LTR pages stay byte-identical to a single-locale app.
   lang?: string;
   dir?: "ltr" | "rtl";
+  // rel="alternate" hreflang links for this page's locale variants (incl.
+  // x-default), built by the pipeline from the i18n table. Absent when i18n is
+  // off, so single-locale pages emit no hreflang.
+  alternates?: Array<{ hreflang: string; href: string }>;
   // The mounted shell's identity (a segment-boundary route's key), stamped on
   // [data-june-root] as data-june-shell so the client router can tell whether a
   // soft-nav fragment belongs to this shell. Absent on non-boundary routes.
@@ -137,6 +142,9 @@ export function Document({
         <title>{title}</title>
         {description ? <meta name="description" content={description} /> : null}
         {metadata?.canonical ? <link rel="canonical" href={metadata.canonical} /> : null}
+        {alternates?.map((a) => (
+          <link key={a.hreflang} rel="alternate" hrefLang={a.hreflang} href={a.href} />
+        ))}
         {metadata?.robots ? <meta name="robots" content={metadata.robots} /> : null}
         {og ? <meta property="og:title" content={og.title ?? title} /> : null}
         {og?.description ?? description ? (

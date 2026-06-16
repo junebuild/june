@@ -39,10 +39,12 @@ import { ensureScope, runInScope } from "@junejs/db";
 import type { AgentConfig } from "@junejs/core/config";
 import {
   LOCALE_COOKIE,
+  localeAlternates,
   localeDir,
   matchPinnedLocale,
   negotiateLocale,
   type I18nConfig,
+  type LocaleAlternate,
 } from "@junejs/core/i18n";
 import type { Resources } from "@junejs/core/resources";
 
@@ -214,6 +216,20 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
     return { lang, dir: localeDir(lang, cfg.i18n) };
   }
 
+  // rel="alternate" hreflang links for this page's locale variants. Built from the
+  // locale-STRIPPED route path (so every locale's URL is generated correctly) and
+  // the current host (cross-origin locales come back absolute). undefined when
+  // i18n is off → single-locale pages emit no hreflang.
+  function alternatesFor(ctx: RouteContext): LocaleAlternate[] | undefined {
+    if (!cfg.i18n) return undefined;
+    const pinned = matchPinnedLocale(cfg.i18n, ctx.url.host, ctx.url.pathname);
+    const routePath = pinned ? pinned.pathname : ctx.url.pathname;
+    return localeAlternates(cfg.i18n, routePath, {
+      currentHost: ctx.url.host,
+      protocol: ctx.url.protocol.replace(":", ""),
+    });
+  }
+
   async function renderDocument(
     node: React.ReactNode,
     metadata: Metadata | undefined,
@@ -221,6 +237,7 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
     chain: LayoutComponent[],
     locale?: string,
     boundaryKey?: string | null,
+    alternates?: LocaleAlternate[],
   ): Promise<Response> {
     // Wrap root→leaf: chain[0] is outermost.
     const wrapped = chain.reduceRight<React.ReactNode>(
@@ -233,6 +250,7 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
         metadata,
         children: wrapped,
         shellKey: boundaryKey, // stamps data-june-shell on [data-june-root]
+        alternates,
         ...langDir(locale),
       }),
     );
@@ -317,6 +335,7 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
         metadata,
         children: wrapped,
         shellKey: boundaryKey, // stamps data-june-shell on [data-june-root]
+        alternates: alternatesFor(ctx),
         ...langDir(ctx.locale),
       }),
       { onError: (e: unknown) => console.error("[june] streaming render error:", e) },
@@ -409,7 +428,7 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
     // renders the whole chain (a hard load of the URL is never segment-scoped) —
     // but it stamps the shell key so the client knows which shell is mounted.
     if (target === "fragment") return renderFragment(node, meta, chain, boundaryIndex, boundaryKey);
-    return renderDocument(node, meta, 200, chain, ctx.locale, boundaryKey);
+    return renderDocument(node, meta, 200, chain, ctx.locale, boundaryKey, alternatesFor(ctx));
   }
 
   async function discovery(url: URL): Promise<Response | null> {
@@ -422,7 +441,10 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
       case "/robots.txt":
         return text(robotsTxt(url.origin), "text/plain; charset=utf-8");
       case "/sitemap.xml":
-        return text(sitemapXml(url.origin, await cfg.routeList()), "application/xml; charset=utf-8");
+        return text(
+          sitemapXml(url.origin, await cfg.routeList(), cfg.i18n),
+          "application/xml; charset=utf-8",
+        );
       case "/.well-known/api-catalog":
         return text(JSON.stringify(apiCatalog(url.origin, agent)), "application/linkset+json");
       case "/.well-known/mcp/server-card.json":

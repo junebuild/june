@@ -183,4 +183,18 @@ describe("document <html lang>/<dir>", () => {
     expect(html).toContain('<html lang="en">');
     expect(html).not.toContain("dir=");
   });
+
+  test("i18n view emits hreflang alternates in the head (locale-stripped path)", async () => {
+    // https request → cross-origin alternates inherit the scheme. React keeps the
+    // typed hrefLang prop's casing (HTML attrs are case-insensitive → crawler-safe).
+    const html = await (await viewPipeline({ i18n })("https://example.com/de/page")).text();
+    expect(html).toContain('rel="alternate" hrefLang="de" href="/de/page"');
+    expect(html).toContain('rel="alternate" hrefLang="fr" href="https://example.fr/page"');
+    expect(html).toContain('hrefLang="x-default" href="/page"');
+  });
+
+  test("no i18n → no hreflang", async () => {
+    const html = await (await viewPipeline()("http://example.com/page")).text();
+    expect(html).not.toContain('rel="alternate"');
+  });
 });

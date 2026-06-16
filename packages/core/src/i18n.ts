@@ -232,3 +232,23 @@ export function dirForLang(lang: string): "ltr" | "rtl" {
 export function localeDir(locale: string, i18n?: I18nConfig): "ltr" | "rtl" {
   return i18n?.locales[locale]?.dir ?? dirForLang(locale);
 }
+
+export type LocaleAlternate = { hreflang: string; href: string };
+
+// The rel="alternate" hreflang set for a page: one entry per locale (its URL for
+// this route via localeHref) plus `x-default` → the default locale. Drives both
+// the document `<head>` and the sitemap. `routePath` is the locale-STRIPPED route
+// path (e.g. "/about"); cross-origin locales come back absolute. This is the SEO
+// CONTENT surface — note llms.txt / /mcp stay canonical single-language.
+export function localeAlternates(
+  i18n: I18nConfig,
+  routePath: string,
+  opts: { currentHost?: string; protocol?: string } = {},
+): LocaleAlternate[] {
+  const out: LocaleAlternate[] = Object.keys(i18n.locales).map((locale) => ({
+    hreflang: locale,
+    href: localeHref(i18n, routePath, locale, opts),
+  }));
+  out.push({ hreflang: "x-default", href: localeHref(i18n, routePath, i18n.defaultLocale, opts) });
+  return out;
+}

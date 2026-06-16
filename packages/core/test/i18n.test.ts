@@ -8,6 +8,7 @@ import { describe, expect, test } from "bun:test";
 import {
   dirForLang,
   type I18nConfig,
+  localeAlternates,
   localeDir,
   localeHref,
   matchPinnedLocale,
@@ -188,6 +189,26 @@ describe("resolveRequestLocale — pinned else negotiated", () => {
     expect(
       resolveRequestLocale(i18n, { host: "example.com", pathname: "/", override: "xx" }).locale,
     ).toBe("en");
+  });
+});
+
+describe("localeAlternates — hreflang set", () => {
+  test("one entry per locale plus x-default, cross-origin absolute", () => {
+    const alts = localeAlternates(i18n, "/about", { currentHost: "example.com" });
+    expect(alts).toEqual([
+      { hreflang: "en", href: "/about" },
+      { hreflang: "de", href: "/de/about" },
+      { hreflang: "fr", href: "https://example.fr/about" },
+      { hreflang: "ja", href: "https://ja.example.com/about" },
+      { hreflang: "zh-TW", href: "https://example.com.tw/tw/about" },
+      { hreflang: "x-default", href: "/about" }, // → defaultLocale (en)
+    ]);
+  });
+
+  test("from a non-default current host, the home host turns relative", () => {
+    const alts = localeAlternates(i18n, "/x", { currentHost: "example.fr" });
+    expect(alts.find((a) => a.hreflang === "fr")!.href).toBe("/x"); // same origin now
+    expect(alts.find((a) => a.hreflang === "en")!.href).toBe("/x"); // en has no domain → relative
   });
 });
 
