@@ -5,6 +5,20 @@ of truth; this file summarizes what matters per release.
 
 ## [Unreleased]
 
+### Added
+
+- **Experimental — per-locale content collections (i18n phase 4).** A content
+  collection can now be translated by locale: keep `content/<collection>/*.md` as
+  the default-locale files (unchanged) and add `content/<collection>/<locale>/*.md`
+  for variants — the content twin of the URL `default-unprefixed / locale-prefixed`
+  split. The generated finder takes the locale (`post(slug, ctx.locale)`) and
+  returns the variant when present, falling back to the default file otherwise (a
+  dev-time warning flags a partial translation); a `posts(locale)` lister returns
+  the collection localized. A collection with no `<locale>/` subdir emits exactly
+  the previous shape, so single-locale apps are byte-identical. The agent surfaces
+  stay canonical: a page's `.md`/`.json` follow its locale, but `llms.txt` / `/mcp`
+  remain single-language by design (tool contracts don't get translated).
+
 ### Changed
 
 - **`@junejs/core` — cheaper segment-scoped active-link reconciliation.** The
