@@ -39,6 +39,7 @@ import { ensureScope, runInScope } from "@junejs/db";
 import type { AgentConfig } from "@junejs/core/config";
 import {
   LOCALE_COOKIE,
+  localeDir,
   matchPinnedLocale,
   negotiateLocale,
   type I18nConfig,
@@ -193,11 +194,21 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
     return headers;
   }
 
+  // The document language + writing direction for one render. lang = the resolved
+  // locale (ctx.locale) when i18n is on, else the site.lang floor, else "en"; dir
+  // derives from it (a LocaleConfig.dir override wins). LTR → dir undefined, so
+  // single-locale pages stay byte-identical.
+  function langDir(locale: string | undefined): { lang: string; dir?: "ltr" | "rtl" } {
+    const lang = locale ?? docConfig.site.lang ?? "en";
+    return { lang, dir: localeDir(lang, cfg.i18n) };
+  }
+
   async function renderDocument(
     node: React.ReactNode,
     metadata: Metadata | undefined,
     status: number,
     chain: LayoutComponent[],
+    locale?: string,
   ): Promise<Response> {
     // Wrap root→leaf: chain[0] is outermost.
     const wrapped = chain.reduceRight<React.ReactNode>(
@@ -205,7 +216,12 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
       node,
     );
     const stream = await renderToReadableStream(
-      React.createElement(Document, { config: docConfigForRender(), metadata, children: wrapped }),
+      React.createElement(Document, {
+        config: docConfigForRender(),
+        metadata,
+        children: wrapped,
+        ...langDir(locale),
+      }),
     );
     await stream.allReady; // fully resolved markup (no streamed Suspense fallbacks)
     // React 19 emits <!DOCTYPE html> itself for an <html> root — don't prepend a
@@ -268,7 +284,12 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
     );
     const metadata = typeof def.metadata === "object" ? def.metadata : undefined;
     const stream = await renderToReadableStream(
-      React.createElement(Document, { config: docConfigForRender(), metadata, children: wrapped }),
+      React.createElement(Document, {
+        config: docConfigForRender(),
+        metadata,
+        children: wrapped,
+        ...langDir(ctx.locale),
+      }),
       { onError: (e: unknown) => console.error("[june] streaming render error:", e) },
     );
     // NO allReady — return the live stream (shell first). React 19 streams the
@@ -276,7 +297,11 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
     return new Response(stream, { status: 200, headers: htmlHeaders() });
   }
 
-  function notFoundResponse(target: RenderTarget, pathname: string): Promise<Response> | Response {
+  function notFoundResponse(
+    target: RenderTarget,
+    pathname: string,
+    locale?: string,
+  ): Promise<Response> | Response {
     // Data clients get a JSON 404; humans get the rendered NotFound document.
     return target !== "view"
       ? Response.json({ error: "Not Found", path: pathname }, { status: 404 })
@@ -285,6 +310,7 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
           { title: "Not found", robots: "noindex" },
           404,
           [],
+          locale,
         );
   }
 
@@ -320,7 +346,7 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
     // "fragment" isn't a declarable projection (it's the view rendered without the
     // shell), so it's never disabled — exclude it from the check.
     if (target !== "fragment" && def[target] === false) {
-      return notFoundResponse(target, ctx.url.pathname);
+      return notFoundResponse(target, ctx.url.pathname, ctx.locale);
     }
 
     const res = await renderTarget(target, def, data, ctx, chain);
@@ -349,7 +375,7 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
     const node = provideLoaderData(data, def.view ? def.view(data, ctx) : null);
     const meta = resolveMeta(def, data, ctx);
     if (target === "fragment") return renderFragment(node, meta, chain);
-    return renderDocument(node, meta, 200, chain);
+    return renderDocument(node, meta, 200, chain, ctx.locale);
   }
 
   async function discovery(url: URL): Promise<Response | null> {
@@ -433,7 +459,7 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
       // --- routes ----------------------------------------------------------
       const { target, pathname, speculative } = negotiate(url, request, routeBase);
       const resolved = await cfg.resolve(pathname);
-      if (!resolved) return notFoundResponse(target, pathname);
+      if (!resolved) return notFoundResponse(target, pathname, locale);
 
       // ctx is identity/request only; db/kv/blob are ambient (read from the
       // request scope this whole handler runs inside — see runInScope below).
@@ -464,7 +490,7 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
         data = resolved.def.load ? await resolved.def.load(ctx) : undefined;
       } catch {
         // unknown slug etc. → 404 (segment error boundaries are a later milestone)
-        return notFoundResponse(target, pathname);
+        return notFoundResponse(target, pathname, locale);
       }
       return renderProjection(resolved, target, data, ctx);
   }

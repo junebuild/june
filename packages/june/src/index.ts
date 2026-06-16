@@ -58,6 +58,8 @@ export {
   matchPinnedLocale,
   negotiateLocale,
   parseAcceptLanguage,
+  localeDir,
+  dirForLang,
   LOCALE_COOKIE,
   type I18nConfig,
   type LocaleConfig,

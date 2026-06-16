@@ -17,6 +17,9 @@
 export type LocaleConfig = {
   domain?: string;
   path?: string;
+  // Writing direction for this locale's `<html dir>`. Omit to let June derive it
+  // from the language tag (the RTL set below); set it to override a wrong guess.
+  dir?: "ltr" | "rtl";
 };
 
 export type I18nConfig = {
@@ -209,4 +212,23 @@ export function localeHref(
     return `${opts.protocol ?? "https"}://${loc.domain}${target}`;
   }
   return target;
+}
+
+// Right-to-left scripts, keyed by primary language subtag (the common set; a
+// locale can always override via LocaleConfig.dir). Arabic, Hebrew, Persian,
+// Urdu, Pashto, Sindhi, Uyghur, Yiddish, Dhivehi, Central Kurdish (Sorani), Syriac.
+const RTL_PRIMARY = new Set([
+  "ar", "he", "fa", "ur", "ps", "sd", "ug", "yi", "dv", "ckb", "syr", "nqo",
+]);
+
+// Derive writing direction from a BARE language tag (its primary subtag). Used by
+// the floor (a single-locale app's `site.lang`) and as localeDir's default.
+export function dirForLang(lang: string): "ltr" | "rtl" {
+  return RTL_PRIMARY.has(lang.toLowerCase().split("-")[0]!) ? "rtl" : "ltr";
+}
+
+// Writing direction for a resolved locale: a LocaleConfig.dir override wins, else
+// derive from the tag. Works with or without an i18n config (the floor passes none).
+export function localeDir(locale: string, i18n?: I18nConfig): "ltr" | "rtl" {
+  return i18n?.locales[locale]?.dir ?? dirForLang(locale);
 }

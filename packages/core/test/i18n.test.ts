@@ -6,7 +6,9 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  dirForLang,
   type I18nConfig,
+  localeDir,
   localeHref,
   matchPinnedLocale,
   negotiateLocale,
@@ -186,6 +188,27 @@ describe("resolveRequestLocale — pinned else negotiated", () => {
     expect(
       resolveRequestLocale(i18n, { host: "example.com", pathname: "/", override: "xx" }).locale,
     ).toBe("en");
+  });
+});
+
+describe("writing direction", () => {
+  test("dirForLang derives RTL from the primary subtag", () => {
+    expect(dirForLang("ar")).toBe("rtl");
+    expect(dirForLang("he-IL")).toBe("rtl");
+    expect(dirForLang("FA")).toBe("rtl"); // case-insensitive
+    expect(dirForLang("en")).toBe("ltr");
+    expect(dirForLang("zh-TW")).toBe("ltr");
+  });
+
+  test("localeDir prefers a LocaleConfig.dir override", () => {
+    const cfg: I18nConfig = {
+      defaultLocale: "en",
+      locales: { en: {}, ar: { path: "/ar" }, ku: { path: "/ku", dir: "rtl" } },
+    };
+    expect(localeDir("ar", cfg)).toBe("rtl"); // derived
+    expect(localeDir("ku", cfg)).toBe("rtl"); // explicit override (ku isn't in the builtin set)
+    expect(localeDir("en", cfg)).toBe("ltr");
+    expect(localeDir("ar")).toBe("rtl"); // works without an i18n config (the floor)
   });
 });
 

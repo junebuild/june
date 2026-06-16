@@ -8,7 +8,10 @@ import type { Metadata } from "./route";
 // The serializable slice of app config the document needs. The server feeds it
 // from AppConfig; the generated worker inlines it as literals at build time.
 export type DocumentConfig = {
-  site: { name?: string; titleTemplate?: string; description?: string; icon?: string };
+  // `lang` is the document-language FLOOR: a single-locale app sets it (default
+  // "en") without any i18n machinery. When `i18n` is configured the resolved
+  // per-request locale (ctx.locale) overrides it on `<html lang>`.
+  site: { name?: string; titleTemplate?: string; description?: string; icon?: string; lang?: string };
   speculationRules: string | null;
   speculationDelivery: "inline" | "header";
   viewTransitions: boolean | "instant" | number;
@@ -97,16 +100,23 @@ export function Document({
   children,
   metadata,
   config,
+  lang,
+  dir,
 }: {
   children: React.ReactNode;
   metadata?: Metadata;
   config: DocumentConfig;
+  // The resolved document language + writing direction for this request. The host
+  // passes ctx.locale (or the site.lang floor); absent → "en". `dir` is rendered
+  // only when "rtl", so LTR pages stay byte-identical to a single-locale app.
+  lang?: string;
+  dir?: "ltr" | "rtl";
 }) {
   const title = documentTitle(metadata, config.site);
   const description = metadata?.description ?? config.site.description;
   const og = metadata?.openGraph;
   return (
-    <html lang="en">
+    <html lang={lang ?? config.site.lang ?? "en"} dir={dir === "rtl" ? "rtl" : undefined}>
       <head>
         {/* charset IN the document (must be in the first 1024 bytes): prerendered
             pages are served by asset layers whose content-type may lack the

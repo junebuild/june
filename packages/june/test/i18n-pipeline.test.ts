@@ -4,6 +4,7 @@
 // dev/worker-shared seam (createPipeline), so testing it here covers both callers.
 
 import { describe, expect, test } from "bun:test";
+import React from "react";
 
 import { resolveAgent } from "@junejs/core/config";
 import { type I18nConfig } from "@junejs/core/i18n";
@@ -135,5 +136,51 @@ describe("i18n absent (off by absence)", () => {
     const res = await p.get("http://example.com/de/thing.json");
     expect(await res.json()).toEqual({ locale: null });
     expect(p.matchedPath()).toBe("/de/thing"); // '/de' is just a path segment
+  });
+});
+
+// Phase 2: the resolved locale drives <html lang>/<html dir>, with a site.lang
+// floor for single-locale apps.
+describe("document <html lang>/<dir>", () => {
+  const viewPipeline = (opts: { i18n?: I18nConfig; siteLang?: string } = {}) => {
+    const doc: DocumentConfig = { ...docConfig, site: { name: "T", lang: opts.siteLang } };
+    const pipeline = createPipeline({
+      docConfig: doc,
+      agent: resolveAgent(undefined),
+      i18n: opts.i18n,
+      routeList: () => [],
+      resolve: async () => ({
+        def: route({ view: () => React.createElement("p", null, "hi") }),
+        params: {},
+        chain: [],
+      }),
+    });
+    return (urlStr: string) => pipeline.fetch(new Request(urlStr));
+  };
+
+  const rtlI18n: I18nConfig = {
+    defaultLocale: "en",
+    locales: { en: {}, ar: { path: "/ar" } },
+  };
+
+  test("the resolved locale becomes <html lang>", async () => {
+    const html = await (await viewPipeline({ i18n })("http://example.com/de/page")).text();
+    expect(html).toContain('<html lang="de">'); // LTR → no dir attribute
+  });
+
+  test("an RTL locale also sets dir=rtl", async () => {
+    const html = await (await viewPipeline({ i18n: rtlI18n })("http://example.com/ar/page")).text();
+    expect(html).toContain('<html lang="ar" dir="rtl">');
+  });
+
+  test("the site.lang floor sets lang without any i18n", async () => {
+    const html = await (await viewPipeline({ siteLang: "ja" })("http://example.com/page")).text();
+    expect(html).toContain('<html lang="ja">');
+  });
+
+  test("no i18n and no site.lang → the 'en' floor, byte-identical to today", async () => {
+    const html = await (await viewPipeline()("http://example.com/page")).text();
+    expect(html).toContain('<html lang="en">');
+    expect(html).not.toContain("dir=");
   });
 });

@@ -92,7 +92,9 @@ export type JuneConfig = {
   earlyHints?: string[];
   // Site-wide metadata defaults: per-route metadata merges over these.
   // titleTemplate: "%s" is replaced by the route's title ("%s — Acme").
-  site?: { name?: string; titleTemplate?: string; description?: string; icon?: string };
+  // lang: the document-language floor for `<html lang>` (default "en"); i18n's
+  // per-request locale overrides it when configured.
+  site?: { name?: string; titleTemplate?: string; description?: string; icon?: string; lang?: string };
   // Locale routing. OFF by absence: omit it and June does no locale handling
   // (today's behavior — the resolution step never runs, ctx.locale is undefined).
   // Present, it lights up host/path → locale resolution, ctx.locale, and
