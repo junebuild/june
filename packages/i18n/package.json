@@ -1,0 +1,25 @@
+{
+  "name": "@junejs/i18n",
+  "version": "0.0.25",
+  "description": "June — the agent-native React framework. ICU messages (typed t()).",
+  "type": "module",
+  "license": "MIT",
+  "homepage": "https://june.build",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@junejs/db": "workspace:*"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/junebuild/june"
+  }
+}

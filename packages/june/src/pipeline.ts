@@ -35,7 +35,7 @@ import {
 } from "@junejs/core/discovery";
 import { mcpHandler, mcpTools } from "@junejs/core/mcp";
 
-import { ensureScope, runInScope } from "@junejs/db";
+import { ensureScope, runInScope, setRequestLocale } from "@junejs/db";
 import type { AgentConfig } from "@junejs/core/config";
 import {
   LOCALE_COOKIE,
@@ -510,6 +510,9 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
                   cookie: readCookie(request, LOCALE_COOKIE),
                 });
         }
+        // Publish the resolved locale onto the request scope so an opt-in i18n
+        // layer's ambient `t` can read it (the core pipeline never imports i18n).
+        if (locale) setRequestLocale(locale);
       }
 
       // --- routes ----------------------------------------------------------

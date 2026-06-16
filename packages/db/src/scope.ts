@@ -25,7 +25,15 @@ import type { Resources, JuneDb, JuneKv, JuneBlob } from "@junejs/core/resources
 // (e.g. Juno's batch-loader registry). This package never reads it — it just
 // carries it per request so such state is STRUCTURALLY request-scoped and can't be
 // stashed on a long-lived handle. Lazily created by requestLocal().
-export type RequestScope = { resources: Resources; locals?: Map<symbol, unknown> };
+export type RequestScope = {
+  resources: Resources;
+  locals?: Map<symbol, unknown>;
+  // The resolved request locale (set by the host after locale resolution). A
+  // request-scope attribute like the design's {locale, tenant, site} — so an
+  // opt-in layer (e.g. @junejs/i18n's ambient `t`) reads it WITHOUT the core
+  // pipeline depending on that layer. Undefined when no i18n is configured.
+  locale?: string;
+};
 
 // The minimal slice of AsyncLocalStorage we use — kept structural so this module
 // never statically names the runtime.
@@ -76,6 +84,20 @@ export function requestLocal<T>(key: symbol, make: () => T): T {
   const locals = (store.locals ??= new Map<symbol, unknown>());
   if (!locals.has(key)) locals.set(key, make());
   return locals.get(key) as T;
+}
+
+// The host sets the resolved locale onto the active scope after it resolves it
+// (the scope is opened before routing, so the locale arrives mid-request). A no-op
+// outside a scope, like the ambient resources.
+export function setRequestLocale(locale: string): void {
+  const store = als?.getStore();
+  if (store) store.locale = locale;
+}
+
+// The current request's resolved locale, or undefined (no scope / no i18n). The
+// generic read an opt-in i18n layer's ambient `t` uses — no dependency on i18n here.
+export function currentLocale(): string | undefined {
+  return als?.getStore()?.locale;
 }
 
 function pick<K extends keyof Resources>(name: K): NonNullable<Resources[K]> {

@@ -101,6 +101,13 @@
         "@junejs/core": "workspace:*",
       },
     },
+    "packages/i18n": {
+      "name": "@junejs/i18n",
+      "version": "0.0.25",
+      "dependencies": {
+        "@junejs/db": "workspace:*",
+      },
+    },
     "packages/june": {
       "name": "@junejs/server",
       "version": "0.0.25",
@@ -217,6 +224,8 @@
     "@junejs/core": ["@junejs/core@workspace:packages/core"],
 
     "@junejs/db": ["@junejs/db@workspace:packages/db"],
+
+    "@junejs/i18n": ["@junejs/i18n@workspace:packages/i18n"],
 
     "@junejs/juno": ["@junejs/juno@workspace:packages/juno"],
 

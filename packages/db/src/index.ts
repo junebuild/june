@@ -3,4 +3,15 @@
 // or action. The host (@junejs/server) opens the resources and runs each request
 // in the scope these read; this package is the worker-safe seam they cross.
 
-export { db, kv, blob, runInScope, ensureScope, requestLocal, registerSqlTagger, type RequestScope } from "./scope";
+export {
+  db,
+  kv,
+  blob,
+  runInScope,
+  ensureScope,
+  requestLocal,
+  setRequestLocale,
+  currentLocale,
+  registerSqlTagger,
+  type RequestScope,
+} from "./scope";
