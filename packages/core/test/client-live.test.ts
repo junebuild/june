@@ -48,4 +48,22 @@ describe("applyLiveUpdate", () => {
     expect(applyLiveUpdate("<p>x</p>", null, () => {})).toBe(false);
     document.body.innerHTML = "";
   });
+
+  test("segment-scoped live update morphs the outlet, NOT the root — the shell survives", () => {
+    // A boundary route: the pushed fragment is content-only. Morphing it into the
+    // root would delete the sidebar; with the shell key it targets the outlet.
+    document.body.innerHTML =
+      '<div data-june-root data-june-shell="docs">' +
+      "<nav data-sidebar>SIDEBAR</nav>" +
+      '<div data-june-outlet><main>count: 1</main></div>' +
+      "</div>";
+    const sidebar = document.querySelector("[data-sidebar]")!;
+
+    const ok = applyLiveUpdate("<main>count: 2</main>", null, () => {}, "docs");
+
+    expect(ok).toBe(true);
+    expect(document.querySelector("[data-june-outlet]")!.textContent).toBe("count: 2"); // content updated
+    expect(document.querySelector("[data-sidebar]")).toBe(sidebar); // shell untouched (same node, not wiped)
+    document.body.innerHTML = "";
+  });
 });

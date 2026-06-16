@@ -46,7 +46,7 @@ import {
 } from "@junejs/core/i18n";
 import type { Resources } from "@junejs/core/resources";
 
-import { negotiate, TITLE_HEADER } from "./negotiate";
+import { negotiate, TITLE_HEADER, SEGMENT_HEADER } from "./negotiate";
 
 // Minimal Cookie-header read for the locale negotiation chain (no dependency on
 // an auth/cookie integration — i18n must stand alone).
@@ -74,6 +74,17 @@ export type Resolved = {
   // into streaming Suspense: the shell + this fallback flush before load()
   // resolves, then the view streams in.
   loading?: React.ComponentType;
+  // Segment-scoped fragments: the index in `chain` of the boundary layout (the
+  // one exporting `segmentBoundary` and rendering <JuneOutlet>), deepest wins.
+  // A soft-nav fragment then renders only chain.slice(boundaryIndex + 1) — the
+  // boundary layout's own markup (the persistent shell) is NOT re-rendered.
+  // null/undefined → whole-chain fragment (the default). Full documents always
+  // render the whole chain regardless, so a hard load is unaffected.
+  boundaryIndex?: number | null;
+  // The shell's identity key (which boundary layout owns it). Stamped on
+  // [data-june-root] (full load) and sent as the SEGMENT_HEADER (fragment) so the
+  // client morphs a fragment only into the shell it belongs to. Set iff boundaryIndex is.
+  boundaryKey?: string | null;
 };
 
 // A RESOURCE route (app/**/route.*): a handler returning a raw Response — binary,
@@ -209,6 +220,7 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
     status: number,
     chain: LayoutComponent[],
     locale?: string,
+    boundaryKey?: string | null,
   ): Promise<Response> {
     // Wrap root→leaf: chain[0] is outermost.
     const wrapped = chain.reduceRight<React.ReactNode>(
@@ -220,6 +232,7 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
         config: docConfigForRender(),
         metadata,
         children: wrapped,
+        shellKey: boundaryKey, // stamps data-june-shell on [data-june-root]
         ...langDir(locale),
       }),
     );
@@ -239,8 +252,20 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
     node: React.ReactNode,
     metadata: Metadata | undefined,
     chain: LayoutComponent[],
+    boundaryIndex?: number | null,
+    boundaryKey?: string | null,
   ): Promise<Response> {
-    const wrapped = chain.reduceRight<React.ReactNode>(
+    // ONE gate: a fragment is segment-scoped iff it has both a boundary index AND
+    // a shell key. They always travel together (resolveBoundary returns both or
+    // neither), but tying the content-slice and the header to a single flag means
+    // a content-only body can never go out without its key (which would wipe the
+    // shell) nor a key without a content-only body.
+    const segmented = typeof boundaryIndex === "number" && boundaryKey != null;
+    // Segment-scoped renders ONLY the chain below the boundary layout (its
+    // children = the <JuneOutlet> contents on a full load), so the boundary
+    // layout's shell markup is never produced. Whole-chain wraps the entire chain.
+    const inside = segmented ? chain.slice(boundaryIndex! + 1) : chain;
+    const wrapped = inside.reduceRight<React.ReactNode>(
       (acc, L) => React.createElement(L, null, acc),
       node,
     );
@@ -250,6 +275,9 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
     const headers = new Headers({ "content-type": "text/html; charset=utf-8" });
     const title = typeof metadata?.title === "string" ? metadata.title : undefined;
     if (title) headers.set(TITLE_HEADER, title);
+    // The shell key tells the client which shell this content-only fragment is
+    // for; it morphs the outlet only when that matches the mounted shell.
+    if (segmented) headers.set(SEGMENT_HEADER, boundaryKey!);
     return new Response(html, { status: 200, headers });
   }
 
@@ -271,7 +299,7 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
     loadPromise: Promise<unknown>,
     ctx: RouteContext,
   ): Promise<Response> {
-    const { def, chain, loading: Loading } = resolved;
+    const { def, chain, loading: Loading, boundaryKey } = resolved;
     const leaf = React.createElement(StreamedView, { loadPromise, def, ctx });
     const boundary = React.createElement(
       Suspense,
@@ -288,6 +316,7 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
         config: docConfigForRender(),
         metadata,
         children: wrapped,
+        shellKey: boundaryKey, // stamps data-june-shell on [data-june-root]
         ...langDir(ctx.locale),
       }),
       { onError: (e: unknown) => console.error("[june] streaming render error:", e) },
@@ -341,7 +370,7 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
     data: unknown,
     ctx: RouteContext,
   ): Promise<Response> {
-    const { def, chain } = resolved;
+    const { def, chain, boundaryIndex, boundaryKey } = resolved;
     // A projection declared `false` is disabled → 404 (and absent from discovery).
     // "fragment" isn't a declarable projection (it's the view rendered without the
     // shell), so it's never disabled — exclude it from the check.
@@ -349,7 +378,7 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
       return notFoundResponse(target, ctx.url.pathname, ctx.locale);
     }
 
-    const res = await renderTarget(target, def, data, ctx, chain);
+    const res = await renderTarget(target, def, data, ctx, chain, boundaryIndex, boundaryKey);
     // Every projection here is chosen by the Accept header at the SAME url (a full
     // page, its fragment, its .md and .json all live at the clean path). Without
     // Vary, a shared/browser cache can hand a soft-nav fragment to a real page
@@ -365,6 +394,8 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
     data: unknown,
     ctx: RouteContext,
     chain: LayoutComponent[],
+    boundaryIndex?: number | null,
+    boundaryKey?: string | null,
   ): Promise<Response> {
     if (target === "md") return renderMarkdown(def, data, ctx);
     if (target === "json") {
@@ -374,8 +405,11 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
     }
     const node = provideLoaderData(data, def.view ? def.view(data, ctx) : null);
     const meta = resolveMeta(def, data, ctx);
-    if (target === "fragment") return renderFragment(node, meta, chain);
-    return renderDocument(node, meta, 200, chain, ctx.locale);
+    // Only the fragment projection narrows to a segment; the full document always
+    // renders the whole chain (a hard load of the URL is never segment-scoped) —
+    // but it stamps the shell key so the client knows which shell is mounted.
+    if (target === "fragment") return renderFragment(node, meta, chain, boundaryIndex, boundaryKey);
+    return renderDocument(node, meta, 200, chain, ctx.locale, boundaryKey);
   }
 
   async function discovery(url: URL): Promise<Response | null> {

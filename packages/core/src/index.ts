@@ -60,6 +60,9 @@ export {
   type DocumentConfig,
 } from "./document";
 
+// Segment-scoped swap boundary — opt a layout into being a persistent shell
+export { JuneOutlet } from "./outlet";
+
 // Client islands — explicit "use client" interactivity (SSR marker + hydrate)
 export {
   Island,

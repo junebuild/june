@@ -32,6 +32,7 @@ import type { DocumentConfig } from "@junejs/core/document";
 import { collection } from "./content";
 import { createWorker, type WorkerManifest } from "./worker";
 import { findMiddlewareFile } from "./router";
+import { resolveBoundary } from "./segment";
 import type { ExtraHandler, LayoutComponent, LoadingComponent, ResourceHandler } from "./pipeline";
 import { findClientEntry, bundleClientToFile, CLIENT_SCRIPT_URL } from "./client-bundle";
 import { cssTargets, findGlobalCss, minifyCss, processCss, STYLES_URL } from "./css";
@@ -173,9 +174,15 @@ export async function freezeConfig(appRoot: string): Promise<{
   };
 }
 
-async function importLayout(file: string): Promise<LayoutComponent | null> {
-  const mod = (await import(pathToFileURL(file).href)) as { default?: LayoutComponent };
-  return typeof mod.default === "function" ? mod.default : null;
+type ImportedLayout = { component: LayoutComponent; boundary: boolean };
+async function importLayout(file: string): Promise<ImportedLayout | null> {
+  const mod = (await import(pathToFileURL(file).href)) as {
+    default?: LayoutComponent;
+    segmentBoundary?: unknown;
+  };
+  return typeof mod.default === "function"
+    ? { component: mod.default, boundary: mod.segmentBoundary === true }
+    : null;
 }
 
 // The FREEZE, in-process: import route modules + layouts, build the manifest a
@@ -186,21 +193,32 @@ export async function buildManifest(appRoot: string): Promise<WorkerManifest> {
   const frozen = await freezeConfig(appRoot);
   const scanned = (await scanRoutes(appDir)).sort((a, b) => a.path.localeCompare(b.path));
 
-  const layoutCache = new Map<string, LayoutComponent | null>();
-  const componentsFor = async (files: string[]): Promise<LayoutComponent[]> => {
-    const chain: LayoutComponent[] = [];
+  const layoutCache = new Map<string, ImportedLayout | null>();
+  const loadCached = async (f: string): Promise<ImportedLayout | null> => {
+    if (!layoutCache.has(f)) layoutCache.set(f, await importLayout(f));
+    return layoutCache.get(f) ?? null;
+  };
+  // The chain (root→leaf) + boundary index + shell key, via the SHARED resolver
+  // (the one place the deepest-wins rule lives), so the frozen manifest and the
+  // dev resolver can't drift — the parity contract.
+  const componentsFor = async (
+    files: string[],
+  ): Promise<{ chain: LayoutComponent[]; boundaryIndex: number | null; key: string | null }> => {
+    const items = [];
     for (const f of files) {
-      if (!layoutCache.has(f)) layoutCache.set(f, await importLayout(f));
-      const c = layoutCache.get(f) ?? null;
-      if (c) chain.push(c);
+      const c = await loadCached(f);
+      items.push({ file: f, entry: c?.component ?? null, boundary: !!c?.boundary });
     }
-    return chain;
+    return resolveBoundary(items);
   };
 
   const loadingCache = new Map<string, LoadingComponent | null>();
   const loadingFor = async (file?: string): Promise<LoadingComponent | undefined> => {
     if (!file) return undefined;
-    if (!loadingCache.has(file)) loadingCache.set(file, await importLayout(file) as LoadingComponent | null);
+    if (!loadingCache.has(file)) {
+      const loaded = await importLayout(file);
+      loadingCache.set(file, loaded ? (loaded.component as LoadingComponent) : null);
+    }
     return loadingCache.get(file) ?? undefined;
   };
 
@@ -208,6 +226,7 @@ export async function buildManifest(appRoot: string): Promise<WorkerManifest> {
   const dynamicRoutes: Array<{ pattern: string; def: BrandedRoute }> = [];
   const resourceRoutes: Array<{ pattern: string; handler: ResourceHandler }> = [];
   const layoutChains: Record<string, LayoutComponent[]> = {};
+  const layoutBoundaries: Record<string, { index: number; key: string }> = {};
   const loadings: Record<string, LoadingComponent> = {};
 
   for (const r of scanned) {
@@ -220,7 +239,7 @@ export async function buildManifest(appRoot: string): Promise<WorkerManifest> {
     }
     const def = routeFromModule(mod);
     if (!def) continue;
-    const chain = await componentsFor(r.layouts);
+    const { chain, boundaryIndex, key } = await componentsFor(r.layouts);
     const loading = await loadingFor(r.loading);
     if (r.dynamic) {
       dynamicRoutes.push({ pattern: r.path, def });
@@ -229,6 +248,7 @@ export async function buildManifest(appRoot: string): Promise<WorkerManifest> {
       routes[r.path] = def;
       layoutChains[r.path] = chain;
     }
+    if (boundaryIndex !== null && key !== null) layoutBoundaries[r.path] = { index: boundaryIndex, key };
     if (loading) loadings[r.path] = loading;
   }
 
@@ -244,6 +264,7 @@ export async function buildManifest(appRoot: string): Promise<WorkerManifest> {
     dynamicRoutes,
     resourceRoutes,
     layoutChains,
+    layoutBoundaries,
     loadings,
     document: frozen.document,
     agent: frozen.agent,
@@ -375,7 +396,17 @@ export async function juneBuild(
     }
     return id;
   };
+  // `segmentBoundary` is a STATIC export, so read each layout module here (no
+  // render) to know its boundary flag AND whether it loads at all — codegen then
+  // FILTERS null layouts and computes the boundary index/key through the SAME
+  // shared resolver the dev/manifest paths use, so all three agree by
+  // construction (not by a fragile "indices happen to line up" assumption).
+  const layoutInfo = new Map<string, ImportedLayout | null>();
+  for (const f of new Set(routes.flatMap((r) => (r.resource ? [] : r.layouts)))) {
+    layoutInfo.set(f, await importLayout(f));
+  }
   const chains: string[] = [];
+  const boundaries: string[] = [];
   const loadings: string[] = [];
   const resources: string[] = [];
   routes.forEach((r, i) => {
@@ -389,11 +420,27 @@ export async function juneBuild(
     imports.push(`import * as r${i} from ${JSON.stringify(importPath(genDir, r.file))};`);
     if (r.dynamic) dynamics.push(`    { pattern: ${JSON.stringify(r.path)}, def: routeFromModule(r${i}) },`);
     else statics.push(`    ${JSON.stringify(r.path)}: routeFromModule(r${i}),`);
-    chains.push(`    ${JSON.stringify(r.path)}: [${r.layouts.map(layoutId).join(", ")}],`);
+    // entry = the emitted layout id (null layouts filtered out, so layoutId — and
+    // its import — is only emitted for real layouts), matching the runtime chain.
+    const { chain, boundaryIndex, key } = resolveBoundary(
+      r.layouts.map((f) => {
+        const info = layoutInfo.get(f) ?? null;
+        return { file: f, entry: info ? layoutId(f) : null, boundary: !!info?.boundary };
+      }),
+    );
+    chains.push(`    ${JSON.stringify(r.path)}: [${chain.join(", ")}],`);
+    if (boundaryIndex !== null && key !== null) {
+      boundaries.push(`    ${JSON.stringify(r.path)}: { index: ${boundaryIndex}, key: ${JSON.stringify(key)} },`);
+    }
     if (r.loading) loadings.push(`    ${JSON.stringify(r.path)}: ${loadingId(r.loading)},`);
   });
   const resourceRoutesField = resources.length
     ? `\n  resourceRoutes: [\n${resources.join("\n")}\n  ],`
+    : "";
+  // Only emitted when some route declares a boundary, so boundary-less bundles
+  // stay byte-identical (additive manifest field, like resources).
+  const layoutBoundariesField = boundaries.length
+    ? `\n  layoutBoundaries: {\n${boundaries.join("\n")}\n  },`
     : "";
 
   const builtExtraFile = findMiddlewareFile(appDir);
@@ -459,7 +506,7 @@ ${dynamics.join("\n")}
   ],${resourceRoutesField}
   layoutChains: {
 ${chains.join("\n")}
-  },
+  },${layoutBoundariesField}
   loadings: {
 ${loadings.join("\n")}
   },

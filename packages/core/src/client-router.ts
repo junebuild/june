@@ -16,14 +16,40 @@
 // exposed ONLY via the `@junejs/core/client-router` subpath and is NOT
 // re-exported from the barrel.
 import { morph } from "./morph";
-import { FRAGMENT_ACCEPT, TITLE_HEADER } from "./nav-protocol";
+import { FRAGMENT_ACCEPT, SEGMENT_HEADER, SHELL_ATTR, TITLE_HEADER } from "./nav-protocol";
+import { outletEl, resolveSwapTarget } from "./shell";
 
-// Called with each freshly swapped-in [data-june-root] so the host can hydrate
-// the new page's islands (islands-client binds this to its registry).
+// Called with each freshly swapped-in region so the host can hydrate the new
+// page's islands (islands-client binds this to its registry). In whole-chain
+// mode this is [data-june-root]; in segment mode it is the [data-june-outlet].
 export type Rehydrate = (root: ParentNode) => void;
 
-const ROOT_ATTR = "data-june-root";
-const rootEl = () => document.querySelector(`[${ROOT_ATTR}]`);
+// Strip a single trailing slash (except the root "/") so an exact-page link and
+// the current path compare equal regardless of slash form — June doesn't redirect
+// "/guide/" to "/guide", so both reach the client verbatim.
+const trimSlash = (p: string): string => (p.length > 1 && p.endsWith("/") ? p.slice(0, -1) : p);
+
+// Segment-scoped mode moves the shell (sidebar/nav, with its active-link state)
+// OUTSIDE the swapped region, so morph no longer re-renders aria-current. This
+// reconciles it from location.pathname — the trade the granularity optimization
+// makes. No-op in whole-chain mode (no outlet), where morph already re-renders
+// the shell. A shell link is active when it points at the current page OR an
+// ancestor of it (section highlight), matching the common SSR convention. Uses
+// the anchor's own parsed .origin/.pathname — no per-link allocation.
+function updateActiveLinks(): void {
+  const outlet = outletEl();
+  if (!outlet) return; // whole-chain mode — morph carries aria-current for free
+  const here = trimSlash(location.pathname);
+  for (const a of document.querySelectorAll<HTMLAnchorElement>("a[href]")) {
+    if (outlet.contains(a)) continue; // inside the swap region — morph owns it
+    if (a.origin !== location.origin) continue;
+    const p = trimSlash(a.pathname);
+    const exact = p === here;
+    const active = exact || (p !== "/" && here.startsWith(p + "/"));
+    if (active) a.setAttribute("aria-current", exact ? "page" : "true");
+    else if (a.hasAttribute("aria-current")) a.removeAttribute("aria-current");
+  }
+}
 
 // Agent surfaces + non-HTML stay hard navigations — the same exclusions the
 // speculation rules use (humans soft-navigate; a link to llms.txt must not).
@@ -54,6 +80,7 @@ export function startClientRouter(rehydrate: Rehydrate): void {
 
     let html: string;
     let title: string | null = null;
+    let fragmentShell: string | null = null; // SEGMENT_HEADER: the fragment's shell key (null = whole-chain)
     try {
       const res = await fetch(href, {
         headers: { accept: FRAGMENT_ACCEPT },
@@ -62,6 +89,7 @@ export function startClientRouter(rehydrate: Rehydrate): void {
       if (!res.ok) throw new Error(`status ${res.status}`);
       html = await res.text();
       title = res.headers.get(TITLE_HEADER);
+      fragmentShell = res.headers.get(SEGMENT_HEADER);
     } catch (err) {
       // Aborted or superseded: a newer navigation owns the screen now — do
       // nothing. Otherwise the network/server actually failed: hand back to the
@@ -72,20 +100,35 @@ export function startClientRouter(rehydrate: Rehydrate): void {
     }
     if (mine !== token) return; // a newer navigation won the race — drop this result
 
-    const current = rootEl();
+    // Resolve the morph target by shell identity: a segment fragment (header =
+    // its shell key) morphs the [data-june-outlet] ONLY when that key matches the
+    // mounted shell; a cross-shell key, a missing <JuneOutlet>, or a stale shell
+    // resolves to null → hard-navigate so the right shell loads instead of
+    // corrupting this one. A whole-chain fragment (no header) morphs the root.
+    const current = resolveSwapTarget(fragmentShell);
     if (!current) {
-      location.href = href; // no [data-june-root] — let the browser handle it
+      location.href = href;
       return;
     }
-    // The fragment is the [data-june-root] INNER html. Parse it into an inert
-    // clone of the root, then morph the live root toward it in place.
+    // The fragment is the target's INNER html. Parse it into an inert clone of
+    // the target, then morph the live target toward it in place.
     const next = current.cloneNode(false) as Element;
     next.innerHTML = html;
+    // Whole-chain morph into the root: the root is no longer a boundary shell, so
+    // drop any stale shell key the clone copied — else mountedShellKey() would lie
+    // on the next navigation and could mis-target a later segment fragment.
+    if (fragmentShell === null) next.removeAttribute(SHELL_ATTR);
+
+    // Push history BEFORE applying so location.pathname is the NEW url when the
+    // active-link hook reads it (popstate already has it updated). Whole-chain
+    // morph doesn't read location, so this reorder is invisible there.
+    if (push) history.pushState({ june: true }, "", href);
 
     const apply = () => {
       morph(current, next);
       if (title !== null) document.title = title;
       rehydrate(current); // hydrate the new island markers (idempotent — skips live ones)
+      updateActiveLinks(); // segment mode: move the shell's aria-current (no-op otherwise)
       window.scrollTo?.(0, 0);
     };
     // View Transitions give the cross-fade for free where supported; elsewhere
@@ -95,8 +138,6 @@ export function startClientRouter(rehydrate: Rehydrate): void {
     }).startViewTransition;
     if (typeof startVT === "function") startVT.call(document, apply);
     else apply();
-
-    if (push) history.pushState({ june: true }, "", href);
   }
 
   document.addEventListener("click", (e) => {

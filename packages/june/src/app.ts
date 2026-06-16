@@ -20,6 +20,7 @@ import { runWithTrace, type RequestTrace } from "@junejs/core/instrumentation";
 
 import { findMiddlewareFile, isResourceFile, listRoutes, matchRouteTree, resolveNotFound, routeFiles, type SegmentMatch } from "./router";
 import { createPipeline, type ExtraHandler, type LayoutComponent, type Pipeline, type Resolved, type ResourceHandler } from "./pipeline";
+import { resolveBoundary } from "./segment";
 import { memoizeResources } from "./resources";
 import { findClientEntry, bundleClientToString, CLIENT_SCRIPT_URL } from "./client-bundle";
 import { findGlobalCss, processCssCached, STYLES_URL } from "./css";
@@ -39,15 +40,25 @@ export type JuneApp = {
   earlyHints(): string[];
 };
 
-// Import a layout file's default export as a layout component (memoized).
-const layoutCache = new Map<string, LayoutComponent>();
-async function loadLayout(file: string): Promise<LayoutComponent | null> {
+// Import a layout file's default export as a layout component (memoized), plus
+// its static `segmentBoundary` flag — read from the module export WITHOUT
+// rendering the component, which is what lets the server slice the chain for a
+// segment-scoped fragment without paying the shell's render cost.
+type LoadedLayout = { component: LayoutComponent; boundary: boolean };
+const layoutCache = new Map<string, LoadedLayout | null>();
+async function loadLayout(file: string): Promise<LoadedLayout | null> {
   const cached = layoutCache.get(file);
-  if (cached) return cached;
-  const mod = (await import(pathToFileURL(file).href)) as { default?: LayoutComponent };
-  if (typeof mod.default !== "function") return null;
-  layoutCache.set(file, mod.default);
-  return mod.default;
+  if (cached !== undefined) return cached;
+  const mod = (await import(pathToFileURL(file).href)) as {
+    default?: LayoutComponent;
+    segmentBoundary?: unknown;
+  };
+  const result: LoadedLayout | null =
+    typeof mod.default === "function"
+      ? { component: mod.default, boundary: mod.segmentBoundary === true }
+      : null;
+  layoutCache.set(file, result);
+  return result;
 }
 
 // The nearest loading.tsx up the segment chain (deepest wins) → the streaming
@@ -64,14 +75,20 @@ async function nearestLoading(segments: SegmentMatch[]): Promise<React.Component
   return mod.default;
 }
 
-async function loadChain(segments: SegmentMatch[]): Promise<LayoutComponent[]> {
-  const chain: LayoutComponent[] = [];
+// The layout chain (root→leaf) plus the segment boundary, via the shared
+// resolver (the one place the deepest-wins rule + shell key live, so dev and the
+// frozen manifest can't drift).
+async function loadChain(
+  segments: SegmentMatch[],
+): Promise<{ chain: LayoutComponent[]; boundaryIndex: number | null; boundaryKey: string | null }> {
+  const items = [];
   for (const seg of segments) {
     if (!seg.layout) continue;
     const L = await loadLayout(seg.layout);
-    if (L) chain.push(L);
+    items.push({ file: seg.layout, entry: L?.component ?? null, boundary: !!L?.boundary });
   }
-  return chain;
+  const { chain, boundaryIndex, key } = resolveBoundary(items);
+  return { chain, boundaryIndex, boundaryKey: key };
 }
 
 export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions): JuneApp {
@@ -166,10 +183,13 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
         }
         const def = routeFromModule(mod);
         if (!def) return null;
+        const { chain, boundaryIndex, boundaryKey } = await loadChain(match.segments);
         return {
           def,
           params: match.params,
-          chain: await loadChain(match.segments),
+          chain,
+          boundaryIndex,
+          boundaryKey,
           loading: await nearestLoading(match.segments),
         } satisfies Resolved;
       },

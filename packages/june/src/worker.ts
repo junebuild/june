@@ -30,6 +30,11 @@ export type WorkerManifest = {
   // Layout chains (root→leaf) keyed by route path / dynamic pattern. The build
   // freezes the same chain the dev server loads from app/layout.* files.
   layoutChains?: Record<string, LayoutComponent[]>;
+  // Segment boundary per route: the chain index of the deepest layout exporting
+  // `segmentBoundary` (renders <JuneOutlet>) plus the shell's identity `key`.
+  // Routes without one are absent → whole-chain fragment (the default). Frozen
+  // statically by the build.
+  layoutBoundaries?: Record<string, { index: number; key: string }>;
   // Nearest loading.tsx per route path → streaming Suspense fallback.
   loadings?: Record<string, LoadingComponent>;
   document: DocumentConfig;
@@ -113,6 +118,8 @@ export function createWorker(
 
   const chainFor = (key: string): LayoutComponent[] => manifest.layoutChains?.[key] ?? [];
   const loadingFor = (key: string): LoadingComponent | undefined => manifest.loadings?.[key];
+  const boundaryFor = (key: string): { index: number; key: string } | null =>
+    manifest.layoutBoundaries?.[key] ?? null;
 
   // The worker's env (D1/KV/R2 bindings) arrives per fetch and is stable across
   // requests in an isolate; we capture the latest and hand it to the env-aware
@@ -132,8 +139,17 @@ export function createWorker(
     resources: provider ? () => provider(currentEnv) : undefined,
     resolve: async (pathname): Promise<Resolved | ResolvedResource | null> => {
       const staticDef = manifest.routes[pathname];
-      if (staticDef)
-        return { def: staticDef, params: {}, chain: chainFor(pathname), loading: loadingFor(pathname) };
+      if (staticDef) {
+        const b = boundaryFor(pathname);
+        return {
+          def: staticDef,
+          params: {},
+          chain: chainFor(pathname),
+          boundaryIndex: b?.index ?? null,
+          boundaryKey: b?.key ?? null,
+          loading: loadingFor(pathname),
+        };
+      }
       for (const d of dynamic) {
         const m = pathname.match(d.regex);
         if (m) {
@@ -145,7 +161,15 @@ export function createWorker(
               return v === undefined ? [] : [[n, decodeURIComponent(v)]];
             }),
           );
-          return { def: d.def, params, chain: chainFor(d.pattern), loading: loadingFor(d.pattern) };
+          const b = boundaryFor(d.pattern);
+          return {
+            def: d.def,
+            params,
+            chain: chainFor(d.pattern),
+            boundaryIndex: b?.index ?? null,
+            boundaryKey: b?.key ?? null,
+            loading: loadingFor(d.pattern),
+          };
         }
       }
       // Resource routes after pages (so a page is never shadowed by one).
