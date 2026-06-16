@@ -3,18 +3,6 @@
 User-facing changes, newest first. The conventional-commit history is the source
 of truth; this file summarizes what matters per release.
 
-## [0.0.24] — 2026-06-16
-
-### Fixed
-
-- **Dev live-reload no longer saturates the browser's connection pool.** In MPA
-  mode every navigation is a full reload that opens a fresh live-reload
-  `EventSource`; the old connection was never closed, and since each held SSE
-  consumes one of the browser's ~6 HTTP/1.1 slots per host, rapid navigation
-  exhausted them — subsequent page loads stalled (pending) or 503'd. The
-  injected reload client now closes its `EventSource` on `pagehide`, releasing
-  the slot before the next page opens its own.
-
 ## [Unreleased]
 
 ### Changed
@@ -27,6 +15,18 @@ of truth; this file summarizes what matters per release.
   is unchanged (exact → `aria-current="page"`, ancestor → `"true"`, trailing
   slashes normalized). The active-link rule and its planned per-link declarative
   override (`data-june-active`) are documented in `docs/navigation-tiers.md`.
+
+## [0.0.24] — 2026-06-16
+
+### Fixed
+
+- **Dev live-reload no longer saturates the browser's connection pool.** In MPA
+  mode every navigation is a full reload that opens a fresh live-reload
+  `EventSource`; the old connection was never closed, and since each held SSE
+  consumes one of the browser's ~6 HTTP/1.1 slots per host, rapid navigation
+  exhausted them — subsequent page loads stalled (pending) or 503'd. The
+  injected reload client now closes its `EventSource` on `pagehide`, releasing
+  the slot before the next page opens its own.
 
 ## [0.0.23] — 2026-06-16
 
@@ -53,6 +53,13 @@ of truth; this file summarizes what matters per release.
   warns. A boundary layout must keep route-dependent context AT OR BELOW
   `<JuneOutlet>` (the shell isn't re-rendered on soft-nav). Whole-chain morph
   stays the default — existing sites are unaffected.
+
+- **Experimental — locale routing (i18n phase 1).** Opt in with `i18n` in
+  `june.config.ts` to light up host/path → locale resolution, `ctx.locale`, and
+  `localeHref`; the resolved locale drives `<html lang>` / `dir` on every
+  document. This is ROUTING ONLY — the message catalog is still future
+  (`@junejs/i18n`), so treat it as the foundation, not a finished i18n story. Omit
+  the config and June does no locale handling (byte-identical to before).
 
 ### Changed
 
