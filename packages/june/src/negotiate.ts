@@ -31,8 +31,13 @@ export type Negotiated = {
   speculative: boolean;
 };
 
-export function negotiate(url: URL, request: Request): Negotiated {
-  let pathname = url.pathname;
+// `basePath` overrides the pathname to negotiate (defaults to url.pathname). The
+// i18n step strips the locale prefix off the FRONT of url.pathname first and
+// passes the remainder here, so extension/Accept negotiation runs on the route
+// path, not the locale-prefixed one. url.pathname stays the raw request path.
+export function negotiate(url: URL, request: Request, basePath?: string): Negotiated {
+  const original = basePath ?? url.pathname;
+  let pathname = original;
   let target: RenderTarget | null = null;
 
   for (const [ext, t] of Object.entries(EXT_TARGET)) {
@@ -53,7 +58,7 @@ export function negotiate(url: URL, request: Request): Negotiated {
     // A bare projection on the root — `/.md`, `/.json` — is NOT a real URL (the
     // home surface is `/index.md`). Stripping the extension collapses it to "/",
     // so steer it back to the literal path: no route matches → 404.
-    pathname = url.pathname;
+    pathname = original;
   }
 
   if (!target) {

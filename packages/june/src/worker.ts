@@ -14,6 +14,7 @@ import type React from "react";
 import type { BrandedRoute } from "@junejs/core/route";
 import type { AgentConfig } from "@junejs/core/config";
 import type { DocumentConfig } from "@junejs/core/document";
+import type { I18nConfig } from "@junejs/core/i18n";
 import type { Resources } from "@junejs/core/resources";
 
 import { createPipeline, type ExtraHandler, type LayoutComponent, type LoadingComponent, type Resolved, type ResolvedResource, type ResourceHandler } from "./pipeline";
@@ -33,6 +34,10 @@ export type WorkerManifest = {
   loadings?: Record<string, LoadingComponent>;
   document: DocumentConfig;
   agent: AgentConfig;
+  // Locale routing config, frozen from june.config.ts `i18n`. The locales table
+  // is plain data; a `resolveLocale` hook survives the in-process freeze (parity
+  // test) but not JSON codegen — worker hook support lands with the codegen pass.
+  i18n?: I18nConfig;
   // Preload Link values (config earlyHints + auto font hints), frozen at build.
   earlyHints?: string[];
   htmlCacheControl?: string;
@@ -118,6 +123,7 @@ export function createWorker(
   const pipeline = createPipeline({
     docConfig: manifest.document,
     agent: manifest.agent,
+    i18n: manifest.i18n,
     routeList: () => routeList,
     earlyHints: manifest.earlyHints,
     htmlCacheControl: manifest.htmlCacheControl,

@@ -47,6 +47,10 @@ export type RouteContext<
   url: URL;
   params: TParams;
   target: RenderTarget;
+  // The resolved request locale, set by the host-resolution step BEFORE routing
+  // when `i18n` is configured (from the URL's domain/path, else negotiation).
+  // Undefined when the app declares no `i18n` — single-locale apps never meet it.
+  locale?: string;
   // True when the request is SPECULATIVE (Sec-Purpose: prefetch / prerender):
   // the page may never be seen. Skip side effects — view counters, analytics,
   // rate-limit consumption. (Client-side twin: defer pageviews until

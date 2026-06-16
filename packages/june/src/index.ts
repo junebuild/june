@@ -50,6 +50,19 @@ export {
 } from "./router";
 export { installAsyncContext } from "./instrumentation";
 export { negotiate, type Negotiated } from "./negotiate";
+// Locale routing (Layer 1). The pure host-resolution layer lives in @junejs/core;
+// re-exported here so apps build locale links with `localeHref` off the ONE handle.
+export {
+  localeHref,
+  resolveRequestLocale,
+  matchPinnedLocale,
+  negotiateLocale,
+  parseAcceptLanguage,
+  LOCALE_COOKIE,
+  type I18nConfig,
+  type LocaleConfig,
+  type LocaleMatch,
+} from "@junejs/core/i18n";
 export {
   createPipeline,
   type Pipeline,

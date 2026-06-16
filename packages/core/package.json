@@ -9,6 +9,7 @@
     ".": "./src/index.ts",
     "./route": "./src/route.ts",
     "./config": "./src/config.ts",
+    "./i18n": "./src/i18n.ts",
     "./resources": "./src/resources.ts",
     "./context": "./src/context.ts",
     "./document": "./src/document.tsx",

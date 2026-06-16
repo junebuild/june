@@ -142,6 +142,7 @@ export async function generateContent(appRoot: string): Promise<string[]> {
 export async function freezeConfig(appRoot: string): Promise<{
   document: DocumentConfig;
   agent: WorkerManifest["agent"];
+  i18n: WorkerManifest["i18n"];
   earlyHints: string[];
   buildExternal: string[];
 }> {
@@ -163,6 +164,10 @@ export async function freezeConfig(appRoot: string): Promise<{
       styles: hasCss ? STYLES_URL : null,
     },
     agent: resolveAgent(cfg.agent),
+    // Pass i18n through as-is: the in-process buildManifest keeps a resolveLocale
+    // hook (parity test), and the codegen JSON.stringify below drops the function
+    // (worker hook support is the codegen pass — see the manifest field comment).
+    i18n: cfg.i18n,
     earlyHints: cfg.earlyHints ?? [],
     buildExternal: cfg.build?.external ?? [],
   };
@@ -242,6 +247,7 @@ export async function buildManifest(appRoot: string): Promise<WorkerManifest> {
     loadings,
     document: frozen.document,
     agent: frozen.agent,
+    i18n: frozen.i18n,
     earlyHints: frozen.earlyHints,
     extra,
   };
@@ -268,6 +274,15 @@ export async function juneBuild(
   if (routes.length === 0) throw new Error(`no page.* routes found under ${appDir}`);
 
   const frozen = await freezeConfig(appRoot);
+  // The locales table freezes into the worker as data; a resolveLocale hook is a
+  // function and won't survive JSON codegen. URL-pinned resolution + the built-in
+  // negotiation chain still work in the worker — only the hook is dev-only for now.
+  if (frozen.i18n?.resolveLocale) {
+    console.warn(
+      "[june build] i18n.resolveLocale is not yet wired into the built worker " +
+        "(URL-pinned + built-in negotiation work; the hook runs in dev only).",
+    );
+  }
   // The deploy adapter packages the portable build for its target (default:
   // built-in workers()). It contributes the entry's export wrapper + emits the
   // deploy config.
@@ -449,7 +464,7 @@ ${chains.join("\n")}
 ${loadings.join("\n")}
   },
   document: ${JSON.stringify(frozen.document, null, 2).replace(/\n/g, "\n  ")},
-  agent: ${JSON.stringify(frozen.agent)},
+  agent: ${JSON.stringify(frozen.agent)},${frozen.i18n ? `\n  i18n: ${JSON.stringify(frozen.i18n)},` : ""}
   earlyHints: ${JSON.stringify(frozen.earlyHints)},${builtExtraFile ? "\n  extra," : ""}${resourcesField}
 });
 

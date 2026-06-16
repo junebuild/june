@@ -37,9 +37,28 @@ import { mcpHandler, mcpTools } from "@junejs/core/mcp";
 
 import { ensureScope, runInScope } from "@junejs/db";
 import type { AgentConfig } from "@junejs/core/config";
+import {
+  LOCALE_COOKIE,
+  matchPinnedLocale,
+  negotiateLocale,
+  type I18nConfig,
+} from "@junejs/core/i18n";
 import type { Resources } from "@junejs/core/resources";
 
 import { negotiate, TITLE_HEADER } from "./negotiate";
+
+// Minimal Cookie-header read for the locale negotiation chain (no dependency on
+// an auth/cookie integration — i18n must stand alone).
+function readCookie(request: Request, name: string): string | undefined {
+  const header = request.headers.get("cookie");
+  if (!header) return undefined;
+  for (const part of header.split(";")) {
+    const eq = part.indexOf("=");
+    if (eq === -1) continue;
+    if (part.slice(0, eq).trim() === name) return decodeURIComponent(part.slice(eq + 1).trim());
+  }
+  return undefined;
+}
 
 export type LayoutComponent = React.ComponentType<{ children: React.ReactNode }>;
 export type LoadingComponent = React.ComponentType;
@@ -73,6 +92,9 @@ export type RouteResolver = (pathname: string) => Promise<Resolved | ResolvedRes
 export type PipelineConfig = {
   docConfig: DocumentConfig;
   agent: AgentConfig;
+  // Locale routing config (june.config.ts `i18n`). Absent → no locale handling:
+  // the resolution step below never runs and ctx.locale stays undefined.
+  i18n?: I18nConfig;
   // The route list for discovery surfaces (sitemap / llms.txt). Async so dev can
   // re-scan the filesystem; the worker returns a frozen array.
   routeList: () => Promise<string[]> | string[];
@@ -383,8 +405,33 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
         return letterFavicon(docConfig.site.name);
       }
 
+      // --- locale resolution (before routing) ------------------------------
+      // host/path → locale, stripping the locale prefix off the front so the
+      // router matches the bare route path. Only runs when `i18n` is configured.
+      let locale: string | undefined;
+      let routeBase = url.pathname;
+      if (cfg.i18n) {
+        const pinned = matchPinnedLocale(cfg.i18n, url.host, url.pathname);
+        if (pinned) {
+          locale = pinned.locale;
+          routeBase = pinned.pathname;
+        } else {
+          // Ambiguous (bare path on the default origin): the resolveLocale hook
+          // gets first say, then the built-in chain. The hook runs ONLY here —
+          // never when the URL already pinned the locale.
+          const override = cfg.i18n.resolveLocale?.({ url, headers: request.headers });
+          locale =
+            override && cfg.i18n.locales[override]
+              ? override
+              : negotiateLocale(cfg.i18n, {
+                  acceptLanguage: request.headers.get("accept-language"),
+                  cookie: readCookie(request, LOCALE_COOKIE),
+                });
+        }
+      }
+
       // --- routes ----------------------------------------------------------
-      const { target, pathname, speculative } = negotiate(url, request);
+      const { target, pathname, speculative } = negotiate(url, request, routeBase);
       const resolved = await cfg.resolve(pathname);
       if (!resolved) return notFoundResponse(target, pathname);
 
@@ -395,6 +442,7 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
         url,
         params: resolved.params,
         target,
+        locale,
         speculative,
       };
 

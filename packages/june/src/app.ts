@@ -149,6 +149,7 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
       extra,
       docConfig,
       agent,
+      i18n: config.i18n,
       routeList: routePaths,
       earlyHints: config.earlyHints,
       resources,

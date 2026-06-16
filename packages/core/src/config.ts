@@ -11,6 +11,7 @@
 // — keeping the contract layer free of `node:*` (zero node:*/Bun.* in this layer).
 
 import type { CacheStoreFactory } from "./cache";
+import type { I18nConfig } from "./i18n";
 import type { JuneDb, ResourceConfig } from "./resources";
 
 export type AgentConfig = {
@@ -92,6 +93,12 @@ export type JuneConfig = {
   // Site-wide metadata defaults: per-route metadata merges over these.
   // titleTemplate: "%s" is replaced by the route's title ("%s — Acme").
   site?: { name?: string; titleTemplate?: string; description?: string; icon?: string };
+  // Locale routing. OFF by absence: omit it and June does no locale handling
+  // (today's behavior — the resolution step never runs, ctx.locale is undefined).
+  // Present, it lights up host/path → locale resolution, ctx.locale, and
+  // localeHref. This is Layer 1 (routing) only; the message catalog is separate
+  // (a future @junejs/i18n). See docs/i18n.md.
+  i18n?: I18nConfig;
   // `june build` options. external: packages left UNBUNDLED in dist/worker.js
   // (wrangler resolves them at deploy with its own rules — needed for packages
   // that import .wasm, e.g. workers-og).
