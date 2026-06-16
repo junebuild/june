@@ -9,9 +9,8 @@
 //
 // Browser-only (touches the DOM); exposed via the @junejs/core/client-live subpath.
 import { morph } from "./morph";
-import { OUTLET_ATTR, SHELL_ATTR } from "./nav-protocol";
-
-const ROOT_ATTR = "data-june-root";
+import { SHELL_ATTR } from "./nav-protocol";
+import { resolveSwapTarget } from "./shell";
 
 export type Rehydrate = (root: ParentNode) => void;
 
@@ -29,19 +28,17 @@ export function applyLiveUpdate(
   rehydrate: Rehydrate,
   segmentShell?: string | null,
 ): boolean {
-  const segmented =
-    segmentShell != null &&
-    document.querySelector(`[${ROOT_ATTR}]`)?.getAttribute(SHELL_ATTR) === segmentShell;
-  const current = segmented
-    ? document.querySelector(`[${OUTLET_ATTR}]`)
-    : segmentShell == null
-      ? document.querySelector(`[${ROOT_ATTR}]`)
-      : null;
+  // Same shell-identity resolution as a soft navigation (the SAME page is
+  // re-rendering, so a segment fragment's key matches the mounted shell → its
+  // outlet; a non-boundary re-render → the root).
+  const fragmentShell = segmentShell ?? null;
+  const current = resolveSwapTarget(fragmentShell);
   if (!current) return false;
   // Parse the fragment into an inert clone of the target, then morph in place with
   // ALL islands preserved (live-update semantics).
   const next = current.cloneNode(false) as Element;
   next.innerHTML = fragmentHtml;
+  if (fragmentShell === null) next.removeAttribute(SHELL_ATTR); // keep the root shell key honest
   morph(current, next, { preserveIslands: "all" });
   if (title !== null) document.title = title;
   rehydrate(current); // hydrate any NEW island markers (idempotent — skips live ones)

@@ -16,19 +16,18 @@
 // exposed ONLY via the `@junejs/core/client-router` subpath and is NOT
 // re-exported from the barrel.
 import { morph } from "./morph";
-import { FRAGMENT_ACCEPT, OUTLET_ATTR, SEGMENT_HEADER, SHELL_ATTR, TITLE_HEADER } from "./nav-protocol";
+import { FRAGMENT_ACCEPT, SEGMENT_HEADER, SHELL_ATTR, TITLE_HEADER } from "./nav-protocol";
+import { outletEl, resolveSwapTarget } from "./shell";
 
 // Called with each freshly swapped-in region so the host can hydrate the new
 // page's islands (islands-client binds this to its registry). In whole-chain
 // mode this is [data-june-root]; in segment mode it is the [data-june-outlet].
 export type Rehydrate = (root: ParentNode) => void;
 
-const ROOT_ATTR = "data-june-root";
-const rootEl = () => document.querySelector(`[${ROOT_ATTR}]`);
-const outletEl = () => document.querySelector(`[${OUTLET_ATTR}]`);
-// The key of the shell currently mounted (stamped on [data-june-root]). Null in
-// whole-chain mode / non-boundary pages.
-const mountedShellKey = () => rootEl()?.getAttribute(SHELL_ATTR) ?? null;
+// Strip a single trailing slash (except the root "/") so an exact-page link and
+// the current path compare equal regardless of slash form — June doesn't redirect
+// "/guide/" to "/guide", so both reach the client verbatim.
+const trimSlash = (p: string): string => (p.length > 1 && p.endsWith("/") ? p.slice(0, -1) : p);
 
 // Segment-scoped mode moves the shell (sidebar/nav, with its active-link state)
 // OUTSIDE the swapped region, so morph no longer re-renders aria-current. This
@@ -40,13 +39,14 @@ const mountedShellKey = () => rootEl()?.getAttribute(SHELL_ATTR) ?? null;
 function updateActiveLinks(): void {
   const outlet = outletEl();
   if (!outlet) return; // whole-chain mode — morph carries aria-current for free
-  const here = location.pathname;
+  const here = trimSlash(location.pathname);
   for (const a of document.querySelectorAll<HTMLAnchorElement>("a[href]")) {
     if (outlet.contains(a)) continue; // inside the swap region — morph owns it
     if (a.origin !== location.origin) continue;
-    const p = a.pathname;
-    const active = p === here || (p !== "/" && here.startsWith(p.endsWith("/") ? p : p + "/"));
-    if (active) a.setAttribute("aria-current", p === here ? "page" : "true");
+    const p = trimSlash(a.pathname);
+    const exact = p === here;
+    const active = exact || (p !== "/" && here.startsWith(p + "/"));
+    if (active) a.setAttribute("aria-current", exact ? "page" : "true");
     else if (a.hasAttribute("aria-current")) a.removeAttribute("aria-current");
   }
 }
@@ -100,15 +100,12 @@ export function startClientRouter(rehydrate: Rehydrate): void {
     }
     if (mine !== token) return; // a newer navigation won the race — drop this result
 
-    // A segment-scoped fragment (SEGMENT_HEADER = the fragment's shell key) is
-    // content-only — it morphs INTO the live [data-june-outlet], but ONLY when it
-    // belongs to the shell currently mounted (its key matches [data-june-root]'s
-    // data-june-shell). A cross-shell navigation, or a layout that declared
-    // segmentBoundary yet forgot to render <JuneOutlet>, fails the match — we
-    // hard-navigate so the correct shell loads instead of corrupting this one. A
-    // whole-chain fragment (no header) morphs the whole [data-june-root].
-    const segmented = fragmentShell !== null && fragmentShell === mountedShellKey();
-    const current = segmented ? outletEl() : fragmentShell === null ? rootEl() : null;
+    // Resolve the morph target by shell identity: a segment fragment (header =
+    // its shell key) morphs the [data-june-outlet] ONLY when that key matches the
+    // mounted shell; a cross-shell key, a missing <JuneOutlet>, or a stale shell
+    // resolves to null → hard-navigate so the right shell loads instead of
+    // corrupting this one. A whole-chain fragment (no header) morphs the root.
+    const current = resolveSwapTarget(fragmentShell);
     if (!current) {
       location.href = href;
       return;
@@ -117,6 +114,10 @@ export function startClientRouter(rehydrate: Rehydrate): void {
     // the target, then morph the live target toward it in place.
     const next = current.cloneNode(false) as Element;
     next.innerHTML = html;
+    // Whole-chain morph into the root: the root is no longer a boundary shell, so
+    // drop any stale shell key the clone copied — else mountedShellKey() would lie
+    // on the next navigation and could mis-target a later segment fragment.
+    if (fragmentShell === null) next.removeAttribute(SHELL_ATTR);
 
     // Push history BEFORE applying so location.pathname is the NEW url when the
     // active-link hook reads it (popstate already has it updated). Whole-chain

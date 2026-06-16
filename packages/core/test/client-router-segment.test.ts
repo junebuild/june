@@ -106,6 +106,39 @@ describe("segment-scoped client navigation", () => {
     expect(outlet.innerHTML).not.toContain('data-page="blog"');
   });
 
+  test("whole-chain nav off a boundary page clears the stale data-june-shell", async () => {
+    document.body.innerHTML = docsShell('<main data-page="home">h</main>');
+    const root = document.querySelector("[data-june-root]")!;
+    expect(root.getAttribute("data-june-shell")).toBe("docs"); // mounted under a shell
+    // navigate to a whole-chain (non-boundary) route: NO segment header
+    globalThis.fetch = fragment("<main data-page=\"about\">about</main>", {});
+
+    history.replaceState({}, "", "/");
+    document.querySelector("[data-sidebar]")!.insertAdjacentHTML("beforeend", '<a href="/about">About</a>');
+    clickLink("/about");
+    await flush();
+
+    // root is no longer a boundary shell → stale key removed, so mountedShellKey() can't lie
+    expect(root.getAttribute("data-june-shell")).toBeNull();
+    expect(root.innerHTML).toContain('data-page="about"');
+  });
+
+  test("trailing-slash route: the exact link is aria-current=page, not an ancestor", async () => {
+    document.body.innerHTML =
+      '<div data-june-root data-june-shell="docs">' +
+      '<nav data-sidebar><a href="/guide">Guide</a><a href="/guide/">GuideSlash</a></nav>' +
+      '<div data-june-outlet><main data-page="x">x</main></div>' +
+      "</div>";
+    globalThis.fetch = fragment('<main data-page="g">g</main>', { [SEGMENT_HEADER]: "docs" });
+
+    clickLink("/guide/"); // land on "/guide/" (June doesn't redirect the slash)
+    await flush();
+
+    expect(location.pathname).toBe("/guide/");
+    // "/guide" (no slash) is the SAME page as "/guide/" → exact, "page" (not "true")
+    expect(document.querySelector('a[href="/guide"]')!.getAttribute("aria-current")).toBe("page");
+  });
+
   test("guard: segment-scoped fragment with no live outlet does not morph the root", async () => {
     document.body.innerHTML =
       '<div data-june-root data-june-shell="docs"><nav data-sidebar><a href="/x">X</a></nav><main data-page="keep">keep</main></div>';

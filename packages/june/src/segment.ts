@@ -17,8 +17,19 @@ export const boundaryWarning = (file: string): string =>
 // only needed WITHIN one running instance (dev server OR deployed worker), since
 // the key is compared between an outlet's host marker and a response header both
 // produced by that same instance — dev and prod need not agree.
+//
+// Memoized: the dev resolver runs per request, and the key is a pure function of
+// the path. 16 hex chars (64 bits) makes a same-instance collision between two
+// boundary layouts — which would morph one shell's content into another — beyond
+// reach without inflating the wire marker.
+const keyCache = new Map<string, string>();
 export function boundaryKey(file: string): string {
-  return createHash("sha256").update(file).digest("hex").slice(0, 8);
+  let key = keyCache.get(file);
+  if (key === undefined) {
+    key = createHash("sha256").update(file).digest("hex").slice(0, 16);
+    keyCache.set(file, key);
+  }
+  return key;
 }
 
 // Build the layout chain (root→leaf, null entries filtered) and locate the

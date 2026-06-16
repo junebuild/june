@@ -255,12 +255,16 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
     boundaryIndex?: number | null,
     boundaryKey?: string | null,
   ): Promise<Response> {
-    // Segment-scoped: render ONLY the chain below the boundary layout (its
+    // ONE gate: a fragment is segment-scoped iff it has both a boundary index AND
+    // a shell key. They always travel together (resolveBoundary returns both or
+    // neither), but tying the content-slice and the header to a single flag means
+    // a content-only body can never go out without its key (which would wipe the
+    // shell) nor a key without a content-only body.
+    const segmented = typeof boundaryIndex === "number" && boundaryKey != null;
+    // Segment-scoped renders ONLY the chain below the boundary layout (its
     // children = the <JuneOutlet> contents on a full load), so the boundary
-    // layout's shell markup is never produced. Whole-chain (no boundary) wraps
-    // the entire chain, byte-identical to today.
-    const inside =
-      typeof boundaryIndex === "number" ? chain.slice(boundaryIndex + 1) : chain;
+    // layout's shell markup is never produced. Whole-chain wraps the entire chain.
+    const inside = segmented ? chain.slice(boundaryIndex! + 1) : chain;
     const wrapped = inside.reduceRight<React.ReactNode>(
       (acc, L) => React.createElement(L, null, acc),
       node,
@@ -273,7 +277,7 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
     if (title) headers.set(TITLE_HEADER, title);
     // The shell key tells the client which shell this content-only fragment is
     // for; it morphs the outlet only when that matches the mounted shell.
-    if (boundaryKey != null) headers.set(SEGMENT_HEADER, boundaryKey);
+    if (segmented) headers.set(SEGMENT_HEADER, boundaryKey!);
     return new Response(html, { status: 200, headers });
   }
 
