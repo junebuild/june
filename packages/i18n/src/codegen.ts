@@ -18,20 +18,37 @@ const TS_TYPE: Record<ParamType, string> = {
   tag: "(chunks: ReactNode) => ReactNode",
 };
 
-/** Read + compile `messages/<locale>.json` → compiled catalogs keyed by locale.
- *  The runtime half of the codegen, exposed for tests. */
+/** Read + compile messages → compiled catalogs keyed by locale. Two layouts,
+ *  mergeable: flat `messages/<locale>.json` (root keys) and namespaced
+ *  `messages/<locale>/<ns>.json` (keys prefixed `<ns>.`). The runtime half of the
+ *  codegen, exposed for tests. */
 export function loadMessages(messagesDir: string): {
   catalogs: Record<string, CompiledCatalog>;
   raw: Record<string, Record<string, string>>;
   locales: string[];
 } {
-  const catalogs: Record<string, CompiledCatalog> = {};
   const raw: Record<string, Record<string, string>> = {};
-  for (const file of readdirSync(messagesDir).filter((f) => f.endsWith(".json"))) {
-    const locale = file.replace(/\.json$/, "");
-    raw[locale] = JSON.parse(readFileSync(join(messagesDir, file), "utf8")) as Record<string, string>;
-    catalogs[locale] = compileCatalog(raw[locale]!);
+  const readJson = (path: string) => JSON.parse(readFileSync(path, "utf8")) as Record<string, string>;
+  const merge = (locale: string, entries: Record<string, string>) =>
+    Object.assign((raw[locale] ??= {}), entries);
+
+  for (const ent of readdirSync(messagesDir, { withFileTypes: true })) {
+    if (ent.isFile() && ent.name.endsWith(".json")) {
+      merge(ent.name.replace(/\.json$/, ""), readJson(join(messagesDir, ent.name)));
+    } else if (ent.isDirectory()) {
+      const locale = ent.name;
+      const sub = join(messagesDir, locale);
+      for (const f of readdirSync(sub).filter((x) => x.endsWith(".json"))) {
+        const ns = f.replace(/\.json$/, "");
+        const prefixed: Record<string, string> = {};
+        for (const [k, v] of Object.entries(readJson(join(sub, f)))) prefixed[`${ns}.${k}`] = v;
+        merge(locale, prefixed);
+      }
+    }
   }
+
+  const catalogs: Record<string, CompiledCatalog> = {};
+  for (const [locale, entries] of Object.entries(raw)) catalogs[locale] = compileCatalog(entries);
   return { catalogs, raw, locales: Object.keys(catalogs) };
 }
 

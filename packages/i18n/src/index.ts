@@ -56,6 +56,16 @@ const warn = (msg: string) => {
   if (process.env.NODE_ENV !== "production") console.warn(`[june i18n] ${msg}`);
 };
 
+// Missing-key warnings dedupe: a key missing on every render would otherwise spam
+// the dev console once per request — warn each (locale, key) once.
+const warnedMissing = new Set<string>();
+const warnMissing = (key: string, locale: string) => {
+  const id = `${locale}:${key}`;
+  if (warnedMissing.has(id)) return;
+  warnedMissing.add(id);
+  warn(`missing key "${key}" (locale "${locale}")`);
+};
+
 /** A pure translator bound to a locale + compiled catalogs. The fallback chain is
  *  variant → default locale → the key itself (dev-warns on a miss). Exposed for
  *  tests and for non-ambient use (islands receive a translator built from props). */
@@ -69,7 +79,7 @@ export function createTranslator(
   const tr = ((key, params) => {
     const msg = lookup(key);
     if (msg === undefined) {
-      warn(`missing key "${key}" (locale "${locale}")`);
+      warnMissing(key, locale);
       return key;
     }
     return formatMessage(msg, locale, params);
@@ -77,7 +87,7 @@ export function createTranslator(
   tr.rich = (key, params) => {
     const msg = lookup(key);
     if (msg === undefined) {
-      warn(`missing key "${key}" (locale "${locale}")`);
+      warnMissing(key, locale);
       return key; // a string ReactNode
     }
     return formatRich(msg, locale, params);
@@ -151,7 +161,8 @@ export function clientTranslator(messages: CompiledCatalog, locale: string): Tra
   return createTranslator(locale, { [locale]: messages }, locale);
 }
 
-// Test-only: reset the module registry between cases.
+// Test-only: reset the module registry + dedup state between cases.
 export function __resetMessages(): void {
   registry = null;
+  warnedMissing.clear();
 }
