@@ -119,6 +119,38 @@ export const t: Translator = Object.assign(
   },
 );
 
+// --- islands (client code-split) ------------------------------------------
+// A page renders with ambient `t` server-side and ships ZERO message catalog to
+// the browser (the HTML carries the formatted strings). An ISLAND can't read the
+// scope on the client, so it ships ONLY the keys it uses — `pickMessages` (server,
+// builds the subset for this request's locale) into the island's props, and
+// `clientTranslator` (client, formats that subset). The parser never ships; only
+// the tiny evaluator (format.ts/rich.ts) + the island's own messages do.
+
+/** SERVER: the compiled subset of `keys` for `locale` (defaults to the scope
+ *  locale), with per-key fallback to the default locale. Pass it as an island
+ *  prop alongside the locale. */
+export function pickMessages(keys: string[], locale?: string): CompiledCatalog {
+  if (!registry) {
+    warn(`pickMessages(${JSON.stringify(keys)}) called before defineMessages()`);
+    return {};
+  }
+  const loc = locale ?? currentLocale() ?? registry.defaultLocale;
+  const out: CompiledCatalog = {};
+  for (const key of keys) {
+    const msg = registry.catalogs[loc]?.[key] ?? registry.catalogs[registry.defaultLocale]?.[key];
+    if (msg) out[key] = msg;
+    else warn(`pickMessages: missing key "${key}"`);
+  }
+  return out;
+}
+
+/** CLIENT: a translator over a one-locale subset (from an island's props). No
+ *  scope, no registry — just the messages it was handed. */
+export function clientTranslator(messages: CompiledCatalog, locale: string): Translator {
+  return createTranslator(locale, { [locale]: messages }, locale);
+}
+
 // Test-only: reset the module registry between cases.
 export function __resetMessages(): void {
   registry = null;
