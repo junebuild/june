@@ -19,6 +19,12 @@ export type AgentConfig = {
   discovery: boolean; // Link header, llms.txt, sitemap, api-catalog, mcp server-card
   mcp: boolean; // the /mcp execution endpoint
   webmcp: boolean; // inject WebMCP tool registrations into the view
+  // Optional llms.txt customization for apps built ON June (e.g. the Kura docs framework):
+  //   framework — replaces the built-in "canonical names" block so a meta-framework can point
+  //               agents at ITS scaffold/scope instead of June's.
+  //   sections  — extra Markdown lines appended (e.g. a list of every doc page + its `.md`).
+  // Both are plain string arrays so they freeze into the worker manifest as-is.
+  llms?: { framework?: string[]; sections?: string[] };
 };
 
 export type SpeculationConfig = {

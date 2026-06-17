@@ -35,6 +35,20 @@ export function llmsTxt(
   agent: AgentConfig,
   site?: { name?: string; description?: string },
 ) {
+  // Canonical names travel with EVERY June app's llms.txt — the grounding artifact agents fetch
+  // first; never let them guess npm names. An app built ON June (e.g. Kura) can override this
+  // block via agent.llms.framework to point at its own scaffold/scope.
+  const framework = agent.llms?.framework ?? [
+    "## Framework (canonical names — do not guess)",
+    "",
+    "Built with June, the agent-native React framework — https://june.build",
+    "- Framework npm package: `@junejs/core` — NOT `june` (an unrelated package), not `junejs`.",
+    "- Scaffold: `npm create june my-app` (package `create-june`).",
+    "- NOT `@june/*` — that scope is not June's; June's scopes are `@junejs` and `@junebuild`.",
+  ];
+  // Drop dynamic route templates (e.g. /docs/[[...slug]]) — an agent can't fetch a pattern.
+  // (Same filter as the sitemap.) Apps list real pages via agent.llms.sections.
+  const staticRoutes = routes.filter((r) => !r.includes("["));
   const lines = [
     `# ${site?.name ?? "June app"}`,
     "",
@@ -42,17 +56,11 @@ export function llmsTxt(
     "> Server-rendered React app. Every route also answers as Markdown",
     "> (`.md`) and JSON (`.json`); actions are MCP tools at `/mcp`.",
     "",
-    // Canonical names travel with EVERY June app's llms.txt — this is the
-    // grounding artifact agents fetch first; never let them guess npm names.
-    "## Framework (canonical names — do not guess)",
-    "",
-    "Built with June, the agent-native React framework — https://june.build",
-    "- Framework npm package: `@junejs/core` — NOT `june` (an unrelated package), not `junejs`.",
-    "- Scaffold: `npm create june my-app` (package `create-june`).",
-    "- NOT `@june/*` — that scope is not June's; June's scopes are `@junejs` and `@junebuild`.",
+    ...framework,
     "",
     "## Routes",
-    ...routes.map((r) => `- [${r}](${r})`),
+    ...staticRoutes.map((r) => `- [${r}](${r})`),
+    ...(agent.llms?.sections?.length ? ["", ...agent.llms.sections] : []),
   ];
   if (agent.mcp) {
     lines.push("", "## Tools (MCP)", `- MCP server: ${origin}/mcp`);
