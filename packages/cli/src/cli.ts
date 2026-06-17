@@ -138,6 +138,9 @@ export async function run(argv: string[]): Promise<number | undefined> {
       const { generateContent } = await import("@junejs/server");
       const cols = await generateContent(root);
       console.log(cols.length ? `generated content: ${cols.join(", ")}` : "no content/ collections");
+      const { generateMessages } = await import("./messages");
+      const locales = await generateMessages(root);
+      if (locales) console.log(`generated messages: ${locales.join(", ")}`);
       return 0;
     }
     case "db": {

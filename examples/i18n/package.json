@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@junejs/core": "workspace:*"
+    "@junejs/core": "workspace:*",
+    "@junejs/i18n": "workspace:*"
   },
   "devDependencies": {
     "@junejs/server": "workspace:*"

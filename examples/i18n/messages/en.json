@@ -1,0 +1,4 @@
+{
+  "greeting": "Hello, {name}!",
+  "items": "{n, plural, one {# item} other {# items}}"
+}

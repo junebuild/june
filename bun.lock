@@ -48,6 +48,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@junejs/core": "workspace:*",
+        "@junejs/i18n": "workspace:*",
       },
       "devDependencies": {
         "@junejs/server": "workspace:*",

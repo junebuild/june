@@ -63,6 +63,20 @@ describe("document head", () => {
   });
 });
 
+describe("ICU messages (typed t, compiled)", () => {
+  test("the default locale formats from messages/en.json", async () => {
+    const html = await (await get("/greet")).text();
+    expect(html).toContain("Hello, Ada!"); // {name} interpolation
+    expect(html).toContain("3 items"); // plural → other
+  });
+
+  test("a sub-path locale formats from its catalog, plural in its language", async () => {
+    const html = await (await get("/de/greet")).text();
+    expect(html).toContain("Hallo, Ada!");
+    expect(html).toContain("3 Einträge"); // de plural → other
+  });
+});
+
 describe("sitemap", () => {
   test("each url carries xhtml:link hreflang alternates", async () => {
     const xml = await (await get("/sitemap.xml")).text();

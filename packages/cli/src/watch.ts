@@ -53,6 +53,15 @@ export function superviseDev(root: string): undefined {
         console.error("[june] content regen failed:", err);
       }
     }
+    if (file.startsWith(`messages${sep}`)) {
+      // Recompile messages/*.json → app/_messages.ts before the server reboots.
+      try {
+        const { generateMessages } = await import("./messages");
+        await generateMessages(root);
+      } catch (err) {
+        console.error("[june] messages regen failed:", err);
+      }
+    }
     console.log(`[june] ${file} changed — restarting`);
     const c = child;
     if (!c || c.exitCode !== null || c.signalCode !== null) {
