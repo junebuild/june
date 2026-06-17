@@ -5,6 +5,22 @@ of truth; this file summarizes what matters per release.
 
 ## [Unreleased]
 
+### Added
+
+- **Experimental — `@junejs/i18n`, typed ICU messages (i18n phase 3).** A new
+  opt-in package (Layer 2; locale routing is the in-box Layer 1). Author messages
+  as ICU MessageFormat in `messages/<locale>.json` (or namespaced
+  `messages/<locale>/<ns>.json` → `ns.key`); `june gen` compiles them to
+  `app/_messages.ts` and a **typed `t`** whose key AND params are derived from the
+  ICU AST — `t("cart.items", { n: number })`, where a wrong/missing param or
+  unknown key is a compile error. CLDR plurals/select are correct per locale
+  (`Intl.PluralRules`), and the **@formatjs parser runs only at build** — the
+  request bundle ships the AST + a small evaluator, never a parser. `t` is
+  ambient (reads `ctx.locale` off the request scope, no threading); `t.rich`
+  renders embedded `<tag>`s to React nodes (`{ link: c => <a>{c}</a> }`); an
+  island ships only the keys it uses via `pickMessages` + `clientTranslator`, so
+  a page still ships zero message catalog. `@junejs/core` stays zero-dependency.
+
 ## [0.0.25] — 2026-06-16
 
 ### Added
