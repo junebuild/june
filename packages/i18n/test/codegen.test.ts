@@ -15,7 +15,12 @@ beforeAll(() => {
   mkdirSync(dir, { recursive: true });
   writeFileSync(
     join(dir, "en.json"),
-    JSON.stringify({ hi: "Hello, {name}!", items: "{n, plural, one {# item} other {# items}}", bye: "Bye" }),
+    JSON.stringify({
+      hi: "Hello, {name}!",
+      items: "{n, plural, one {# item} other {# items}}",
+      bye: "Bye",
+      readDocs: "Read <link>the docs</link>",
+    }),
   );
   writeFileSync(join(dir, "de.json"), JSON.stringify({ hi: "Hallo, {name}!" }));
 });
@@ -38,12 +43,15 @@ describe("generateMessagesModule — the typed-t module", () => {
     const { code, locales } = generateMessagesModule(dir, { defaultLocale: "en" });
     expect(locales.sort()).toEqual(["de", "en"]);
     expect(code).toContain("defineMessages(CATALOGS, { defaultLocale: \"en\" })");
-    // params typed from the AST: {name} → string, plural var → number, none → never
+    // params typed from the AST: {name} → string, plural var → number, none → never,
+    // <tag> → a ReactNode-returning function
     expect(code).toContain('"hi": { "name": string };');
     expect(code).toContain('"items": { "n": number };');
     expect(code).toContain('"bye": Record<never, never>;');
-    // the typed t signature (no-param keys take no args; others require params)
-    expect(code).toContain("export const t = rawT as <K extends keyof Messages>");
-    expect(code).toContain("keyof Messages[K] extends never ? [] : [params: Messages[K]]");
+    expect(code).toContain('"readDocs": { "link": (chunks: ReactNode) => ReactNode };');
+    // the typed t: a callable (plain keys) with .rich (all keys → ReactNode)
+    expect(code).toContain("export const t = rawT as unknown as {");
+    expect(code).toContain("rich: <K extends keyof Messages>(");
+    expect(code).toContain("type PlainKey =");
   });
 });

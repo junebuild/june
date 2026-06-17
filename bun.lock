@@ -109,6 +109,9 @@
         "@formatjs/icu-messageformat-parser": "^2.7.0",
         "@junejs/db": "workspace:*",
       },
+      "peerDependencies": {
+        "react": "^19.2.0",
+      },
     },
     "packages/june": {
       "name": "@junejs/server",

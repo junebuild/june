@@ -21,7 +21,9 @@ export function compileCatalog(raw: Record<string, string>): CompiledCatalog {
   return out;
 }
 
-export type ParamType = "string" | "number" | "Date";
+// "tag" = a `<x>…</x>` rich element → a (chunks: ReactNode) => ReactNode param,
+// rendered by t.rich (not the plain string t).
+export type ParamType = "string" | "number" | "Date" | "tag";
 
 /** The params a message needs, derived from its AST. Plural/number args are
  *  numbers, date/time are Dates, plain `{x}` and select keys are strings. This is
@@ -49,6 +51,10 @@ export function deriveParams(
       case TYPE.select:
         into[el.value] ??= "string";
         for (const o of Object.values(el.options)) deriveParams(o.value, into);
+        break;
+      case TYPE.tag:
+        into[el.value] = "tag";
+        deriveParams(el.children, into);
         break;
       default:
         break;

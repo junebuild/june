@@ -17,13 +17,23 @@
 // currentLocale is the generic request-scope read (the host sets it after locale
 // resolution); the core pipeline never imports this package — the locale crosses
 // via the scope, not a direct dependency.
+import type { ReactNode } from "react";
+
 import { currentLocale } from "@junejs/db";
 
-// Runtime only — format.ts does NOT reach the @formatjs parser (that's build-only
-// in compile.ts / codegen.ts), so the request bundle never ships an ICU parser.
+// Runtime only — format.ts/rich.ts do NOT reach the @formatjs parser (that's
+// build-only in compile.ts / codegen.ts), so the request bundle never ships one.
 import { formatMessage, type CompiledCatalog, type CompiledMessage } from "./format";
+import { formatRich } from "./rich";
 
 export { formatMessage, type CompiledCatalog, type CompiledMessage } from "./format";
+export { formatRich } from "./rich";
+
+/** A translator: callable for a plain string, `.rich` for embedded components. */
+export type Translator = {
+  (key: string, params?: Record<string, unknown>): string;
+  rich(key: string, params?: Record<string, unknown>): ReactNode;
+};
 
 export type MessagesConfig = {
   catalogs: Record<string, CompiledCatalog>;
@@ -53,29 +63,61 @@ export function createTranslator(
   locale: string,
   catalogs: Record<string, CompiledCatalog>,
   defaultLocale: string,
-): (key: string, params?: Record<string, unknown>) => string {
-  return (key, params) => {
-    const msg = catalogs[locale]?.[key] ?? catalogs[defaultLocale]?.[key];
+): Translator {
+  const lookup = (key: string): CompiledMessage | undefined =>
+    catalogs[locale]?.[key] ?? catalogs[defaultLocale]?.[key];
+  const tr = ((key, params) => {
+    const msg = lookup(key);
     if (msg === undefined) {
       warn(`missing key "${key}" (locale "${locale}")`);
       return key;
     }
     return formatMessage(msg, locale, params);
+  }) as Translator;
+  tr.rich = (key, params) => {
+    const msg = lookup(key);
+    if (msg === undefined) {
+      warn(`missing key "${key}" (locale "${locale}")`);
+      return key; // a string ReactNode
+    }
+    return formatRich(msg, locale, params);
   };
+  return tr;
+}
+
+function ambientTranslator(): Translator | null {
+  if (!registry) return null;
+  return createTranslator(
+    currentLocale() ?? registry.defaultLocale,
+    registry.catalogs,
+    registry.defaultLocale,
+  );
 }
 
 /** Ambient translate: resolves the locale from the request scope (`ctx.locale`),
  *  then formats `key` from the registered catalogs. Falls back to the default
- *  locale, then the key. Server-side (loaders/views/actions); islands take a
- *  translator via props instead (no scope on the client). */
-export function t(key: string, params?: Record<string, unknown>): string {
-  if (!registry) {
-    warn(`t("${key}") called before defineMessages()`);
-    return key;
-  }
-  const locale = currentLocale() ?? registry.defaultLocale;
-  return createTranslator(locale, registry.catalogs, registry.defaultLocale)(key, params);
-}
+ *  locale, then the key. `t.rich` renders embedded `<tag>`s to ReactNode. Server-
+ *  side (loaders/views/actions); islands take a translator via props instead. */
+export const t: Translator = Object.assign(
+  (key: string, params?: Record<string, unknown>): string => {
+    const tr = ambientTranslator();
+    if (!tr) {
+      warn(`t("${key}") called before defineMessages()`);
+      return key;
+    }
+    return tr(key, params);
+  },
+  {
+    rich: (key: string, params?: Record<string, unknown>): ReactNode => {
+      const tr = ambientTranslator();
+      if (!tr) {
+        warn(`t.rich("${key}") called before defineMessages()`);
+        return key;
+      }
+      return tr.rich(key, params);
+    },
+  },
+);
 
 // Test-only: reset the module registry between cases.
 export function __resetMessages(): void {
