@@ -79,7 +79,10 @@ function loadEntry(file: string, slug: string, locale?: string): ContentEntry {
 }
 
 const isMd = (f: string) => f.endsWith(".md") || f.endsWith(".mdx");
-const slugOf = (f: string) => f.replace(/\.(md|mdx)$/, "");
+// Strip the extension, then collapse a directory index file to the directory itself, so it owns the
+// folder's URL (Next.js / GitBook / Fumadocs convention): `a/b/index.md` → `a/b`, `a/b/README.md` →
+// `a/b`, and a root `index`/`README` → "". A folder with an index becomes a page (not a buried child).
+const slugOf = (f: string) => f.replace(/\.(md|mdx)$/, "").replace(/(^|\/)(index|README)$/i, "");
 const byDate = (a: ContentEntry, b: ContentEntry) =>
   String(b.data.date ?? "").localeCompare(String(a.data.date ?? "")) ||
   a.slug.localeCompare(b.slug);
@@ -104,25 +107,44 @@ function isLocaleDir(name: string, known?: readonly string[]): boolean {
   return known ? known.includes(name) : LOCALE_DIR.test(name);
 }
 
-export function scanCollection(dir: string, knownLocales?: readonly string[]): ScannedCollection {
-  const def: ContentEntry[] = [];
-  const byLocale: Record<string, ContentEntry[]> = {};
-  for (const ent of readdirSync(dir, { withFileTypes: true })) {
+// Recursively collect markdown under `root`; slug = the path relative to `root`, POSIX, no extension
+// (`guides/install.md` → `guides/install`) so routes and the sidebar can nest. `skipTopLocales` skips
+// locale buckets at the TOP level only (scanned separately) — so a top-level `ja-JP/` is a locale, but
+// a nested `guides/` (or `guides/ja-JP/`) is plain content.
+function collectMd(
+  root: string,
+  knownLocales: readonly string[] | undefined,
+  skipTopLocales: boolean,
+  sub = "",
+): { file: string; slug: string }[] {
+  const out: { file: string; slug: string }[] = [];
+  for (const ent of readdirSync(join(root, sub), { withFileTypes: true })) {
+    const rel = sub ? `${sub}/${ent.name}` : ent.name;
     if (ent.isDirectory()) {
-      // Only a configured locale (or, without a list, a BCP-47-shaped name) is a
-      // locale bucket — a stray content/<col>/images/ is NOT a phantom "images".
-      if (!isLocaleDir(ent.name, knownLocales)) continue;
-      const locale = ent.name;
-      const sub = join(dir, locale);
-      byLocale[locale] = readdirSync(sub)
-        .filter(isMd)
-        .map((f) => loadEntry(join(sub, f), slugOf(f), locale))
-        .sort(byDate);
+      if (skipTopLocales && sub === "" && isLocaleDir(ent.name, knownLocales)) continue;
+      out.push(...collectMd(root, knownLocales, skipTopLocales, rel));
     } else if (isMd(ent.name)) {
-      def.push(loadEntry(join(dir, ent.name), slugOf(ent.name)));
+      out.push({ file: join(root, rel), slug: slugOf(rel) });
     }
   }
-  def.sort(byDate);
+  return out;
+}
+
+export function scanCollection(dir: string, knownLocales?: readonly string[]): ScannedCollection {
+  // Default-locale entries: every .md under `dir` except inside top-level locale buckets. Flat files
+  // keep flat slugs (zero migration); subdirs become slug paths.
+  const def = collectMd(dir, knownLocales, true)
+    .map(({ file, slug }) => loadEntry(file, slug))
+    .sort(byDate);
+  const byLocale: Record<string, ContentEntry[]> = {};
+  for (const ent of readdirSync(dir, { withFileTypes: true })) {
+    if (ent.isDirectory() && isLocaleDir(ent.name, knownLocales)) {
+      const locale = ent.name;
+      byLocale[locale] = collectMd(join(dir, locale), knownLocales, false)
+        .map(({ file, slug }) => loadEntry(file, slug, locale))
+        .sort(byDate);
+    }
+  }
   return { default: def, byLocale };
 }
 
@@ -158,8 +180,9 @@ export function entry(
   locale?: string,
   opts?: { fallback?: boolean },
 ): ContentEntry | null {
-  // Guard the slug — it comes from the URL.
-  if (!/^[A-Za-z0-9._-]+$/.test(slug)) return null;
+  // Guard the slug — it comes from the URL. Allow "/" so nested content (`guides/install`) resolves,
+  // but reject path traversal and absolute/empty segments so the slug can't escape `dir`.
+  if (!/^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/.test(slug) || slug.includes("..")) return null;
   if (!locale) return probe(dir, slug);
   const variant = probe(join(dir, locale), slug, locale);
   if (variant) return variant;
@@ -207,6 +230,9 @@ export function generateContentModule(
     body += `export const ${CONST}: ContentEntry[] = ${JSON.stringify(def.map(strip), null, 2)};\n`;
     if (Object.keys(byLocale).length === 0) {
       body += `export const ${finder} = (slug: string): ContentEntry | null => ${CONST}.find((p) => p.slug === slug) ?? null;\n`;
+      // Always export the locale lister (a no-op for single-locale collections) so consumers can
+      // import `${d.name}` unconditionally — adding/removing locales never changes the module's shape.
+      body += `export const ${d.name} = (_locale?: string): ContentEntry[] => ${CONST};\n`;
     } else {
       anyLocale = true;
       const map: Record<string, Record<string, unknown>> = {};

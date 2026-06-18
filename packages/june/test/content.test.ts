@@ -35,7 +35,8 @@ const docsDir = () => join(root, "docs");
 describe("scanCollection", () => {
   test("splits flat (default) from <locale>/ subdirs", () => {
     const s = scanCollection(docsDir());
-    expect(s.default.map((e) => e.slug)).toEqual(["guide", "intro"]); // date desc
+    // non-locale subdirs recurse into nested slugs; date desc (diagram 01-03 > guide 01-02 > intro 01-01)
+    expect(s.default.map((e) => e.slug)).toEqual(["images/diagram", "guide", "intro"]);
     expect(s.default.every((e) => e.locale === undefined)).toBe(true);
     expect(Object.keys(s.byLocale)).toEqual(["de"]);
     expect(s.byLocale.de!.map((e) => e.slug)).toEqual(["intro"]);
@@ -60,18 +61,18 @@ describe("scanCollection", () => {
 
 describe("collection(dir, locale) — localized listing with fallback", () => {
   test("no locale → the default entries", () => {
-    expect(collection(docsDir()).map((e) => e.slug)).toEqual(["guide", "intro"]);
+    expect(collection(docsDir()).map((e) => e.slug)).toEqual(["images/diagram", "guide", "intro"]);
   });
 
   test("locale → variant where present, default otherwise", () => {
     const de = collection(docsDir(), "de");
-    expect(de.map((e) => e.slug)).toEqual(["guide", "intro"]);
+    expect(de.map((e) => e.slug)).toEqual(["images/diagram", "guide", "intro"]);
     expect(de.find((e) => e.slug === "intro")!.locale).toBe("de"); // translated
     expect(de.find((e) => e.slug === "guide")!.locale).toBeUndefined(); // fell back
   });
 
   test("an untranslated locale falls back wholesale to default", () => {
-    expect(collection(docsDir(), "fr").map((e) => e.locale)).toEqual([undefined, undefined]);
+    expect(collection(docsDir(), "fr").map((e) => e.locale)).toEqual([undefined, undefined, undefined]);
   });
 });
 
@@ -139,5 +140,54 @@ describe("generateContentModule — the frozen _content.ts", () => {
     expect(mod.doc("intro")!.locale).toBeUndefined(); // no locale → default
     expect(mod.docs("de").find((e) => e.slug === "intro")!.locale).toBe("de");
     expect(mod.post("hello")!.slug).toBe("hello"); // flat collection still works
+  });
+});
+
+// Nested folders → slug paths (`guides/install`), WITH and WITHOUT a locale prefix. Isolated in its
+// own temp root so the flat-collection assertions above stay exact.
+describe("nested content (folders → slug paths)", () => {
+  let nroot: string;
+  const ndocs = () => join(nroot, "docs");
+  beforeAll(() => {
+    nroot = mkdtempSync(join(tmpdir(), "june-nested-"));
+    const docs = join(nroot, "docs");
+    mkdirSync(join(docs, "guides", "advanced"), { recursive: true });
+    mkdirSync(join(docs, "ja-JP", "guides"), { recursive: true });
+    writeFileSync(join(docs, "guides", "index.md"), md("Guides", "2026-01-01", "Guides")); // folder index
+    writeFileSync(join(docs, "guides", "install.md"), md("Install", "2026-01-02", "Install EN"));
+    writeFileSync(join(docs, "guides", "advanced", "tuning.md"), md("Tuning", "2026-01-03", "Tuning EN"));
+    writeFileSync(join(docs, "ja-JP", "guides", "install.md"), md("インストール", "2026-01-02", "Install JA"));
+  });
+  afterAll(() => rmSync(nroot, { recursive: true, force: true }));
+
+  test("scanCollection: nested files get slash slugs; a folder index collapses to the folder", () => {
+    const s = scanCollection(ndocs());
+    expect(s.default.map((e) => e.slug).sort()).toEqual(["guides", "guides/advanced/tuning", "guides/install"]);
+    expect(s.byLocale["ja-JP"]!.map((e) => e.slug)).toEqual(["guides/install"]); // locale mirror nests too
+  });
+
+  test("entry: resolves a nested slug with and without a locale (variant → fallback)", () => {
+    expect(entry(ndocs(), "guides/install")!.data.title).toBe("Install"); // no locale → default
+    expect(entry(ndocs(), "guides/install", "ja-JP")!.locale).toBe("ja-JP"); // nested variant
+    expect(entry(ndocs(), "guides/advanced/tuning", "ja-JP")!.locale).toBeUndefined(); // nested fallback
+  });
+
+  test("entry: the slug guard allows '/' but rejects path traversal", () => {
+    expect(entry(ndocs(), "guides/install")).not.toBeNull(); // '/' allowed
+    expect(entry(ndocs(), "../secret")).toBeNull(); // traversal blocked
+    expect(entry(ndocs(), "guides/../../etc/passwd")).toBeNull();
+    expect(entry(ndocs(), "/guides/install")).toBeNull(); // leading slash → empty segment
+  });
+
+  test("the emitted finder resolves nested slugs with/without locale", async () => {
+    const { code } = generateContentModule(nroot);
+    const file = join(nroot, "_content.ts");
+    writeFileSync(file, code);
+    const mod = (await import(pathToFileURL(file).href)) as {
+      doc: (slug: string, locale?: string) => { slug: string; locale?: string } | null;
+    };
+    expect(mod.doc("guides/advanced/tuning")!.slug).toBe("guides/advanced/tuning"); // 3 levels, no locale
+    expect(mod.doc("guides/install", "ja-JP")!.locale).toBe("ja-JP"); // nested variant
+    expect(mod.doc("guides/advanced/tuning", "ja-JP")!.locale).toBeUndefined(); // nested fallback
   });
 });
