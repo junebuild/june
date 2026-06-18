@@ -1,6 +1,7 @@
 // The `june` CLI logic — host code (node:* allowed), a thin layer over
 // @junejs/server. Exposed as run(argv) so it is testable without spawning a
 // process; the bin (june.ts) just forwards process.argv. See docs/cli.md.
+// (curator smoke test: trivial touch to packages/cli to trigger the Mori workflow)
 
 import { existsSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
