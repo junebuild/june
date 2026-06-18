@@ -68,7 +68,7 @@
     },
     "packages/cli": {
       "name": "@junejs/cli",
-      "version": "0.0.25",
+      "version": "0.0.27",
       "bin": {
         "june": "./bin.mjs",
       },
@@ -79,7 +79,7 @@
     },
     "packages/core": {
       "name": "@junejs/core",
-      "version": "0.0.25",
+      "version": "0.0.27",
       "peerDependencies": {
         "react": "^19.2.0",
         "react-dom": "^19.2.0",
@@ -90,21 +90,21 @@
     },
     "packages/create-june": {
       "name": "create-june",
-      "version": "0.0.25",
+      "version": "0.0.27",
       "bin": {
         "create-june": "./bin.mjs",
       },
     },
     "packages/db": {
       "name": "@junejs/db",
-      "version": "0.0.25",
+      "version": "0.0.27",
       "dependencies": {
         "@junejs/core": "workspace:*",
       },
     },
     "packages/i18n": {
       "name": "@junejs/i18n",
-      "version": "0.0.25",
+      "version": "0.0.27",
       "dependencies": {
         "@formatjs/icu-messageformat-parser": "^2.7.0",
         "@junejs/db": "workspace:*",
@@ -115,7 +115,7 @@
     },
     "packages/june": {
       "name": "@junejs/server",
-      "version": "0.0.25",
+      "version": "0.0.27",
       "dependencies": {
         "@junejs/core": "workspace:*",
         "@junejs/db": "workspace:*",
@@ -144,7 +144,7 @@
     },
     "packages/juno": {
       "name": "@junejs/juno",
-      "version": "0.0.25",
+      "version": "0.0.27",
       "dependencies": {
         "@junejs/core": "workspace:*",
         "@junejs/db": "workspace:*",
@@ -226,7 +226,7 @@
 
     "@formatjs/intl-localematcher": ["@formatjs/intl-localematcher@0.6.2", "", { "dependencies": { "tslib": "^2.8.0" } }, "sha512-XOMO2Hupl0wdd172Y06h6kLpBz6Dv+J4okPLl4LPtzbr8f66WbIoy4ev98EBuZ6ZK4h5ydTN6XneT4QVpD7cdA=="],
 
-    "@happy-dom/global-registrator": ["@happy-dom/global-registrator@20.10.4", "", { "dependencies": { "@types/node": ">=20.0.0", "happy-dom": "^20.10.4" } }, "sha512-d1iWnYgb20MuHYyXVcjkEdFkUy5+myq8RyLAFK9Sy4PVNy/cU5xrM5JM/MMMR3KDZQ6YNVj9puy96lcfEaKh8Q=="],
+    "@happy-dom/global-registrator": ["@happy-dom/global-registrator@20.10.6", "", { "dependencies": { "@types/node": ">=20.0.0", "happy-dom": "^20.10.6" } }, "sha512-Nu/IjRkkNxmeG2ywWsyJSO4d1BrWTqVzxCPL+gXj0b97klhmjd6wLzt6Bx/laNpkZ3WLW7zNCqmtMIbIlahqug=="],
 
     "@june-examples/basic": ["@june-examples/basic@workspace:examples/basic"],
 
@@ -402,7 +402,7 @@
 
     "generate-function": ["generate-function@2.3.1", "", { "dependencies": { "is-property": "^1.0.2" } }, "sha512-eeB5GfMNeevm/GRYq20ShmsaGcmI81kIX2K9XQx5miC8KdHaC6Jm0qQ8ZNeGOi7wYB8OsdxKs+Y2oVuTFuVwKQ=="],
 
-    "happy-dom": ["happy-dom@20.10.4", "", { "dependencies": { "@types/node": ">=20.0.0", "@types/whatwg-mimetype": "^3.0.2", "@types/ws": "^8.18.1", "buffer-image-size": "^0.6.4", "entities": "^7.0.1", "whatwg-mimetype": "^3.0.0", "ws": "^8.21.0" } }, "sha512-bKrsQnFNpcjZG0UPsH7UMN7Oyp3AB42LXk2GuiQmu7l4QFxH7lsw5T1eWEtE2+vbIFrTC45sbNSB2pkB8MTfKA=="],
+    "happy-dom": ["happy-dom@20.10.6", "", { "dependencies": { "@types/node": ">=20.0.0", "@types/whatwg-mimetype": "^3.0.2", "@types/ws": "^8.18.1", "buffer-image-size": "^0.6.4", "entities": "^7.0.1", "whatwg-mimetype": "^3.0.0", "ws": "^8.21.0" } }, "sha512-6QD0ilzDDt93tX44y8tbmZdAcdTRYDhUP+Asgi6pC8Pp5IA3cvaZGyoVN/EGtlq9ziT65iPuBBn3ASLr6hCgVw=="],
 
     "hex-rgb": ["hex-rgb@4.3.0", "", {}, "sha512-Ox1pJVrDCyGHMG9CFg1tmrRUMRPRsAWYc/PinY0XzJU4K7y7vjNoLKIQ7BR5UJMCxNN8EM1MNDmHWA/B3aZUuw=="],
 
