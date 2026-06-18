@@ -1,7 +1,7 @@
 ---
 title: "The june CLI"
 nav: "CLI"
-description: Five verbs — dev, build, deploy, gen, info — installed locally by the scaffold, version-pinned per project, with --dry-run as the CI contract.
+description: Six verbs — dev, build, deploy, gen, db, info — installed locally by the scaffold, version-pinned per project, with --dry-run as the CI contract.
 date: 2026-06-12
 section: Features
 order: "32"
@@ -16,13 +16,15 @@ cd my-app && npm run dev
 
 The scaffold installs `june` as a local devDependency: no global install,
 version pinned per project, reproducible for every collaborator — human or
-agent. Then the whole loop is five verbs:
+agent. Then the whole loop is six verbs:
 
 ```bash
 june dev          # dev server (Bun/Node host), zero config
 june build        # Workers bundle: dist/worker.js + prerendered assets
-june deploy       # build → wrangler upload → URL (--dry-run validates only)
+june deploy       # build → upload → URL (--dry-run validates only)
 june gen          # freeze content/**/*.md → app/_content.ts
+june db migrate   # apply pending migrations (--allow-destructive)
+june db types     # write db/schema.d.ts from the migrated schema
 june info         # show routes + the agent surface
 ```
 
