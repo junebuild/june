@@ -5,6 +5,7 @@ description: The agent discovery surface — llms.txt, sitemap, robots, api-cata
 date: 2026-06-12
 section: Features
 order: "29"
+sources: [packages/core/src/discovery.ts]
 ---
 ## The feature
 

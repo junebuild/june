@@ -5,6 +5,7 @@ description: Five verbs — dev, build, deploy, gen, info — installed locally 
 date: 2026-06-12
 section: Features
 order: "32"
+sources: [packages/cli/**]
 ---
 ## The feature
 
