@@ -21,8 +21,8 @@ agent. Then the whole loop is six verbs:
 ```bash
 june dev          # dev server (Bun/Node host), zero config
 june build        # Workers bundle: dist/worker.js + prerendered assets
-june deploy       # build → wrangler upload → URL (--dry-run validates only)
-june gen          # freeze content/**/*.md → app/_content.ts
+june deploy       # build → deploy (workers/vercel) → URL (--dry-run validates only)
+june gen          # freeze content/**/*.md → app/_content.ts (+ i18n messages → app/_messages.ts)
 june db           # database tasks: db migrate, db types
 june info         # show routes + the agent surface
 ```
