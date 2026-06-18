@@ -5,6 +5,7 @@ description: Every June app is an MCP server — defineAction() is simultaneousl
 date: 2026-06-12
 section: Features
 order: "28"
+sources: [packages/core/src/mcp.ts]
 ---
 ## The feature
 

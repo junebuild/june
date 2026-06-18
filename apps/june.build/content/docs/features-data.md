@@ -5,6 +5,7 @@ description: Resources are declared, not wired. db / kv / blob ride an ambient s
 date: 2026-06-13
 section: Concepts
 order: "13"
+sources: [packages/db/**, packages/juno/**]
 ---
 ## Declared, not wired
 
