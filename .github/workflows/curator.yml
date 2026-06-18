@@ -1,25 +1,42 @@
 name: curator
 # Mori (Kura Curator) keeps june.build's docs true to the code. On a PR that touches a package a
 # doc tracks via `sources:`, Mori updates the page and commits it onto the same PR branch.
-# Same-repo mode: docs (apps/june.build/content/docs) live beside the code — the built-in
-# GITHUB_TOKEN is enough, no extra credential.
+# Same-repo mode: docs (apps/june.build/content/docs) live beside the code.
+# Commits are attributed to the "Kura Curator" GitHub App (kura-curator[bot]) so they carry its
+# avatar; the app token also authorizes the push back to the PR branch.
 on:
   pull_request:
     paths:
       - "packages/**"
 permissions:
-  contents: write          # commit the docs update onto the PR branch
-  pull-requests: write     # for the push/manual standalone-PR path
+  contents: write
+  pull-requests: write
 jobs:
   curate:
     runs-on: ubuntu-latest
     steps:
+      - name: Mint Kura Curator app token
+        uses: actions/create-github-app-token@v2
+        id: app
+        with:
+          app-id: ${{ vars.KURA_CURATOR_APP_ID }}
+          private-key: ${{ secrets.KURA_CURATOR_APP_PRIVATE_KEY }}
+      - name: Resolve bot user id
+        id: bot
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          SLUG: ${{ steps.app.outputs.app-slug }}
+        run: echo "uid=$(gh api "/users/${SLUG}[bot]" --jq .id)" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.head_ref }}   # the PR branch, so Mori can push the docs onto it
-          fetch-depth: 0                # full history, to diff against the base
+          ref: ${{ github.head_ref }}              # the PR branch, so Mori can push the docs onto it
+          fetch-depth: 0                           # full history, to diff against the base
+          token: ${{ steps.app.outputs.token }}    # persist the app token as the git push credential
       - uses: kurajs/curator@v1
         with:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           docs-dir: apps/june.build/content/docs
           mode: same-pr   # monorepo, no external forks push to packages/** — ride the PR (code+docs reviewed together)
+          github-token: ${{ steps.app.outputs.token }}
+          committer-name: ${{ steps.app.outputs.app-slug }}[bot]
+          committer-email: ${{ steps.bot.outputs.uid }}+${{ steps.app.outputs.app-slug }}[bot]@users.noreply.github.com
