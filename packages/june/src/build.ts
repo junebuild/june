@@ -516,6 +516,10 @@ ${adapterEntry.wrap("pipeline")}
     transform: { define: { "process.env.NODE_ENV": JSON.stringify("production") } },
     plugins: [rolldownCssModulesPlugin(cssModuleMaps)], // .module.css → scoped class map
     external: (id: string) => {
+      // Bun built-ins (bun, bun:sqlite, …) exist only at Bun runtime, never in the workerd graph.
+      // Declaring them external silences rolldown's UNRESOLVED_IMPORT warning (it constant-folds the
+      // `const x = "bun"; import(x)` guard and tries to resolve "bun" before falling back to external).
+      if (id === "bun" || id.startsWith("bun:")) return true;
       // Binary assets stay external — wrangler's CompiledWasm/Data rules own them.
       if (/\.(wasm|ttf|otf|woff2?|png|jpe?g|avif|webp)$/.test(id)) return true;
       // config build.external: packages wrangler must bundle itself (its own
