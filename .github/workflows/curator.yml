@@ -22,3 +22,4 @@ jobs:
         with:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           docs-dir: apps/june.build/content/docs
+          mode: same-pr   # monorepo, no external forks push to packages/** — ride the PR (code+docs reviewed together)
