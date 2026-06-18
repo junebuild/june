@@ -62,6 +62,12 @@ const ROUTE_EXTS = [".tsx", ".jsx", ".ts", ".js"];
 
 const isRouteGroup = (name: string) => /^\(.+\)$/.test(name);
 
+// Bun built-ins (`bun`, `bun:sqlite`, …) exist only at the Bun runtime and must never enter the
+// workerd graph. Marking them external keeps rolldown from constant-folding the `const x = "bun";
+// import(x)` runtime guard (in @junejs/core's cache.ts) and warning UNRESOLVED_IMPORT. Exported so
+// the build keeps externalizing them — see test/build-externals.test.ts.
+export const isBunSpecifier = (id: string): boolean => id === "bun" || id.startsWith("bun:");
+
 function segmentFile(dir: string, base: string): string | undefined {
   return ROUTE_EXTS.map((e) => join(dir, `${base}${e}`)).find(existsSync);
 }
@@ -516,10 +522,8 @@ ${adapterEntry.wrap("pipeline")}
     transform: { define: { "process.env.NODE_ENV": JSON.stringify("production") } },
     plugins: [rolldownCssModulesPlugin(cssModuleMaps)], // .module.css → scoped class map
     external: (id: string) => {
-      // Bun built-ins (bun, bun:sqlite, …) exist only at Bun runtime, never in the workerd graph.
-      // Declaring them external silences rolldown's UNRESOLVED_IMPORT warning (it constant-folds the
-      // `const x = "bun"; import(x)` guard and tries to resolve "bun" before falling back to external).
-      if (id === "bun" || id.startsWith("bun:")) return true;
+      // Bun built-ins exist only at Bun runtime, never in the workerd graph (see isBunSpecifier).
+      if (isBunSpecifier(id)) return true;
       // Binary assets stay external — wrangler's CompiledWasm/Data rules own them.
       if (/\.(wasm|ttf|otf|woff2?|png|jpe?g|avif|webp)$/.test(id)) return true;
       // config build.external: packages wrangler must bundle itself (its own
