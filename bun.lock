@@ -79,7 +79,7 @@
     },
     "packages/core": {
       "name": "@junejs/core",
-      "version": "0.0.27",
+      "version": "0.0.28",
       "peerDependencies": {
         "react": "^19.2.0",
         "react-dom": "^19.2.0",
@@ -97,7 +97,7 @@
     },
     "packages/db": {
       "name": "@junejs/db",
-      "version": "0.0.27",
+      "version": "0.0.28",
       "dependencies": {
         "@junejs/core": "workspace:*",
       },
@@ -144,7 +144,7 @@
     },
     "packages/juno": {
       "name": "@junejs/juno",
-      "version": "0.0.27",
+      "version": "0.0.28",
       "dependencies": {
         "@junejs/core": "workspace:*",
         "@junejs/db": "workspace:*",
