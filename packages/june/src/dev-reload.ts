@@ -38,10 +38,13 @@ const RELOAD_JS = `// june dev live-reload: reconnect-after-drop → reload; "cs
     es.addEventListener("open", () => {
       if (dropped) {
         // push-HMR: morph the freshly-restarted page in place (state survives);
-        // hard-reload only if there's no morph hook or it can't apply.
+        // hard-reload only if there's no morph hook or it can't apply. On a
+        // successful morph also swap the stylesheet: a .tsx edit can change the
+        // class set, so the Tailwind-compiled /_june/global.css must refresh too
+        // (cache-busted) — otherwise new utility classes render unstyled.
         const hot = window.__juneLiveReload;
         (hot ? hot() : Promise.resolve(false)).then(
-          (ok) => { if (!ok) location.reload(); },
+          (ok) => { if (ok) swapCss(); else location.reload(); },
           () => location.reload(),
         );
       }

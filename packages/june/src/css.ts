@@ -4,15 +4,16 @@
 // (served immutable). Only the asset HREF diverges dev↔built, never the rendered
 // structure — so dev/built parity (the agent surface) holds.
 //
-// Floor: plain CSS, zero deps. Blessed: if global.css opts into Tailwind
-// (`@import "tailwindcss"`), June compiles it via the app's own Tailwind v4
-// (resolved from the app, not bundled into June) — Tailwind auto-detects the
-// content it scans. CSS never touches the agent projections (.md/.json/mcp).
+// Floor: plain CSS, zero deps — Lightning CSS (the SAME Rust engine Tailwind v4 uses) handles
+// nesting/prefix/minify. Blessed: if global.css opts into Tailwind (`@import "tailwindcss"`), June
+// compiles it via the app's own Tailwind v4 ENGINE DIRECTLY — @tailwindcss/node + the @tailwindcss/oxide
+// Rust scanner (the first-party Vite-plugin path, not PostCSS) — resolved from the app, napi-portable
+// across Bun and Node. CSS never touches the agent projections (.md/.json/mcp).
 
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import type { Targets } from "lightningcss"; // type-only — never enters the graph
@@ -67,23 +68,40 @@ export async function cssTargets(appDir: string): Promise<Targets> {
   return targets;
 }
 
+// Minimal type surface of the bits of Tailwind v4's engine we drive directly.
+type TwSource = { base: string; pattern: string; negated: boolean };
+type TwCompiler = { build(candidates: string[]): string; sources: TwSource[]; features: number };
+type TwNode = {
+  compile(css: string, opts: { base: string; onDependency: (p: string) => void }): Promise<TwCompiler>;
+  optimize(css: string, opts: { minify: boolean }): { code: string };
+  Features: { Utilities: number };
+};
+type TwOxide = { Scanner: new (o: { sources: TwSource[] }) => { scan(): string[] } };
+
+// Compile Tailwind v4 via its programmatic engine — @tailwindcss/node (compile + Lightning CSS optimize)
+// + @tailwindcss/oxide (the Rust content Scanner) — the SAME direct path the first-party Vite plugin
+// uses, NOT PostCSS. No postcss dependency or extra parse pass; the Oxide scanner (Rust) finds class
+// candidates and the compiler emits only those (tree-shaken). Engine resolved from the APP (its dep,
+// not June's); napi works identically on Bun and Node. Returns null when Tailwind isn't installed.
 async function compileTailwind(
   css: string,
   file: string,
   appDir: string,
   minify: boolean,
 ): Promise<string | null> {
-  const postcssPath = resolveFromApp("postcss", appDir);
-  const tailwindPath = resolveFromApp("@tailwindcss/postcss", appDir);
-  if (!postcssPath || !tailwindPath) return null;
-  const postcss = ((await import(postcssPath)) as { default: (p: unknown[]) => { process(css: string, opts: { from: string }): Promise<{ css: string }> } }).default;
-  const tailwind = ((await import(tailwindPath)) as { default: (opts?: unknown) => unknown }).default;
-  // Tailwind v4 only emits the classes the project actually uses (content
-  // detection = tree-shaking). For build we ALSO minify via its Lightning CSS
-  // optimizer; dev stays unminified for readability.
-  const plugin = minify ? tailwind({ optimize: { minify: true } }) : tailwind();
-  const result = await postcss([plugin]).process(css, { from: file });
-  return result.css;
+  const nodePath = resolveFromApp("@tailwindcss/node", appDir);
+  const oxidePath = resolveFromApp("@tailwindcss/oxide", appDir);
+  if (!nodePath || !oxidePath) return null;
+  const { compile, optimize, Features } = (await import(nodePath)) as TwNode;
+  const { Scanner } = (await import(oxidePath)) as TwOxide;
+  const base = dirname(file); // the CSS's dir — resolves @import / @source / auto-detection
+  const compiler = await compile(css, { base, onDependency: () => {} });
+  // Scan the project (app root) plus whatever the compiler declares; Oxide skips node_modules/.gitignore.
+  const sources: TwSource[] = [{ base: dirname(appDir), pattern: "**/*", negated: false }, ...compiler.sources];
+  const candidates = compiler.features & Features.Utilities ? new Scanner({ sources }).scan() : [];
+  const out = compiler.build(candidates);
+  // Lightning CSS optimize for build (minify + prefix/lower); dev stays readable.
+  return minify ? optimize(out, { minify: true }).code : out;
 }
 
 // Dev-only memo. The dev server re-fetches /global.css on EVERY navigation, but
@@ -138,7 +156,7 @@ export async function processCss(
     });
     if (compiled !== null) return compiled; // Tailwind already minified when asked
     console.warn(
-      "[june] global.css uses Tailwind but @tailwindcss/postcss isn't installed — serving raw CSS.",
+      "[june] global.css uses Tailwind but @tailwindcss/node + @tailwindcss/oxide aren't installed — serving raw CSS.",
     );
   }
   // Plain CSS (or the Tailwind fallback): minify + autoprefix/lower for the app's
