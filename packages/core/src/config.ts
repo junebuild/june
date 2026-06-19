@@ -83,9 +83,9 @@ export type JuneConfig = {
   // June's built-in baseline CSS reset — a minimal, Tailwind-Preflight-aligned normalize
   // (box-sizing, body margin, responsive media, form font inheritance, button reset,
   // text-size-adjust), injected at zero specificity via :where() so any stylesheet overrides it.
-  // ON by default. Set `false` when your CSS already ships a reset (e.g. Tailwind Preflight) to
-  // avoid the duplicate.
-  cssReset?: boolean; // default true
+  // DEFAULT: auto — ON, but OFF when app/global.css opts into Tailwind (its Preflight IS the reset,
+  // so June skips the duplicate). Set explicitly true/false to override the detection.
+  cssReset?: boolean; // default: on; auto-off when Tailwind is detected
   // Opt-in client router. OFF by default — June's floor is browser-native MPA
   // navigation (speculation prerender + View Transitions = SPA feel, zero JS).
   // Turn it on for app-like surfaces (dashboards) that need in-memory state to

@@ -10,7 +10,7 @@
 // Rust scanner (the first-party Vite-plugin path, not PostCSS) — resolved from the app, napi-portable
 // across Bun and Node. CSS never touches the agent projections (.md/.json/mcp).
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
@@ -31,6 +31,18 @@ export function findGlobalCss(appDir: string): string | null {
 }
 
 const usesTailwind = (css: string) => /@import\s+["']tailwindcss["']|@tailwind\b/.test(css);
+
+// True when app/global.css opts into Tailwind. Sync (build-time, tiny file) so the document config —
+// built synchronously in dev (app.ts) and the build (build.ts) — can default `cssReset` off when
+// Tailwind is present: its Preflight IS the reset, so June need not add its own baseline reset.
+export function globalCssUsesTailwind(appDir: string): boolean {
+  const p = join(appDir, GLOBAL_CSS);
+  try {
+    return existsSync(p) && usesTailwind(readFileSync(p, "utf8"));
+  } catch {
+    return false;
+  }
+}
 
 // Resolve a tool from the APP's node_modules (Tailwind/postcss are the app's
 // deps, not June's). Returns null when absent.

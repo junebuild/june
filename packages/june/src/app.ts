@@ -23,7 +23,7 @@ import { createPipeline, type ExtraHandler, type LayoutComponent, type Pipeline,
 import { resolveBoundary } from "./segment";
 import { memoizeResources } from "./resources";
 import { findClientEntry, bundleClientToString, CLIENT_SCRIPT_URL } from "./client-bundle";
-import { findGlobalCss, processCssCached, STYLES_URL } from "./css";
+import { findGlobalCss, globalCssUsesTailwind, processCssCached, STYLES_URL } from "./css";
 import { buildModuleCss, registerCssModules, MODULE_STYLES_URL, type ModuleMaps } from "./css-modules";
 
 export type CreateAppOptions = {
@@ -107,7 +107,8 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
     speculationRules: resolveSpeculationRules(speculation ?? undefined),
     speculationDelivery: speculation ? speculation.delivery ?? "inline" : "inline",
     viewTransitions: config.viewTransitions ?? true,
-    cssReset: config.cssReset,
+    // Default the baseline reset OFF when the app uses Tailwind (its Preflight is the reset).
+    cssReset: config.cssReset ?? !globalCssUsesTailwind(appDir),
     clientRouter: config.clientRouter ?? false,
     clientScript: clientEntry ? CLIENT_SCRIPT_URL : null,
     styles: cssEntry ? STYLES_URL : null,

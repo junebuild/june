@@ -35,7 +35,7 @@ import { findMiddlewareFile } from "./router";
 import { resolveBoundary } from "./segment";
 import type { ExtraHandler, LayoutComponent, LoadingComponent, ResourceHandler } from "./pipeline";
 import { findClientEntry, bundleClientToFile, CLIENT_SCRIPT_URL } from "./client-bundle";
-import { cssTargets, findGlobalCss, minifyCss, processCss, STYLES_URL } from "./css";
+import { cssTargets, findGlobalCss, globalCssUsesTailwind, minifyCss, processCss, STYLES_URL } from "./css";
 import { buildModuleCss, rolldownCssModulesPlugin, registerCssModules } from "./css-modules";
 
 export type BuildResult = {
@@ -148,7 +148,8 @@ export async function freezeConfig(appRoot: string): Promise<{
       speculationRules: resolveSpeculationRules(cfg.speculation ?? undefined),
       speculationDelivery: "inline",
       viewTransitions: cfg.viewTransitions ?? true,
-      cssReset: cfg.cssReset,
+      // Default the baseline reset OFF when the app uses Tailwind (its Preflight is the reset).
+      cssReset: cfg.cssReset ?? !globalCssUsesTailwind(join(appRoot, "app")),
       clientRouter: cfg.clientRouter ?? false,
       clientScript: hasClient ? CLIENT_SCRIPT_URL : null,
       styles: hasCss ? STYLES_URL : null,
