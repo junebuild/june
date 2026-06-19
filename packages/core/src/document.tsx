@@ -15,11 +15,13 @@ export type DocumentConfig = {
   speculationRules: string | null;
   speculationDelivery: "inline" | "header";
   viewTransitions: boolean | "instant" | number;
-  // June's built-in baseline CSS reset (BASE_RESET_CSS): a minimal, Tailwind-Preflight-aligned
-  // normalize (box-sizing, body margin, responsive media, form font inheritance, button reset,
-  // text-size-adjust), wrapped in :where() so it's zero-specificity and any stylesheet overrides it.
-  // Default ON. Set `false` when your CSS already ships a reset (e.g. Tailwind Preflight) to avoid
-  // the duplicate. Maps from JuneConfig.cssReset.
+  // June's built-in zero-config defaults: the baseline reset (BASE_RESET_CSS) AND the starter look
+  // (STARTER_CONTENT_CSS — page background, a centered 720px column, inline-code chips). The reset is
+  // :where()-wrapped (zero-specificity); the starter look is full-specificity AND unlayered, so it
+  // would override an app's own CSS (Tailwind utilities/typography included). Both default ON and are
+  // dropped together when `false` — set it when your CSS already ships a reset and owns the look (e.g.
+  // Tailwind Preflight + your own styles). Maps from JuneConfig.cssReset (auto-off when Tailwind is
+  // detected in app/global.css).
   cssReset?: boolean;
   // Opt-in client router (config.clientRouter). When true the page is wrapped in
   // <div data-june-root> — the region the router swaps on soft navigation — and
@@ -58,6 +60,18 @@ export const BASE_RESET_CSS = `:where(*,::before,::after,::backdrop){box-sizing:
 :where(img,picture,video,canvas,svg){display:block;max-width:100%}
 :where(button,input,select,textarea){font:inherit}
 :where(button){color:inherit;background:none;border:0}`;
+
+// June's zero-config "starter look": opinionated defaults — a page background, a centered 720px reading
+// column, and inline-code chips — that make an app shipping NO CSS of its own look decent immediately.
+// Unlike BASE_RESET_CSS these are full-specificity LAYOUT/LOOK opinions, not a :where() reset, so they
+// would fight an app that brings its own styling. CSS cascade layers don't save us here: these are
+// unlayered, and unlayered normal declarations outrank EVERY @layer (Tailwind utilities and the
+// typography plugin included) regardless of specificity. So they're injected together with the reset
+// and, like it, DEFERRED when the app brings its own system (cssReset === false — which auto-derives
+// from Tailwind detection in the host). Then Tailwind Preflight + the app's CSS own the look entirely.
+export const STARTER_CONTENT_CSS = `body{font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#fbfbf8;color:#1d1d1f}
+main{width:min(720px,calc(100vw - 32px));margin:72px auto}
+code{background:#ecebe4;border-radius:4px;padding:2px 5px}`;
 
 // Cross-document View Transitions: same-origin MPA navigations cross-fade
 // (and pair with prerender: activation + smooth transition = SPA feel, no SPA).
@@ -180,25 +194,11 @@ export function Document({
         {config.speculationRules ? (
           <script dangerouslySetInnerHTML={{ __html: PREFETCH_FALLBACK }} />
         ) : null}
+        {/* June's zero-config reset + starter look. Both are deferred when the app brings its own
+            styling system (cssReset === false, auto-set when Tailwind is detected) so they never fight
+            it — see BASE_RESET_CSS / STARTER_CONTENT_CSS. View-transition CSS is orthogonal, always on. */}
         <style>{`${viewTransitionCss(config.viewTransitions)}
-${config.cssReset === false ? "" : BASE_RESET_CSS}
-          body {
-            font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-            background: #fbfbf8;
-            color: #1d1d1f;
-          }
-
-          main {
-            width: min(720px, calc(100vw - 32px));
-            margin: 72px auto;
-          }
-
-          code {
-            background: #ecebe4;
-            border-radius: 4px;
-            padding: 2px 5px;
-          }
-        `}</style>
+${config.cssReset === false ? "" : BASE_RESET_CSS + "\n" + STARTER_CONTENT_CSS}`}</style>
         {/* The app's global.css — auto-linked, AFTER the inline base styles so it
             (and a Tailwind reset) wins. Absent → no stylesheet. */}
         {config.styles ? <link rel="stylesheet" href={config.styles} /> : null}
