@@ -107,6 +107,7 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
     speculationRules: resolveSpeculationRules(speculation ?? undefined),
     speculationDelivery: speculation ? speculation.delivery ?? "inline" : "inline",
     viewTransitions: config.viewTransitions ?? true,
+    cssReset: config.cssReset,
     clientRouter: config.clientRouter ?? false,
     clientScript: clientEntry ? CLIENT_SCRIPT_URL : null,
     styles: cssEntry ? STYLES_URL : null,

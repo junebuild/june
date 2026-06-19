@@ -80,6 +80,12 @@ export type JuneConfig = {
   //   "instant"      → cross-document activation with no animation
   //   false          → no @view-transition rule at all
   viewTransitions?: boolean | "instant" | number; // default true
+  // June's built-in baseline CSS reset — a minimal, Tailwind-Preflight-aligned normalize
+  // (box-sizing, body margin, responsive media, form font inheritance, button reset,
+  // text-size-adjust), injected at zero specificity via :where() so any stylesheet overrides it.
+  // ON by default. Set `false` when your CSS already ships a reset (e.g. Tailwind Preflight) to
+  // avoid the duplicate.
+  cssReset?: boolean; // default true
   // Opt-in client router. OFF by default — June's floor is browser-native MPA
   // navigation (speculation prerender + View Transitions = SPA feel, zero JS).
   // Turn it on for app-like surfaces (dashboards) that need in-memory state to

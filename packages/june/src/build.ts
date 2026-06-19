@@ -148,6 +148,7 @@ export async function freezeConfig(appRoot: string): Promise<{
       speculationRules: resolveSpeculationRules(cfg.speculation ?? undefined),
       speculationDelivery: "inline",
       viewTransitions: cfg.viewTransitions ?? true,
+      cssReset: cfg.cssReset,
       clientRouter: cfg.clientRouter ?? false,
       clientScript: hasClient ? CLIENT_SCRIPT_URL : null,
       styles: hasCss ? STYLES_URL : null,

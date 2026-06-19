@@ -15,6 +15,12 @@ export type DocumentConfig = {
   speculationRules: string | null;
   speculationDelivery: "inline" | "header";
   viewTransitions: boolean | "instant" | number;
+  // June's built-in baseline CSS reset (BASE_RESET_CSS): a minimal, Tailwind-Preflight-aligned
+  // normalize (box-sizing, body margin, responsive media, form font inheritance, button reset,
+  // text-size-adjust), wrapped in :where() so it's zero-specificity and any stylesheet overrides it.
+  // Default ON. Set `false` when your CSS already ships a reset (e.g. Tailwind Preflight) to avoid
+  // the duplicate. Maps from JuneConfig.cssReset.
+  cssReset?: boolean;
   // Opt-in client router (config.clientRouter). When true the page is wrapped in
   // <div data-june-root> — the region the router swaps on soft navigation — and
   // that element's presence is the runtime signal the islands bundle reads to
@@ -40,6 +46,18 @@ export type DocumentConfig = {
   // in-browser agent can call them (each tool's execute proxies to /mcp).
   webmcpTools?: Array<{ name: string; description?: string; inputSchema?: unknown }> | null;
 };
+
+// June's built-in baseline CSS reset — a minimal, Tailwind-Preflight-aligned normalize, NOT a layout
+// opinion. Every rule is wrapped in :where() so it carries ZERO specificity: present as a safe baseline
+// for apps with no reset, yet trivially overridden by any stylesheet (so it never fights an app's own
+// styles, Tailwind Preflight included). Deliberately omits `cursor: pointer` on buttons to match
+// Tailwind v4 / browser-native behavior. Injected unless `cssReset: false`.
+export const BASE_RESET_CSS = `:where(*,::before,::after,::backdrop){box-sizing:border-box}
+:where(html){-webkit-text-size-adjust:100%}
+:where(body){margin:0}
+:where(img,picture,video,canvas,svg){display:block;max-width:100%}
+:where(button,input,select,textarea){font:inherit}
+:where(button){color:inherit;background:none;border:0}`;
 
 // Cross-document View Transitions: same-origin MPA navigations cross-fade
 // (and pair with prerender: activation + smooth transition = SPA feel, no SPA).
@@ -163,8 +181,8 @@ export function Document({
           <script dangerouslySetInnerHTML={{ __html: PREFETCH_FALLBACK }} />
         ) : null}
         <style>{`${viewTransitionCss(config.viewTransitions)}
+${config.cssReset === false ? "" : BASE_RESET_CSS}
           body {
-            margin: 0;
             font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
             background: #fbfbf8;
             color: #1d1d1f;
