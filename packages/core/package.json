@@ -17,6 +17,7 @@
     "./outlet": "./src/outlet.tsx",
     "./islands-client": "./src/islands-client.ts",
     "./client-router": "./src/client-router.ts",
+    "./client-router-flight": "./src/client-router-flight.ts",
     "./client-live": "./src/client-live.ts",
     "./nav-protocol": "./src/nav-protocol.ts",
     "./morph": "./src/morph.ts",

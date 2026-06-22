@@ -4,6 +4,7 @@
 import React from "react";
 
 import type { Metadata } from "./route";
+import type { RouterMode } from "./config";
 
 // The serializable slice of app config the document needs. The server feeds it
 // from AppConfig; the generated worker inlines it as literals at build time.
@@ -23,11 +24,13 @@ export type DocumentConfig = {
   // Tailwind Preflight + your own styles). Maps from JuneConfig.cssReset (auto-off when Tailwind is
   // detected in app/global.css).
   cssReset?: boolean;
-  // Opt-in client router (config.clientRouter). When true the page is wrapped in
-  // <div data-june-root> — the region the router swaps on soft navigation — and
-  // that element's presence is the runtime signal the islands bundle reads to
-  // start the router. Absent → classic MPA navigation, zero added JS.
-  clientRouter?: boolean;
+  // Opt-in client router (resolved from config.clientRouter). When not "off" the
+  // page is wrapped in <div data-june-root> — the region the router swaps on soft
+  // navigation — and that element's presence is the runtime signal the islands
+  // bundle reads to start the router. "off"/absent → classic MPA navigation, zero
+  // added JS. The applier ("morph" default, "flight" opt-in) rides on the same
+  // element as data-june-router (omitted for morph → byte-identical to before).
+  clientRouter?: RouterMode;
   // URL of the client islands runtime bundle. Set by the host (dev serves it,
   // build freezes its hashed path) when the app has islands; the document then
   // loads it as a deferred module so `"use client"` islands hydrate. Absent /
@@ -206,11 +209,17 @@ ${config.cssReset === false ? "" : BASE_RESET_CSS + "\n" + STARTER_CONTENT_CSS}`
         {config.moduleStyles ? <link rel="stylesheet" href={config.moduleStyles} /> : null}
       </head>
       <body>
-        {/* clientRouter on → wrap the page in the swap region. Its presence is
-            also the router's activation signal (the islands bundle starts the
-            router iff [data-june-root] exists). Off → bytes are unchanged. */}
-        {config.clientRouter ? (
-          <div data-june-root data-june-shell={shellKey ?? undefined}>
+        {/* clientRouter not "off" → wrap the page in the swap region. Its
+            presence is the router's activation signal (the islands bundle starts
+            the router iff [data-june-root] exists); data-june-router names the
+            applier. "off" → bytes unchanged; "morph" → router attr omitted, so
+            byte-identical to the previous boolean output. */}
+        {config.clientRouter && config.clientRouter !== "off" ? (
+          <div
+            data-june-root
+            data-june-router={config.clientRouter === "flight" ? "flight" : undefined}
+            data-june-shell={shellKey ?? undefined}
+          >
             {children}
           </div>
         ) : (

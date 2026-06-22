@@ -24,7 +24,7 @@ import { basename, dirname, join, relative, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { loadJuneConfig } from "./config-loader";
-import { resolveAgent, resolveSpeculationRules } from "@junejs/core/config";
+import { resolveAgent, resolveClientRouter, resolveSpeculationRules } from "@junejs/core/config";
 import { buildLinkHeader } from "@junejs/core/discovery";
 import { routeFromModule, type BrandedRoute } from "@junejs/core/route";
 import { workers, type JuneAdapter, type ResourcePlan } from "./adapter";
@@ -35,6 +35,8 @@ import { findMiddlewareFile } from "./router";
 import { resolveBoundary } from "./segment";
 import type { ExtraHandler, LayoutComponent, LoadingComponent, ResourceHandler } from "./pipeline";
 import { findClientEntry, bundleClientToFile, CLIENT_SCRIPT_URL } from "./client-bundle";
+import { generateIslandRegistry } from "./island-registry";
+import { buildRsc, findRscRoutes } from "./rsc-build";
 import { cssTargets, findGlobalCss, globalCssUsesTailwind, minifyCss, processCss, STYLES_URL } from "./css";
 import { buildModuleCss, rolldownCssModulesPlugin, registerCssModules } from "./css-modules";
 
@@ -150,7 +152,7 @@ export async function freezeConfig(appRoot: string): Promise<{
       viewTransitions: cfg.viewTransitions ?? true,
       // Default the baseline reset OFF when the app uses Tailwind (its Preflight is the reset).
       cssReset: cfg.cssReset ?? !globalCssUsesTailwind(join(appRoot, "app")),
-      clientRouter: cfg.clientRouter ?? false,
+      clientRouter: resolveClientRouter(cfg.clientRouter),
       clientScript: hasClient ? CLIENT_SCRIPT_URL : null,
       styles: hasCss ? STYLES_URL : null,
     },
@@ -345,8 +347,17 @@ export async function juneBuild(
   const clientEntry = findClientEntry(appDir);
   let clientAsset: string | null = null;
   if (clientEntry) {
+    // Regenerate the auto lazy island registry before bundling (same as dev).
+    generateIslandRegistry(appDir);
     clientAsset = await bundleClientToFile(clientEntry, appRoot, assetsDir, cssModuleMaps);
     frozen.document.clientScript = `/${clientAsset}`;
+  }
+
+  // Opt-in PER-ROUTE RSC build (page.rsc.tsx routes): emit the server + SSR-worker
+  // graphs under <outDir>/rsc/. Gated on RSC routes existing, so apps without any
+  // are byte-identical to before. Coexists with the SSR pipeline via a dispatcher.
+  if (findRscRoutes(appDir).length > 0) {
+    await buildRsc(appRoot, outDir, frozen.document);
   }
 
   // Declared resources become two things: a build-time plan (→ platform bindings

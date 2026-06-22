@@ -14,7 +14,12 @@ import { pathToFileURL } from "node:url";
 import type { ComponentType } from "react";
 
 import { routeFromModule } from "@junejs/core/route";
-import { resolveAgent, resolveSpeculationRules, type JuneConfig } from "@junejs/core/config";
+import {
+  resolveAgent,
+  resolveClientRouter,
+  resolveSpeculationRules,
+  type JuneConfig,
+} from "@junejs/core/config";
 import type { DocumentConfig } from "@junejs/core/document";
 import { runWithTrace, type RequestTrace } from "@junejs/core/instrumentation";
 
@@ -22,7 +27,13 @@ import { findMiddlewareFile, isResourceFile, listRoutes, matchRouteTree, resolve
 import { createPipeline, type ExtraHandler, type LayoutComponent, type Pipeline, type Resolved, type ResourceHandler } from "./pipeline";
 import { resolveBoundary } from "./segment";
 import { memoizeResources } from "./resources";
-import { findClientEntry, bundleClientToString, CLIENT_SCRIPT_URL } from "./client-bundle";
+import {
+  findClientEntry,
+  bundleClientSplit,
+  CLIENT_SCRIPT_URL,
+  type ClientChunks,
+} from "./client-bundle";
+import { generateIslandRegistry } from "./island-registry";
 import { findGlobalCss, globalCssUsesTailwind, processCssCached, STYLES_URL } from "./css";
 import { buildModuleCss, registerCssModules, MODULE_STYLES_URL, type ModuleMaps } from "./css-modules";
 
@@ -109,7 +120,7 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
     viewTransitions: config.viewTransitions ?? true,
     // Default the baseline reset OFF when the app uses Tailwind (its Preflight is the reset).
     cssReset: config.cssReset ?? !globalCssUsesTailwind(appDir),
-    clientRouter: config.clientRouter ?? false,
+    clientRouter: resolveClientRouter(config.clientRouter),
     clientScript: clientEntry ? CLIENT_SCRIPT_URL : null,
     styles: cssEntry ? STYLES_URL : null,
   };
@@ -119,13 +130,17 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
   let moduleCssPromise: Promise<{ maps: ModuleMaps; css: string | null }> | undefined;
   const getModuleCss = () => (moduleCssPromise ??= buildModuleCss(appDir, dirname(appDir)));
 
-  let clientBundle: Promise<string> | undefined;
-  const serveClient = (): Promise<string> =>
-    // cwd = the app ROOT (appDir's parent) so rolldown resolves node_modules
-    // from the project, exactly like the build does. Islands may import .module.css.
-    (clientBundle ??= getModuleCss().then(({ maps }) =>
-      bundleClientToString(clientEntry!, dirname(appDir), maps),
-    ));
+  // Split build: one chunk per island + a shared React chunk, all keyed by file
+  // name. The entry is "client.js"; island chunks load on demand. cwd = the app
+  // ROOT so rolldown resolves node_modules from the project, like the build does.
+  let clientBundle: Promise<ClientChunks> | undefined;
+  const serveClient = (): Promise<ClientChunks> =>
+    (clientBundle ??= getModuleCss().then(({ maps }) => {
+      // Regenerate app/_islands.gen.ts (the auto lazy registry) right before
+      // bundling, so a freshly added island() module is wired without a restart.
+      generateIslandRegistry(appDir);
+      return bundleClientSplit(clientEntry!, dirname(appDir), "development", maps);
+    }));
 
   const routePaths = () => listRoutes(appDir, { pageConvention: true });
 
@@ -228,15 +243,27 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
             new Response(css ?? "", { headers: { "content-type": "text/css; charset=utf-8" } }),
         );
       }
-      // Dev serves the islands runtime itself (build ships it as a static
-      // asset); bundled on first hit, memoized after.
-      if (clientEntry && new URL(request.url).pathname === CLIENT_SCRIPT_URL) {
-        return serveClient().then(
-          (code) =>
-            new Response(code, {
-              headers: { "content-type": "text/javascript; charset=utf-8" },
-            }),
-          (err: unknown) => {
+      // Dev serves the islands runtime itself (build ships it as static assets);
+      // bundled on first hit, memoized after. Split build → many chunks under
+      // /_june/: the entry is /_june/client.js, islands are /_june/<name>.js,
+      // loaded on demand by the lazy runtime.
+      {
+        const pathname = new URL(request.url).pathname;
+        if (clientEntry && pathname.startsWith("/_june/") && pathname.endsWith(".js")) {
+          const file = pathname.slice("/_june/".length);
+          return serveClient().then(
+            (chunks) => {
+              const code = chunks.get(file);
+              if (code === undefined)
+                return new Response(`unknown client chunk: ${file}\n`, {
+                  status: 404,
+                  headers: { "content-type": "text/plain; charset=utf-8" },
+                });
+              return new Response(code, {
+                headers: { "content-type": "text/javascript; charset=utf-8" },
+              });
+            },
+            (err: unknown) => {
             // A rejected bundle must answer, not hang the request (Bun.serve
             // times the handler out) — and must not be memoized, or the error
             // outlives its cause.
@@ -246,8 +273,9 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
               status: 500,
               headers: { "content-type": "text/plain; charset=utf-8" },
             });
-          },
-        );
+            },
+          );
+        }
       }
       return runWithTrace(newTrace(), async () => (await getPipeline()).fetch(request));
     },
