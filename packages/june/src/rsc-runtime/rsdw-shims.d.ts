@@ -12,6 +12,10 @@ declare module "react-server-dom-webpack/server" {
     id: string,
     exportName: string,
   ): unknown;
+  // "use server" — register a server function so it serializes as a server
+  // reference and can be invoked from a decoded client request.
+  export function registerServerReference<F>(fn: F, id: string, exportName: string): F;
+  export function decodeReply(body: string | FormData, serverManifest?: unknown, options?: unknown): Promise<unknown[]>;
 }
 
 declare module "react-server-dom-webpack/client" {
@@ -19,6 +23,8 @@ declare module "react-server-dom-webpack/client" {
     stream: ReadableStream<Uint8Array>,
     options?: unknown,
   ): Promise<React.ReactNode> & React.ReactNode;
+  // "use server" client half — encode args for a server-function POST.
+  export function encodeReply(value: unknown): Promise<string | FormData>;
 }
 
 // The app under render, injected by the build (resolve.alias "june:app" → app).
