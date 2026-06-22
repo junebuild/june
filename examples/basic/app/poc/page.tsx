@@ -23,14 +23,14 @@ export default function PocPage() {
         <h2>
           <code>idle</code> — hydrates in requestIdleCallback
         </h2>
-        <Counter initial={100} label="idle" client="idle" />
+        <Counter initial={100} label="idle" client:idle />
       </section>
 
       <section>
         <h2>
           <code>only</code> — never SSR'd, mounts fresh on the client
         </h2>
-        <Counter initial={7} label="client-only" client="only" />
+        <Counter initial={7} label="client-only" client:only />
       </section>
 
       <section>
@@ -54,7 +54,7 @@ export default function PocPage() {
         <h2>
           <code>visible</code> — hydrates on scroll into view
         </h2>
-        <Counter initial={0} label="visible" client="visible" />
+        <Counter initial={0} label="visible" client:visible />
       </section>
     </main>
   );

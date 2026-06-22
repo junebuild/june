@@ -56,8 +56,8 @@ describe("poc intent-based islands", () => {
     expect(document.body.querySelector("button")!.textContent).toBe("count: 4");
   });
 
-  test('client="only" ships an empty marker and mounts fresh on the client', async () => {
-    const html = renderToString(<Counter initial={9} client="only" />);
+  test('client:only ships an empty marker and mounts fresh on the client', async () => {
+    const html = renderToString(<Counter initial={9} client:only />);
     expect(html).toContain('data-june-strategy="only"');
     expect(html).not.toContain("count: 9"); // never SSR'd
     document.body.innerHTML = html;
@@ -65,6 +65,15 @@ describe("poc intent-based islands", () => {
       hydrateIslandsAuto();
     });
     expect(document.body.querySelector("button")!.textContent).toBe("count: 9");
+  });
+
+  test("client:<strategy> directive sets the marker strategy and is stripped from props", () => {
+    const html = renderToString(<Counter initial={5} client:visible />);
+    expect(html).toContain('data-june-strategy="visible"');
+    // The directive must NOT leak into the serialized props or onto the DOM.
+    expect(html).not.toContain("client:visible");
+    expect(html).toContain("count: "); // visible islands ARE server-rendered (text-boundary aside)
+    expect(html).toContain("5</button>");
   });
 
   test("server-slot <Tabs> adopts the SSR panels into an interactive shell", async () => {

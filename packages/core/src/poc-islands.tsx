@@ -59,13 +59,22 @@ export type IslandOptions = {
   slot?: boolean;
 };
 
+// The Astro-style hydration directives, expressed as JSX NAMESPACED attributes
+// (`<Counter client:visible/>`). They are NOT a transform: the whole toolchain
+// (Bun, tsc, rolldown/oxc) already lowers `client:visible` to the string-keyed
+// prop `"client:visible": true`, so the wrapper just reads it at runtime. Typing
+// them here makes tsc validate the directive (a typo like `client:bogus` errors)
+// and autocomplete the four strategies.
+export type IslandIntent = { [K in `client:${Strategy}`]?: boolean };
+const INTENT_KEYS = ["client:load", "client:idle", "client:visible", "client:only"] as const;
+
 // Wrap a client component so it can be used DIRECTLY (`<Counter/>`). Returns a
 // server component that renders the hydration marker; self-registers the raw
 // component for the client runtime.
 export function island<P extends Record<string, unknown>>(
   Component: React.ComponentType<P>,
   options: IslandOptions = {},
-): React.ComponentType<P & { client?: Strategy; children?: React.ReactNode }> {
+): React.ComponentType<P & IslandIntent & { children?: React.ReactNode }> {
   const name = options.name ?? Component.displayName ?? Component.name;
   if (!name) {
     throw new Error(
@@ -77,14 +86,20 @@ export function island<P extends Record<string, unknown>>(
   // Register the RAW component — the client hydrates this, not the wrapper.
   POC_REGISTRY.set(name, { component: Component, strategy: defaultStrategy, slot });
 
-  function IslandWrapper(props: P & { client?: Strategy }): React.ReactElement {
-    // `client` is the per-usage intent override; `children` are the slot. Neither
-    // crosses to the client as JSON props.
-    const { client, children, ...rest } = props as P & {
-      client?: Strategy;
-      children?: React.ReactNode;
-    };
-    const strategy: Strategy = client ?? defaultStrategy;
+  function IslandWrapper(props: P & IslandIntent & { children?: React.ReactNode }): React.ReactElement {
+    // Pull out the slot children + any `client:*` directives. None of these cross
+    // to the client as JSON props.
+    const { children, ...rest } = props as P & IslandIntent & { children?: React.ReactNode };
+    // Per-usage intent: the truthy `client:<strategy>` directive wins; strip every
+    // directive key so it never reaches the component or the serialized props.
+    let chosen: Strategy | undefined;
+    for (const key of INTENT_KEYS) {
+      if (key in rest) {
+        if ((rest as Record<string, unknown>)[key]) chosen = key.slice("client:".length) as Strategy;
+        delete (rest as Record<string, unknown>)[key];
+      }
+    }
+    const strategy: Strategy = chosen ?? defaultStrategy;
 
     const markerProps: Record<string, unknown> = {
       [ISLAND_NAME_ATTR]: name,
