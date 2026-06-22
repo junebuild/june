@@ -9,6 +9,16 @@
 export const FRAGMENT_ACCEPT = "text/vnd.june.fragment+html";
 export const TITLE_HEADER = "x-june-title";
 
+// The OPT-IN sibling of FRAGMENT_ACCEPT (clientRouter: "flight"). A soft
+// navigation asks for the SAME url with this media type to get the `flight`
+// projection — the route rendered through the server's react-server graph as a
+// React Flight stream (VDOM-over-the-wire) instead of an HTML fragment. Like the
+// fragment type a browser never sends it, so it adds no public URL surface; the
+// title rides back in TITLE_HEADER. Until the server grows a flight projection
+// (the react-server dual-graph render — runtime-convergence.md #1/#2) a request
+// for it negotiates away and the client applier hard-navigates.
+export const FLIGHT_ACCEPT = "text/vnd.june.flight";
+
 // Segment-scoped fragments (the granularity optimization): when a route's layout
 // chain declares a boundary (`export const segmentBoundary = true` on a layout
 // that renders <JuneOutlet>), the server renders only the chain BELOW the

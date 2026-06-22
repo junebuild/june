@@ -18,7 +18,6 @@
 // Host-coupled (node:fs + Rolldown), so it lives in @junejs/server, never the pure
 // contract layer.
 
-import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -57,6 +56,33 @@ async function bundleClient(entryFile: string, cwd: string, mode: BundleMode, ma
   return bundle;
 }
 
+// PoC: split build. With a lazy registry (`{ name: () => import("./Island") }`)
+// the entry's dynamic imports make rolldown emit ONE chunk per island plus a
+// shared chunk for React — so a page downloads only the islands it actually
+// renders, not the whole app's union. Returns every chunk keyed by file name
+// (the entry is "client.js"); the dev server serves each under /_june/<name>.
+export type ClientChunks = Map<string, string>;
+
+export async function bundleClientSplit(
+  entryFile: string,
+  cwd: string,
+  mode: BundleMode,
+  maps: ModuleMaps = {},
+): Promise<ClientChunks> {
+  const bundle = await bundleClient(entryFile, cwd, mode, maps);
+  const { output } = await bundle.generate({
+    format: "esm",
+    entryFileNames: "client.js",
+    // [name] (no hash) in dev so the relative `import("./Counter.js")` baked into
+    // the entry resolves to a path the dev server can serve by name.
+    chunkFileNames: "[name].js",
+  });
+  await bundle.close();
+  const chunks: ClientChunks = new Map();
+  for (const o of output) if (o.type === "chunk") chunks.set(o.fileName, o.code);
+  return chunks;
+}
+
 // Build the client entry to a single `client.js` string (dev serves this live).
 export async function bundleClientToString(entryFile: string, cwd: string, maps: ModuleMaps = {}): Promise<string> {
   const bundle = await bundleClient(entryFile, cwd, "development", maps);
@@ -66,19 +92,39 @@ export async function bundleClientToString(entryFile: string, cwd: string, maps:
   return entry && entry.type === "chunk" ? entry.code : "";
 }
 
-// Build the client entry, content-hash it, and write `<destDir>/_june/client.<hash>.js`
-// (immutable-cacheable, like the hashed CSS). Returns the asset filename
-// (`_june/client.<hash>.js`) so the build can freeze its URL into the document.
+// Build the client entry and write EVERY emitted chunk/asset under
+// `<destDir>/_june/`, each content-hashed by rolldown (immutable-cacheable). With
+// a lazy registry (`{ name: () => import("./Island") }`) rolldown code-splits one
+// chunk per island + a shared React chunk, and the entry's relative `import()`s
+// already point at the hashed siblings — so they must ALL ship, not just the
+// entry (writing only the entry leaves those imports 404ing in production).
+// Returns the ENTRY asset filename (`_june/client.<hash>.js`) for the document.
 export async function bundleClientToFile(entryFile: string, cwd: string, destDir: string, maps: ModuleMaps = {}): Promise<string> {
   const bundle = await bundleClient(entryFile, cwd, "production", maps);
-  const { output } = await bundle.generate({ format: "esm", entryFileNames: "client.js" });
+  // Hash entry + split chunks; all under _june/ so the entry's relative imports
+  // (`./Counter-<hash>.js`) resolve there when served from /_june/client.<hash>.js.
+  const { output } = await bundle.generate({
+    format: "esm",
+    // hex hashes keep the asset names in the historical `client.<8hex>.js` shape
+    // (lowercase hex) the document + parity tests expect, now that there can be
+    // sibling chunks too.
+    hashCharacters: "hex",
+    entryFileNames: "_june/client.[hash].js",
+    chunkFileNames: "_june/[name]-[hash].js",
+    assetFileNames: "_june/[name]-[hash][extname]",
+  });
   await bundle.close();
-  const entry = output.find((o) => o.type === "chunk" && o.isEntry);
-  const code = entry && entry.type === "chunk" ? entry.code : "";
-  const hash = createHash("sha256").update(code).digest("hex").slice(0, 8);
-  const fileName = `_june/client.${hash}.js`;
-  const dest = join(destDir, fileName);
-  await mkdir(dirname(dest), { recursive: true });
-  await writeFile(dest, code);
-  return fileName;
+
+  let entryFileName = "";
+  for (const o of output) {
+    const dest = join(destDir, o.fileName);
+    await mkdir(dirname(dest), { recursive: true });
+    if (o.type === "chunk") {
+      await writeFile(dest, o.code);
+      if (o.isEntry) entryFileName = o.fileName;
+    } else {
+      await writeFile(dest, o.source);
+    }
+  }
+  return entryFileName;
 }

@@ -43,6 +43,9 @@ export function hydrateIslands(
   let hydrated = 0;
   for (const el of markers) {
     if ((el as Marked).__juneHydrated) continue; // already live (e.g. carried across a nav)
+    // PoC intent-based islands carry data-june-strategy and are owned by
+    // hydrateIslandsAuto — never double-hydrate them from the legacy registry.
+    if (el.hasAttribute("data-june-strategy")) continue;
     const name = el.getAttribute(ISLAND_NAME_ATTR);
     if (!name) continue;
     const Component = registry[name];
@@ -60,13 +63,26 @@ export function hydrateIslands(
   }
 
   // Opt-in client router: the document renders [data-june-root] only when
-  // config.clientRouter is on, and only the full-document boot call (root ===
-  // document) should start it — re-hydrations of swapped subtrees pass the new
-  // root, not the document. Bind the router's re-hydrate to THIS registry so
-  // every soft-navigated page brings its islands to life.
-  if (root === document && document.querySelector("[data-june-root]")) {
+  // config.clientRouter is not "off", and only the full-document boot call
+  // (root === document) should start it — re-hydrations of swapped subtrees pass
+  // the new root, not the document. Bind the router's re-hydrate to THIS registry
+  // so every soft-navigated page brings its islands to life.
+  const routerRoot = root === document ? document.querySelector("[data-june-root]") : null;
+  if (routerRoot) {
     const rehydrate = (swapped: ParentNode) => hydrateIslands(registry, swapped);
-    startClientRouter(rehydrate);
+    // The applier rides on the root element: data-june-router="flight" means the
+    // author opted into Flight (VDOM-over-wire); its absence means morph (the
+    // HTML-over-wire default). Flight is gated here so it can NEVER be the silent
+    // default — it only runs when the document explicitly named it. The Flight
+    // module is DYNAMICALLY imported so react-server-dom is pulled into the bundle
+    // ONLY for flight-opted apps; morph users never pay that coupling.
+    if (routerRoot.getAttribute("data-june-router") === "flight") {
+      void import("./client-router-flight").then(({ startFlightRouter }) =>
+        startFlightRouter(),
+      );
+    } else {
+      startClientRouter(rehydrate);
+    }
     // Dev push-HMR hook: the injected dev-reload script calls this on reconnect
     // after a restart instead of location.reload() — re-fetch the current page's
     // fragment and MORPH it (preserveIslands:"all"), so island state, focus, and

@@ -9,3 +9,13 @@ import { hydrateIslands } from "@junejs/core/islands-client";
 import { Counter } from "./Counter";
 
 hydrateIslands({ Counter });
+
+// PoC: intent-based islands, CODE-SPLIT + AUTO-REGISTERED. ISLAND_LOADERS is
+// generated from the "use client" island() modules (app/_islands.gen.ts) — no
+// hand-written name→import map. Each entry is a lazy `() => import(...)`, so
+// rolldown emits one chunk per island and a page downloads only what it renders.
+import { hydrateIslandsLazy } from "@junejs/core/poc-islands-client";
+
+import { ISLAND_LOADERS } from "./_islands.gen";
+
+hydrateIslandsLazy(ISLAND_LOADERS);

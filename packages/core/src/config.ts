@@ -97,7 +97,20 @@ export type JuneConfig = {
   // Pure progressive enhancement: it degrades to a hard navigation when JS is
   // off or a fetch fails, and never touches the agent surface — every URL is
   // still a complete, projectable (.md/.json/mcp) document.
-  clientRouter?: boolean; // default false
+  //
+  // Three states, so the APPLIER (the wire format) is the author's explicit
+  // choice — Flight is never the silent default:
+  //   false (default) — browser-native MPA navigation; zero added JS.
+  //   true | "morph"  — soft nav via MORPH (HTML-over-wire): fetch the next
+  //                     page's fragment and reconcile it. The recommended
+  //                     applier — one representation, agent surfaces intact,
+  //                     island state preserved without annotation.
+  //   "flight"        — soft nav via FLIGHT (React VDOM-over-wire). EXPLICIT
+  //                     opt-in only: finer-grained streaming updates at the cost
+  //                     of a React-only second wire format. `true` NEVER implies
+  //                     it — you must name "flight" — so the HTML/zero-JS promise
+  //                     only ever yields when the author asks for it.
+  clientRouter?: boolean | "morph" | "flight"; // default false
   // Early Hints (IETF RFC 8297): Link rel=preload values for critical assets
   // (fonts/CSS), e.g. ["</fonts/inter.woff2>; rel=preload; as=font; crossorigin"].
   // Floor: sent as a Link header on HTML responses (Cloudflare upgrades it to
@@ -146,6 +159,21 @@ export function resolveAgent(partial?: Partial<AgentConfig>): AgentConfig {
     return { enabled: false, discovery: false, mcp: false, webmcp: false };
   }
   return merged;
+}
+
+// The navigation applier the runtime activates. "off" = MPA (no router). "morph"
+// = HTML-over-wire (the default soft-nav applier). "flight" = React VDOM-over-wire
+// (explicit opt-in). The host + document branch on this; the client reads it back
+// off the [data-june-root] element (data-june-router) to start the right applier.
+export type RouterMode = "off" | "morph" | "flight";
+
+// Normalize the three-state clientRouter into an explicit applier mode. `true`
+// and "morph" both mean morph — Flight is reachable ONLY by naming "flight", so
+// it can never become the silent default of the common `clientRouter: true`.
+export function resolveClientRouter(value: JuneConfig["clientRouter"]): RouterMode {
+  if (value === "flight") return "flight";
+  if (value === true || value === "morph") return "morph";
+  return "off";
 }
 
 // --- speculation (hover prerender/prefetch) -----------------------------------
