@@ -27,3 +27,14 @@ declare module "june:app" {
   export const App: React.ComponentType;
   export const clientManifest: Record<string, unknown> | undefined;
 }
+
+// The generated consumer manifest (resolve.alias "june:rsc-client" → app/_rsc-client.gen.ts).
+declare module "june:rsc-client" {
+  export const MODULE_MAP: Record<string, Record<string, { id: string; chunks: string[]; name: string }>>;
+}
+
+// The frozen document config (resolve.alias "june:rsc-config" → generated).
+declare module "june:rsc-config" {
+  import type { DocumentConfig } from "@junejs/core/document";
+  export const DOC_CONFIG: DocumentConfig;
+}

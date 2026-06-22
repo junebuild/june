@@ -22,11 +22,16 @@ export type RscGraph = "server" | "ssr";
 // "react-server" so React resolves to the server build.
 const EDGE_CONDITIONS = ["workerd", "edge-light", "import", "default"];
 
+// Generic-entry virtuals the build resolves to real app modules (so one runtime
+// entry serves any app): "june:app" (the app root), "june:rsc-client" (the
+// generated consumer manifest), "june:rsc-config" (the document config).
+export type RscAliases = Record<string, string>;
+
 async function bundleGraph(
   entryFile: string,
   cwd: string,
   graph: RscGraph,
-  appAlias?: string,
+  aliases: RscAliases = {},
   plugins: Plugin[] = [],
 ): Promise<string> {
   const { rolldown } = await import("rolldown");
@@ -39,9 +44,7 @@ async function bundleGraph(
     transform: { define: { "process.env.NODE_ENV": JSON.stringify("production") } },
     resolve: {
       conditionNames,
-      // The generic runtime entry imports the app as "june:app"; the build aliases
-      // it to the real app module so one entry serves any app.
-      ...(appAlias ? { alias: { "june:app": appAlias } } : {}),
+      ...(Object.keys(aliases).length ? { alias: aliases } : {}),
     },
   });
   const { output } = await bundle.generate({ format: "esm" });
@@ -56,16 +59,16 @@ async function bundleGraph(
 export function bundleServerGraph(
   entryFile: string,
   cwd: string,
-  appAlias?: string,
+  aliases?: RscAliases,
   appDir?: string,
 ): Promise<string> {
   const plugins = appDir ? [rscClientReferencesPlugin(appDir)] : [];
-  return bundleGraph(entryFile, cwd, "server", appAlias, plugins);
+  return bundleGraph(entryFile, cwd, "server", aliases, plugins);
 }
 
 // Bundle the SSR (normal-react) graph that turns a Flight stream into HTML.
-export function bundleSsrGraph(entryFile: string, cwd: string, appAlias?: string): Promise<string> {
-  return bundleGraph(entryFile, cwd, "ssr", appAlias);
+export function bundleSsrGraph(entryFile: string, cwd: string, aliases?: RscAliases): Promise<string> {
+  return bundleGraph(entryFile, cwd, "ssr", aliases);
 }
 
 // True iff bundled code references node:* — the worker-safety invariant. The RSC

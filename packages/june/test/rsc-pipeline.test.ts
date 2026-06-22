@@ -37,7 +37,7 @@ afterAll(() => rmSync(workdir, { recursive: true, force: true }));
 // Bundle the server graph for an app fixture, run it, return the Flight payload.
 async function renderFlightFor(appFixture: string): Promise<{ flight: string; code: string }> {
   const appDir = join(FIXTURES, appFixture);
-  const code = await bundleServerGraph(FLIGHT_ENTRY, REPO, join(appDir, "App.tsx"), appDir);
+  const code = await bundleServerGraph(FLIGHT_ENTRY, REPO, { "june:app": join(appDir, "App.tsx") }, appDir);
   const file = join(workdir, `flight-${appFixture}.mjs`);
   writeFileSync(file, code);
   const mod = (await import(file)) as { renderFlight: () => Promise<string> };

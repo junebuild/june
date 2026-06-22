@@ -36,6 +36,7 @@ import { resolveBoundary } from "./segment";
 import type { ExtraHandler, LayoutComponent, LoadingComponent, ResourceHandler } from "./pipeline";
 import { findClientEntry, bundleClientToFile, CLIENT_SCRIPT_URL } from "./client-bundle";
 import { generateIslandRegistry } from "./island-registry";
+import { buildRsc, findRscEntry } from "./rsc-build";
 import { cssTargets, findGlobalCss, globalCssUsesTailwind, minifyCss, processCss, STYLES_URL } from "./css";
 import { buildModuleCss, rolldownCssModulesPlugin, registerCssModules } from "./css-modules";
 
@@ -350,6 +351,13 @@ export async function juneBuild(
     generateIslandRegistry(appDir);
     clientAsset = await bundleClientToFile(clientEntry, appRoot, assetsDir, cssModuleMaps);
     frozen.document.clientScript = `/${clientAsset}`;
+  }
+
+  // Opt-in RSC build (app/_rsc.tsx): emit the server + SSR-worker graphs under
+  // <outDir>/rsc/. Gated on the entry file, so apps without it are byte-identical
+  // to before. Isolated from the SSR pipeline below.
+  if (findRscEntry(appDir)) {
+    await buildRsc(appRoot, outDir, frozen.document);
   }
 
   // Declared resources become two things: a build-time plan (→ platform bindings
