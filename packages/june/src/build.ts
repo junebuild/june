@@ -36,7 +36,7 @@ import { resolveBoundary } from "./segment";
 import type { ExtraHandler, LayoutComponent, LoadingComponent, ResourceHandler } from "./pipeline";
 import { findClientEntry, bundleClientToFile, CLIENT_SCRIPT_URL } from "./client-bundle";
 import { generateIslandRegistry } from "./island-registry";
-import { buildRsc, findRscEntry } from "./rsc-build";
+import { buildRsc, findRscRoutes } from "./rsc-build";
 import { cssTargets, findGlobalCss, globalCssUsesTailwind, minifyCss, processCss, STYLES_URL } from "./css";
 import { buildModuleCss, rolldownCssModulesPlugin, registerCssModules } from "./css-modules";
 
@@ -353,10 +353,10 @@ export async function juneBuild(
     frozen.document.clientScript = `/${clientAsset}`;
   }
 
-  // Opt-in RSC build (app/_rsc.tsx): emit the server + SSR-worker graphs under
-  // <outDir>/rsc/. Gated on the entry file, so apps without it are byte-identical
-  // to before. Isolated from the SSR pipeline below.
-  if (findRscEntry(appDir)) {
+  // Opt-in PER-ROUTE RSC build (page.rsc.tsx routes): emit the server + SSR-worker
+  // graphs under <outDir>/rsc/. Gated on RSC routes existing, so apps without any
+  // are byte-identical to before. Coexists with the SSR pipeline via a dispatcher.
+  if (findRscRoutes(appDir).length > 0) {
     await buildRsc(appRoot, outDir, frozen.document);
   }
 

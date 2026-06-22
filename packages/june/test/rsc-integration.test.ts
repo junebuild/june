@@ -1,12 +1,13 @@
-// RSC integration — buildRsc emits a worker that serves the RSC app as a full
-// <Document> HTML response, on a STANDARD target (worker-safe, no native runtime).
-// Builds for real, then invokes the emitted worker's fetch().
+// Per-route RSC coexistence — buildRsc emits a worker for page.rsc.tsx routes, and
+// createRscDispatch routes RSC paths there while everything else stays on the SSR
+// pipeline. Builds for real, then drives the dispatcher (real RSC worker + a stub
+// SSR fetch) to prove both render models coexist behind one fetch handler.
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { buildRsc, findRscEntry } from "../src/rsc-build";
+import { buildRsc, findRscRoutes, createRscDispatch } from "../src/rsc-build";
 import type { DocumentConfig } from "@junejs/core/document";
 
 const APP_ROOT = join(import.meta.dir, "fixtures", "rsc-app");
@@ -23,33 +24,42 @@ beforeAll(() => {
 });
 afterAll(() => rmSync(out, { recursive: true, force: true }));
 
-describe("buildRsc", () => {
-  test("opt-in: detects app/_rsc.tsx", () => {
-    expect(findRscEntry(join(APP_ROOT, "app"))).toBeTruthy();
-    expect(findRscEntry(join(import.meta.dir, "fixtures", "rsc"))).toBeUndefined();
+describe("per-route RSC", () => {
+  test("opt-in: scans page.rsc.tsx routes", () => {
+    const routes = findRscRoutes(join(APP_ROOT, "app"));
+    expect(routes.map((r) => r.path)).toEqual(["/"]);
+    // a non-RSC app has none
+    expect(findRscRoutes(join(import.meta.dir, "fixtures", "rsc"))).toEqual([]);
   });
 
-  test("builds an RSC worker that serves a full Document with the island SSR'd", async () => {
-    // cwd = APP_ROOT (inside the repo) so rolldown resolves node_modules; outputs
-    // go to a temp dir. Regenerates the (deterministic) committed manifests.
+  test("dispatcher: RSC path → Flight Document; other path → SSR pipeline", async () => {
     const result = await buildRsc(APP_ROOT, out, DOC_CONFIG);
     expect(result).not.toBeNull();
+    expect(result!.paths).toEqual(["/"]);
 
-    const worker = (await import(join(out, result!.worker))) as {
+    const rscWorker = (await import(join(out, result!.worker))) as {
       default: { fetch: (r: Request) => Promise<Response> };
     };
-    const res = await worker.default.fetch(new Request("http://x/"));
-    expect(res.status).toBe(200);
-    expect(res.headers.get("content-type")).toContain("text/html");
 
-    const html = await res.text();
-    // Full document shell (Document wrapped it).
-    expect(html).toContain("<!DOCTYPE html>");
-    expect(html).toContain("<html");
-    expect(html).toContain("<title>RSC</title>"); // from DOC_CONFIG.site.name
-    // Server content + the client island SSR'd through Flight, with its server slot.
-    expect(html).toContain("RSC app root");
-    expect(html).toContain('data-island="tabs"');
-    expect(html).toContain("SERVER overview");
+    // Stub SSR pipeline (the real one is tested elsewhere); the dispatcher must
+    // never send a non-RSC path to the RSC worker.
+    const ssrFetch = async () =>
+      new Response("SSR-PIPELINE", { headers: { "content-type": "text/html" } });
+
+    const dispatch = createRscDispatch(ssrFetch, rscWorker.default.fetch, result!.paths);
+
+    // RSC-owned path → the RSC worker renders a full Document via Flight.
+    const rsc = await dispatch(new Request("http://x/"));
+    expect(rsc.status).toBe(200);
+    const rscHtml = await rsc.text();
+    expect(rscHtml).toContain("<!DOCTYPE html>");
+    expect(rscHtml).toContain("<title>RSC</title>");
+    expect(rscHtml).toContain("RSC app root");
+    expect(rscHtml).toContain('data-island="tabs"'); // island SSR'd via Flight
+    expect(rscHtml).toContain("SERVER overview"); // its server slot children
+
+    // Any other path → the SSR pipeline, untouched.
+    const ssr = await dispatch(new Request("http://x/about"));
+    expect(await ssr.text()).toBe("SSR-PIPELINE");
   }, 60_000);
 });

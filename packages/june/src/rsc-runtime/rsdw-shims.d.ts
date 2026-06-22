@@ -34,6 +34,13 @@ declare module "june:app" {
   export const clientManifest: Record<string, unknown> | undefined;
 }
 
+// The generated per-route map (resolve.alias "june:rsc-routes" → _rsc-routes.gen.tsx).
+declare module "june:rsc-routes" {
+  import type React from "react";
+  export const ROUTES: Record<string, React.ComponentType>;
+  export const clientManifest: Record<string, unknown> | undefined;
+}
+
 // The generated consumer manifest (resolve.alias "june:rsc-client" → app/_rsc-client.gen.ts).
 declare module "june:rsc-client" {
   export const MODULE_MAP: Record<string, Record<string, { id: string; chunks: string[]; name: string }>>;

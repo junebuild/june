@@ -17,7 +17,7 @@ import { Document } from "@junejs/core/document";
 import { MODULE_MAP } from "june:rsc-client"; // installs __webpack_require__ (side effect) + the moduleMap
 import { DOC_CONFIG } from "june:rsc-config"; // the frozen DocumentConfig
 
-type ServerBundle = { renderFlight: () => Promise<string> };
+type ServerBundle = { renderFlight: (path: string) => Promise<string | null> };
 
 function Root({ tree }: { tree: Promise<React.ReactNode> }): React.ReactNode {
   return use(tree);
@@ -36,12 +36,13 @@ async function streamToString(stream: ReadableStream<Uint8Array>): Promise<strin
   return out;
 }
 
-async function renderDocument(): Promise<string> {
+async function renderDocument(path: string): Promise<string | null> {
   // Non-literal specifier → rolldown leaves it as a runtime import, so the
   // react-server server bundle is loaded (not re-bundled) from beside this file.
   const serverUrl = new URL("./server.js", import.meta.url).href;
   const server = (await import(serverUrl)) as ServerBundle;
-  const flight = await server.renderFlight();
+  const flight = await server.renderFlight(path);
+  if (flight === null) return null; // no RSC route here
 
   const flightStream = new Response(flight).body as ReadableStream<Uint8Array>;
   const tree = createFromReadableStream(flightStream, {
@@ -60,8 +61,10 @@ async function renderDocument(): Promise<string> {
 }
 
 export default {
-  async fetch(_request: Request): Promise<Response> {
-    const body = await renderDocument();
+  async fetch(request: Request): Promise<Response> {
+    const path = new URL(request.url).pathname;
+    const body = await renderDocument(path);
+    if (body === null) return new Response("Not Found", { status: 404 });
     return new Response(body, { headers: { "content-type": "text/html; charset=utf-8" } });
   },
 };
