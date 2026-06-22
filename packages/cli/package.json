@@ -1,6 +1,6 @@
 {
   "name": "@junejs/cli",
-  "version": "0.0.32",
+  "version": "0.0.33",
   "description": "The `june` CLI — dev / build / deploy / gen / info. A thin bin over @junejs/server.",
   "type": "module",
   "license": "MIT",

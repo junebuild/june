@@ -19,3 +19,4 @@ export const POSTS: ContentEntry[] = [
   }
 ];
 export const post = (slug: string): ContentEntry | null => POSTS.find((p) => p.slug === slug) ?? null;
+export const posts = (_locale?: string): ContentEntry[] => POSTS;

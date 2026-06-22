@@ -5,8 +5,39 @@ of truth; this file summarizes what matters per release.
 
 ## [Unreleased]
 
+## [0.0.33]
+
+### Changed
+
+- **`clientRouter` is now three-state** — `false | true|"morph" | "flight"`. `true`
+  stays the morph (HTML-over-wire) applier (byte-identical output); `"flight"` is an
+  explicit opt-in to the Flight applier. Flight is never the silent default.
+
+### Deprecated
+
+- **`<Island>` and `hydrateIslands(registry)`** — superseded by `island()` + the
+  generated registry. Kept for one release; the `@junejs/core/poc-islands{,-client}`
+  PoC subpaths are removed (import `island()` from `@junejs/core/islands`).
+
 ### Added
 
+- **Island v2 — intent-based authoring (`@junejs/core/islands`).** Use a client
+  component directly: `export const Counter = island(function Counter() {…})`, then
+  `<Counter initial={0} />`. Declare hydration intent at the call site, Astro-style,
+  with **typed** JSX directives (transform-free — the toolchain lowers
+  `client:visible` to a prop the runtime reads): `client:load` (default),
+  `client:idle`, `client:visible` (IntersectionObserver), `client:only` (no SSR,
+  mount fresh). The intent gates **download**, not just hydration. Per-island
+  **code-splitting** (one chunk per island, fetched only on the pages that render
+  it) and an **auto-generated registry** from `island()` modules
+  (`app/_islands.gen.ts`). Slot islands are **experimental** (the stable slot model
+  is RSC).
+- **Experimental — RSC build pipeline for standard targets.** Foundations for React
+  Server Components on Cloudflare Workers / Vercel edge (no native runtime): the dual
+  React graph via resolve conditions, `"use client"` → client-reference codegen,
+  Flight → `<Document>` HTML, and per-route coexistence (`page.rsc.tsx`) with the
+  SSR/island pipeline behind a path dispatcher. Opt-in; not yet wired as the
+  deployed worker entry.
 - **Experimental — `@junejs/i18n`, typed ICU messages (i18n phase 3).** A new
   opt-in package (Layer 2; locale routing is the in-box Layer 1). Author messages
   as ICU MessageFormat in `messages/<locale>.json` (or namespaced
