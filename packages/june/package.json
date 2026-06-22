@@ -32,9 +32,10 @@
   "dependencies": {
     "@junejs/core": "workspace:*",
     "@junejs/db": "workspace:*",
+    "lightningcss": "^1.27.0",
     "marked": "^18.0.5",
-    "rolldown": "^1.1.0",
-    "lightningcss": "^1.27.0"
+    "react-server-dom-webpack": "19.2.7",
+    "rolldown": "^1.1.0"
   },
   "peerDependencies": {
     "react": "^19.2.0",
