@@ -14,6 +14,8 @@
 // engine the client bundle already uses.
 import type { Plugin } from "rolldown";
 
+import { rscClientReferencesPlugin } from "./rsc-manifest";
+
 export type RscGraph = "server" | "ssr";
 
 // edge-first conditions shared by both graphs; the server graph prepends
@@ -48,9 +50,17 @@ async function bundleGraph(
   return entry && entry.type === "chunk" ? entry.code : "";
 }
 
-// Bundle the server (react-server) graph that renders an app to Flight.
-export function bundleServerGraph(entryFile: string, cwd: string, appAlias?: string): Promise<string> {
-  return bundleGraph(entryFile, cwd, "server", appAlias);
+// Bundle the server (react-server) graph that renders an app to Flight. When
+// `appDir` is given, the client-references plugin rewrites that app's "use client"
+// modules into client references automatically (no hand-written registration).
+export function bundleServerGraph(
+  entryFile: string,
+  cwd: string,
+  appAlias?: string,
+  appDir?: string,
+): Promise<string> {
+  const plugins = appDir ? [rscClientReferencesPlugin(appDir)] : [];
+  return bundleGraph(entryFile, cwd, "server", appAlias, plugins);
 }
 
 // Bundle the SSR (normal-react) graph that turns a Flight stream into HTML.

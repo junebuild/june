@@ -25,7 +25,8 @@ import { join, relative } from "node:path";
 
 export const ISLAND_REGISTRY_FILE = "_islands.gen.ts";
 
-function walk(dir: string): string[] {
+// Shared with rsc-manifest.ts (the RSC client-reference codegen).
+export function walk(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
     const p = join(dir, name);
     return statSync(p).isDirectory() ? walk(p) : [p];
@@ -34,7 +35,7 @@ function walk(dir: string): string[] {
 
 // True iff the first real statement (skipping blanks + line comments) is the
 // directive — the same rule the bundler uses to treat a module as client.
-function firstStatementIsDirective(src: string, directive: string): boolean {
+export function firstStatementIsDirective(src: string, directive: string): boolean {
   for (const line of src.split("\n")) {
     const t = line.trim();
     if (!t || t.startsWith("//")) continue;
@@ -44,7 +45,7 @@ function firstStatementIsDirective(src: string, directive: string): boolean {
 }
 
 // The named exports of a module (skipping `export default` and `export type`).
-function exportNames(src: string): string[] {
+export function exportNames(src: string): string[] {
   const names: string[] = [];
   for (const line of src.split("\n")) {
     const t = line.trim();

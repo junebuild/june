@@ -1,6 +1,7 @@
-import { Tabs } from "./client-refs";
-// Maps the client-reference id → its chunk descriptor (the client manifest).
-export const clientManifest = { "rsc/Tabs": { id: "rsc/Tabs", chunks: [], name: "Tabs" } };
+// The island is imported as a NORMAL module here; the server-graph plugin rewrites
+// Tabs.tsx into a client reference automatically. clientManifest is generated.
+import { Tabs } from "./Tabs";
+export { CLIENT_MANIFEST as clientManifest } from "./_rsc-server.gen";
 export function App() {
   return (
     <main>
