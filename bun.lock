@@ -121,7 +121,6 @@
         "@junejs/db": "workspace:*",
         "lightningcss": "^1.27.0",
         "marked": "^18.0.5",
-        "react-server-dom-webpack": "19.2.7",
         "rolldown": "^1.1.0",
       },
       "devDependencies": {
@@ -129,6 +128,7 @@
         "@types/pg": "^8.20.0",
         "mysql2": "^3.22.5",
         "pg": "^8.21.0",
+        "react-server-dom-webpack": "19.2.7",
       },
       "peerDependencies": {
         "@libsql/client": "^0.14.0 || ^0.15.0 || ^0.16.0 || ^0.17.0",
@@ -136,11 +136,13 @@
         "pg": "^8.0.0",
         "react": "^19.2.0",
         "react-dom": "^19.2.0",
+        "react-server-dom-webpack": "19.2.7",
       },
       "optionalPeers": [
         "@libsql/client",
         "mysql2",
         "pg",
+        "react-server-dom-webpack",
       ],
     },
     "packages/juno": {

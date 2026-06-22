@@ -1,6 +1,6 @@
 // The auto island registry generator: scans "use client" island() modules and
 // emits app/_islands.gen.ts keyed by export name → lazy import. Legacy islands
-// (no island() from poc-islands) and non-client modules are excluded.
+// (no island() from islands) and non-client modules are excluded.
 import { describe, expect, test, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -25,7 +25,7 @@ function appDir(files: Record<string, string>): string {
 }
 
 const ISLAND = (name: string) =>
-  `"use client";\nimport { island } from "@junejs/core/poc-islands";\nexport const ${name} = island(function ${name}(){ return null; });\n`;
+  `"use client";\nimport { island } from "@junejs/core/islands";\nexport const ${name} = island(function ${name}(){ return null; });\n`;
 
 describe("generateIslandRegistry", () => {
   test("emits a lazy loader per island export, keyed by export name", () => {
@@ -42,7 +42,7 @@ describe("generateIslandRegistry", () => {
     expect(out).toContain("export const ISLAND_LOADERS");
   });
 
-  test("excludes legacy islands (no island() from poc-islands) and server modules", () => {
+  test("excludes legacy islands (no island() from islands) and server modules", () => {
     const app = appDir({
       // legacy: "use client" but uses the OLD <Island> path, no island() wrapper
       "Legacy.tsx": `"use client";\nimport { useState } from "react";\nexport function Legacy(){ const [n]=useState(0); return null; }\n`,

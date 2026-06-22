@@ -4,7 +4,7 @@
 // registry keys by — no explicit { name }, no hand-written loader map.
 import { useState } from "react";
 
-import { island } from "@junejs/core/poc-islands";
+import { island } from "@junejs/core/islands";
 
 export const Counter = island(function Counter({
   initial = 0,

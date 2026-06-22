@@ -8,8 +8,8 @@ afterAll(() => GlobalRegistrator.unregister());
 
 import { act, useEffect, useRef, useState } from "react";
 import { renderToString } from "react-dom/server";
-import { island, Tab } from "@junejs/core/poc-islands";
-import { hydrateIslandsAuto, type SlotProps } from "@junejs/core/poc-islands-client";
+import { island, Tab } from "@junejs/core/islands";
+import { hydrateIslandsAuto, type SlotProps } from "@junejs/core/islands-client";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 

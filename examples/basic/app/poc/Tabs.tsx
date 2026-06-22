@@ -8,8 +8,8 @@
 // registry keys by — no explicit { name } needed.
 import { useEffect, useRef, useState } from "react";
 
-import { island, type Strategy } from "@junejs/core/poc-islands";
-import type { SlotProps } from "@junejs/core/poc-islands-client";
+import { island, type Strategy } from "@junejs/core/islands";
+import type { SlotProps } from "@junejs/core/islands-client";
 
 // Strategy is re-exported only so the page can type `client` overrides if needed.
 export type { Strategy };

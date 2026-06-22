@@ -9,8 +9,8 @@ afterAll(() => GlobalRegistrator.unregister());
 
 import { act, useState } from "react";
 import { renderToString } from "react-dom/server";
-import { island } from "@junejs/core/poc-islands";
-import { hydrateIslandsLazy } from "@junejs/core/poc-islands-client";
+import { island } from "@junejs/core/islands";
+import { hydrateIslandsLazy } from "@junejs/core/islands-client";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 

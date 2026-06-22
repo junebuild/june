@@ -2,7 +2,7 @@
 // so the author never hand-writes the `{ name: () => import("./Island") }` map.
 //
 // Scans app/** for modules that (a) start with the "use client" directive AND
-// (b) use `island()` from @junejs/core/poc-islands, and writes app/_islands.gen.ts:
+// (b) use `island()` from @junejs/core/islands, and writes app/_islands.gen.ts:
 //
 //   export const ISLAND_LOADERS = {
 //     "Counter": () => import("./poc/Counter"),
@@ -70,7 +70,7 @@ export function generateIslandRegistry(appDir: string): number {
     .filter(
       ({ src }) =>
         firstStatementIsDirective(src, "use client") &&
-        /@junejs\/core\/poc-islands/.test(src) &&
+        /@junejs\/core\/islands/.test(src) &&
         /\bisland\s*\(/.test(src),
     );
 

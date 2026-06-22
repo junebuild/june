@@ -1,4 +1,4 @@
-import { Tab } from "@junejs/core/poc-islands";
+import { Tab } from "@junejs/core/islands";
 
 import { Counter } from "./Counter";
 import { Tabs } from "./Tabs";
