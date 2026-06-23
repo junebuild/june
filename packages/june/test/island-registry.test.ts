@@ -113,4 +113,38 @@ describe("generateIslandRegistry", () => {
     const app = appDir({ "a/Dup.tsx": ISLAND("Dup"), "b/Dup.tsx": ISLAND("Dup") });
     expect(() => generateIslandRegistry(app)).toThrow(/duplicate island name "Dup"/);
   });
+
+  // R5: an island() whose name can't be determined statically is a BUILD error,
+  // not a silent skip (which would leave a dead island at runtime).
+  test("throws on an anonymous island() with no { name }", () => {
+    const app = appDir({
+      "Anon.tsx":
+        '"use client";\nimport { island } from "@junejs/core/islands";\n' +
+        "export const Anon = island(() => null);\n",
+    });
+    expect(() => generateIslandRegistry(app)).toThrow(/no statically-determinable name/);
+  });
+
+  test("throws on a dynamic (non-literal) { name }", () => {
+    const app = appDir({
+      "Dyn.tsx":
+        '"use client";\nimport { island } from "@junejs/core/islands";\n' +
+        "const n = \"X\";\nexport const Dyn = island(function Z(){ return null; }, { name: n });\n",
+    });
+    expect(() => generateIslandRegistry(app)).toThrow(/no statically-determinable name/);
+  });
+
+  // R5: the directive is read from the AST prologue, so a leading block comment
+  // before "use client" doesn't hide the module (a line regex would miss it).
+  test("detects 'use client' after a leading block comment (AST prologue)", () => {
+    const app = appDir({
+      "Blocked.tsx":
+        '/* a banner comment */\n"use client";\nimport { island } from "@junejs/core/islands";\n' +
+        "export const Blocked = island(function Blocked(){ return null; });\n",
+    });
+    const n = generateIslandRegistry(app);
+    const out = readFileSync(join(app, ISLAND_REGISTRY_FILE), "utf8");
+    expect(n).toBe(1);
+    expect(out).toContain('"Blocked": () => import("./Blocked")');
+  });
 });

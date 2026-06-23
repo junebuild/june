@@ -1,23 +1,20 @@
 // Auto-generate the island registry by scanning "use client" island() modules,
 // so the author never hand-writes the `{ name: () => import("./Island") }` map.
 //
-// Scans app/** for modules that (a) start with the "use client" directive AND
-// (b) use `island()` from @junejs/core/islands, and writes app/_islands.gen.ts:
+// Scans app/** (AST, via oxc-parser) for modules that (a) start with the
+// "use client" directive AND (b) import + call `island()` from @junejs/core/islands,
+// and writes app/_islands.gen.ts:
 //
 //   export const ISLAND_LOADERS = {
-//     "Counter": () => import("./poc/Counter"),
-//     "Tabs":    () => import("./poc/Tabs"),
+//     "Counter": () => import("./Counter"),
 //   };
 //
-// The KEY is the module's EXPORT name; importing the module runs its `island()`
-// call, which self-registers the component under its runtime name. Those must
-// agree — the marker the server stamps (the island's name) is what the client
-// looks up. So the convention is: an island's name == its export name (the React
-// default — `export const Counter = island(function Counter() {…})` satisfies it
-// for free; otherwise pass `island(C, { name })`).
-//
-// Over-inclusion is harmless: a loader whose name no marker references is never
-// called, so no chunk for an unused export is ever fetched.
+// The KEY is the ISLAND name — the value `island()` registers under at runtime
+// (options.name, else the wrapped function's/identifier's name), extracted from
+// the island() call by islandNameOfCall(). The marker the server stamps, the
+// runtime registry, and this loader key therefore all agree BY CONSTRUCTION (no
+// export-name desync). Importing the module runs island(), which self-registers
+// the component; the loader just triggers that import.
 //
 // Host-coupled (node:fs), so it lives in @junejs/server, never the contract layer.
 import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
@@ -66,24 +63,32 @@ export function exportNames(src: string): string[] {
 
 // The island NAME an `island(...)` call registers under — the SAME value the
 // runtime derives (options.name ?? the component's function/identifier name).
-// Keying the loader by THIS (not the export name) is what kills the desync
-// (P1-1): the marker, the registry, and the loader all agree by construction.
-// Returns null for an anonymous component with no { name } — island() throws on
-// that at runtime, so we leave it for the runtime to report.
+// An `island(...)` call (callee is the `island` identifier).
+function isIslandCall(init: unknown): boolean {
+  const call = init as { type?: string; callee?: { type?: string; name?: string } };
+  return call?.type === "CallExpression" && call.callee?.type === "Identifier" && call.callee.name === "island";
+}
+
+// The STATIC island name of an island() call: an explicit string-literal { name },
+// else the wrapped function's / identifier's name — the SAME value island()
+// registers under at runtime, so the marker/registry/loader agree by construction
+// (P1-1). Returns null when it can't be determined statically (arrow/anonymous
+// with no { name }, or a non-literal { name }) — the caller turns that into a
+// build error (R5: fail loud, not a silent skip → dead island).
 function islandNameOfCall(init: unknown): string | null {
-  const call = init as { type?: string; callee?: { type?: string; name?: string }; arguments?: any[] };
-  if (call?.type !== "CallExpression") return null;
-  if (call.callee?.type !== "Identifier" || call.callee.name !== "island") return null;
+  const call = init as { arguments?: any[] };
   const [a0, a1] = call.arguments ?? [];
   if (a1?.type === "ObjectExpression") {
     for (const p of a1.properties ?? []) {
       const key = p.key?.name ?? p.key?.value;
-      if (key === "name" && typeof p.value?.value === "string") return p.value.value;
+      // An explicit { name } wins — but only a string LITERAL is statically known;
+      // a dynamic value (the runtime would use it) can't be matched here → null.
+      if (key === "name") return typeof p.value?.value === "string" ? p.value.value : null;
     }
   }
   if (a0?.type === "FunctionExpression") return a0.id?.name ?? null;
   if (a0?.type === "Identifier") return a0.name ?? null;
-  return null; // arrow/anonymous without { name } → runtime island() errors
+  return null;
 }
 
 // True iff the module imports `island` from @junejs/core/islands (so a local
@@ -97,6 +102,20 @@ function importsIslandApi(program: { body: any[] }): boolean {
   );
 }
 
+// True iff "use client" is in the module's directive prologue — read from the AST
+// (R5: consistent with the rest of the scan; skips block comments correctly,
+// unlike a line regex). The prologue is the run of leading string-literal
+// expression statements.
+function hasUseClientDirective(program: { body: any[] }): boolean {
+  for (const node of program.body) {
+    if (node.type !== "ExpressionStatement") break;
+    const expr = node.expression;
+    if (expr?.type !== "Literal" || typeof expr.value !== "string") break;
+    if (expr.value === "use client") return true;
+  }
+  return false;
+}
+
 // Write app/_islands.gen.ts. Returns the number of island loaders emitted.
 //
 // AST-based (oxc-parser) — robust against multi-line exports / re-exports that a
@@ -108,14 +127,18 @@ export function generateIslandRegistry(appDir: string): number {
   const entries: string[] = [];
 
   for (const f of walk(appDir)) {
-    if (!/\.(tsx|ts|jsx)$/.test(f) || f.endsWith(ISLAND_REGISTRY_FILE)) continue;
+    if (!/\.(tsx|ts|jsx)$/.test(f) || f.endsWith(ISLAND_REGISTRY_FILE) || f.endsWith(".gen.ts")) continue;
     const src = readFileSync(f, "utf8");
-    if (!firstStatementIsDirective(src, "use client")) continue;
+    // Cheap pre-filter: no "use client" substring at all → not a client module
+    // (skips every server component without parsing). The AST directive check
+    // below is the authoritative one.
+    if (!src.includes("use client")) continue;
     const { program } = parseSync(f, src);
-    if (!importsIslandApi(program as { body: any[] })) continue;
+    const ast = program as { body: any[] };
+    if (!hasUseClientDirective(ast) || !importsIslandApi(ast)) continue;
 
     const rel = "./" + relative(appDir, f).replace(/\.(tsx|ts|jsx)$/, "");
-    for (const node of (program as { body: any[] }).body) {
+    for (const node of ast.body) {
       const varDecl =
         node.type === "ExportNamedDeclaration" && node.declaration?.type === "VariableDeclaration"
           ? node.declaration
@@ -124,8 +147,15 @@ export function generateIslandRegistry(appDir: string): number {
             : null;
       if (!varDecl) continue;
       for (const d of varDecl.declarations ?? []) {
+        if (!isIslandCall(d.init)) continue;
         const name = islandNameOfCall(d.init);
-        if (!name) continue;
+        if (!name) {
+          throw new Error(
+            `[june] island() in ${rel} has no statically-determinable name. ` +
+              `Name the wrapped function (island(function Counter(){…})) or pass a ` +
+              `string-literal island(C, { name: "Counter" }).`,
+          );
+        }
         const prev = seen.get(name);
         if (prev && prev !== f) {
           throw new Error(
