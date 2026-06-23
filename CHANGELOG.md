@@ -5,6 +5,42 @@ of truth; this file summarizes what matters per release.
 
 ## [Unreleased]
 
+## [0.0.38]
+
+### Added
+
+- **Cross-island store — shared state across separate React roots.** Islands hydrate as
+  independent roots, so React Context can't connect them. `createStore(initial)` returns
+  a module-level singleton `{ get, set, subscribe }` that any island can import;
+  `useStore(store, selector?)` subscribes via `useSyncExternalStore` so each island
+  re-renders only when its slice changes. State is client-only: SSR renders the initial
+  value and never mutates during a server render, so a long-lived worker can't leak state
+  across requests. Survives morph navigation (the singleton outlives the page swap).
+
+  ```ts
+  // cart-store.ts
+  import { createStore } from "@junejs/core/store";
+  export const cartStore = createStore({ count: 0 });
+
+  // CartBadge.tsx — "use client"
+  import { useStore } from "@junejs/core/store";
+  import { cartStore } from "./cart-store";
+  export function CartBadge() {
+    const count = useStore(cartStore, s => s.count);
+    return <span>{count}</span>;
+  }
+  ```
+
+### Fixed
+
+- **Slot shell DOM-removal guard (dev only).** A slot island must hide its content with
+  CSS/`[hidden]` — unmounting it silently kills nested islands. A `MutationObserver` now
+  warns at dev time if a slot's content node leaves the DOM. Production builds fold the
+  guard out entirely.
+- **Whitespace-only children no longer create a slot island.** A stray space or newline
+  in JSX previously made a component look like it had a slot, triggering slot behaviour
+  unexpectedly. Whitespace-only children are now ignored.
+
 ## [0.0.37]
 
 ### Added
