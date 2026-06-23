@@ -271,6 +271,31 @@ function importPath(fromDir: string, file: string): string {
   return p.startsWith(".") ? p : `./${p}`;
 }
 
+/** Read the app's tsconfig.json and return compilerOptions.jsxImportSource.
+ *  Follows one level of `extends` so apps that inherit from a base tsconfig
+ *  (e.g. "@kurajs/docs/tsconfig.kura.json") are handled correctly.
+ *  Returns undefined when absent or unreadable. */
+async function appJsxImportSource(appRoot: string): Promise<string | undefined> {
+  type Tsconfig = { extends?: string; compilerOptions?: { jsxImportSource?: string } };
+  const read = async (path: string): Promise<Tsconfig | undefined> => {
+    const f = Bun.file(path);
+    if (!(await f.exists())) return undefined;
+    try { return JSON.parse(await f.text()) as Tsconfig; } catch { return undefined; }
+  };
+  const tc = await read(join(appRoot, "tsconfig.json"));
+  if (!tc) return undefined;
+  if (tc.compilerOptions?.jsxImportSource) return tc.compilerOptions.jsxImportSource;
+  // One level of extends: resolve relative paths and bare package specifiers.
+  if (tc.extends) {
+    const base = tc.extends.startsWith(".")
+      ? join(appRoot, tc.extends)
+      : join(appRoot, "node_modules", tc.extends);
+    const btc = await read(base);
+    if (btc?.compilerOptions?.jsxImportSource) return btc.compilerOptions.jsxImportSource;
+  }
+  return undefined;
+}
+
 export async function juneBuild(
   appRoot: string,
   options: { outDir?: string; external?: string[] } = {},
@@ -535,8 +560,17 @@ ${adapterEntry.wrap("pipeline")}
     transform: {
       define: { "process.env.NODE_ENV": JSON.stringify("production") },
       // Route JSX through June's runtime so `<X client:*/>` in pages emits island
-      // markers at SSR (rolldown ignores the tsconfig/pragma; set it explicitly).
-      jsx: { runtime: "automatic", importSource: "@junejs/core" },
+      // markers at SSR. Rolldown ignores tsconfig/pragma so we must set importSource
+      // explicitly — BUT only when the app's tsconfig doesn't already declare it as
+      // "@junejs/core". When both are set to the same value rolldown emits
+      // CONFIGURATION_FIELD_CONFLICT (value-independent); skip the explicit set so
+      // rolldown reads it from tsconfig silently.
+      jsx: {
+        runtime: "automatic",
+        ...((await appJsxImportSource(appRoot)) === "@junejs/core"
+          ? {}
+          : { importSource: "@junejs/core" }),
+      },
     },
     plugins: [rolldownCssModulesPlugin(cssModuleMaps)], // .module.css → scoped class map
     external: (id: string) => {
