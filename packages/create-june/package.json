@@ -1,6 +1,6 @@
 {
   "name": "create-june",
-  "version": "0.0.27",
+  "version": "0.0.28",
   "description": "Scaffold a new June app — `npm create june my-app`.",
   "type": "module",
   "license": "MIT",

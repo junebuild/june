@@ -5,6 +5,55 @@ of truth; this file summarizes what matters per release.
 
 ## [Unreleased]
 
+## [0.0.35]
+
+The island layer's final form: a plain `"use client"` component used with a
+`client:*` directive at the call site — **no wrapper, no transform**. `<Counter
+client:visible/>` just works.
+
+### Changed (BREAKING, pre-1.0)
+
+- **Authoring is now `<Counter client:visible/>` on a PLAIN component.** Set
+  `jsxImportSource: "@junejs/core"` (the new JSX runtime) and a `"use client"`
+  component used with a `client:*` directive becomes an island automatically. This
+  is the standard JSX factory the compiler already calls — **not** an AST transform.
+
+  ```tsx
+  // Counter.tsx — a plain "use client" React component (no island() wrapper)
+  "use client";
+  export function Counter({ initial = 0 }) { … }
+
+  // page.tsx — hydration intent at the call site
+  import { Counter } from "./Counter";
+  <Counter initial={0} client:visible />
+  ```
+
+### Removed
+
+- **`island()`, `Tab`, `hydrateIslandsAuto`, `hydrateIslandsLazy`,
+  `ISLAND_REGISTRY`** and the light-DOM `slot` option. Replace `island()` wrappers
+  with plain components + a `client:*` directive at each usage. The client runtime
+  is now `hydrateIslands(loaders)` (wired by `startJuneClient`, unchanged).
+
+### Added
+
+- **Zero-setup library islands.** The registry is generated from USAGE
+  (`<X client:*/>`) — the import specifier is resolved at the call site, so a
+  third-party island works the same as an app one: ship ESM + declare `@junejs/core`
+  as a peer, then `import { X } from "your-lib"; <X client:visible/>`. No manifest,
+  no config list.
+- **`@junejs/core/jsx-runtime`** + `/jsx-dev-runtime` — the island JSX runtime,
+  with `client:load|idle|visible|only` (+ `persist`) typed on every component (a
+  typo like `client:bogus` is a compile error).
+
+### Migration
+
+- `export const Counter = island(function Counter() {…})` →
+  `export function Counter() {…}` (mark the module `"use client"`).
+- `<Counter/>` → `<Counter client:load/>` (a `client:*` directive is now REQUIRED to
+  make a usage an island).
+- Set `"jsxImportSource": "@junejs/core"` in your `tsconfig.json`.
+
 ## [0.0.34]
 
 Island v2 hardening — it can now fully replace the (now-removed) legacy `<Island>`.
