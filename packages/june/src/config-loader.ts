@@ -16,9 +16,17 @@ import type { JuneConfig } from "@junejs/core/config";
 // Probe the given dir AND its parent: callers pass either the app root
 // (build/deploy) or the routes dir `app/` (serve) — the config file lives at
 // the app root in both layouts.
+//
+// Config resolution order (first found wins):
+//   1. june.config.ts / june.config.js  — the user's own config
+//   2. .june/config.ts                  — framework-generated config (e.g. written by
+//                                         a wrapper CLI before invoking june); lives in
+//                                         june's own artifact dir (gitignored), so the
+//                                         wrapper framework never needs to add files to
+//                                         the app root.
 export async function loadJuneConfig(appDir: string): Promise<JuneConfig> {
   for (const dir of [appDir, join(appDir, "..")]) {
-    for (const name of ["june.config.ts", "june.config.js"]) {
+    for (const name of ["june.config.ts", "june.config.js", ".june/config.ts"]) {
       const path = join(dir, name);
       if (existsSync(path)) {
         const mod = (await import(pathToFileURL(path).href)) as { default?: JuneConfig };
