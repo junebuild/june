@@ -67,4 +67,50 @@ describe("generateIslandRegistry", () => {
     expect(n).toBe(0);
     expect(out).toContain("export const ISLAND_LOADERS: Record<string, () => Promise<unknown>> = {\n};");
   });
+
+  // P1-1: key by the ISLAND name (from the call), not the export name — so an
+  // export/function-name mismatch can't silently fail to hydrate.
+  test("keys by the island name even when it differs from the export name", () => {
+    const app = appDir({
+      "Counter.tsx":
+        '"use client";\nimport { island } from "@junejs/core/islands";\n' +
+        'export const Widget = island(function Counter(){ return null; });\n',
+    });
+    generateIslandRegistry(app);
+    const out = readFileSync(join(app, ISLAND_REGISTRY_FILE), "utf8");
+    expect(out).toContain('"Counter": () => import("./Counter")'); // the island name, not "Widget"
+    expect(out).not.toContain("Widget");
+  });
+
+  // P1-1: explicit { name } wins.
+  test("honors an explicit { name } option", () => {
+    const app = appDir({
+      "C.tsx":
+        '"use client";\nimport { island } from "@junejs/core/islands";\n' +
+        'export const C = island(function Impl(){ return null; }, { name: "Picked" });\n',
+    });
+    generateIslandRegistry(app);
+    const out = readFileSync(join(app, ISLAND_REGISTRY_FILE), "utf8");
+    expect(out).toContain('"Picked": () => import("./C")');
+  });
+
+  // P1-2: a multi-line island() declaration the old line-regex would have missed.
+  test("handles a multi-line island() declaration (AST, not line regex)", () => {
+    const app = appDir({
+      "Multi.tsx":
+        '"use client";\nimport { island } from "@junejs/core/islands";\n' +
+        "export const Multi = island(\n  function Multi() {\n    return null;\n  },\n  { strategy: \"visible\" },\n);\n",
+    });
+    const n = generateIslandRegistry(app);
+    const out = readFileSync(join(app, ISLAND_REGISTRY_FILE), "utf8");
+    expect(n).toBe(1);
+    expect(out).toContain('"Multi": () => import("./Multi")');
+  });
+
+  // P2-1: a duplicate island name across modules is a build error, not a silent
+  // overwrite.
+  test("throws on a duplicate island name across modules", () => {
+    const app = appDir({ "a/Dup.tsx": ISLAND("Dup"), "b/Dup.tsx": ISLAND("Dup") });
+    expect(() => generateIslandRegistry(app)).toThrow(/duplicate island name "Dup"/);
+  });
 });

@@ -3,8 +3,9 @@
 // already applied the saved theme before paint; this island just lets the user
 // flip it and persists the choice. Server-renders inert; hydration wires it.
 import { useEffect, useState } from "react";
+import { island } from "@junejs/core/islands";
 
-export function ThemeToggle() {
+function ThemeToggleImpl() {
   const [theme, setTheme] = useState<"light" | "dark">("light");
 
   // adopt whatever the inline script set on <html> (avoids a hydration flip)
@@ -36,3 +37,5 @@ export function ThemeToggle() {
     </button>
   );
 }
+
+export const ThemeToggle = island(ThemeToggleImpl, { name: "ThemeToggle" });

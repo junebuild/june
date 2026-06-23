@@ -4,6 +4,7 @@
 // (tools/list → tools/call → streamed result), honoring prefers-reduced-motion.
 // Server-renders showing the Human surface; hydration enables the tabs.
 import { useEffect, useRef, useState } from "react";
+import { island } from "@junejs/core/islands";
 
 const POINTS = [
   { k: "01", h: "One definition, four surfaces", b: "HTML to people; .md, .json, and /mcp to agents — derived, never maintained by hand." },
@@ -154,7 +155,7 @@ function McpProjection({ active }: { active: boolean }) {
   );
 }
 
-export function HeroViewer() {
+function HeroViewerImpl() {
   const [tab, setTab] = useState<"human" | "md" | "json" | "mcp">("human");
   return (
     <div className="j-viewer">
@@ -187,3 +188,5 @@ export function HeroViewer() {
     </div>
   );
 }
+
+export const HeroViewer = island(HeroViewerImpl, { name: "HeroViewer" });

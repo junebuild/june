@@ -33,85 +33,8 @@ import { FRAGMENT_ACCEPT, SEGMENT_HEADER, TITLE_HEADER } from "./nav-protocol";
 // persistent island carried across a navigation, already live, is skipped.
 type Marked = Element & { __juneHydrated?: boolean };
 
-// The app maps each island `name` to its component. v0.1 is explicit: the app
-// writes this by hand in its client entry. v0.2 generates it from `"use client"`.
-export type IslandRegistry = Record<string, React.ComponentType<any>>;
-
-// Hydrate every island marker found under `root` (the whole document by default).
-// Returns the count hydrated — handy for tests and dev diagnostics.
-//
-// @deprecated The hand-written registry path. Prefer `island()` + the generated
-// registry with `hydrateIslandsLazy(ISLAND_LOADERS)` (below). Kept for one release.
-export function hydrateIslands(
-  registry: IslandRegistry,
-  root: ParentNode = document,
-): number {
-  const markers = root.querySelectorAll(`${ISLAND_TAG}[${ISLAND_NAME_ATTR}]`);
-  let hydrated = 0;
-  for (const el of markers) {
-    if ((el as Marked).__juneHydrated) continue; // already live (e.g. carried across a nav)
-    // PoC intent-based islands carry data-june-strategy and are owned by
-    // hydrateIslandsAuto — never double-hydrate them from the legacy registry.
-    if (el.hasAttribute("data-june-strategy")) continue;
-    const name = el.getAttribute(ISLAND_NAME_ATTR);
-    if (!name) continue;
-    const Component = registry[name];
-    if (!Component) {
-      // Explicit registry: an unregistered island is an author mistake (forgot to
-      // add it to the client entry), so surface it instead of silently leaving a
-      // dead, non-interactive marker on the page.
-      console.warn(`[june] island "${name}" is on the page but not registered for hydration`);
-      continue;
-    }
-    const props = deserializeIslandProps(el.getAttribute(ISLAND_PROPS_ATTR));
-    hydrateRoot(el as Element, React.createElement(Component, props));
-    (el as Marked).__juneHydrated = true;
-    hydrated++;
-  }
-
-  // Opt-in client router: the document renders [data-june-root] only when
-  // config.clientRouter is not "off", and only the full-document boot call
-  // (root === document) should start it — re-hydrations of swapped subtrees pass
-  // the new root, not the document. Bind the router's re-hydrate to THIS registry
-  // so every soft-navigated page brings its islands to life.
-  const routerRoot = root === document ? document.querySelector("[data-june-root]") : null;
-  if (routerRoot) {
-    const rehydrate = (swapped: ParentNode) => hydrateIslands(registry, swapped);
-    // The applier rides on the root element: data-june-router="flight" means the
-    // author opted into Flight (VDOM-over-wire); its absence means morph (the
-    // HTML-over-wire default). Flight is gated here so it can NEVER be the silent
-    // default — it only runs when the document explicitly named it. The Flight
-    // module is DYNAMICALLY imported so react-server-dom is pulled into the bundle
-    // ONLY for flight-opted apps; morph users never pay that coupling.
-    if (routerRoot.getAttribute("data-june-router") === "flight") {
-      void import("./client-router-flight").then(({ startFlightRouter }) =>
-        startFlightRouter(),
-      );
-    } else {
-      startClientRouter(rehydrate);
-    }
-    // Dev push-HMR hook: the injected dev-reload script calls this on reconnect
-    // after a restart instead of location.reload() — re-fetch the current page's
-    // fragment and MORPH it (preserveIslands:"all"), so island state, focus, and
-    // scroll survive the edit. Returns false (caller hard-reloads) on any miss.
-    (window as unknown as { __juneLiveReload?: () => Promise<boolean> }).__juneLiveReload =
-      async () => {
-        try {
-          const res = await fetch(location.href, { headers: { accept: FRAGMENT_ACCEPT } });
-          if (!res.ok) return false;
-          return applyLiveUpdate(
-            await res.text(),
-            res.headers.get(TITLE_HEADER),
-            rehydrate,
-            res.headers.get(SEGMENT_HEADER), // segment-scoped → morph the outlet, not the root
-          );
-        } catch {
-          return false;
-        }
-      };
-  }
-  return hydrated;
-}
+// (The legacy hand-written `hydrateIslands(registry)` + `<Island>` are gone — the
+// island() + generated-registry path below is the only model.)
 
 // --- intent-based runtime (paired with island()) -----------------------------
 //
@@ -218,4 +141,61 @@ export function hydrateIslandsLazy(loaders: IslandLoaders, root: ParentNode = do
     n++;
   }
   return n;
+}
+
+// --- startJuneClient — the bootstrap (router + live-reload over island hydration)
+//
+// hydrateIslandsAuto/Lazy are pure PRIMITIVES (scan + schedule + mount). This is
+// the BOOTSTRAP that wires them to the page: hydrate the islands now, and — when
+// the document opted into the client router ([data-june-root]) — start the router
+// and the dev live-reload hook with a rehydrate that brings each soft-navigated
+// page's islands to life. A persisted island (data-june-persist) is carried as a
+// live node by morph and skipped by rehydrate (already `__juneHydrated`), so its
+// state survives the navigation.
+//
+// One entry point for an app's client.js:  startJuneClient({ loaders: ISLAND_LOADERS })
+export type StartOptions = {
+  // The generated lazy registry. Omit to hydrate already-imported islands eagerly.
+  loaders?: IslandLoaders;
+};
+
+export function startJuneClient(options: StartOptions = {}): void {
+  const { loaders } = options;
+  const rehydrate = (root: ParentNode): number =>
+    loaders ? hydrateIslandsLazy(loaders, root) : hydrateIslandsAuto(root);
+
+  // 1. Bring this page's islands to life.
+  rehydrate(document);
+
+  // 2. Opt-in client router: the document renders [data-june-root] only when
+  //    clientRouter is not "off". The applier rides on the element — "flight"
+  //    (VDOM-over-wire, dynamically imported so react-server-dom stays out of
+  //    morph bundles) vs the morph default. Flight is never the silent default.
+  const routerRoot = document.querySelector("[data-june-root]");
+  if (!routerRoot) return;
+
+  if (routerRoot.getAttribute("data-june-router") === "flight") {
+    void import("./client-router-flight").then(({ startFlightRouter }) => startFlightRouter());
+    return;
+  }
+
+  startClientRouter(rehydrate);
+  // Dev push-HMR hook: the injected dev-reload script calls this on reconnect
+  // instead of location.reload() — re-fetch the current page's fragment and MORPH
+  // it, so island state, focus, and scroll survive the edit. False → hard reload.
+  (window as unknown as { __juneLiveReload?: () => Promise<boolean> }).__juneLiveReload =
+    async () => {
+      try {
+        const res = await fetch(location.href, { headers: { accept: FRAGMENT_ACCEPT } });
+        if (!res.ok) return false;
+        return applyLiveUpdate(
+          await res.text(),
+          res.headers.get(TITLE_HEADER),
+          rehydrate,
+          res.headers.get(SEGMENT_HEADER), // segment-scoped → morph the outlet, not the root
+        );
+      } catch {
+        return false;
+      }
+    };
 }

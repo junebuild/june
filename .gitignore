@@ -17,5 +17,3 @@ target/
 .vscode/
 .vercel/
 
-# Generated island registry in test fixtures (regenerated on build/dev)
-packages/june/test/fixtures/**/_islands.gen.ts

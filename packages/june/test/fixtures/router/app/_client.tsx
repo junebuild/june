@@ -1,8 +1,5 @@
-// Client entry. Calling hydrateIslands also starts the client router when the
-// document opted in (config.clientRouter → [data-june-root] is on the page).
-import { hydrateIslands } from "@junejs/core/islands-client";
+import { startJuneClient } from "@junejs/core/islands-client";
 
-import { Counter } from "./Counter";
-import { Live } from "./Live";
+import { ISLAND_LOADERS } from "./_islands.gen";
 
-hydrateIslands({ Counter, Live });
+startJuneClient({ loaders: ISLAND_LOADERS });

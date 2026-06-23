@@ -1,8 +1,6 @@
 // A page: the default export is the view (it receives the loader's data as
 // props); named exports configure the other surfaces. No loader → static.
 import type { Loaded } from "@junejs/core/route";
-import { Island } from "@junejs/core/islands";
-
 import { Counter } from "./Counter";
 
 export const loader = () => ({ message: "Welcome to June" });
@@ -17,9 +15,9 @@ export default function Home({ message }: Loaded<typeof loader>) {
         <a className="underline" href="/.md">Markdown</a>, and exposes its actions to agents at{" "}
         <code className="rounded bg-gray-100 px-1">/mcp</code>.
       </p>
-      {/* A client island: only this subtree hydrates (app/_client.tsx registers it). */}
+      {/* A client island: only this subtree hydrates. */}
       <div className="mt-6">
-        <Island name="Counter" component={Counter} props={{ initial: 0 }} />
+        <Counter initial={0} />
       </div>
     </main>
   );

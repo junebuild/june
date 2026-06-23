@@ -34,6 +34,7 @@
     "@junejs/db": "workspace:*",
     "lightningcss": "^1.27.0",
     "marked": "^18.0.5",
+    "oxc-parser": "^0.137.0",
     "rolldown": "^1.1.0"
   },
   "peerDependencies": {

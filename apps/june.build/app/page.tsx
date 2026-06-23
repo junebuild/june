@@ -1,4 +1,3 @@
-import { Island } from "@junejs/core/islands";
 
 import { bySlug } from "./content";
 import { HeroViewer } from "./HeroViewer";
@@ -45,7 +44,7 @@ function Hero() {
             Nothing drifts, because nothing is duplicated.
           </p>
           <div className="j-install">
-            <Island name="InstallCmd" component={InstallCmd} />
+            <InstallCmd />
             <a className="j-secondary-link" href="/why">
               Why June →
             </a>
@@ -62,7 +61,7 @@ function Hero() {
             </span>
           </div>
         </div>
-        <Island name="HeroViewer" component={HeroViewer} />
+        <HeroViewer />
       </div>
     </header>
   );
@@ -420,7 +419,7 @@ function CtaBand() {
           </a>
         </div>
         <div className="j-install">
-          <Island name="InstallCmd" component={InstallCmd} />
+          <InstallCmd />
         </div>
       </div>
     </section>
