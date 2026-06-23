@@ -2,9 +2,8 @@
 // The copyable install command — June's primary CTA. Server-renders the pill;
 // hydration wires the copy button (clipboard needs the client).
 import { useState } from "react";
-import { island } from "@junejs/core/islands";
 
-function InstallCmdImpl({ cmd = "npm create june@latest my-app" }: { cmd?: string }) {
+export function InstallCmd({ cmd = "npm create june@latest my-app" }: { cmd?: string }) {
   const [copied, setCopied] = useState(false);
   const copy = () => {
     try {
@@ -31,5 +30,3 @@ function InstallCmdImpl({ cmd = "npm create june@latest my-app" }: { cmd?: strin
     </div>
   );
 }
-
-export const InstallCmd = island(InstallCmdImpl, { name: "InstallCmd" });

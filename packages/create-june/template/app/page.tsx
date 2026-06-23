@@ -17,7 +17,7 @@ export default function Home({ message }: Loaded<typeof loader>) {
       </p>
       {/* A client island: only this subtree hydrates. */}
       <div className="mt-6">
-        <Counter initial={0} />
+        <Counter initial={0} client:load />
       </div>
     </main>
   );

@@ -50,7 +50,10 @@ async function bundleClient(entryFile: string, cwd: string, mode: BundleMode, ma
     // branch resolved at build (no `process` in the browser to read it at runtime).
     platform: "browser",
     plugins: [rolldownCssModulesPlugin(maps)], // islands may import .module.css
-    transform: { define: { "process.env.NODE_ENV": JSON.stringify(mode) } },
+    transform: {
+      define: { "process.env.NODE_ENV": JSON.stringify(mode) },
+      jsx: { runtime: "automatic", importSource: "@junejs/core" }, // June's island JSX runtime
+    },
     resolve: { conditionNames: ["browser", "import", "default"] },
   });
   return bundle;

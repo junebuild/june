@@ -17,6 +17,7 @@ import {
   ISLAND_NAME_ATTR,
   ISLAND_PROPS_ATTR,
   ISLAND_STRATEGY_ATTR,
+  ISLAND_PERSIST_ATTR,
   serializeIslandProps,
   type Strategy,
 } from "./islands";
@@ -35,6 +36,9 @@ declare module "react" {
       "client:idle"?: boolean;
       "client:visible"?: boolean;
       "client:only"?: boolean;
+      // Carry the island's live node across a soft navigation (only on an island,
+      // i.e. alongside a client:* directive).
+      persist?: boolean;
     }
   }
 }
@@ -46,15 +50,18 @@ const DIRECTIVE = "client:";
 export function islandMarker(type: unknown, props: Record<string, unknown> | null): unknown {
   if (typeof type !== "function" || props == null) return null;
   let strategy: Strategy | undefined;
+  let persist = false;
   const rest: Record<string, unknown> = {};
   for (const k in props) {
     if (k.startsWith(DIRECTIVE)) {
       if (props[k]) strategy = k.slice(DIRECTIVE.length) as Strategy;
+    } else if (k === "persist") {
+      persist = Boolean(props[k]);
     } else {
       rest[k] = props[k];
     }
   }
-  if (!strategy) return null;
+  if (!strategy) return null; // `persist` alone (no client:*) is not an island
 
   const name = (type as { displayName?: string; name?: string }).displayName || (type as { name?: string }).name;
   // children aren't JSON-serializable; keep them out of the props attribute (they
@@ -65,6 +72,7 @@ export function islandMarker(type: unknown, props: Record<string, unknown> | nul
     [ISLAND_NAME_ATTR]: name,
     [ISLAND_STRATEGY_ATTR]: strategy,
     [ISLAND_PROPS_ATTR]: serializeIslandProps(serializable),
+    ...(persist ? { [ISLAND_PERSIST_ATTR]: "" } : {}),
     // "only" → never server-render (client mounts fresh); else SSR the component.
     children: strategy === "only" ? undefined : rjsx(type as never, rest as never),
   } as never);

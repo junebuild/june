@@ -57,8 +57,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             ))}
           </div>
           <div className="j-nav-right">
-            <ViewAs />
-            <ThemeToggle />
+            <ViewAs client:load />
+            <ThemeToggle client:load />
           </div>
         </div>
       </nav>

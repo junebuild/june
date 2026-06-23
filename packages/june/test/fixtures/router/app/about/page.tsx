@@ -1,14 +1,10 @@
 import { Counter } from "../Counter";
-
 export default function About() {
   return (
     <main>
       <h1 data-page="about">About</h1>
-      {/* initial: 100 — distinct from Home's island, so the test can prove this
-          page hydrated fresh (not a carried-over Counter). */}
-      <Counter initial={100} />
+      <Counter initial={100} client:load />
     </main>
   );
 }
-
 export const metadata = { title: "About" };

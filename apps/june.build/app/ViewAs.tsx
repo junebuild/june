@@ -6,7 +6,6 @@
 // layout can't know the path server-side (layouts get only children), so the
 // hrefs are filled from location on hydrate; surfaces are reachable by URL too.
 import { useEffect, useState } from "react";
-import { island } from "@junejs/core/islands";
 
 // The projection stem for a path: "/why.md" → "/why"; "/" → "/index" (so the
 // home surfaces read as the intuitive /index.md · /index.json).
@@ -15,7 +14,7 @@ function routeStem(pathname: string): string {
   return clean === "" ? "/index" : clean;
 }
 
-function ViewAsImpl() {
+export function ViewAs() {
   // human = the canonical page path ("/" for home); stem = the projection base
   // ("/index" for home) so .md/.json read as /index.md · /index.json.
   const [human, setHuman] = useState("/");
@@ -56,5 +55,3 @@ function ViewAsImpl() {
     </div>
   );
 }
-
-export const ViewAs = island(ViewAsImpl, { name: "ViewAs" });

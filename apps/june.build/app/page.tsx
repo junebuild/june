@@ -44,7 +44,7 @@ function Hero() {
             Nothing drifts, because nothing is duplicated.
           </p>
           <div className="j-install">
-            <InstallCmd />
+            <InstallCmd client:load />
             <a className="j-secondary-link" href="/why">
               Why June →
             </a>
@@ -61,7 +61,7 @@ function Hero() {
             </span>
           </div>
         </div>
-        <HeroViewer />
+        <HeroViewer client:load />
       </div>
     </header>
   );
@@ -419,7 +419,7 @@ function CtaBand() {
           </a>
         </div>
         <div className="j-install">
-          <InstallCmd />
+          <InstallCmd client:load />
         </div>
       </div>
     </section>
