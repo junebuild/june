@@ -5,6 +5,34 @@ of truth; this file summarizes what matters per release.
 
 ## [Unreleased]
 
+## [0.0.36]
+
+Hardening of the jsx-runtime island model (0.0.35).
+
+### Fixed
+
+- **Islands with children no longer mismatch silently.** An island SSR'd its
+  children but the client hydrates from the serialized props alone, so the children
+  were dropped → hydration mismatch. Now fail-loud at both the build (the codegen
+  rejects `<X client:*/>` with children) and at render. Composition via children
+  needs RSC — make the children a separate client subtree.
+- **An island module must be `"use client"`.** The codegen verifies a resolvable
+  (relative) island module starts with the `"use client"` directive, so a
+  server-only module (`node:*`, secrets) can't be pulled into the client bundle via
+  its loader.
+
+### Performance
+
+- **The JSX runtime no longer taxes every render.** A fast path bails before any
+  allocation unless a prop is a `client:*` directive, so non-island component
+  renders cost only one cheap key scan.
+
+### Known edge
+
+- A renamed island export (`export { Foo as Counter }`) makes the marker name differ
+  from the loader key → the island stays inert and warns. Keep the export name equal
+  to the component's function name.
+
 ## [0.0.35]
 
 The island layer's final form: a plain `"use client"` component used with a
