@@ -45,9 +45,11 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Tag matches package versions
+        if: github.event_name == 'push'
         run: |
           # The tag must equal @junejs/core's version. New sub-packages (e.g. @junejs/og) may
           # ship at a lower version than core — they are skipped by the idempotent publish loop.
+          # Skipped on workflow_dispatch so sub-packages can be patched without bumping core.
           v=$(python3 -c "import json; print(json.load(open('packages/core/package.json'))['version'])")
           [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME != @junejs/core version v$v"; exit 1; }
 
