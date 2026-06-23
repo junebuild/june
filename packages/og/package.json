@@ -1,6 +1,6 @@
 {
   "name": "@junejs/og",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "type": "module",
   "description": "June \u2014 cross-platform OG image generation. Cloudflare Workers, Vercel Edge, and Node.js dev all share one import; the right backend is selected at build time via export conditions.",
   "exports": {
