@@ -5,6 +5,36 @@ of truth; this file summarizes what matters per release.
 
 ## [Unreleased]
 
+## [0.0.34]
+
+Island v2 hardening — it can now fully replace the (now-removed) legacy `<Island>`.
+
+### Removed
+
+- **Legacy `<Island>` + `hydrateIslands(registry)`** (and `IslandProps`). The
+  `island()` + generated-registry path is the only island model now. Migrate:
+  `export const Counter = island(function Counter() {…})` and use `<Counter/>`.
+
+### Added
+
+- **`startJuneClient({ loaders })`** — the client bootstrap. `hydrateIslands`
+  Auto/Lazy are pure primitives; startJuneClient wires the client router + dev
+  live-reload with a v2-aware rehydrate, so island-v2 islands compose with
+  `clientRouter` and re-hydrate after a soft navigation.
+- **`island(C, { persist })`** — carry an island's live node (state, open
+  connections) across a soft navigation (the v2 equivalent of the old
+  `<Island persist>`).
+
+### Fixed
+
+- **Island registry codegen is AST-based** (oxc-parser). Loaders are keyed by the
+  island's name from the `island()` call (matching the runtime), so an
+  export-name/function-name mismatch can no longer silently fail to hydrate;
+  multi-line/re-export forms are no longer missed; and a duplicate island name
+  across modules is a build error instead of a silent overwrite.
+- **`react-server-dom-webpack` is an optional peer dependency** — island-v2 apps
+  no longer pull the RSC runtime they don't use.
+
 ## [0.0.33]
 
 ### Changed
