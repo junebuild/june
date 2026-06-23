@@ -76,12 +76,22 @@ export function islandMarker(type: unknown, props: Record<string, unknown> | nul
   if (!strategy) return null; // only `client:false` directives → not an island
 
   const name = (type as { displayName?: string; name?: string }).displayName || (type as { name?: string }).name;
-  // Islands can't take children: the client hydrates from the serialized props
-  // ALONE, so any SSR'd children would be dropped → hydration mismatch. Composition
-  // via children needs RSC. Fail loud (the codegen catches this at build too).
+  // Islands are LEAVES — they can't take children. The client hydrates from the
+  // serialized props ALONE, so any SSR'd children would be dropped → hydration
+  // mismatch. Fail loud (the codegen catches this at build too) with honest options.
+  //
+  // FUTURE slot (a deliberate single exception, not yet built): an interactive
+  // shell wrapping zero-JS server content. The clean design is to SSR the shell +
+  // place children in an in-place <june-slot>, then on the client HYDRATE the shell
+  // (not createRoot) where the slot renders <june-slot dangerouslySetInnerHTML={the
+  // captured server HTML} suppressHydrationWarning/> — same string both sides, so
+  // hydration aligns and React never reconciles inside (content stays zero-JS,
+  // nested islands self-hydrate). NOT the old light-DOM createRoot+__slot version.
   if (rest.children != null && rest.children !== false) {
     throw new Error(
-      `[june] island <${name} client:*/> cannot take children — composition via children needs RSC; make the children a separate client subtree instead.`,
+      `[june] island <${name} client:*/> cannot take children — islands are leaves. ` +
+        `Use vanilla JS/CSS for pure toggle chrome (tabs/accordion), ONE leaf island if the whole subtree is interactive, ` +
+        `or RSC for static server content inside an interactive shell.`,
     );
   }
   return rjsx(ISLAND_TAG as never, {

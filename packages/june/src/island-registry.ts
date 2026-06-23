@@ -149,7 +149,9 @@ export function generateIslandRegistry(appDir: string): number {
       // (the client only has the serialized props). Composition via children = RSC.
       if (hasChildren) {
         throw new Error(
-          `[june] <${tag} client:*/> in ${rel} has children — islands cannot take children (composition via children needs RSC). Make the children a separate client subtree.`,
+          `[june] <${tag} client:*/> in ${rel} has children — islands are leaves and cannot take children. ` +
+            `Use vanilla JS/CSS for pure toggle chrome (tabs/accordion), one leaf island if the whole subtree is interactive, ` +
+            `or RSC for static server content inside an interactive shell.`,
         );
       }
       const name = imp.imported; // = the component's runtime name = the marker the JSX runtime stamps
