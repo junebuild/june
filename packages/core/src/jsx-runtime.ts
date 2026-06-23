@@ -84,7 +84,10 @@ export function islandMarker(type: unknown, props: Record<string, unknown> | nul
   // opaquely so it hydrates 1:1 and never reconciles). The component just renders
   // `{children}`. A leaf island taking no children is the common case (no slot).
   const { children, ...serializable } = rest;
-  const hasSlot = children != null && children !== false;
+  // A slot island is one given real children. Whitespace-only string children (a
+  // stray space/newline) don't count — a leaf island isn't a slot by accident.
+  const hasSlot =
+    children != null && children !== false && !(typeof children === "string" && children.trim() === "");
   if (hasSlot && strategy === "only") {
     throw new Error(
       `[june] island <${name} client:only/> cannot take children — client:only is never server-rendered, so there is no server content to slot.`,

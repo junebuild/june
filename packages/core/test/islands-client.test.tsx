@@ -94,6 +94,39 @@ describe("hydrateIslands", () => {
       "count: 6",
     );
   });
+
+  test("re-scanning (morph) doesn't re-hydrate a live slot island — its state survives", async () => {
+    function Shell({ children }: { children?: ReactNode }) {
+      const [n, setN] = useState(0);
+      return (
+        <div>
+          <button type="button" data-shell onClick={() => setN((v) => v + 1)}>
+            shell: {n}
+          </button>
+          {children}
+        </div>
+      );
+    }
+    document.body.innerHTML = renderToString(
+      <Shell client:load>
+        <p data-s>x</p>
+      </Shell>,
+    );
+    const loaders = { Shell: () => Promise.resolve(Shell) };
+    await act(async () => {
+      hydrateIslands(loaders);
+      await flush();
+    });
+    await act(async () => {
+      document.querySelector<HTMLElement>("[data-shell]")!.click(); // 0 → 1
+    });
+    await act(async () => {
+      hydrateIslands(loaders); // re-scan, as a soft navigation would
+      await flush();
+    });
+    expect(document.querySelector("[data-shell]")!.textContent).toBe("shell: 1"); // not reset
+    expect(document.querySelector("[data-s]")!.textContent).toBe("x");
+  });
 });
 
 describe("startJuneClient (bootstrap)", () => {

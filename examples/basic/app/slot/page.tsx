@@ -9,7 +9,7 @@ export default function SlotPage() {
     <main>
       <h1>Slot island</h1>
       <p>An interactive shell wrapping zero-JS server content (plus a nested island).</p>
-      <Panel client:visible>
+      <Panel client:load>
         <article>
           <p>This paragraph is plain server HTML — no client JS.</p>
           <Counter initial={0} client:load />
