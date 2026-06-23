@@ -67,5 +67,9 @@ jobs:
               echo "$name@$v already on the registry — skipping"
               continue
             fi
-            (cd "packages/$p" && bun pm pack && npm publish ./*.tgz --access public)
+            out=$(cd "packages/$p" && bun pm pack && npm publish ./*.tgz --access public 2>&1) && echo "ok $name@$v" || {
+              echo "$out" | grep -q "cannot publish over the previously published versions" \
+                && echo "skip $name@$v (already published, different provenance)" \
+                || { echo "$out"; exit 1; }
+            }
           done
