@@ -3,6 +3,6 @@
 export const ISLAND_LOADERS: Record<string, () => Promise<unknown>> = {
   "HeroViewer": () => import("./HeroViewer"),
   "InstallCmd": () => import("./InstallCmd"),
-  "ViewAs": () => import("./ViewAs"),
   "ThemeToggle": () => import("./ThemeToggle"),
+  "ViewAs": () => import("./ViewAs"),
 };

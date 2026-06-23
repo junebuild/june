@@ -113,7 +113,10 @@ export function island<P extends Record<string, unknown>>(
   const defaultStrategy: Strategy = options.strategy ?? "load";
   const slot = options.slot ?? false;
   const persist = options.persist ?? false;
-  // Register the RAW component — the client hydrates this, not the wrapper.
+  // Register the RAW component — the client hydrates this, not the wrapper. Within
+  // ONE app, duplicate names are caught at build time (generateIslandRegistry
+  // throws); we don't throw here because a single process can legitimately host
+  // several apps' islands sharing a name (tests, multi-app bundlers).
   ISLAND_REGISTRY.set(name, { component: Component, strategy: defaultStrategy, slot });
 
   function IslandWrapper(props: P & IslandIntent & { children?: React.ReactNode }): React.ReactElement {
