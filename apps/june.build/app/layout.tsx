@@ -2,7 +2,6 @@
 // (wordmark + global "view as" + theme switch), the page, and the footer. The
 // styling lives in app/global.css (auto-linked); the body font stack ends in CJK
 // faces so the Chinese posts typeset natively, no webfont.
-import { Island } from "@junejs/core/islands";
 
 import { ThemeToggle } from "./ThemeToggle";
 import { ViewAs } from "./ViewAs";
@@ -58,8 +57,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             ))}
           </div>
           <div className="j-nav-right">
-            <Island name="ViewAs" component={ViewAs} />
-            <Island name="ThemeToggle" component={ThemeToggle} />
+            <ViewAs />
+            <ThemeToggle />
           </div>
         </div>
       </nav>

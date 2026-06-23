@@ -1,8 +1,9 @@
-// The client entry (the app/_client.* convention). Its presence turns on
-// /client.js and the document's <script>; delete it and every page ships zero
-// client JS. Register each island by the name its <Island> uses.
-import { hydrateIslands } from "@junejs/core/islands-client";
+// The client entry (app/_client.* convention). Its presence turns on /client.js;
+// delete it and every page ships zero client JS. startJuneClient hydrates the
+// islands and wires the router when clientRouter is on. ISLAND_LOADERS is
+// generated from your island() modules.
+import { startJuneClient } from "@junejs/core/islands-client";
 
-import { Counter } from "./Counter";
+import { ISLAND_LOADERS } from "./_islands.gen";
 
-hydrateIslands({ Counter });
+startJuneClient({ loaders: ISLAND_LOADERS });

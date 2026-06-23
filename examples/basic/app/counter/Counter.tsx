@@ -1,6 +1,6 @@
 "use client";
-// A client island (island v2): used directly as <Counter/> with its hydration
-// intent at the call site. Everything NOT wrapped by island() ships zero client JS.
+// The example island (island v2): used directly as <Counter/>. The server renders
+// it inert ("count: 0"); the client entry hydrates it so the button counts.
 import { useState } from "react";
 
 import { island } from "@junejs/core/islands";

@@ -1,20 +1,14 @@
-// Client islands — explicit, transform-free interactivity for v0.1.
+// Client islands — transform-free interactivity.
 //
 // A page is server-rendered with zero client JS by default. To make ONE subtree
-// interactive, an author marks the component `"use client"` (convention) and
-// drops it into the server tree through `<Island>`. The server SSRs the
-// component inside a `<june-island>` marker that also carries its props as JSON;
-// the rest of the page ships no JS. The client runtime (Phase: hydration) scans
-// for these markers, looks the component up in an explicit registry, and
-// `hydrateRoot`s each one in place — so `useState`/`onClick` come alive without
-// the page becoming an SPA.
+// interactive, mark the component `"use client"` and wrap it with `island()`; use
+// it directly (`<Counter/>`) with its hydration intent at the call site
+// (`client:visible`). The server SSRs it inside a `<june-island>` marker carrying
+// its props (+ intent) as attributes; the client runtime scans the markers, looks
+// each up in the registry (auto-generated from the modules), and brings it to life.
 //
-// PURE: this is React-only (no `node:*` / `Bun.*`), so it lives in the contract
-// layer and both the dev server and the built worker render identical markers.
-//
-// v0.1 is EXPLICIT: the author names the island and registers it on the client
-// by hand. Auto-scanning `"use client"` files into a generated registry (so the
-// `name` and the client import are derived, not written) is deferred to v0.2.
+// PURE: React-only (no `node:*` / `Bun.*`), so it lives in the contract layer and
+// both the dev server and the built worker render identical markers.
 import React from "react";
 
 // The marker element + attributes are the contract between this server-side
@@ -48,48 +42,7 @@ export function deserializeIslandProps(raw: string | null | undefined): Record<s
   }
 }
 
-export type IslandProps<P extends Record<string, unknown> = Record<string, unknown>> = {
-  // The registry key the client runtime hydrates against. Must match the key the
-  // app registers in its client entry (v0.1: written by hand).
-  name: string;
-  // The component to SSR now and hydrate later — the SAME component runs in both
-  // graphs, so its server markup and client tree match (no hydration mismatch).
-  component: React.ComponentType<P>;
-  // JSON-serializable props, embedded in the marker for the client to rehydrate.
-  props?: P;
-  // Carry this island's LIVE node across client-router navigations (see
-  // ISLAND_PERSIST_ATTR). Only meaningful when `clientRouter` is on.
-  persist?: boolean;
-};
-
-// Wrap a client component in its hydration marker. The marker SSRs the component
-// (so the island is visible + indexable with zero JS) AND stamps the name +
-// serialized props the client runtime needs to bring it to life.
-//
-// @deprecated Prefer `island()` (below): direct `<Counter/>` usage with `client:*`
-// intent + an auto-generated registry. `<Island>` is kept for one release and
-// will be removed.
-export function Island<P extends Record<string, unknown>>({
-  name,
-  component: Component,
-  props,
-  persist,
-}: IslandProps<P>): React.ReactElement {
-  const resolved = (props ?? {}) as P;
-  return React.createElement(
-    ISLAND_TAG,
-    {
-      [ISLAND_NAME_ATTR]: name,
-      [ISLAND_PROPS_ATTR]: serializeIslandProps(resolved),
-      // Boolean attribute: present only when opted in, so non-persisted islands
-      // (and apps without clientRouter) render byte-identical markers.
-      ...(persist ? { [ISLAND_PERSIST_ATTR]: "" } : {}),
-    },
-    React.createElement(Component, resolved),
-  );
-}
-
-// --- island() — intent-based authoring (the v0.2 surface) ---------------------
+// --- island() — intent-based authoring -----------------------------------------
 //
 // Use a client component DIRECTLY, with its hydration intent at the call site:
 //
@@ -131,6 +84,10 @@ export type IslandOptions = {
   // explicitly only when the function is anonymous/minified.
   name?: string;
   strategy?: Strategy;
+  // Carry this island's LIVE node across client-router soft navigations (its React
+  // state + open connections survive instead of being re-created). Only meaningful
+  // with clientRouter; the match key across pages is the island name.
+  persist?: boolean;
   // EXPERIMENTAL: take server-rendered children as a light-DOM slot.
   slot?: boolean;
 };
@@ -155,6 +112,7 @@ export function island<P extends Record<string, unknown>>(
   }
   const defaultStrategy: Strategy = options.strategy ?? "load";
   const slot = options.slot ?? false;
+  const persist = options.persist ?? false;
   // Register the RAW component — the client hydrates this, not the wrapper.
   ISLAND_REGISTRY.set(name, { component: Component, strategy: defaultStrategy, slot });
 
@@ -175,6 +133,7 @@ export function island<P extends Record<string, unknown>>(
       [ISLAND_NAME_ATTR]: name,
       [ISLAND_PROPS_ATTR]: serializeIslandProps(rest),
       [ISLAND_STRATEGY_ATTR]: strategy,
+      ...(persist ? { [ISLAND_PERSIST_ATTR]: "" } : {}),
       ...(slot ? { [ISLAND_SLOT_ATTR]: "" } : {}),
     };
 

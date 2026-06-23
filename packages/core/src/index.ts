@@ -63,15 +63,18 @@ export {
 // Segment-scoped swap boundary — opt a layout into being a persistent shell
 export { JuneOutlet } from "./outlet";
 
-// Client islands — explicit "use client" interactivity (SSR marker + hydrate)
+// Client islands — intent-based "use client" interactivity (island() + client:*)
 export {
-  Island,
+  island,
+  Tab,
   serializeIslandProps,
   deserializeIslandProps,
   ISLAND_TAG,
   ISLAND_NAME_ATTR,
   ISLAND_PROPS_ATTR,
-  type IslandProps,
+  type Strategy,
+  type IslandOptions,
+  type IslandIntent,
 } from "./islands";
 
 // The unified action registry (UI action == MCP tool == WebMCP tool)
