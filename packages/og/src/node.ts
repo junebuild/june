@@ -34,6 +34,6 @@ export class ImageResponse extends Response {
         writer.write(new Uint8Array(png));
         writer.close();
       })
-      .catch((err) => writer.abort(err));
+      .catch((err: unknown) => writer.abort(err));
   }
 }
