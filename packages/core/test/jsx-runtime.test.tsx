@@ -69,4 +69,13 @@ describe("jsx-runtime island markers", () => {
       ),
     ).toThrow(/cannot take children/);
   });
+
+  test("I3: whitespace-only children don't make a component a slot island", () => {
+    function Box({ children }: { children?: ReactNode }) {
+      return <div className="box">{children}</div>;
+    }
+    const html = renderToStaticMarkup(<Box client:load>{"   "}</Box>);
+    expect(html).not.toContain("data-june-slot");
+    expect(html).not.toContain("june-slot");
+  });
 });

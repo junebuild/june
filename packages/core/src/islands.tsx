@@ -58,6 +58,13 @@ export function deserializeIslandProps(raw: string | null | undefined): Record<s
 //    nested island markers within it survive to self-hydrate.
 // Internal: the JSX runtime (server) and islands-client (client) substitute an
 // island's `children` with this — the author just renders `{children}`.
+//
+// AUTHOR CONSTRAINTS (the two costs of a slot island):
+//  1. The slot content is INERT — frozen server HTML. Children that need to share
+//     the shell's React state must be a nested island or use a cross-island store.
+//  2. The shell must HIDE the slot (CSS / [hidden]), never conditionally UNMOUNT it
+//     (`{open && children}`) — unmounting destroys the nested islands inside it.
+//     (islands-client warns in dev if a slot's content is removed from the DOM.)
 export function JuneSlot({ children, html }: { children?: ReactNode; html?: string }): ReactElement {
   if (html != null) {
     return createElement(ISLAND_SLOT_TAG, { dangerouslySetInnerHTML: { __html: html }, suppressHydrationWarning: true });

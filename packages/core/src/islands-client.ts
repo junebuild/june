@@ -53,6 +53,22 @@ function mount(el: Element, Component: React.ComponentType<any>): void {
     const slotEl = el.querySelector(ISLAND_SLOT_TAG);
     const html = slotEl ? slotEl.innerHTML : "";
     hydrateRoot(el, React.createElement(Component, { ...props, children: React.createElement(JuneSlot, { html }) }));
+    // Foot-gun guard (dev only): a slot shell must HIDE its content (CSS / [hidden]),
+    // never conditionally unmount it (`{open && children}`). Unmounting removes the
+    // slot DOM — and the already-hydrated nested islands inside it die silently
+    // (they won't be re-scanned). Warn if the slot node leaves the DOM.
+    if (process.env.NODE_ENV !== "production" && slotEl && typeof MutationObserver !== "undefined") {
+      const obs = new MutationObserver(() => {
+        if (!el.contains(slotEl)) {
+          obs.disconnect();
+          console.warn(
+            `[june] slot island "${el.getAttribute(ISLAND_NAME_ATTR)}" unmounted its content — ` +
+              `toggle with CSS or the [hidden] attribute, not conditional rendering, or nested islands die silently.`,
+          );
+        }
+      });
+      obs.observe(el, { childList: true, subtree: true });
+    }
     return;
   }
   // "only" was never SSR'd → mount fresh; otherwise adopt the server markup.
