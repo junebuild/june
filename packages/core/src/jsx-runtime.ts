@@ -49,6 +49,18 @@ const DIRECTIVE = "client:";
 // its island marker; otherwise return null (the caller passes through to React).
 export function islandMarker(type: unknown, props: Record<string, unknown> | null): unknown {
   if (typeof type !== "function" || props == null) return null;
+  // Fast path: a component is an island ONLY if some prop is a `client:*` directive.
+  // The common case is a normal component render — bail here, before allocating
+  // `rest`, so the whole tree doesn't pay an O(props) copy + alloc per element.
+  let isIsland = false;
+  for (const k in props) {
+    if (k.charCodeAt(0) === 99 /* 'c' */ && k.startsWith(DIRECTIVE)) {
+      isIsland = true;
+      break;
+    }
+  }
+  if (!isIsland) return null;
+
   let strategy: Strategy | undefined;
   let persist = false;
   const rest: Record<string, unknown> = {};
@@ -61,17 +73,21 @@ export function islandMarker(type: unknown, props: Record<string, unknown> | nul
       rest[k] = props[k];
     }
   }
-  if (!strategy) return null; // `persist` alone (no client:*) is not an island
+  if (!strategy) return null; // only `client:false` directives → not an island
 
   const name = (type as { displayName?: string; name?: string }).displayName || (type as { name?: string }).name;
-  // children aren't JSON-serializable; keep them out of the props attribute (they
-  // still go to the component for SSR). The marker name = the component's runtime
-  // name (must equal the export name the registry keys by — fail-loud in codegen).
-  const { children: _children, ...serializable } = rest;
+  // Islands can't take children: the client hydrates from the serialized props
+  // ALONE, so any SSR'd children would be dropped → hydration mismatch. Composition
+  // via children needs RSC. Fail loud (the codegen catches this at build too).
+  if (rest.children != null && rest.children !== false) {
+    throw new Error(
+      `[june] island <${name} client:*/> cannot take children — composition via children needs RSC; make the children a separate client subtree instead.`,
+    );
+  }
   return rjsx(ISLAND_TAG as never, {
     [ISLAND_NAME_ATTR]: name,
     [ISLAND_STRATEGY_ATTR]: strategy,
-    [ISLAND_PROPS_ATTR]: serializeIslandProps(serializable),
+    [ISLAND_PROPS_ATTR]: serializeIslandProps(rest),
     ...(persist ? { [ISLAND_PERSIST_ATTR]: "" } : {}),
     // "only" → never server-render (client mounts fresh); else SSR the component.
     children: strategy === "only" ? undefined : rjsx(type as never, rest as never),

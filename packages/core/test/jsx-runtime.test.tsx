@@ -4,7 +4,7 @@
 // marker — no island() wrapper on the component. This file IS compiled with the
 // pragma above, so the markers here are produced by the real toolchain path.
 import { describe, expect, test } from "bun:test";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 // A PLAIN "use client" component — NO island() wrapper anywhere.
@@ -39,5 +39,18 @@ describe("jsx-runtime island markers", () => {
   test("host elements pass straight through", () => {
     const html = renderToStaticMarkup(<div className="x">hi</div>);
     expect(html).toBe('<div class="x">hi</div>');
+  });
+
+  test("N1: an island with children throws (no silent hydration mismatch)", () => {
+    function Box({ children }: { children?: ReactNode }) {
+      return <div>{children}</div>;
+    }
+    expect(() =>
+      renderToStaticMarkup(
+        <Box client:load>
+          <span>x</span>
+        </Box>,
+      ),
+    ).toThrow(/cannot take children/);
   });
 });
