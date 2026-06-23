@@ -18,6 +18,8 @@ import {
   ISLAND_PROPS_ATTR,
   ISLAND_STRATEGY_ATTR,
   ISLAND_PERSIST_ATTR,
+  ISLAND_SLOT_ATTR,
+  JuneSlot,
   serializeIslandProps,
   type Strategy,
 } from "./islands";
@@ -76,21 +78,27 @@ export function islandMarker(type: unknown, props: Record<string, unknown> | nul
   if (!strategy) return null; // only `client:false` directives → not an island
 
   const name = (type as { displayName?: string; name?: string }).displayName || (type as { name?: string }).name;
-  // Islands can't take children: the client hydrates from the serialized props
-  // ALONE, so any SSR'd children would be dropped → hydration mismatch. Composition
-  // via children needs RSC. Fail loud (the codegen catches this at build too).
-  if (rest.children != null && rest.children !== false) {
+  // Slot island: a component used WITH children is an interactive shell wrapping
+  // server-rendered content. Wrap the children in <JuneSlot> (server: renders them
+  // as zero-JS HTML inside <june-slot>; client: re-renders the captured HTML
+  // opaquely so it hydrates 1:1 and never reconciles). The component just renders
+  // `{children}`. A leaf island taking no children is the common case (no slot).
+  const { children, ...serializable } = rest;
+  const hasSlot = children != null && children !== false;
+  if (hasSlot && strategy === "only") {
     throw new Error(
-      `[june] island <${name} client:*/> cannot take children — composition via children needs RSC; make the children a separate client subtree instead.`,
+      `[june] island <${name} client:only/> cannot take children — client:only is never server-rendered, so there is no server content to slot.`,
     );
   }
+  const componentProps = hasSlot ? { ...serializable, children: rjsx(JuneSlot as never, { children } as never) } : serializable;
   return rjsx(ISLAND_TAG as never, {
     [ISLAND_NAME_ATTR]: name,
     [ISLAND_STRATEGY_ATTR]: strategy,
-    [ISLAND_PROPS_ATTR]: serializeIslandProps(rest),
+    [ISLAND_PROPS_ATTR]: serializeIslandProps(serializable), // children never serialize; they SSR via the slot
     ...(persist ? { [ISLAND_PERSIST_ATTR]: "" } : {}),
+    ...(hasSlot ? { [ISLAND_SLOT_ATTR]: "" } : {}),
     // "only" → never server-render (client mounts fresh); else SSR the component.
-    children: strategy === "only" ? undefined : rjsx(type as never, rest as never),
+    children: strategy === "only" ? undefined : rjsx(type as never, componentProps as never),
   } as never);
 }
 

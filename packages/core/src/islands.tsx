@@ -9,12 +9,17 @@
 //
 // PURE: no `node:*` / `Bun.*`, so it lives in the contract layer and the dev server
 // + built worker render identical markers.
+import { createElement, type ReactElement, type ReactNode } from "react";
 
 export const ISLAND_TAG = "june-island";
 export const ISLAND_NAME_ATTR = "data-june-island";
 export const ISLAND_PROPS_ATTR = "data-june-props";
 // When to bring the island to life (the `client:*` directive's value).
 export const ISLAND_STRATEGY_ATTR = "data-june-strategy";
+// Present when an island wraps server-rendered children as a slot (it took
+// children). The element below carries that content across the SSR→hydrate boundary.
+export const ISLAND_SLOT_ATTR = "data-june-slot";
+export const ISLAND_SLOT_TAG = "june-slot";
 // Carry the island's live node across a client-router soft navigation: its
 // already-hydrated node (React state, open sockets and all) is moved into the next
 // page instead of re-created. No-op without `clientRouter`. The match key across
@@ -42,4 +47,20 @@ export function deserializeIslandProps(raw: string | null | undefined): Record<s
   } catch {
     return {};
   }
+}
+
+// The slot boundary an island's children pass through — the SAME component on both
+// sides of the SSR→hydrate boundary, so it renders byte-identical markup:
+//  - SERVER: render the children normally → zero-JS HTML inside `<june-slot>`.
+//  - CLIENT: render the captured server HTML opaquely (dangerouslySetInnerHTML +
+//    suppressHydrationWarning). Same string → hydration aligns; React never
+//    reconciles inside, so the content stays the server's zero-JS HTML and any
+//    nested island markers within it survive to self-hydrate.
+// Internal: the JSX runtime (server) and islands-client (client) substitute an
+// island's `children` with this — the author just renders `{children}`.
+export function JuneSlot({ children, html }: { children?: ReactNode; html?: string }): ReactElement {
+  if (html != null) {
+    return createElement(ISLAND_SLOT_TAG, { dangerouslySetInnerHTML: { __html: html }, suppressHydrationWarning: true });
+  }
+  return createElement(ISLAND_SLOT_TAG, null, children);
 }

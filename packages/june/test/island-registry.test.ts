@@ -95,11 +95,13 @@ describe("generateIslandRegistry (usage-driven)", () => {
     expect(() => generateIslandRegistry(app)).toThrow(/NAMED imports/);
   });
 
-  test("N1: throws on an island used with children", () => {
+  test("a slot island (used with children) still emits one loader — slot is runtime", () => {
     const app = appDir({
-      "page.tsx": 'import { Tabs } from "./Tabs";\nexport default () => <Tabs client:load><p>panel</p></Tabs>;\n',
+      "Tabs.tsx": '"use client";\nexport function Tabs(){ return null; }\n',
+      "page.tsx": 'import { Tabs } from "./Tabs";\nexport default () => <Tabs client:visible><p>panel</p></Tabs>;\n',
     });
-    expect(() => generateIslandRegistry(app)).toThrow(/cannot take children/);
+    expect(generateIslandRegistry(app)).toBe(1);
+    expect(gen(app)).toContain('"Tabs": () => import("./Tabs").then((m) => m.Tabs)');
   });
 
   test('N3: throws when a resolvable island module is not "use client"', () => {
