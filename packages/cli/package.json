@@ -1,7 +1,7 @@
 {
   "name": "@junejs/cli",
-  "version": "0.0.38",
-  "description": "The `june` CLI — dev / build / deploy / gen / info. A thin bin over @junejs/server.",
+  "version": "0.0.39",
+  "description": "The `june` CLI \u2014 dev / build / deploy / gen / info. A thin bin over @junejs/server.",
   "type": "module",
   "license": "MIT",
   "homepage": "https://june.build",
@@ -20,8 +20,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@junejs/core": "workspace:*",
-    "@junejs/server": "workspace:*"
+    "@junejs/core": "workspace:^",
+    "@junejs/server": "workspace:^"
   },
   "repository": {
     "type": "git",

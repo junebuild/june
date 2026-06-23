@@ -68,18 +68,18 @@
     },
     "packages/cli": {
       "name": "@junejs/cli",
-      "version": "0.0.38",
+      "version": "0.0.39",
       "bin": {
         "june": "./bin.mjs",
       },
       "dependencies": {
-        "@junejs/core": "workspace:*",
-        "@junejs/server": "workspace:*",
+        "@junejs/core": "workspace:^",
+        "@junejs/server": "workspace:^",
       },
     },
     "packages/core": {
       "name": "@junejs/core",
-      "version": "0.0.38",
+      "version": "0.0.39",
       "peerDependencies": {
         "react": "^19.2.0",
         "react-dom": "^19.2.0",
@@ -97,9 +97,9 @@
     },
     "packages/db": {
       "name": "@junejs/db",
-      "version": "0.0.28",
+      "version": "0.0.29",
       "dependencies": {
-        "@junejs/core": "workspace:*",
+        "@junejs/core": "workspace:^",
       },
     },
     "packages/i18n": {
@@ -107,7 +107,7 @@
       "version": "0.0.27",
       "dependencies": {
         "@formatjs/icu-messageformat-parser": "^2.7.0",
-        "@junejs/db": "workspace:*",
+        "@junejs/db": "workspace:^",
       },
       "peerDependencies": {
         "react": "^19.2.0",
@@ -115,10 +115,10 @@
     },
     "packages/june": {
       "name": "@junejs/server",
-      "version": "0.0.36",
+      "version": "0.0.37",
       "dependencies": {
-        "@junejs/core": "workspace:*",
-        "@junejs/db": "workspace:*",
+        "@junejs/core": "workspace:^",
+        "@junejs/db": "workspace:^",
         "lightningcss": "^1.27.0",
         "marked": "^18.0.5",
         "oxc-parser": "^0.137.0",
@@ -150,11 +150,11 @@
       "name": "@junejs/juno",
       "version": "0.0.28",
       "dependencies": {
-        "@junejs/core": "workspace:*",
-        "@junejs/db": "workspace:*",
+        "@junejs/core": "workspace:^",
+        "@junejs/db": "workspace:^",
       },
       "devDependencies": {
-        "@junejs/server": "workspace:*",
+        "@junejs/server": "workspace:^",
         "@types/pg": "^8.20.0",
         "mysql2": "^3.22.5",
         "pg": "^8.21.0",

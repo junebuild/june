@@ -1,6 +1,6 @@
 {
   "name": "@junejs/server",
-  "version": "0.0.36",
+  "version": "0.0.37",
   "description": "June host adapters + dev server. Host-coupled; depends on the pure @junejs/core contract layer.",
   "type": "module",
   "license": "MIT",
@@ -30,8 +30,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@junejs/core": "workspace:*",
-    "@junejs/db": "workspace:*",
+    "@junejs/core": "workspace:^",
+    "@junejs/db": "workspace:^",
     "lightningcss": "^1.27.0",
     "marked": "^18.0.5",
     "oxc-parser": "^0.137.0",
