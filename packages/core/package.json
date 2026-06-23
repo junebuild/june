@@ -14,6 +14,7 @@
     "./context": "./src/context.ts",
     "./document": "./src/document.tsx",
     "./islands": "./src/islands.tsx",
+    "./store": "./src/store.ts",
     "./jsx-runtime": "./src/jsx-runtime.ts",
     "./jsx-dev-runtime": "./src/jsx-dev-runtime.ts",
     "./outlet": "./src/outlet.tsx",
