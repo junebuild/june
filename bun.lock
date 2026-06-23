@@ -162,7 +162,7 @@
     },
     "packages/og": {
       "name": "@junejs/og",
-      "version": "0.0.2",
+      "version": "0.0.3",
       "devDependencies": {
         "@resvg/resvg-js": "^2.6.2",
         "@types/react": "^19.2.0",
