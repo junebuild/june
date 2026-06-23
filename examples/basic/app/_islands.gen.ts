@@ -2,4 +2,5 @@
 // Maps each island name to a loader that resolves its component; hydrateIslands uses it.
 export const ISLAND_LOADERS: Record<string, () => Promise<unknown>> = {
   "Counter": () => import("./counter/Counter").then((m) => m.Counter),
+  "Panel": () => import("./slot/Panel").then((m) => m.Panel),
 };
