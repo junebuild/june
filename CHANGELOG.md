@@ -5,6 +5,31 @@ of truth; this file summarizes what matters per release.
 
 ## [Unreleased]
 
+### Added
+
+- **Slot islands — an interactive shell wrapping server-rendered content.** A client
+  island that renders `{children}` becomes a slot: the children are SSR'd as zero-JS
+  HTML inside the island, and on hydrate the shell adopts that HTML verbatim
+  (`dangerouslySetInnerHTML` + `suppressHydrationWarning`) — it hydrates 1:1, React
+  never reconciles the content, and any nested islands inside it self-hydrate. No new
+  API: the author just writes a `"use client"` component that renders `{children}`
+  and uses it with children:
+
+  ```tsx
+  "use client";
+  export function Viewer({ children }) {
+    const [zoom, setZoom] = useState(1);
+    return <div><button onClick={() => setZoom((z) => z + 1)}>{zoom}x</button>{children}</div>;
+  }
+  // page (server): the <article> stays zero-JS; Viewer's chrome hydrates
+  <Viewer client:visible><article dangerouslySetInnerHTML={frozenHtml} /></Viewer>
+  ```
+
+  This replaces the 0.0.36 "islands can't take children" guard. Slot content is
+  frozen server HTML; for children that share the shell's React state, make it one
+  island or use a cross-island store. `client:only` + children is rejected (nothing
+  is server-rendered to slot).
+
 ## [0.0.36]
 
 Hardening of the jsx-runtime island model (0.0.35).

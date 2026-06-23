@@ -41,15 +41,31 @@ describe("jsx-runtime island markers", () => {
     expect(html).toBe('<div class="x">hi</div>');
   });
 
-  test("N1: an island with children throws (no silent hydration mismatch)", () => {
-    function Box({ children }: { children?: ReactNode }) {
+  test("slot: an island WITH children SSRs them inside <june-slot> + flags data-june-slot", () => {
+    function Shell({ children }: { children?: ReactNode }) {
+      return <div className="shell">{children}</div>;
+    }
+    const html = renderToStaticMarkup(
+      <Shell client:visible>
+        <p>server content</p>
+      </Shell>,
+    );
+    expect(html).toContain("data-june-slot"); // marked as a slot island
+    expect(html).toContain("<june-slot>");
+    expect(html).toContain("<p>server content</p>"); // children SSR'd (zero-JS) inside the slot
+    expect(html).toContain('class="shell"'); // shell rendered around it
+    expect(html).not.toContain('data-june-props="{&quot;children'); // children never serialized
+  });
+
+  test("client:only + children throws (nothing is server-rendered to slot)", () => {
+    function Shell({ children }: { children?: ReactNode }) {
       return <div>{children}</div>;
     }
     expect(() =>
       renderToStaticMarkup(
-        <Box client:load>
-          <span>x</span>
-        </Box>,
+        <Shell client:only>
+          <p>x</p>
+        </Shell>,
       ),
     ).toThrow(/cannot take children/);
   });

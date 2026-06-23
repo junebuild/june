@@ -17,6 +17,9 @@ import {
   ISLAND_NAME_ATTR,
   ISLAND_PROPS_ATTR,
   ISLAND_STRATEGY_ATTR,
+  ISLAND_SLOT_ATTR,
+  ISLAND_SLOT_TAG,
+  JuneSlot,
   deserializeIslandProps,
 } from "./islands";
 import { startClientRouter } from "./client-router";
@@ -40,6 +43,18 @@ function mount(el: Element, Component: React.ComponentType<any>): void {
   (el as Marked).__juneHydrated = true;
   const props = deserializeIslandProps(el.getAttribute(ISLAND_PROPS_ATTR));
   const strategy = el.getAttribute(ISLAND_STRATEGY_ATTR);
+
+  // Slot island: capture the server-rendered slot HTML and feed it back as the
+  // children (the JuneSlot wrapper renders it opaquely), so the shell hydrates 1:1
+  // and the server content is preserved verbatim. Nested island markers inside it
+  // are found by the normal scan and self-hydrate. Always a hydrate (never SSR'd
+  // empty: client:only + slot is rejected at build/render).
+  if (el.hasAttribute(ISLAND_SLOT_ATTR)) {
+    const slotEl = el.querySelector(ISLAND_SLOT_TAG);
+    const html = slotEl ? slotEl.innerHTML : "";
+    hydrateRoot(el, React.createElement(Component, { ...props, children: React.createElement(JuneSlot, { html }) }));
+    return;
+  }
   // "only" was never SSR'd → mount fresh; otherwise adopt the server markup.
   if (strategy === "only") createRoot(el).render(React.createElement(Component, props));
   else hydrateRoot(el, React.createElement(Component, props));

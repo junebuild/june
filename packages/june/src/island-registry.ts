@@ -84,29 +84,20 @@ function hasClientDirective(openingElement: any): boolean {
   );
 }
 
-// Real (non-whitespace) JSX children — empty text/whitespace doesn't count.
-function hasRealChildren(node: any): boolean {
-  return (node.children ?? []).some(
-    (c: any) =>
-      (c.type === "JSXText" && c.value.trim() !== "") ||
-      c.type === "JSXElement" ||
-      c.type === "JSXFragment" ||
-      (c.type === "JSXExpressionContainer" && c.expression?.type !== "JSXEmptyExpression"),
-  );
-}
-
-// Collect every JSX element used with a client:* directive (recursive walk).
-function islandUsages(program: { body: any[] }): Array<{ tag: string; hasChildren: boolean }> {
-  const usages: Array<{ tag: string; hasChildren: boolean }> = [];
+// Collect every JSX element tag used with a client:* directive (recursive walk).
+// A usage with children is a SLOT island (handled at runtime); the loader is the
+// same either way, so the codegen only needs the tags.
+function islandTags(program: { body: any[] }): string[] {
+  const tags: string[] = [];
   (function walkNode(node: any) {
     if (!node || typeof node !== "object") return;
     if (Array.isArray(node)) return node.forEach(walkNode);
     if (node.type === "JSXElement" && node.openingElement?.name?.type === "JSXIdentifier" && hasClientDirective(node.openingElement)) {
-      usages.push({ tag: node.openingElement.name.name, hasChildren: hasRealChildren(node) });
+      tags.push(node.openingElement.name.name);
     }
     for (const k in node) if (k !== "type") walkNode(node[k]);
   })(program);
-  return usages;
+  return tags;
 }
 
 // Resolve a relative import specifier to a source file on disk (try extensions +
@@ -133,7 +124,7 @@ export function generateIslandRegistry(appDir: string): number {
     const imports = importMap(ast);
     const rel = "./" + relative(appDir, f);
 
-    for (const { tag, hasChildren } of islandUsages(ast)) {
+    for (const tag of islandTags(ast)) {
       const imp = imports.get(tag);
       if (!imp) {
         throw new Error(
@@ -143,15 +134,6 @@ export function generateIslandRegistry(appDir: string): number {
       if (imp.kind !== "named") {
         throw new Error(
           `[june] <${tag} client:*/> in ${rel}: island imports must be NAMED imports (a named \`{ ${tag} }\` import; default/namespace imports aren't supported as islands).`,
-        );
-      }
-      // N1: islands can't take children — they'd be SSR'd but dropped on hydrate
-      // (the client only has the serialized props). Composition via children = RSC.
-      if (hasChildren) {
-        throw new Error(
-          `[june] <${tag} client:*/> in ${rel} has children — islands are leaves and cannot take children. ` +
-            `Use vanilla JS/CSS for pure toggle chrome (tabs/accordion), one leaf island if the whole subtree is interactive, ` +
-            `or RSC for static server content inside an interactive shell.`,
         );
       }
       const name = imp.imported; // = the component's runtime name = the marker the JSX runtime stamps

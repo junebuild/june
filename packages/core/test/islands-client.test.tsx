@@ -8,7 +8,7 @@ import { GlobalRegistrator } from "@happy-dom/global-registrator";
 beforeAll(() => GlobalRegistrator.register({ url: "http://localhost:3000/" }));
 afterAll(() => GlobalRegistrator.unregister());
 
-import { act, useState } from "react";
+import { act, useState, type ReactNode } from "react";
 import { renderToString } from "react-dom/server";
 import { hydrateIslands, startJuneClient } from "@junejs/core/islands-client";
 
@@ -47,6 +47,52 @@ describe("hydrateIslands", () => {
       await flush();
     });
     expect(document.body.querySelector("button")!.textContent).toBe("count: 1"); // intact, unhydrated
+  });
+
+  test("slot island: shell hydrates, server content stays, nested island self-hydrates", async () => {
+    // A PLAIN interactive shell that renders {children} (a slot island), wrapping
+    // static server content AND a nested Counter island.
+    function Shell({ children }: { children?: ReactNode }) {
+      const [n, setN] = useState(0);
+      return (
+        <div>
+          <button type="button" data-shell onClick={() => setN((v) => v + 1)}>
+            shell: {n}
+          </button>
+          {children}
+        </div>
+      );
+    }
+    // The jsx-runtime turns this into a slot marker with the static <p> + the nested
+    // Counter marker SSR'd inside <june-slot>.
+    document.body.innerHTML = renderToString(
+      <Shell client:load>
+        <p data-static>frozen</p>
+        <Counter initial={5} client:load />
+      </Shell>,
+    );
+    expect(document.body.querySelector("[data-static]")!.textContent).toBe("frozen");
+
+    await act(async () => {
+      hydrateIslands({ Shell: () => Promise.resolve(Shell), Counter: () => Promise.resolve(Counter) });
+      await flush();
+    });
+
+    // shell interactive
+    await act(async () => {
+      document.querySelector<HTMLElement>("[data-shell]")!.click();
+    });
+    expect(document.querySelector("[data-shell]")!.textContent).toBe("shell: 1");
+    // server content preserved verbatim
+    expect(document.querySelector("[data-static]")!.textContent).toBe("frozen");
+    // nested island self-hydrated (its own props + state)
+    const counter = [...document.querySelectorAll("button")].find((b) => b.textContent!.startsWith("count:"))!;
+    await act(async () => {
+      counter.click();
+    });
+    expect([...document.querySelectorAll("button")].find((b) => b.textContent!.startsWith("count:"))!.textContent).toBe(
+      "count: 6",
+    );
   });
 });
 
