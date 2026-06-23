@@ -94,4 +94,27 @@ describe("generateIslandRegistry (usage-driven)", () => {
     });
     expect(() => generateIslandRegistry(app)).toThrow(/NAMED imports/);
   });
+
+  test("N1: throws on an island used with children", () => {
+    const app = appDir({
+      "page.tsx": 'import { Tabs } from "./Tabs";\nexport default () => <Tabs client:load><p>panel</p></Tabs>;\n',
+    });
+    expect(() => generateIslandRegistry(app)).toThrow(/cannot take children/);
+  });
+
+  test('N3: throws when a resolvable island module is not "use client"', () => {
+    const app = appDir({
+      "Counter.tsx": "export function Counter(){ return null; }\n", // no "use client"
+      "page.tsx": 'import { Counter } from "./Counter";\nexport default () => <Counter client:load />;\n',
+    });
+    expect(() => generateIslandRegistry(app)).toThrow(/not "use client"/);
+  });
+
+  test('N3: accepts a relative island module that is "use client"', () => {
+    const app = appDir({
+      "Counter.tsx": '"use client";\nexport function Counter(){ return null; }\n',
+      "page.tsx": 'import { Counter } from "./Counter";\nexport default () => <Counter client:load />;\n',
+    });
+    expect(generateIslandRegistry(app)).toBe(1);
+  });
 });

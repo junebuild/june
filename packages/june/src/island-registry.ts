@@ -8,8 +8,15 @@
 // scan of node_modules). The KEY is the imported name = the component's runtime name
 // = the marker the JSX runtime stamps, so all three agree by construction.
 //
+// KNOWN EDGE (N4): the marker name the JSX runtime stamps is the component's runtime
+// `.name`; this key is the IMPORTED name. They agree when the export name == the
+// function name (the norm). A renamed export (`export { Foo as Counter }`, or
+// `export const Counter = someFn`) makes them differ → the marker can't find its
+// loader → the island stays inert and `hydrateIslands` warns. We can't read the
+// runtime name statically, so this is a documented edge, not a build error.
+//
 // Host-coupled (node:fs + oxc-parser), so it lives in @junejs/server.
-import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, dirname, resolve } from "node:path";
 
 import { parseSync } from "oxc-parser";
@@ -77,18 +84,39 @@ function hasClientDirective(openingElement: any): boolean {
   );
 }
 
-// Collect every JSX element tag used with a client:* directive (recursive walk).
-function islandTags(program: { body: any[] }): string[] {
-  const tags: string[] = [];
+// Real (non-whitespace) JSX children — empty text/whitespace doesn't count.
+function hasRealChildren(node: any): boolean {
+  return (node.children ?? []).some(
+    (c: any) =>
+      (c.type === "JSXText" && c.value.trim() !== "") ||
+      c.type === "JSXElement" ||
+      c.type === "JSXFragment" ||
+      (c.type === "JSXExpressionContainer" && c.expression?.type !== "JSXEmptyExpression"),
+  );
+}
+
+// Collect every JSX element used with a client:* directive (recursive walk).
+function islandUsages(program: { body: any[] }): Array<{ tag: string; hasChildren: boolean }> {
+  const usages: Array<{ tag: string; hasChildren: boolean }> = [];
   (function walkNode(node: any) {
     if (!node || typeof node !== "object") return;
     if (Array.isArray(node)) return node.forEach(walkNode);
     if (node.type === "JSXElement" && node.openingElement?.name?.type === "JSXIdentifier" && hasClientDirective(node.openingElement)) {
-      tags.push(node.openingElement.name.name);
+      usages.push({ tag: node.openingElement.name.name, hasChildren: hasRealChildren(node) });
     }
     for (const k in node) if (k !== "type") walkNode(node[k]);
   })(program);
-  return tags;
+  return usages;
+}
+
+// Resolve a relative import specifier to a source file on disk (try extensions +
+// /index), or null if it can't be resolved (path alias / virtual / package).
+function resolveLocalModule(fromFile: string, spec: string): string | null {
+  const base = resolve(dirname(fromFile), spec);
+  const exts = [".tsx", ".ts", ".jsx", ".js"];
+  for (const e of exts) if (existsSync(base + e)) return base + e;
+  for (const e of exts) if (existsSync(join(base, "index" + e))) return join(base, "index" + e);
+  return null;
 }
 
 // Write app/_islands.gen.ts. Returns the number of island loaders emitted.
@@ -105,7 +133,7 @@ export function generateIslandRegistry(appDir: string): number {
     const imports = importMap(ast);
     const rel = "./" + relative(appDir, f);
 
-    for (const tag of islandTags(ast)) {
+    for (const { tag, hasChildren } of islandUsages(ast)) {
       const imp = imports.get(tag);
       if (!imp) {
         throw new Error(
@@ -117,12 +145,31 @@ export function generateIslandRegistry(appDir: string): number {
           `[june] <${tag} client:*/> in ${rel}: island imports must be NAMED imports (a named \`{ ${tag} }\` import; default/namespace imports aren't supported as islands).`,
         );
       }
+      // N1: islands can't take children — they'd be SSR'd but dropped on hydrate
+      // (the client only has the serialized props). Composition via children = RSC.
+      if (hasChildren) {
+        throw new Error(
+          `[june] <${tag} client:*/> in ${rel} has children — islands cannot take children (composition via children needs RSC). Make the children a separate client subtree.`,
+        );
+      }
       const name = imp.imported; // = the component's runtime name = the marker the JSX runtime stamps
       // Re-base a relative specifier from the importing file to appDir (the gen
       // file lives in appDir); a package specifier is used verbatim.
-      const loaderSpec = imp.spec.startsWith(".")
-        ? "./" + relative(appDir, resolve(dirname(f), imp.spec))
-        : imp.spec;
+      const isRelative = imp.spec.startsWith(".");
+      const loaderSpec = isRelative ? "./" + relative(appDir, resolve(dirname(f), imp.spec)) : imp.spec;
+
+      // N3: an island runs on the client, so its module must be a client module —
+      // otherwise its loader would pull a server-only graph (node:*, secrets) into
+      // the client bundle. Verify "use client" for modules we can resolve on disk
+      // (relative imports); package islands are trusted (can't reliably resolve).
+      if (isRelative) {
+        const modFile = resolveLocalModule(f, imp.spec);
+        if (modFile && !firstStatementIsDirective(readFileSync(modFile, "utf8"), "use client")) {
+          throw new Error(
+            `[june] island "${name}" (./${relative(appDir, modFile)}) is used with client:* but its module is not "use client". An island must be a client module.`,
+          );
+        }
+      }
 
       const prev = seen.get(name);
       if (prev && prev !== loaderSpec) {
