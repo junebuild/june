@@ -9,6 +9,7 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch: # allow manual trigger for sub-package patches without bumping core
 
 permissions:
   id-token: write # required for OIDC
