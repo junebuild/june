@@ -5,6 +5,8 @@ of truth; this file summarizes what matters per release.
 
 ## [Unreleased]
 
+## [0.0.37]
+
 ### Added
 
 - **Slot islands — an interactive shell wrapping server-rendered content.** A client
