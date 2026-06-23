@@ -1,6 +1,6 @@
-// PoC code-splitting: prove the lazy runtime downloads ONLY the islands a page
-// renders. A loader is a `() => import(chunk)` thunk — here we spy on the thunks
-// to assert which chunks a page would fetch, without a real bundler.
+/** @jsxImportSource @junejs/core */
+// Code-splitting: a page only loads the chunks for the islands it renders. The
+// loaders are spied so we can assert which chunks would be fetched.
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 
@@ -9,12 +9,11 @@ afterAll(() => GlobalRegistrator.unregister());
 
 import { act, useState } from "react";
 import { renderToString } from "react-dom/server";
-import { island } from "@junejs/core/islands";
-import { hydrateIslandsLazy } from "@junejs/core/islands-client";
+import { hydrateIslands } from "@junejs/core/islands-client";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-function CounterImpl({ initial = 0 }: { initial?: number }) {
+function Counter({ initial = 0 }: { initial?: number }) {
   const [n, setN] = useState(initial);
   return (
     <button type="button" onClick={() => setN((v) => v + 1)}>
@@ -22,49 +21,38 @@ function CounterImpl({ initial = 0 }: { initial?: number }) {
     </button>
   );
 }
-const Counter = island(CounterImpl, { name: "LazyCounter" });
-
-function TabsImpl() {
+function Tabs() {
   return <div>tabs</div>;
 }
-const Tabs = island(TabsImpl, { name: "LazyTabs" });
+const flush = () => new Promise((r) => setTimeout(r, 0));
 
-// Loaders mimic `() => import("./Chunk")`: the import side-effect (island()) has
-// already registered the component above, so the thunk just resolves — and
-// records that this chunk WOULD have been fetched.
 function spyLoaders() {
   const fetched: string[] = [];
   return {
     fetched,
     loaders: {
-      LazyCounter: () => {
-        fetched.push("Counter.js");
-        return Promise.resolve();
+      Counter: () => {
+        fetched.push("Counter");
+        return Promise.resolve(Counter);
       },
-      LazyTabs: () => {
-        fetched.push("Tabs.js");
-        return Promise.resolve();
+      Tabs: () => {
+        fetched.push("Tabs");
+        return Promise.resolve(Tabs);
       },
     },
   };
 }
 
-describe("poc code-split lazy islands", () => {
+describe("code-split island loading", () => {
   test("a page fetches only the chunks for the islands it renders", async () => {
-    // This page renders ONLY a Counter (like /poc-lite).
-    document.body.innerHTML = renderToString(<Counter initial={2} />);
+    document.body.innerHTML = renderToString(<Counter initial={2} client:load />); // only Counter
     const { fetched, loaders } = spyLoaders();
-
     await act(async () => {
-      hydrateIslandsLazy(loaders);
+      hydrateIslands(loaders);
+      await flush();
     });
-    await act(async () => {}); // flush the loader's microtask → mount
-
-    // Counter's chunk was requested; Tabs' chunk was NOT (no marker on the page).
-    expect(fetched).toContain("Counter.js");
-    expect(fetched).not.toContain("Tabs.js");
-
-    // And it actually came alive.
+    expect(fetched).toContain("Counter");
+    expect(fetched).not.toContain("Tabs");
     await act(async () => {
       document.body.querySelector("button")!.click();
     });
@@ -73,14 +61,12 @@ describe("poc code-split lazy islands", () => {
 
   test("a page with both islands fetches both chunks", async () => {
     document.body.innerHTML =
-      renderToString(<Counter initial={0} />) + renderToString(<Tabs />);
+      renderToString(<Counter initial={0} client:load />) + renderToString(<Tabs client:load />);
     const { fetched, loaders } = spyLoaders();
-
     await act(async () => {
-      hydrateIslandsLazy(loaders);
+      hydrateIslands(loaders);
+      await flush();
     });
-    await act(async () => {});
-
-    expect(fetched.sort()).toEqual(["Counter.js", "Tabs.js"]);
+    expect(fetched.sort()).toEqual(["Counter", "Tabs"]);
   });
 });

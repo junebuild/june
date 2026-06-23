@@ -1,7 +1,4 @@
 import { Live } from "./Live";
-
-// Root layout. The persistent island lives HERE, inside the swapped region, so its
-// survival across navigation is entirely the router's doing.
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <>
@@ -10,7 +7,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <a href="/about">About</a>
         <a href="/users">Users</a>
       </nav>
-      <Live />
+      <Live client:load persist />
       {children}
     </>
   );

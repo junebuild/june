@@ -1,10 +1,9 @@
-// The auto island registry generator: scans "use client" island() modules and
-// emits app/_islands.gen.ts keyed by export name → lazy import. Legacy islands
-// (no island() from islands) and non-client modules are excluded.
+// The usage-driven island registry generator: scans `<X client:*/>` usages and
+// resolves each component's import AT THE USAGE SITE (app or lib alike).
 import { describe, expect, test, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 
 import { generateIslandRegistry, ISLAND_REGISTRY_FILE } from "../src/island-registry";
 
@@ -15,102 +14,84 @@ afterEach(() => {
 });
 
 function appDir(files: Record<string, string>): string {
-  dir = mkdtempSync(join(tmpdir(), "june-islands-"));
+  dir = mkdtempSync(join(tmpdir(), "june-isl-"));
   for (const [rel, src] of Object.entries(files)) {
     const full = join(dir, rel);
-    mkdirSync(join(full, ".."), { recursive: true });
+    mkdirSync(dirname(full), { recursive: true });
     writeFileSync(full, src);
   }
   return dir;
 }
+const gen = (app: string) => readFileSync(join(app, ISLAND_REGISTRY_FILE), "utf8");
 
-const ISLAND = (name: string) =>
-  `"use client";\nimport { island } from "@junejs/core/islands";\nexport const ${name} = island(function ${name}(){ return null; });\n`;
-
-describe("generateIslandRegistry", () => {
-  test("emits a lazy loader per island export, keyed by export name", () => {
+describe("generateIslandRegistry (usage-driven)", () => {
+  test("emits a loader per island usage, keyed by imported name", () => {
     const app = appDir({
-      "poc/Counter.tsx": ISLAND("Counter"),
-      "widgets/Tabs.tsx": ISLAND("Tabs"),
+      "page.tsx":
+        'import { Counter } from "./Counter";\n' +
+        "export default function P(){ return <main><Counter initial={0} client:load /></main>; }\n",
     });
-    const n = generateIslandRegistry(app);
-    const out = readFileSync(join(app, ISLAND_REGISTRY_FILE), "utf8");
-
-    expect(n).toBe(2);
-    expect(out).toContain('"Counter": () => import("./poc/Counter")');
-    expect(out).toContain('"Tabs": () => import("./widgets/Tabs")');
-    expect(out).toContain("export const ISLAND_LOADERS");
+    expect(generateIslandRegistry(app)).toBe(1);
+    expect(gen(app)).toContain('"Counter": () => import("./Counter").then((m) => m.Counter)');
   });
 
-  test("excludes legacy islands (no island() from islands) and server modules", () => {
+  test("a lib (package) island is discovered the same way — no manifest", () => {
     const app = appDir({
-      // legacy: "use client" but uses the OLD <Island> path, no island() wrapper
-      "Legacy.tsx": `"use client";\nimport { useState } from "react";\nexport function Legacy(){ const [n]=useState(0); return null; }\n`,
-      // a plain server component
-      "page.tsx": `export default function Page(){ return null; }\n`,
-      // a real island
-      "Real.tsx": ISLAND("Real"),
+      "page.tsx":
+        'import { ApiExplorer } from "kuradocs";\n' +
+        "export default function P(){ return <ApiExplorer client:visible />; }\n",
     });
-    const n = generateIslandRegistry(app);
-    const out = readFileSync(join(app, ISLAND_REGISTRY_FILE), "utf8");
-
-    expect(n).toBe(1);
-    expect(out).toContain('"Real": () => import("./Real")');
-    expect(out).not.toContain("Legacy");
-    expect(out).not.toContain("Page");
+    expect(generateIslandRegistry(app)).toBe(1);
+    expect(gen(app)).toContain('"ApiExplorer": () => import("kuradocs").then((m) => m.ApiExplorer)');
   });
 
-  test("emits a valid empty registry when there are no islands", () => {
-    const app = appDir({ "page.tsx": `export default function P(){ return null; }\n` });
-    const n = generateIslandRegistry(app);
-    const out = readFileSync(join(app, ISLAND_REGISTRY_FILE), "utf8");
-    expect(n).toBe(0);
-    expect(out).toContain("export const ISLAND_LOADERS: Record<string, () => Promise<unknown>> = {\n};");
-  });
-
-  // P1-1: key by the ISLAND name (from the call), not the export name — so an
-  // export/function-name mismatch can't silently fail to hydrate.
-  test("keys by the island name even when it differs from the export name", () => {
+  test("re-bases a relative specifier from a nested page to the app dir", () => {
     const app = appDir({
-      "Counter.tsx":
-        '"use client";\nimport { island } from "@junejs/core/islands";\n' +
-        'export const Widget = island(function Counter(){ return null; });\n',
+      "docs/page.tsx":
+        'import { Widget } from "../Widget";\n' +
+        "export default function P(){ return <Widget client:load />; }\n",
     });
     generateIslandRegistry(app);
-    const out = readFileSync(join(app, ISLAND_REGISTRY_FILE), "utf8");
-    expect(out).toContain('"Counter": () => import("./Counter")'); // the island name, not "Widget"
-    expect(out).not.toContain("Widget");
+    expect(gen(app)).toContain('"Widget": () => import("./Widget").then((m) => m.Widget)');
   });
 
-  // P1-1: explicit { name } wins.
-  test("honors an explicit { name } option", () => {
+  test("a component WITHOUT client:* is not an island", () => {
     const app = appDir({
-      "C.tsx":
-        '"use client";\nimport { island } from "@junejs/core/islands";\n' +
-        'export const C = island(function Impl(){ return null; }, { name: "Picked" });\n',
+      "page.tsx":
+        'import { Counter } from "./Counter";\n' +
+        "export default function P(){ return <Counter initial={0} />; }\n",
     });
-    generateIslandRegistry(app);
-    const out = readFileSync(join(app, ISLAND_REGISTRY_FILE), "utf8");
-    expect(out).toContain('"Picked": () => import("./C")');
+    expect(generateIslandRegistry(app)).toBe(0);
   });
 
-  // P1-2: a multi-line island() declaration the old line-regex would have missed.
-  test("handles a multi-line island() declaration (AST, not line regex)", () => {
+  test("the same island used on several pages → one loader", () => {
     const app = appDir({
-      "Multi.tsx":
-        '"use client";\nimport { island } from "@junejs/core/islands";\n' +
-        "export const Multi = island(\n  function Multi() {\n    return null;\n  },\n  { strategy: \"visible\" },\n);\n",
+      "page.tsx": 'import { Counter } from "./Counter";\nexport default () => <Counter client:load />;\n',
+      "about/page.tsx": 'import { Counter } from "../Counter";\nexport default () => <Counter client:idle />;\n',
     });
-    const n = generateIslandRegistry(app);
-    const out = readFileSync(join(app, ISLAND_REGISTRY_FILE), "utf8");
-    expect(n).toBe(1);
-    expect(out).toContain('"Multi": () => import("./Multi")');
+    expect(generateIslandRegistry(app)).toBe(1);
   });
 
-  // P2-1: a duplicate island name across modules is a build error, not a silent
-  // overwrite.
-  test("throws on a duplicate island name across modules", () => {
-    const app = appDir({ "a/Dup.tsx": ISLAND("Dup"), "b/Dup.tsx": ISLAND("Dup") });
-    expect(() => generateIslandRegistry(app)).toThrow(/duplicate island name "Dup"/);
+  test("throws on a duplicate island name from different modules", () => {
+    const app = appDir({
+      "a/page.tsx": 'import { Counter } from "../x/Counter";\nexport default () => <Counter client:load />;\n',
+      "b/page.tsx": 'import { Counter } from "../y/Counter";\nexport default () => <Counter client:load />;\n',
+    });
+    expect(() => generateIslandRegistry(app)).toThrow(/duplicate island name "Counter"/);
+  });
+
+  test("throws on a local (non-imported) component used as an island", () => {
+    const app = appDir({
+      "page.tsx":
+        "function Local(){ return null; }\nexport default () => <Local client:load />;\n",
+    });
+    expect(() => generateIslandRegistry(app)).toThrow(/must be an IMPORTED component/);
+  });
+
+  test("throws on a default import used as an island", () => {
+    const app = appDir({
+      "page.tsx": 'import Counter from "./Counter";\nexport default () => <Counter client:load />;\n',
+    });
+    expect(() => generateIslandRegistry(app)).toThrow(/NAMED imports/);
   });
 });

@@ -14,6 +14,8 @@
     "./context": "./src/context.ts",
     "./document": "./src/document.tsx",
     "./islands": "./src/islands.tsx",
+    "./jsx-runtime": "./src/jsx-runtime.ts",
+    "./jsx-dev-runtime": "./src/jsx-dev-runtime.ts",
     "./outlet": "./src/outlet.tsx",
     "./islands-client": "./src/islands-client.ts",
     "./client-router": "./src/client-router.ts",

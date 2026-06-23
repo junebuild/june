@@ -1,27 +1,16 @@
-// Auto-generate the island registry by scanning "use client" island() modules,
-// so the author never hand-writes the `{ name: () => import("./Island") }` map.
+// Auto-generate the island registry by scanning ISLAND USAGE — every
+// `<Counter client:*/>` in the app — and resolving the component's import AT THE
+// USAGE SITE. Writes app/_islands.gen.ts mapping each island name to a lazy loader
+// that dynamic-imports its module and resolves the component export.
 //
-// Scans app/** for modules that (a) start with the "use client" directive AND
-// (b) use `island()` from @junejs/core/islands, and writes app/_islands.gen.ts:
+// Usage-driven, so a third-party (lib) island is discovered the same way as an app
+// one — the import specifier is right there at the call site (no lib manifest, no
+// scan of node_modules). The KEY is the imported name = the component's runtime name
+// = the marker the JSX runtime stamps, so all three agree by construction.
 //
-//   export const ISLAND_LOADERS = {
-//     "Counter": () => import("./poc/Counter"),
-//     "Tabs":    () => import("./poc/Tabs"),
-//   };
-//
-// The KEY is the module's EXPORT name; importing the module runs its `island()`
-// call, which self-registers the component under its runtime name. Those must
-// agree — the marker the server stamps (the island's name) is what the client
-// looks up. So the convention is: an island's name == its export name (the React
-// default — `export const Counter = island(function Counter() {…})` satisfies it
-// for free; otherwise pass `island(C, { name })`).
-//
-// Over-inclusion is harmless: a loader whose name no marker references is never
-// called, so no chunk for an unused export is ever fetched.
-//
-// Host-coupled (node:fs), so it lives in @junejs/server, never the contract layer.
+// Host-coupled (node:fs + oxc-parser), so it lives in @junejs/server.
 import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, relative, dirname, resolve } from "node:path";
 
 import { parseSync } from "oxc-parser";
 
@@ -36,7 +25,7 @@ export function walk(dir: string): string[] {
 }
 
 // True iff the first real statement (skipping blanks + line comments) is the
-// directive — the same rule the bundler uses to treat a module as client.
+// directive — used by the RSC manifest codegen.
 export function firstStatementIsDirective(src: string, directive: string): boolean {
   for (const line of src.split("\n")) {
     const t = line.trim();
@@ -46,14 +35,14 @@ export function firstStatementIsDirective(src: string, directive: string): boole
   return false;
 }
 
-// The named exports of a module (skipping `export default` and `export type`).
+// The named exports of a module — used by the RSC manifest codegen.
 export function exportNames(src: string): string[] {
   const names: string[] = [];
   for (const line of src.split("\n")) {
     const t = line.trim();
     const decl = t.match(/^export\s+(?:async\s+)?(?:function|const|let|var|class)\s+([A-Za-z0-9_$]+)/);
     if (decl) names.push(decl[1]!);
-    const named = t.match(/^export\s*\{([^}]*)\}/); // `export type { … }` won't match (the `type` breaks it)
+    const named = t.match(/^export\s*\{([^}]*)\}/);
     if (named) {
       for (const part of named[1]!.split(",")) {
         const e = part.split(" as ").pop()?.trim();
@@ -64,87 +53,96 @@ export function exportNames(src: string): string[] {
   return names;
 }
 
-// The island NAME an `island(...)` call registers under — the SAME value the
-// runtime derives (options.name ?? the component's function/identifier name).
-// Keying the loader by THIS (not the export name) is what kills the desync
-// (P1-1): the marker, the registry, and the loader all agree by construction.
-// Returns null for an anonymous component with no { name } — island() throws on
-// that at runtime, so we leave it for the runtime to report.
-function islandNameOfCall(init: unknown): string | null {
-  const call = init as { type?: string; callee?: { type?: string; name?: string }; arguments?: any[] };
-  if (call?.type !== "CallExpression") return null;
-  if (call.callee?.type !== "Identifier" || call.callee.name !== "island") return null;
-  const [a0, a1] = call.arguments ?? [];
-  if (a1?.type === "ObjectExpression") {
-    for (const p of a1.properties ?? []) {
-      const key = p.key?.name ?? p.key?.value;
-      if (key === "name" && typeof p.value?.value === "string") return p.value.value;
+type Import = { spec: string; imported: string; kind: "named" | "default" | "namespace" };
+
+// local binding name → its import, for one module.
+function importMap(program: { body: any[] }): Map<string, Import> {
+  const map = new Map<string, Import>();
+  for (const n of program.body) {
+    if (n.type !== "ImportDeclaration" || typeof n.source?.value !== "string") continue;
+    const spec = n.source.value as string;
+    for (const s of n.specifiers ?? []) {
+      if (s.type === "ImportSpecifier") map.set(s.local.name, { spec, imported: s.imported.name, kind: "named" });
+      else if (s.type === "ImportDefaultSpecifier") map.set(s.local.name, { spec, imported: "default", kind: "default" });
+      else if (s.type === "ImportNamespaceSpecifier") map.set(s.local.name, { spec, imported: "*", kind: "namespace" });
     }
   }
-  if (a0?.type === "FunctionExpression") return a0.id?.name ?? null;
-  if (a0?.type === "Identifier") return a0.name ?? null;
-  return null; // arrow/anonymous without { name } → runtime island() errors
+  return map;
 }
 
-// True iff the module imports `island` from @junejs/core/islands (so a local
-// function happening to be named `island` is never mistaken for the API).
-function importsIslandApi(program: { body: any[] }): boolean {
-  return program.body.some(
-    (n) =>
-      n.type === "ImportDeclaration" &&
-      n.source?.value === "@junejs/core/islands" &&
-      (n.specifiers ?? []).some((s: any) => s.imported?.name === "island"),
+// Does this JSX element carry a `client:*` directive?
+function hasClientDirective(openingElement: any): boolean {
+  return (openingElement.attributes ?? []).some(
+    (a: any) => a.type === "JSXAttribute" && a.name?.type === "JSXNamespacedName" && a.name.namespace?.name === "client",
   );
 }
 
+// Collect every JSX element tag used with a client:* directive (recursive walk).
+function islandTags(program: { body: any[] }): string[] {
+  const tags: string[] = [];
+  (function walkNode(node: any) {
+    if (!node || typeof node !== "object") return;
+    if (Array.isArray(node)) return node.forEach(walkNode);
+    if (node.type === "JSXElement" && node.openingElement?.name?.type === "JSXIdentifier" && hasClientDirective(node.openingElement)) {
+      tags.push(node.openingElement.name.name);
+    }
+    for (const k in node) if (k !== "type") walkNode(node[k]);
+  })(program);
+  return tags;
+}
+
 // Write app/_islands.gen.ts. Returns the number of island loaders emitted.
-//
-// AST-based (oxc-parser) — robust against multi-line exports / re-exports that a
-// line regex would miss (P1-2), keyed by the island's runtime name (P1-1), and
-// it throws on a duplicate name across modules (P2-1) instead of silently
-// overwriting.
 export function generateIslandRegistry(appDir: string): number {
-  const seen = new Map<string, string>(); // island name → absolute file (dup guard)
+  const seen = new Map<string, string>(); // island name → loader specifier (dup guard)
   const entries: string[] = [];
 
   for (const f of walk(appDir)) {
-    if (!/\.(tsx|ts|jsx)$/.test(f) || f.endsWith(ISLAND_REGISTRY_FILE)) continue;
+    if (!/\.(tsx|jsx)$/.test(f) || f.endsWith(ISLAND_REGISTRY_FILE) || f.endsWith(".gen.ts")) continue;
     const src = readFileSync(f, "utf8");
-    if (!firstStatementIsDirective(src, "use client")) continue;
+    if (!src.includes("client:")) continue; // cheap pre-filter
     const { program } = parseSync(f, src);
-    if (!importsIslandApi(program as { body: any[] })) continue;
+    const ast = program as { body: any[] };
+    const imports = importMap(ast);
+    const rel = "./" + relative(appDir, f);
 
-    const rel = "./" + relative(appDir, f).replace(/\.(tsx|ts|jsx)$/, "");
-    for (const node of (program as { body: any[] }).body) {
-      const varDecl =
-        node.type === "ExportNamedDeclaration" && node.declaration?.type === "VariableDeclaration"
-          ? node.declaration
-          : node.type === "VariableDeclaration"
-            ? node
-            : null;
-      if (!varDecl) continue;
-      for (const d of varDecl.declarations ?? []) {
-        const name = islandNameOfCall(d.init);
-        if (!name) continue;
-        const prev = seen.get(name);
-        if (prev && prev !== f) {
-          throw new Error(
-            `[june] duplicate island name "${name}": defined in ${rel} and ` +
-              `./${relative(appDir, prev).replace(/\.(tsx|ts|jsx)$/, "")}. Island names must be unique.`,
-          );
-        }
-        if (seen.has(name)) continue;
-        seen.set(name, f);
-        entries.push(`  ${JSON.stringify(name)}: () => import(${JSON.stringify(rel)}),`);
+    for (const tag of islandTags(ast)) {
+      const imp = imports.get(tag);
+      if (!imp) {
+        throw new Error(
+          `[june] <${tag} client:*/> in ${rel}: an island must be an IMPORTED component (a named import), not a local definition.`,
+        );
       }
+      if (imp.kind !== "named") {
+        throw new Error(
+          `[june] <${tag} client:*/> in ${rel}: island imports must be NAMED imports (a named \`{ ${tag} }\` import; default/namespace imports aren't supported as islands).`,
+        );
+      }
+      const name = imp.imported; // = the component's runtime name = the marker the JSX runtime stamps
+      // Re-base a relative specifier from the importing file to appDir (the gen
+      // file lives in appDir); a package specifier is used verbatim.
+      const loaderSpec = imp.spec.startsWith(".")
+        ? "./" + relative(appDir, resolve(dirname(f), imp.spec))
+        : imp.spec;
+
+      const prev = seen.get(name);
+      if (prev && prev !== loaderSpec) {
+        throw new Error(
+          `[june] duplicate island name "${name}" from different modules ("${prev}" and "${loaderSpec}"). Island names must be unique.`,
+        );
+      }
+      if (seen.has(name)) continue; // same island used on several pages — fine
+      seen.set(name, loaderSpec);
+      entries.push(
+        `  ${JSON.stringify(name)}: () => import(${JSON.stringify(loaderSpec)}).then((m) => m.${name}),`,
+      );
     }
   }
 
   entries.sort(); // deterministic output
   const body = entries.length ? entries.join("\n") + "\n" : "";
   const out =
-    "// AUTO-GENERATED by June — do not edit. Lazy loaders for island() modules.\n" +
-    "// Maps each island name to a lazy chunk loader; hydrateIslandsLazy consumes it.\n" +
+    "// AUTO-GENERATED by June — do not edit. Lazy loaders for client:* islands.\n" +
+    "// Maps each island name to a loader that resolves its component; hydrateIslands uses it.\n" +
     "export const ISLAND_LOADERS: Record<string, () => Promise<unknown>> = {\n" +
     body +
     "};\n";

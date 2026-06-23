@@ -532,7 +532,12 @@ ${adapterEntry.wrap("pipeline")}
     // the dev-only code tree-shakes. Build-time on purpose: runtime process.env.NODE_ENV
     // differs by target (Vercel sets it; workerd may not), so baking it makes the output
     // deterministic and target-agnostic. `june dev` doesn't use this path.
-    transform: { define: { "process.env.NODE_ENV": JSON.stringify("production") } },
+    transform: {
+      define: { "process.env.NODE_ENV": JSON.stringify("production") },
+      // Route JSX through June's runtime so `<X client:*/>` in pages emits island
+      // markers at SSR (rolldown ignores the tsconfig/pragma; set it explicitly).
+      jsx: { runtime: "automatic", importSource: "@junejs/core" },
+    },
     plugins: [rolldownCssModulesPlugin(cssModuleMaps)], // .module.css → scoped class map
     external: (id: string) => {
       // Bun built-ins exist only at Bun runtime, never in the workerd graph (see isBunSpecifier).

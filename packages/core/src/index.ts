@@ -63,18 +63,15 @@ export {
 // Segment-scoped swap boundary — opt a layout into being a persistent shell
 export { JuneOutlet } from "./outlet";
 
-// Client islands — intent-based "use client" interactivity (island() + client:*)
+// Client islands — the marker contract. Authoring is `<Counter client:visible/>`
+// via jsxImportSource: "@junejs/core" (the jsx-runtime); no wrapper, no transform.
 export {
-  island,
-  Tab,
   serializeIslandProps,
   deserializeIslandProps,
   ISLAND_TAG,
   ISLAND_NAME_ATTR,
   ISLAND_PROPS_ATTR,
   type Strategy,
-  type IslandOptions,
-  type IslandIntent,
 } from "./islands";
 
 // The unified action registry (UI action == MCP tool == WebMCP tool)

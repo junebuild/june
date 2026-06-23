@@ -1,16 +1,14 @@
 // The client half of the islands contract — the hydration runtime.
 //
-// Bundled into the app's `client.js` (NOT the server/worker graph), it runs once
-// after the document parses: scan for `<june-island>` markers, look each up in
-// the app's explicit registry, and `hydrateRoot` it in place. The server already
-// SSR'd the markup, so hydration only attaches behavior — `useState`, `onClick` —
-// with no flash and no mismatch (same component, same props, both graphs).
+// Bundled into the app's `client.js` (NOT the server/worker graph), it scans for
+// `<june-island>` markers, loads each island's chunk ON ITS INTENT (the marker's
+// `data-june-strategy`), and brings it to life in place. A marker is produced by
+// the JSX runtime for a `"use client"` component used with a `client:*` directive;
+// the loader (generated from that usage) returns the component to hydrate.
 //
-// PURE per the contract layer's rule (no `node:*` / `Bun.*`) — it is browser-only
-// (it touches `document` + `react-dom/client`), so it is exposed ONLY as the
-// `@junejs/core/islands-client` subpath and is deliberately NOT re-exported from the
-// barrel: pulling `react-dom/client` into the worker graph is exactly what we
-// must not do.
+// PURE per the contract layer's rule (no `node:*` / `Bun.*`) — browser-only (touches
+// `document` + `react-dom/client`), so it is exposed ONLY as the
+// `@junejs/core/islands-client` subpath and never re-exported from the barrel.
 import React from "react";
 import { createRoot, hydrateRoot } from "react-dom/client";
 
@@ -19,64 +17,36 @@ import {
   ISLAND_NAME_ATTR,
   ISLAND_PROPS_ATTR,
   ISLAND_STRATEGY_ATTR,
-  ISLAND_SLOT_ATTR,
-  ISLAND_REGISTRY,
   deserializeIslandProps,
-  type Strategy,
 } from "./islands";
 import { startClientRouter } from "./client-router";
 import { applyLiveUpdate } from "./client-live";
 import { FRAGMENT_ACCEPT, SEGMENT_HEADER, TITLE_HEADER } from "./nav-protocol";
 
-// Set on a marker once hydrated, so re-scanning a tree (the client router
-// re-hydrates each swapped page) never hydrates the same node twice — and a
-// persistent island carried across a navigation, already live, is skipped.
+// Set on a marker once hydrated, so re-scanning a tree (the router re-hydrates each
+// swapped page) never hydrates the same node twice — and a persisted island carried
+// across a navigation, already live, is skipped.
 type Marked = Element & { __juneHydrated?: boolean };
 
-// (The legacy hand-written `hydrateIslands(registry)` + `<Island>` are gone — the
-// island() + generated-registry path below is the only model.)
+// A loader per island name: `{ Counter: () => import("./Counter").then(m => m.Counter) }`
+// — the generated ISLAND_LOADERS. It resolves to the COMPONENT (typed unknown to
+// match the generated map; cast on mount), and the import carries the island's code
+// (its own chunk), so a page fetches only the chunks for the markers it rendered; a
+// `visible`/`idle` island isn't requested until it fires.
+export type IslandLoaders = Record<string, () => Promise<unknown>>;
 
-// --- intent-based runtime (paired with island()) -----------------------------
-//
-// Scans markers that carry `data-june-strategy` (the island() signature, never on
-// legacy `<Island>` markers, so the two runtimes never touch the same node) and
-// brings each to life ACCORDING TO ITS INTENT: now, on idle, on visible, or
-// fresh-on-client.
-
-// The component a slot island receives its lifted server panels through.
-// EXPERIMENTAL — paired with island()'s `slot` option.
-export type SlotProps = { __slot?: HTMLElement[] };
-
-function mountFromRegistry(el: Element, name: string): void {
+function mount(el: Element, Component: React.ComponentType<any>): void {
   if ((el as Marked).__juneHydrated) return;
-  const entry = ISLAND_REGISTRY.get(name);
-  if (!entry) {
-    console.warn(`[june] island "${name}" is on the page but not registered (import its module)`);
-    return;
-  }
-  const props = deserializeIslandProps(el.getAttribute(ISLAND_PROPS_ATTR));
-  const strategy = (el.getAttribute(ISLAND_STRATEGY_ATTR) ?? "load") as Strategy;
   (el as Marked).__juneHydrated = true;
-
-  if (el.hasAttribute(ISLAND_SLOT_ATTR)) {
-    // Light-DOM slot: lift the server-rendered panels out, clear the marker, and
-    // hand the nodes to the shell to place. createRoot (not hydrate) — the shell
-    // is new client markup wrapping adopted DOM, not a 1:1 match of the server.
-    const slot = Array.from(el.children) as HTMLElement[];
-    el.replaceChildren();
-    createRoot(el).render(React.createElement(entry.component, { ...props, __slot: slot }));
-    return;
-  }
-  if (strategy === "only") {
-    createRoot(el).render(React.createElement(entry.component, props)); // never SSR'd → fresh
-    return;
-  }
-  hydrateRoot(el, React.createElement(entry.component, props)); // adopt the server markup
+  const props = deserializeIslandProps(el.getAttribute(ISLAND_PROPS_ATTR));
+  const strategy = el.getAttribute(ISLAND_STRATEGY_ATTR);
+  // "only" was never SSR'd → mount fresh; otherwise adopt the server markup.
+  if (strategy === "only") createRoot(el).render(React.createElement(Component, props));
+  else hydrateRoot(el, React.createElement(Component, props));
 }
 
-// Fire `run` according to the marker's intent. The callback is what downloads
-// (lazy) and/or mounts the island — so the strategy gates BOTH the network
-// request and the work, not just the hydration.
+// Fire `run` according to the marker's intent. The callback downloads (lazy) AND
+// mounts — so the strategy gates BOTH the network request and the work.
 function schedule(el: Element, run: () => void): void {
   const strategy = el.getAttribute(ISLAND_STRATEGY_ATTR) ?? "load";
   if (strategy === "idle" && "requestIdleCallback" in window) {
@@ -92,35 +62,13 @@ function schedule(el: Element, run: () => void): void {
     });
     io.observe(el);
   } else {
-    run(); // load, only, slot, and any unknown/unsupported strategy → immediate
+    run(); // load, only, and any unknown/unsupported strategy → immediate
   }
 }
 
-// EAGER: components already imported (via island() import side-effects). Brings
-// every intent-bearing island under `root` to life. Returns the count scheduled.
-export function hydrateIslandsAuto(root: ParentNode = document): number {
-  const markers = root.querySelectorAll(`${ISLAND_TAG}[${ISLAND_STRATEGY_ATTR}]`);
-  let n = 0;
-  for (const el of markers) {
-    if ((el as Marked).__juneHydrated) continue;
-    const name = el.getAttribute(ISLAND_NAME_ATTR);
-    if (!name) continue;
-    schedule(el, () => mountFromRegistry(el, name));
-    n++;
-  }
-  return n;
-}
-
-// A lazy loader per island name: `{ Counter: () => import("./Counter") }` — the
-// generated ISLAND_LOADERS. The import carries the island's code (its own chunk),
-// so a page fetches only the chunks for the markers it rendered, and a
-// `visible`/`idle` island is not even requested until its trigger fires.
-export type IslandLoaders = Record<string, () => Promise<unknown>>;
-
-// LAZY: download each island's chunk ON ITS INTENT, then mount it. Importing the
-// chunk runs its `island()` call (self-registering into ISLAND_REGISTRY);
-// mountFromRegistry then brings it to life.
-export function hydrateIslandsLazy(loaders: IslandLoaders, root: ParentNode = document): number {
+// Bring every island marker under `root` to life via the generated loaders.
+// Returns the count scheduled (handy for tests/diagnostics).
+export function hydrateIslands(loaders: IslandLoaders, root: ParentNode = document): number {
   const markers = root.querySelectorAll(`${ISLAND_TAG}[${ISLAND_STRATEGY_ATTR}]`);
   let n = 0;
   for (const el of markers) {
@@ -134,7 +82,7 @@ export function hydrateIslandsLazy(loaders: IslandLoaders, root: ParentNode = do
     }
     schedule(el, () => {
       void load().then(
-        () => mountFromRegistry(el, name),
+        (Component) => mount(el, Component as React.ComponentType<any>),
         (err) => console.error(`[june] failed to load island "${name}":`, err),
       );
     });
@@ -145,32 +93,26 @@ export function hydrateIslandsLazy(loaders: IslandLoaders, root: ParentNode = do
 
 // --- startJuneClient — the bootstrap (router + live-reload over island hydration)
 //
-// hydrateIslandsAuto/Lazy are pure PRIMITIVES (scan + schedule + mount). This is
-// the BOOTSTRAP that wires them to the page: hydrate the islands now, and — when
-// the document opted into the client router ([data-june-root]) — start the router
-// and the dev live-reload hook with a rehydrate that brings each soft-navigated
-// page's islands to life. A persisted island (data-june-persist) is carried as a
-// live node by morph and skipped by rehydrate (already `__juneHydrated`), so its
-// state survives the navigation.
+// hydrateIslands is a pure PRIMITIVE (scan + schedule + mount). This is the
+// BOOTSTRAP that wires it to the page: hydrate this page's islands, and — when the
+// document opted into the client router ([data-june-root]) — start the router + the
+// dev live-reload hook with a rehydrate that brings each soft-navigated page's
+// islands to life. A persisted island (data-june-persist) is carried as a live node
+// by morph and skipped by rehydrate (already `__juneHydrated`), so state survives.
 //
 // One entry point for an app's client.js:  startJuneClient({ loaders: ISLAND_LOADERS })
-export type StartOptions = {
-  // The generated lazy registry. Omit to hydrate already-imported islands eagerly.
-  loaders?: IslandLoaders;
-};
+export type StartOptions = { loaders: IslandLoaders };
 
-export function startJuneClient(options: StartOptions = {}): void {
+export function startJuneClient(options: StartOptions): void {
   const { loaders } = options;
-  const rehydrate = (root: ParentNode): number =>
-    loaders ? hydrateIslandsLazy(loaders, root) : hydrateIslandsAuto(root);
+  const rehydrate = (root: ParentNode): number => hydrateIslands(loaders, root);
 
   // 1. Bring this page's islands to life.
   rehydrate(document);
 
-  // 2. Opt-in client router: the document renders [data-june-root] only when
-  //    clientRouter is not "off". The applier rides on the element — "flight"
-  //    (VDOM-over-wire, dynamically imported so react-server-dom stays out of
-  //    morph bundles) vs the morph default. Flight is never the silent default.
+  // 2. Opt-in client router. The applier rides on [data-june-root] — "flight"
+  //    (VDOM-over-wire, dynamically imported so react-server-dom stays out of morph
+  //    bundles) vs the morph default. Flight is never the silent default.
   const routerRoot = document.querySelector("[data-june-root]");
   if (!routerRoot) return;
 
