@@ -17,3 +17,4 @@ target/
 .vscode/
 .vercel/
 
+packages/og/*.tgz
