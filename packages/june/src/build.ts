@@ -322,8 +322,16 @@ export async function juneBuild(
   await rm(outDir, { recursive: true, force: true }); // stale chunks must not ship
 
   const contentCollections = await generateContent(appRoot);
-  const routes = (await scanRoutes(appDir)).sort((a, b) => a.path.localeCompare(b.path));
-  if (routes.length === 0) throw new Error(`no page.* routes found under ${appDir}`);
+  // Same merge as buildManifest: app/ takes priority over .june/routes/.
+  const juneRoutesDir2 = join(appRoot, ".june", "routes");
+  const appRoutes2 = await scanRoutes(appDir);
+  const frameworkRoutes2 = existsSync(juneRoutesDir2) ? await scanRoutes(juneRoutesDir2) : [];
+  const appPaths2 = new Set(appRoutes2.map((r) => r.path));
+  const routes = [
+    ...appRoutes2,
+    ...frameworkRoutes2.filter((r) => !appPaths2.has(r.path)),
+  ].sort((a, b) => a.path.localeCompare(b.path));
+  if (routes.length === 0) throw new Error(`no page.* routes found under ${appDir} or .june/routes/`);
 
   const frozen = await freezeConfig(appRoot);
   // The locales table freezes into the worker as data; a resolveLocale hook is a
