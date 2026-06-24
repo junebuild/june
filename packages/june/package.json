@@ -40,7 +40,7 @@
   "peerDependencies": {
     "react": "catalog:",
     "react-dom": "catalog:",
-    "react-server-dom-webpack": "19.2.7",
+    "react-server-dom-webpack": "catalog:",
     "pg": "^8.0.0",
     "mysql2": "^3.0.0",
     "@libsql/client": "^0.14.0 || ^0.15.0 || ^0.16.0 || ^0.17.0"
@@ -68,6 +68,6 @@
     "@types/pg": "^8.20.0",
     "mysql2": "^3.22.5",
     "pg": "^8.21.0",
-    "react-server-dom-webpack": "19.2.7"
+    "react-server-dom-webpack": "catalog:"
   }
 }

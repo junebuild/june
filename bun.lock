@@ -129,7 +129,7 @@
         "@types/pg": "^8.20.0",
         "mysql2": "^3.22.5",
         "pg": "^8.21.0",
-        "react-server-dom-webpack": "19.2.7",
+        "react-server-dom-webpack": "catalog:",
       },
       "peerDependencies": {
         "@libsql/client": "^0.14.0 || ^0.15.0 || ^0.16.0 || ^0.17.0",
@@ -137,7 +137,7 @@
         "pg": "^8.0.0",
         "react": "catalog:",
         "react-dom": "catalog:",
-        "react-server-dom-webpack": "19.2.7",
+        "react-server-dom-webpack": "catalog:",
       },
       "optionalPeers": [
         "@libsql/client",
@@ -182,6 +182,7 @@
     "@types/react-dom": "^19.2.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
+    "react-server-dom-webpack": "19.2.7",
   },
   "packages": {
     "@emnapi/core": ["@emnapi/core@1.11.1", "", { "dependencies": { "@emnapi/wasi-threads": "1.2.2", "tslib": "^2.4.0" } }, "sha512-RSvbQmHzdKzNsLYa/wHrbc3KN4sYLKAdPZxqiM2HATqv/SBk2/ENSHpvXGaLOMcsAyz0poEGqkmmKYG3OWiJEQ=="],
