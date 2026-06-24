@@ -58,6 +58,11 @@ export interface JuneAdapter {
   // runtime has none). Target-specific: workers → "workerd", vercel → "edge-light".
   // The same portable graph, resolved for the platform's module surface.
   readonly conditions: string[];
+  // Packages the adapter REQUIRES to be left unbundled by Rolldown so the
+  // target's own bundler (e.g. wrangler) can handle them — WASM loaders,
+  // platform-native bindings, etc. Merged with config.build.external at build
+  // time; user config can add more but the adapter's own list is always applied.
+  readonly buildExternal?: string[];
   // Reject a config this target can't honor, BEFORE the expensive build — e.g.
   // Vercel has no D1, so a declared db fails fast with a clear message instead of
   // a cryptic prerender/runtime error. Optional; default is "accept everything".
@@ -76,6 +81,10 @@ export function workers(opts?: { name?: string; domain?: string }): JuneAdapter 
     name: "workers",
     capabilities: { runtime: "edge", persistentConnections: true, assets: "platform" },
     conditions: ["workerd", "edge", "import", "default"],
+    // workers-og is a workerd-native WASM package: rolldown cannot bundle its
+    // .wasm assets (wrangler's own bundler applies the CompiledWasm rule). Mark
+    // it external here so user apps never need `build: { external: ["workers-og"] }`.
+    buildExternal: ["workers-og"],
 
     entry({ linkHeader }) {
       return {

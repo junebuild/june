@@ -68,7 +68,7 @@
     },
     "packages/cli": {
       "name": "@junejs/cli",
-      "version": "0.0.43",
+      "version": "0.0.44",
       "bin": {
         "june": "./bin.mjs",
       },
@@ -79,7 +79,7 @@
     },
     "packages/core": {
       "name": "@junejs/core",
-      "version": "0.0.43",
+      "version": "0.0.44",
       "peerDependencies": {
         "react": "^19.2.0",
         "react-dom": "^19.2.0",
@@ -115,7 +115,7 @@
     },
     "packages/june": {
       "name": "@junejs/server",
-      "version": "0.0.41",
+      "version": "0.0.42",
       "dependencies": {
         "@junejs/core": "workspace:^",
         "@junejs/db": "workspace:^",
@@ -574,7 +574,7 @@
 
     "detect-libc": ["detect-libc@2.1.2", "", {}, "sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ=="],
 
-    "electron-to-chromium": ["electron-to-chromium@1.5.377", "", {}, "sha512-cH1jZgJHoezfTnKfKwnScpHywTFVnJUNITDPREFdhNjiuD502+QFpG0Qk7G8jhsV/f+CEAFlIrzP1fT+IMb92g=="],
+    "electron-to-chromium": ["electron-to-chromium@1.5.378", "", {}, "sha512-VinvOAuuPmdD1guEgGv5f2Qp7/vlfqOrUOMYNnOD4wj3pit8kRsQHzfIf6teyUGWo15Tg5+bOJaRunvyltpVWQ=="],
 
     "emoji-regex-xs": ["emoji-regex-xs@2.0.1", "", {}, "sha512-1QFuh8l7LqUcKe24LsPUNzjrzJQ7pgRwp1QMcZ5MX6mFplk2zQ08NVCM84++1cveaUUYtcCYHmeFEuNg16sU4g=="],
 

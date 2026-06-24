@@ -6,7 +6,7 @@ import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { workers } from "../src/adapter";
+import { workers, vercel, deno } from "../src/adapter";
 
 let dir: string | undefined;
 afterEach(async () => {
@@ -58,6 +58,11 @@ describe("workers() adapter", () => {
     expect(w.name).toBe("fallback");
     expect(w.assets).toBeUndefined();
     expect(w.routes).toBeUndefined();
+  });
+
+  test("declares workers-og as a required buildExternal (WASM needs wrangler bundling, not rolldown)", () => {
+    const a = workers();
+    expect(a.buildExternal).toContain("workers-og");
   });
 
   test("emit writes a d1_databases binding when the plan declares a db", async () => {

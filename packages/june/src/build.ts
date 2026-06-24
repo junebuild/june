@@ -578,9 +578,13 @@ ${adapterEntry.wrap("pipeline")}
       if (isBunSpecifier(id)) return true;
       // Binary assets stay external — wrangler's CompiledWasm/Data rules own them.
       if (/\.(wasm|ttf|otf|woff2?|png|jpe?g|avif|webp)$/.test(id)) return true;
-      // config build.external: packages wrangler must bundle itself (its own
-      // esbuild owns their .wasm/asset rules — e.g. workers-og).
-      const list = options.external ?? frozen.buildExternal;
+      // Merge: adapter.buildExternal (target-specific, e.g. workers-og for the
+      // Workers adapter) + config build.external (user additions). User config
+      // wins additions but can never REMOVE the adapter's own required externals.
+      const list = [
+        ...(adapter.buildExternal ?? []),
+        ...(options.external ?? frozen.buildExternal),
+      ];
       return list.some((e) => id === e || id.startsWith(`${e}/`));
     },
     resolve: {
