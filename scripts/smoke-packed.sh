@@ -29,8 +29,19 @@ for tgz in "$work"/*.tgz; do
     echo "✘ $(basename "$tgz") — could not read package/package.json from the tarball"
     exit 1
   }
-  if printf '%s' "$meta" | grep -qE '"(catalog:|workspace:)'; then
-    echo "✘ $(basename "$tgz") still contains an unresolved catalog:/workspace: protocol in package.json"
+  # Inspect dependency VALUES only (via jq), not the raw text: a description/keyword that happens to
+  # contain the literal "catalog:"/"workspace:" must not trip the guard, and a real leak can only
+  # live in a dependency range.
+  leaks=$(printf '%s' "$meta" | jq -r '
+    [.dependencies, .devDependencies, .peerDependencies, .optionalDependencies]
+    | add // {} | to_entries[]
+    | select(.value | type == "string" and test("^(catalog:|workspace:)"))
+    | "\(.key)=\(.value)"') || {
+    echo "✘ $(basename "$tgz") — package/package.json is not valid JSON"
+    exit 1
+  }
+  if [ -n "$leaks" ]; then
+    echo "✘ $(basename "$tgz") still contains unresolved catalog:/workspace: protocol(s): $leaks"
     exit 1
   fi
 done
