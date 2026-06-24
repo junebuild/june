@@ -12,6 +12,8 @@ describe("ignoredPath()", () => {
 
   test("generated and vendored paths never trigger (no restart loops)", () => {
     expect(ignoredPath("app/_content.ts")).toBe(true); // written by `june gen`
+    expect(ignoredPath("app/_islands.gen.ts")).toBe(true); // rewritten before every bundle
+    expect(ignoredPath("app/_routes.gen.ts")).toBe(true); // any top-level *.gen.ts
     expect(ignoredPath("node_modules/react/index.js")).toBe(true);
     expect(ignoredPath("dist/worker.js")).toBe(true);
     expect(ignoredPath(".git/HEAD")).toBe(true);
@@ -24,7 +26,8 @@ describe("ignoredPath()", () => {
     expect(ignoredPath("app/page.tsx")).toBe(false); // code still restarts
   });
 
-  test("an _content-named file deeper than app/ still triggers", () => {
+  test("a generated-looking file deeper than app/ still triggers", () => {
     expect(ignoredPath("app/docs/_content.ts")).toBe(false);
+    expect(ignoredPath("app/docs/x.gen.ts")).toBe(false); // only top-level app/*.gen.ts is generated
   });
 });
