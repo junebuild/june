@@ -115,7 +115,7 @@
     },
     "packages/june": {
       "name": "@junejs/server",
-      "version": "0.0.46",
+      "version": "0.0.47",
       "dependencies": {
         "@junejs/core": ">=0.0.46 <0.1.0",
         "@junejs/db": ">=0.0.31 <0.1.0",

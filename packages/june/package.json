@@ -1,6 +1,6 @@
 {
   "name": "@junejs/server",
-  "version": "0.0.46",
+  "version": "0.0.47",
   "description": "June host adapters + dev server. Host-coupled; depends on the pure @junejs/core contract layer.",
   "type": "module",
   "license": "MIT",
