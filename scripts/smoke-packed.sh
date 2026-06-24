@@ -10,9 +10,22 @@ work=$(mktemp -d)
 trap 'pkill -f "june.ts dev" 2>/dev/null; rm -rf "$work"' EXIT
 
 echo "→ packing workspace tarballs"
-for p in core db june juno cli create-june; do
+# Pack EVERY published package (matches .github/workflows/publish.yml). og is published but isn't
+# exercised by the scaffold below, so it's only covered by the protocol-leak check that follows.
+for p in core db june juno cli create-june og; do
   (cd "packages/$p" && bun pm pack --quiet >/dev/null 2>&1)
   mv packages/$p/*.tgz "$work/"
+done
+
+# A published tarball must carry resolved semver ranges — npm/pnpm reject `catalog:`/`workspace:`,
+# so a bun pm pack that fails to rewrite them (e.g. a `react: catalog:` peer in og) would ship a
+# broken package. Assert no such protocol survives in any packed package.json.
+echo "→ verifying packed tarballs use resolved versions (no catalog:/workspace: leaks)"
+for tgz in "$work"/*.tgz; do
+  if tar -xzOf "$tgz" package/package.json | grep -qE '"(catalog:|workspace:)'; then
+    echo "✘ $(basename "$tgz") still contains an unresolved catalog:/workspace: protocol in package.json"
+    exit 1
+  fi
 done
 
 echo "→ scaffolding from the packed create-june"
