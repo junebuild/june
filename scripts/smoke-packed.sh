@@ -10,9 +10,40 @@ work=$(mktemp -d)
 trap 'pkill -f "june.ts dev" 2>/dev/null; rm -rf "$work"' EXIT
 
 echo "→ packing workspace tarballs"
-for p in core db june juno cli create-june; do
+# Pack EVERY published package (matches .github/workflows/publish.yml). og is published but isn't
+# exercised by the scaffold below, so it's only covered by the protocol-leak check that follows.
+for p in core db june juno cli create-june og; do
   (cd "packages/$p" && bun pm pack --quiet >/dev/null 2>&1)
   mv packages/$p/*.tgz "$work/"
+done
+
+# A published tarball must carry resolved semver ranges — npm/pnpm reject `catalog:`/`workspace:`,
+# so a bun pm pack that fails to rewrite them (e.g. a `react: catalog:` peer in og) would ship a
+# broken package. Assert no such protocol survives in any packed package.json.
+echo "→ verifying packed tarballs use resolved versions (no catalog:/workspace: leaks)"
+for tgz in "$work"/*.tgz; do
+  # Capture first and fail hard if extraction fails: a tar error piped straight into the `if`
+  # condition would just evaluate false (set -e doesn't apply in conditions), silently SKIPPING
+  # the check for a corrupt/empty tarball — the opposite of what this guard is for.
+  meta=$(tar -xzOf "$tgz" package/package.json) || {
+    echo "✘ $(basename "$tgz") — could not read package/package.json from the tarball"
+    exit 1
+  }
+  # Inspect dependency VALUES only (via jq), not the raw text: a description/keyword that happens to
+  # contain the literal "catalog:"/"workspace:" must not trip the guard, and a real leak can only
+  # live in a dependency range.
+  leaks=$(printf '%s' "$meta" | jq -r '
+    [.dependencies, .devDependencies, .peerDependencies, .optionalDependencies]
+    | add // {} | to_entries[]
+    | select(.value | type == "string" and test("^(catalog:|workspace:)"))
+    | "\(.key)=\(.value)"') || {
+    echo "✘ $(basename "$tgz") — package/package.json is not valid JSON"
+    exit 1
+  }
+  if [ -n "$leaks" ]; then
+    echo "✘ $(basename "$tgz") still contains unresolved catalog:/workspace: protocol(s): $leaks"
+    exit 1
+  fi
 done
 
 echo "→ scaffolding from the packed create-june"
