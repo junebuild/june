@@ -9,6 +9,7 @@
 // all change observable output (test/config-output.test.ts) — the PoC shipped a
 // dev server that silently ignored june.config.ts for days.
 
+import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ComponentType } from "react";
@@ -106,6 +107,12 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
   // Normalize once: rolldown resolves the client entry against an absolute cwd,
   // so a relative appDir would double the path. Absolute from here on.
   const appDir = resolve(appDirInput);
+  // Generated routes (e.g. kura's docs/home/search) live in .june/routes/; buildManifest merges
+  // them into the route set (app/ wins). The DEV resolver must do the same — otherwise every
+  // generated page 404s under `kura dev` while `kura build` serves it (a dev/build asymmetry).
+  // app/ stays the priority/escape-hatch; this is the framework slot, consulted as a fallback.
+  const juneRoutesDir = join(dirname(appDir), ".june", "routes");
+  const hasJuneRoutes = existsSync(juneRoutesDir);
   const agent = resolveAgent(config.agent);
   const speculation = config.speculation;
   // app/_client.* present → the dev document loads /client.js and we serve it
@@ -144,7 +151,14 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
       return bundleClientSplit(clientEntry!, dirname(appDir), "development", maps);
     }));
 
-  const routePaths = () => listRoutes(appDir, { pageConvention: true });
+  // app/ routes + generated .june/routes/ (app/ wins on path collision), for sitemap / llms.txt.
+  const routePaths = async () => {
+    const own = await listRoutes(appDir, { pageConvention: true });
+    if (!hasJuneRoutes) return own;
+    const seen = new Set(own);
+    const gen = (await listRoutes(juneRoutesDir, { pageConvention: true })).filter((p) => !seen.has(p));
+    return [...own, ...gen].sort();
+  };
 
   const resources = memoizeResources(config.resources);
 
@@ -191,7 +205,9 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
       resources,
       notFoundComponent,
       resolve: async (pathname) => {
-        const match = await matchRouteTree(appDir, pathname, { pageConvention: true });
+        const match =
+          (await matchRouteTree(appDir, pathname, { pageConvention: true })) ??
+          (hasJuneRoutes ? await matchRouteTree(juneRoutesDir, pathname, { pageConvention: true }) : null);
         if (!match) return null;
         const mod = await import(pathToFileURL(match.file).href);
         // Resource route (route.*): the default export is the Response handler.
@@ -282,7 +298,9 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
       return runWithTrace(newTrace(), async () => (await getPipeline()).fetch(request));
     },
     async warmup() {
-      for (const file of await routeFiles(appDir, { pageConvention: true })) {
+      const files = await routeFiles(appDir, { pageConvention: true });
+      if (hasJuneRoutes) files.push(...(await routeFiles(juneRoutesDir, { pageConvention: true })));
+      for (const file of files) {
         await import(pathToFileURL(file).href).catch((err) => {
           console.error(`[june] failed to load route ${file}`, err);
         });
