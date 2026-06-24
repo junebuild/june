@@ -9,8 +9,27 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { juneBuild, type BuildResult } from "../src/build";
+import { juneBuild, workerName, type BuildResult } from "../src/build";
 import { juneDeploy } from "../src/deploy";
+
+describe("workerName (wrangler-valid name from a package/dir name)", () => {
+  test("a SCOPED package name drops its scope (no leading dash → wrangler accepts it)", () => {
+    expect(workerName("@kurajs/example-docs")).toBe("example-docs"); // was "-kurajs-example-docs"
+    expect(workerName("@acme/My App")).toBe("my-app");
+  });
+  test("plain names pass through; punctuation collapses; edges trim; empty → fallback", () => {
+    expect(workerName("website")).toBe("website");
+    expect(workerName("My_Cool.Site")).toBe("my-cool-site");
+    expect(workerName("--weird--")).toBe("weird");
+    expect(workerName("@scope/___")).toBe("app");
+  });
+  test("the result is always a valid wrangler worker name", () => {
+    const ok = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+    for (const n of ["@kurajs/example-docs", "website", "@a/b c", "...", "Foo"]) {
+      expect(workerName(n)).toMatch(ok);
+    }
+  });
+});
 import { createApp } from "../src/app";
 import { loadJuneConfig } from "../src/config-loader";
 

@@ -180,6 +180,21 @@ async function importLayout(file: string): Promise<ImportedLayout | null> {
     : null;
 }
 
+// A wrangler-valid worker name from a package name or directory name. Wrangler requires lowercase
+// [a-z0-9-] not starting/ending with a dash — so a SCOPED package name (`@scope/pkg`) must lose its
+// scope (else the `@` sanitizes to a leading dash and wrangler rejects the config). Drop the scope,
+// lowercase, collapse non-alphanumerics to single dashes, trim edge dashes; fall back to "app" if
+// nothing survives (e.g. an all-punctuation name). Exported for tests.
+export function workerName(raw: string): string {
+  return (
+    raw
+      .replace(/^@[^/]+\//, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "app"
+  );
+}
+
 // The FREEZE, in-process: import route modules + layouts, build the manifest a
 // createWorker() can run immediately. Used by prerender and by the parity test
 // (its render path is identical to the Rolldown-bundled worker).
@@ -689,7 +704,7 @@ ${adapterEntry.wrap("pipeline")}
   const pkgName = existsSync(pkgPath)
     ? (JSON.parse(await Bun.file(pkgPath).text()) as { name?: string }).name
     : undefined;
-  const defaultName = (pkgName ?? basename(appRoot)).replace(/[^a-z0-9-]/gi, "-").toLowerCase();
+  const defaultName = workerName(pkgName ?? basename(appRoot));
   // A declared D1-backed db (sqlite/d1) → a D1 binding named DB (the name
   // bindWorkerResources reads). turso() connects from env, not a binding — no plan.
   const plan: ResourcePlan =
