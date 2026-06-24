@@ -13,15 +13,15 @@
   },
   "dependencies": {
     "@junejs/core": "workspace:*",
-    "react": "^19.2.0",
-    "react-dom": "^19.2.0",
+    "react": "catalog:",
+    "react-dom": "catalog:",
     "workers-og": "^0.0.27"
   },
   "devDependencies": {
     "@junejs/cli": "workspace:*",
     "@junejs/server": "workspace:*",
     "@resvg/resvg-js": "^2.6.2",
-    "@types/react": "^19.2.0",
+    "@types/react": "catalog:",
     "satori": "^0.26.0",
     "typescript": "^5.9.0"
   }

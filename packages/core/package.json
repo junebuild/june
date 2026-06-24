@@ -1,7 +1,7 @@
 {
   "name": "@junejs/core",
   "version": "0.0.46",
-  "description": "June \u2014 the agent-native React framework. Contract layer (pure, host-free).",
+  "description": "June — the agent-native React framework. Contract layer (pure, host-free).",
   "type": "module",
   "license": "MIT",
   "homepage": "https://june.build",
@@ -38,8 +38,8 @@
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
-    "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "react": "catalog:",
+    "react-dom": "catalog:"
   },
   "peerDependenciesMeta": {
     "react": {

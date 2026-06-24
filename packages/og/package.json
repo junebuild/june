@@ -2,7 +2,7 @@
   "name": "@junejs/og",
   "version": "0.0.4",
   "type": "module",
-  "description": "June \u2014 cross-platform OG image generation. Cloudflare Workers, Vercel Edge, and Node.js dev all share one import; the right backend is selected at build time via export conditions.",
+  "description": "June — cross-platform OG image generation. Cloudflare Workers, Vercel Edge, and Node.js dev all share one import; the right backend is selected at build time via export conditions.",
   "exports": {
     ".": {
       "workerd": "./src/workerd.ts",
@@ -29,13 +29,13 @@
   "homepage": "https://june.build",
   "license": "MIT",
   "peerDependencies": {
-    "react": "^19.2.0"
+    "react": "catalog:"
   },
   "devDependencies": {
     "@resvg/resvg-js": "^2.6.2",
     "@vercel/og": "^0.11.1",
-    "@types/react": "^19.2.0",
-    "react": "^19.2.0",
+    "@types/react": "catalog:",
+    "react": "catalog:",
     "satori": "^0.26.0",
     "typescript": "^5.9.0",
     "workers-og": "^0.0.27"

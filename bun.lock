@@ -20,15 +20,15 @@
       "version": "0.0.0",
       "dependencies": {
         "@junejs/core": "workspace:*",
-        "react": "^19.2.0",
-        "react-dom": "^19.2.0",
+        "react": "catalog:",
+        "react-dom": "catalog:",
         "workers-og": "^0.0.27",
       },
       "devDependencies": {
         "@junejs/cli": "workspace:*",
         "@junejs/server": "workspace:*",
         "@resvg/resvg-js": "^2.6.2",
-        "@types/react": "^19.2.0",
+        "@types/react": "catalog:",
         "satori": "^0.26.0",
         "typescript": "^5.9.0",
       },
@@ -81,8 +81,8 @@
       "name": "@junejs/core",
       "version": "0.0.46",
       "peerDependencies": {
-        "react": "^19.2.0",
-        "react-dom": "^19.2.0",
+        "react": "catalog:",
+        "react-dom": "catalog:",
       },
       "optionalPeers": [
         "react",
@@ -110,7 +110,7 @@
         "@junejs/db": ">=0.0.31 <0.1.0",
       },
       "peerDependencies": {
-        "react": "^19.2.0",
+        "react": "catalog:",
       },
     },
     "packages/june": {
@@ -135,8 +135,8 @@
         "@libsql/client": "^0.14.0 || ^0.15.0 || ^0.16.0 || ^0.17.0",
         "mysql2": "^3.0.0",
         "pg": "^8.0.0",
-        "react": "^19.2.0",
-        "react-dom": "^19.2.0",
+        "react": "catalog:",
+        "react-dom": "catalog:",
         "react-server-dom-webpack": "19.2.7",
       },
       "optionalPeers": [
@@ -165,17 +165,22 @@
       "version": "0.0.4",
       "devDependencies": {
         "@resvg/resvg-js": "^2.6.2",
-        "@types/react": "^19.2.0",
+        "@types/react": "catalog:",
         "@vercel/og": "^0.11.1",
-        "react": "^19.2.0",
+        "react": "catalog:",
         "satori": "^0.26.0",
         "typescript": "^5.9.0",
         "workers-og": "^0.0.27",
       },
       "peerDependencies": {
-        "react": "^19.2.0",
+        "react": "catalog:",
       },
     },
+  },
+  "catalog": {
+    "@types/react": "^19.2.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
   },
   "packages": {
     "@emnapi/core": ["@emnapi/core@1.11.1", "", { "dependencies": { "@emnapi/wasi-threads": "1.2.2", "tslib": "^2.4.0" } }, "sha512-RSvbQmHzdKzNsLYa/wHrbc3KN4sYLKAdPZxqiM2HATqv/SBk2/ENSHpvXGaLOMcsAyz0poEGqkmmKYG3OWiJEQ=="],
