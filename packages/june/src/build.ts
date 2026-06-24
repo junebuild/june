@@ -142,7 +142,10 @@ export async function freezeConfig(appRoot: string): Promise<{
   // document. Detected HERE (not just in juneBuild) so the prerender path —
   // which re-freezes through buildManifest — sets the SAME clientScript, keeping
   // prerendered pages byte-equivalent to the live worker (parity).
-  const hasClient = findClientEntry(join(appRoot, "app")) !== undefined;
+  // Client entry: app/_client.* wins; fall back to .june/routes/_client.* (framework slot).
+  const hasClient =
+    findClientEntry(join(appRoot, "app")) !== undefined ||
+    findClientEntry(join(appRoot, ".june", "routes")) !== undefined;
   const hasCss = findGlobalCss(join(appRoot, "app")) !== null;
   return {
     document: {
@@ -182,8 +185,19 @@ async function importLayout(file: string): Promise<ImportedLayout | null> {
 // (its render path is identical to the Rolldown-bundled worker).
 export async function buildManifest(appRoot: string): Promise<WorkerManifest> {
   const appDir = join(appRoot, "app");
+  const juneRoutesDir = join(appRoot, ".june", "routes");
   const frozen = await freezeConfig(appRoot);
-  const scanned = (await scanRoutes(appDir)).sort((a, b) => a.path.localeCompare(b.path));
+
+  // Merge routes: app/ takes priority over .june/routes/ (app/ is the escape hatch).
+  // .june/routes/ is the convention slot for framework-generated routes (e.g. kura
+  // writes its docs/search/og routes there so the user never manages boilerplate).
+  const appRoutes = await scanRoutes(appDir);
+  const frameworkRoutes = existsSync(juneRoutesDir) ? await scanRoutes(juneRoutesDir) : [];
+  const appPaths = new Set(appRoutes.map((r) => r.path));
+  const scanned = [
+    ...appRoutes,
+    ...frameworkRoutes.filter((r) => !appPaths.has(r.path)),
+  ].sort((a, b) => a.path.localeCompare(b.path));
 
   const layoutCache = new Map<string, ImportedLayout | null>();
   const loadCached = async (f: string): Promise<ImportedLayout | null> => {
@@ -369,7 +383,8 @@ export async function juneBuild(
   // and it can be served immutable. The asset is written here. The client may
   // import .module.css too, so it gets the same module maps.
   const assetsDir = join(outDir, "assets");
-  const clientEntry = findClientEntry(appDir);
+  const clientEntry =
+    findClientEntry(appDir) ?? findClientEntry(join(appRoot, ".june", "routes"));
   let clientAsset: string | null = null;
   if (clientEntry) {
     // Regenerate the auto lazy island registry before bundling (same as dev).

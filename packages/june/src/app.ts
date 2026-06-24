@@ -9,7 +9,7 @@
 // all change observable output (test/config-output.test.ts) — the PoC shipped a
 // dev server that silently ignored june.config.ts for days.
 
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ComponentType } from "react";
 
@@ -111,7 +111,9 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
   // app/_client.* present → the dev document loads /client.js and we serve it
   // (bundled lazily, memoized). Detected the same way the build freezes it, so
   // dev and built surfaces agree.
-  const clientEntry = findClientEntry(appDir);
+  const clientEntry =
+    findClientEntry(appDir) ??
+    findClientEntry(join(dirname(appDir), ".june", "routes"));
   const cssEntry = findGlobalCss(appDir);
   const docConfig: DocumentConfig = {
     site: config.site ?? {},
