@@ -3,7 +3,9 @@
 // This is the seed of the Phase 3 golden contract (dev and built worker must
 // produce byte-equivalent surfaces).
 
-import { beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { createApp, type JuneApp } from "../src/app";
@@ -189,5 +191,44 @@ describe("not found", () => {
     const res = await get("/does/not/exist");
     expect(res.status).toBe(404);
     expect(await res.text()).toContain("404 — Not found");
+  });
+});
+
+// Regression: the build manifest merges .june/routes/ (the framework slot for generated routes,
+// e.g. kura's docs/home/search), so the DEV resolver must too — else `kura dev` 404s every
+// generated page while the built worker serves them. See createApp's juneRoutesDir fallback.
+// Fixtures live UNDER the package so their JSX resolves June's configured jsx runtime.
+describe("generated routes in .june/routes/ (dev/build parity)", () => {
+  const PKG_DIR = fileURLToPath(new URL("..", import.meta.url));
+  const tmps: string[] = [];
+  const fixture = (files: Record<string, string>): string => {
+    const root = mkdtempSync(join(PKG_DIR, ".tmp-gen-"));
+    tmps.push(root);
+    for (const [rel, body] of Object.entries(files)) {
+      const abs = join(root, rel);
+      mkdirSync(join(abs, ".."), { recursive: true });
+      writeFileSync(abs, body);
+    }
+    return root;
+  };
+  afterAll(() => tmps.forEach((t) => rmSync(t, { recursive: true, force: true })));
+
+  test("a page present ONLY in .june/routes/ is served, not 404'd", async () => {
+    const root = fixture({
+      "app/page.tsx": "export default function Home(){return <main>app home</main>;}\n",
+      ".june/routes/gen/page.tsx": "export default function Gen(){return <main>generated route body</main>;}\n",
+    });
+    const res = await createApp({ appDir: join(root, "app") }).fetch(new Request("http://june.test/gen"));
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("generated route body");
+  });
+
+  test("app/ wins on a path collision with .june/routes/", async () => {
+    const root = fixture({
+      "app/dup/page.tsx": "export default function A(){return <main>from app</main>;}\n",
+      ".june/routes/dup/page.tsx": "export default function B(){return <main>from june routes</main>;}\n",
+    });
+    const res = await createApp({ appDir: join(root, "app") }).fetch(new Request("http://june.test/dup"));
+    expect(await res.text()).toContain("from app");
   });
 });
