@@ -22,7 +22,14 @@ done
 # broken package. Assert no such protocol survives in any packed package.json.
 echo "→ verifying packed tarballs use resolved versions (no catalog:/workspace: leaks)"
 for tgz in "$work"/*.tgz; do
-  if tar -xzOf "$tgz" package/package.json | grep -qE '"(catalog:|workspace:)'; then
+  # Capture first and fail hard if extraction fails: a tar error piped straight into the `if`
+  # condition would just evaluate false (set -e doesn't apply in conditions), silently SKIPPING
+  # the check for a corrupt/empty tarball — the opposite of what this guard is for.
+  meta=$(tar -xzOf "$tgz" package/package.json) || {
+    echo "✘ $(basename "$tgz") — could not read package/package.json from the tarball"
+    exit 1
+  }
+  if printf '%s' "$meta" | grep -qE '"(catalog:|workspace:)'; then
     echo "✘ $(basename "$tgz") still contains an unresolved catalog:/workspace: protocol in package.json"
     exit 1
   fi
