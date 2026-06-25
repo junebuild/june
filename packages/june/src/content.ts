@@ -11,7 +11,13 @@
 // Agents read exactly what the author wrote (frontmatter included).
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { marked } from "marked";
+import { toHtmlSync, init } from "@momiji-rs/sparkdown-gfm";
+
+// Instantiate the markdown→HTML wasm once, up front. loadEntry() renders synchronously (it runs from
+// sync collection scanners and from dev request handlers), and toHtmlSync requires the wasm to be
+// ready. This module is build/dev-only — it imports node:fs and is never in the frozen worker bundle —
+// so a top-level await is safe here (it never reaches workerd). Init is ~0.3ms, once per process.
+await init();
 
 export type ContentEntry = {
   slug: string;
@@ -22,7 +28,7 @@ export type ContentEntry = {
   body: string;
   /** The authored file, verbatim — the agent-facing .md projection. */
   original: string;
-  /** The body rendered to HTML (marked). */
+  /** The body rendered to HTML (CommonMark + GFM, via sparkdown-gfm wasm). */
   html: string;
   /** The locale this entry was authored in — set for files under a `<locale>/`
    *  subdir, undefined for the flat (default-locale) files. */
@@ -71,7 +77,7 @@ function loadEntry(file: string, slug: string, locale?: string): ContentEntry {
     data,
     body,
     original,
-    html: marked.parse(body, { async: false }) as string,
+    html: toHtmlSync(body),
     ...(locale ? { locale } : {}),
   };
   memo.set(file, { mtime, entry });

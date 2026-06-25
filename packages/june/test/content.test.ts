@@ -191,3 +191,35 @@ describe("nested content (folders → slug paths)", () => {
     expect(mod.doc("guides/advanced/tuning", "ja-JP")!.locale).toBeUndefined(); // nested fallback
   });
 });
+
+describe("html rendering (sparkdown-gfm)", () => {
+  // entry.html is rendered by the sparkdown-gfm wasm (CommonMark + GFM). This guards the renderer swap
+  // from marked: GFM features must render, headings must stay BARE (Kura's anchor post-processor regex
+  // depends on `<h2>` with no attributes), and a bare {…} must stay literal text (MDX's expression
+  // footgun does not apply to plain markdown).
+  let html: string;
+  let dir: string;
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), "june-md-"));
+    writeFileSync(
+      join(dir, "p.md"),
+      "---\ntitle: T\n---\n" +
+        "## Section\n\n" +
+        "| a | b |\n|---|---|\n| 1 | 2 |\n\n" +
+        "~~old~~ and a bare {literal}\n\n" +
+        "- [ ] todo\n- [x] done\n\n" +
+        "see https://june.build\n\n" +
+        "```ts\nconst x = 1;\n```\n",
+    );
+    html = collection(dir)[0]!.html;
+  });
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  test("GFM table renders", () => expect(html).toContain("<table>"));
+  test("GFM strikethrough renders", () => expect(html).toContain("<del>old</del>"));
+  test("GFM task list renders", () => expect(html).toContain('type="checkbox"'));
+  test("GFM bare-URL autolink renders", () => expect(html).toContain('href="https://june.build"'));
+  test("code fence keeps the language class", () => expect(html).toContain('<code class="language-ts">'));
+  test("headings stay bare (no injected id/class)", () => expect(html).toContain("<h2>Section</h2>"));
+  test("a bare {…} stays literal text (no MDX expression footgun)", () => expect(html).toContain("{literal}"));
+});
