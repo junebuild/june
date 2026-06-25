@@ -11,13 +11,21 @@
 // Agents read exactly what the author wrote (frontmatter included).
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { toHtmlSync, init } from "@momiji-rs/sparkdown-gfm";
+import { toHtmlSync, initSync } from "@momiji-rs/sparkdown-gfm";
 
-// Instantiate the markdown→HTML wasm once, up front. loadEntry() renders synchronously (it runs from
-// sync collection scanners and from dev request handlers), and toHtmlSync requires the wasm to be
-// ready. This module is build/dev-only — it imports node:fs and is never in the frozen worker bundle —
-// so a top-level await is safe here (it never reaches workerd). Init is ~0.3ms, once per process.
-await init();
+// The markdown→HTML wasm is initialized LAZILY on the first render, synchronously. loadEntry() is sync
+// (it runs from sync collection scanners and dev request handlers) and toHtmlSync needs the wasm ready;
+// initSync() instantiates it without an await (valid on Node/Bun — this module is build/dev-only, imports
+// node:fs, and never reaches the browser/worker bundle). Lazy + sync means importing this file has NO
+// side effect: db/adapter-only code paths that never render markdown don't trigger (or risk) wasm init.
+// Idempotent, ~0.3ms, once per process.
+let wasmReady = false;
+const ensureWasm = () => {
+  if (!wasmReady) {
+    initSync();
+    wasmReady = true;
+  }
+};
 
 export type ContentEntry = {
   slug: string;
@@ -71,6 +79,7 @@ function loadEntry(file: string, slug: string, locale?: string): ContentEntry {
   if (hit && hit.mtime === mtime) return hit.entry;
   const original = readFileSync(file, "utf8");
   const { data, body } = parseFrontmatter(original);
+  ensureWasm(); // sync, idempotent — instantiate the renderer wasm on first use only
   const entry: ContentEntry = {
     slug,
     file,
