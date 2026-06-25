@@ -32,8 +32,8 @@
   "dependencies": {
     "@junejs/core": ">=0.0.46 <0.1.0",
     "@junejs/db": ">=0.0.31 <0.1.0",
+    "@momiji-rs/sparkdown": "^0.0.4",
     "lightningcss": "^1.27.0",
-    "marked": "^18.0.5",
     "oxc-parser": "^0.137.0",
     "rolldown": "^1.1.0"
   },

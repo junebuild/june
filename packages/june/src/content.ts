@@ -11,7 +11,21 @@
 // Agents read exactly what the author wrote (frontmatter included).
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { marked } from "marked";
+import { toHtmlSync, initSync } from "@momiji-rs/sparkdown/gfm";
+
+// The markdown→HTML wasm is initialized LAZILY on the first render, synchronously. loadEntry() is sync
+// (it runs from sync collection scanners and dev request handlers) and toHtmlSync needs the wasm ready;
+// initSync() instantiates it without an await (valid on Node/Bun — this module is build/dev-only, imports
+// node:fs, and never reaches the browser/worker bundle). Lazy + sync means importing this file has NO
+// side effect: db/adapter-only code paths that never render markdown don't trigger (or risk) wasm init.
+// Idempotent, ~0.3ms, once per process.
+let wasmReady = false;
+const ensureWasm = () => {
+  if (!wasmReady) {
+    initSync();
+    wasmReady = true;
+  }
+};
 
 export type ContentEntry = {
   slug: string;
@@ -22,7 +36,7 @@ export type ContentEntry = {
   body: string;
   /** The authored file, verbatim — the agent-facing .md projection. */
   original: string;
-  /** The body rendered to HTML (marked). */
+  /** The body rendered to HTML (CommonMark + GFM, via @momiji-rs/sparkdown/gfm wasm). */
   html: string;
   /** The locale this entry was authored in — set for files under a `<locale>/`
    *  subdir, undefined for the flat (default-locale) files. */
@@ -65,13 +79,14 @@ function loadEntry(file: string, slug: string, locale?: string): ContentEntry {
   if (hit && hit.mtime === mtime) return hit.entry;
   const original = readFileSync(file, "utf8");
   const { data, body } = parseFrontmatter(original);
+  ensureWasm(); // sync, idempotent — instantiate the renderer wasm on first use only
   const entry: ContentEntry = {
     slug,
     file,
     data,
     body,
     original,
-    html: marked.parse(body, { async: false }) as string,
+    html: toHtmlSync(body),
     ...(locale ? { locale } : {}),
   };
   memo.set(file, { mtime, entry });
