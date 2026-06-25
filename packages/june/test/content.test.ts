@@ -192,8 +192,8 @@ describe("nested content (folders → slug paths)", () => {
   });
 });
 
-describe("html rendering (sparkdown-gfm)", () => {
-  // entry.html is rendered by the sparkdown-gfm wasm (CommonMark + GFM). This guards the renderer swap
+describe("html rendering (sparkdown/gfm)", () => {
+  // entry.html is rendered by the @momiji-rs/sparkdown/gfm wasm (CommonMark + GFM). This guards the renderer swap
   // from marked: GFM features must render, headings must stay BARE (Kura's anchor post-processor regex
   // depends on `<h2>` with no attributes), and a bare {…} must stay literal text (MDX's expression
   // footgun does not apply to plain markdown).
