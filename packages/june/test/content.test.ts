@@ -219,7 +219,14 @@ describe("html rendering (sparkdown-gfm)", () => {
   test("GFM strikethrough renders", () => expect(html).toContain("<del>old</del>"));
   test("GFM task list renders", () => expect(html).toContain('type="checkbox"'));
   test("GFM bare-URL autolink renders", () => expect(html).toContain('href="https://june.build"'));
-  test("code fence keeps the language class", () => expect(html).toContain('<code class="language-ts">'));
-  test("headings stay bare (no injected id/class)", () => expect(html).toContain("<h2>Section</h2>"));
+  // Flexible: the contract is "a language-* class is present", so extra classes/whitespace are fine.
+  test("code fence keeps the language class", () => expect(html).toMatch(/<code class="[^"]*\blanguage-ts\b/));
+  // Strict ON PURPOSE: "bare" IS the contract — Kura's processHtml anchor regex is /<h([23])>/, which
+  // only matches an h2/h3 with NO attributes. So assert the exact bare form AND that no h2 carries attrs;
+  // a loose match would wrongly pass for a contract-breaking `<h2 id=…>`.
+  test("headings stay bare (no injected id/class)", () => {
+    expect(html).toContain("<h2>Section</h2>");
+    expect(html).not.toMatch(/<h2\s/);
+  });
   test("a bare {…} stays literal text (no MDX expression footgun)", () => expect(html).toContain("{literal}"));
 });
