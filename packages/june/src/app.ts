@@ -144,10 +144,10 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
   // ROOT so rolldown resolves node_modules from the project, like the build does.
   let clientBundle: Promise<ClientChunks> | undefined;
   const serveClient = (): Promise<ClientChunks> =>
-    (clientBundle ??= getModuleCss().then(({ maps }) => {
+    (clientBundle ??= getModuleCss().then(async ({ maps }) => {
       // Regenerate app/_islands.gen.ts (the auto lazy registry) right before
       // bundling, so a freshly added island() module is wired without a restart.
-      generateIslandRegistry(appDir);
+      await generateIslandRegistry(appDir);
       return bundleClientSplit(clientEntry!, dirname(appDir), "development", maps);
     }));
 

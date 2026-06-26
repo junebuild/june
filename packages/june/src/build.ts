@@ -411,7 +411,7 @@ export async function juneBuild(
   let clientAsset: string | null = null;
   if (clientEntry) {
     // Regenerate the auto lazy island registry before bundling (same as dev).
-    generateIslandRegistry(appDir);
+    await generateIslandRegistry(appDir);
     clientAsset = await bundleClientToFile(clientEntry, appRoot, assetsDir, cssModuleMaps);
     frozen.document.clientScript = `/${clientAsset}`;
   }
