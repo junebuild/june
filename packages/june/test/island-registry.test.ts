@@ -25,98 +25,98 @@ function appDir(files: Record<string, string>): string {
 const gen = (app: string) => readFileSync(join(app, ISLAND_REGISTRY_FILE), "utf8");
 
 describe("generateIslandRegistry (usage-driven)", () => {
-  test("emits a loader per island usage, keyed by imported name", () => {
+  test("emits a loader per island usage, keyed by imported name", async () => {
     const app = appDir({
       "page.tsx":
         'import { Counter } from "./Counter";\n' +
         "export default function P(){ return <main><Counter initial={0} client:load /></main>; }\n",
     });
-    expect(generateIslandRegistry(app)).toBe(1);
+    expect(await generateIslandRegistry(app)).toBe(1);
     expect(gen(app)).toContain('"Counter": () => import("./Counter").then((m) => m.Counter)');
   });
 
-  test("a lib (package) island is discovered the same way — no manifest", () => {
+  test("a lib (package) island is discovered the same way — no manifest", async () => {
     const app = appDir({
       "page.tsx":
         'import { ApiExplorer } from "kuradocs";\n' +
         "export default function P(){ return <ApiExplorer client:visible />; }\n",
     });
-    expect(generateIslandRegistry(app)).toBe(1);
+    expect(await generateIslandRegistry(app)).toBe(1);
     expect(gen(app)).toContain('"ApiExplorer": () => import("kuradocs").then((m) => m.ApiExplorer)');
   });
 
-  test("re-bases a relative specifier from a nested page to the app dir", () => {
+  test("re-bases a relative specifier from a nested page to the app dir", async () => {
     const app = appDir({
       "docs/page.tsx":
         'import { Widget } from "../Widget";\n' +
         "export default function P(){ return <Widget client:load />; }\n",
     });
-    generateIslandRegistry(app);
+    await generateIslandRegistry(app);
     expect(gen(app)).toContain('"Widget": () => import("./Widget").then((m) => m.Widget)');
   });
 
-  test("a component WITHOUT client:* is not an island", () => {
+  test("a component WITHOUT client:* is not an island", async () => {
     const app = appDir({
       "page.tsx":
         'import { Counter } from "./Counter";\n' +
         "export default function P(){ return <Counter initial={0} />; }\n",
     });
-    expect(generateIslandRegistry(app)).toBe(0);
+    expect(await generateIslandRegistry(app)).toBe(0);
   });
 
-  test("the same island used on several pages → one loader", () => {
+  test("the same island used on several pages → one loader", async () => {
     const app = appDir({
       "page.tsx": 'import { Counter } from "./Counter";\nexport default () => <Counter client:load />;\n',
       "about/page.tsx": 'import { Counter } from "../Counter";\nexport default () => <Counter client:idle />;\n',
     });
-    expect(generateIslandRegistry(app)).toBe(1);
+    expect(await generateIslandRegistry(app)).toBe(1);
   });
 
-  test("throws on a duplicate island name from different modules", () => {
+  test("throws on a duplicate island name from different modules", async () => {
     const app = appDir({
       "a/page.tsx": 'import { Counter } from "../x/Counter";\nexport default () => <Counter client:load />;\n',
       "b/page.tsx": 'import { Counter } from "../y/Counter";\nexport default () => <Counter client:load />;\n',
     });
-    expect(() => generateIslandRegistry(app)).toThrow(/duplicate island name "Counter"/);
+    await expect(generateIslandRegistry(app)).rejects.toThrow(/duplicate island name "Counter"/);
   });
 
-  test("throws on a local (non-imported) component used as an island", () => {
+  test("throws on a local (non-imported) component used as an island", async () => {
     const app = appDir({
       "page.tsx":
         "function Local(){ return null; }\nexport default () => <Local client:load />;\n",
     });
-    expect(() => generateIslandRegistry(app)).toThrow(/must be an IMPORTED component/);
+    await expect(generateIslandRegistry(app)).rejects.toThrow(/must be an IMPORTED component/);
   });
 
-  test("throws on a default import used as an island", () => {
+  test("throws on a default import used as an island", async () => {
     const app = appDir({
       "page.tsx": 'import Counter from "./Counter";\nexport default () => <Counter client:load />;\n',
     });
-    expect(() => generateIslandRegistry(app)).toThrow(/NAMED imports/);
+    await expect(generateIslandRegistry(app)).rejects.toThrow(/NAMED imports/);
   });
 
-  test("a slot island (used with children) still emits one loader — slot is runtime", () => {
+  test("a slot island (used with children) still emits one loader — slot is runtime", async () => {
     const app = appDir({
       "Tabs.tsx": '"use client";\nexport function Tabs(){ return null; }\n',
       "page.tsx": 'import { Tabs } from "./Tabs";\nexport default () => <Tabs client:visible><p>panel</p></Tabs>;\n',
     });
-    expect(generateIslandRegistry(app)).toBe(1);
+    expect(await generateIslandRegistry(app)).toBe(1);
     expect(gen(app)).toContain('"Tabs": () => import("./Tabs").then((m) => m.Tabs)');
   });
 
-  test('N3: throws when a resolvable island module is not "use client"', () => {
+  test('N3: throws when a resolvable island module is not "use client"', async () => {
     const app = appDir({
       "Counter.tsx": "export function Counter(){ return null; }\n", // no "use client"
       "page.tsx": 'import { Counter } from "./Counter";\nexport default () => <Counter client:load />;\n',
     });
-    expect(() => generateIslandRegistry(app)).toThrow(/not "use client"/);
+    await expect(generateIslandRegistry(app)).rejects.toThrow(/not "use client"/);
   });
 
-  test('N3: accepts a relative island module that is "use client"', () => {
+  test('N3: accepts a relative island module that is "use client"', async () => {
     const app = appDir({
       "Counter.tsx": '"use client";\nexport function Counter(){ return null; }\n',
       "page.tsx": 'import { Counter } from "./Counter";\nexport default () => <Counter client:load />;\n',
     });
-    expect(generateIslandRegistry(app)).toBe(1);
+    expect(await generateIslandRegistry(app)).toBe(1);
   });
 });

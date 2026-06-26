@@ -16,10 +16,13 @@
 // runtime name statically, so this is a documented edge, not a build error.
 //
 // Host-coupled (node:fs + oxc-parser), so it lives in @junejs/server.
+// NOTE: oxc-parser is imported LAZILY inside generateIslandRegistry (not at module top
+// level). Its index eagerly loads a native/wasm binding on import, and the lightweight
+// helpers below (walk/exportNames/firstStatementIsDirective) are pulled into the runtime
+// bundle by rsc-manifest.ts — an eager `import "oxc-parser"` here would drag that binding
+// into the worker and crash on runtimes without it (e.g. Vercel's Node fn → wasm32-wasi).
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, dirname, resolve } from "node:path";
-
-import { parseSync } from "oxc-parser";
 
 export const ISLAND_REGISTRY_FILE = "_islands.gen.ts";
 
@@ -111,7 +114,10 @@ function resolveLocalModule(fromFile: string, spec: string): string | null {
 }
 
 // Write app/_islands.gen.ts. Returns the number of island loaders emitted.
-export function generateIslandRegistry(appDir: string): number {
+// Async because oxc-parser is dynamic-imported here (build-time only) to keep its
+// eager binding load out of the runtime bundle — see the note on the imports above.
+export async function generateIslandRegistry(appDir: string): Promise<number> {
+  const { parseSync } = await import("oxc-parser");
   const seen = new Map<string, string>(); // island name → loader specifier (dup guard)
   const entries: string[] = [];
 
