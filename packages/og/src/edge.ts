@@ -25,16 +25,19 @@ export class ImageResponse extends Response {
     super(readable, {
       status: options.status ?? 200,
       headers: {
-        "content-type": "image/png",
         "cache-control": "public, max-age=86400, stale-while-revalidate=604800",
         ...options.headers,
+        // Contract (types.ts): callers may merge/override any header EXCEPT content-type
+        // — set it last so it always wins and the body is always served as a PNG.
+        "content-type": "image/png",
       },
     });
-    const writer = writable.getWriter();
     (_import("@vercel/og") as Promise<{ ImageResponse: VercelImageResponse }>)
       .then(({ ImageResponse: VercelOg }) => {
         // Delegate the actual render to @vercel/og, then pipe its PNG body into ours
-        // (so our status/headers above win, matching node.ts's response shape).
+        // (so our status/headers above win, matching node.ts's response shape). pipeTo
+        // handles backpressure, completion, and error propagation (it aborts `writable`
+        // if the source errors), so there's no hand-managed writer to get wrong.
         const rendered = new VercelOg(element, {
           width: options.width ?? 1200,
           height: options.height ?? 630,
@@ -42,15 +45,11 @@ export class ImageResponse extends Response {
           emoji: options.emoji,
           debug: options.debug,
         });
-        if (!rendered.body) return void writer.close();
-        return rendered.body.pipeTo(
-          new WritableStream<Uint8Array>({
-            write: (chunk) => void writer.write(chunk),
-            close: () => void writer.close(),
-            abort: (e) => void writer.abort(e),
-          }),
-        );
+        return rendered.body ? rendered.body.pipeTo(writable) : writable.close();
       })
-      .catch((err: unknown) => void writer.abort(err));
+      // The lazy import or the render setup failed (a streaming error already aborted
+      // `writable` via pipeTo — the redundant abort is swallowed). Abort so the response
+      // errors instead of hanging.
+      .catch((err: unknown) => writable.abort(err).catch(() => {}));
   }
 }

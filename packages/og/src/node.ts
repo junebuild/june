@@ -22,9 +22,11 @@ export class ImageResponse extends Response {
     super(readable, {
       status: options.status ?? 200,
       headers: {
-        "content-type": "image/png",
         "cache-control": "public, max-age=86400, stale-while-revalidate=604800",
         ...options.headers,
+        // Contract (types.ts): callers may merge/override any header EXCEPT content-type
+        // — set it last so it always wins and the body is always served as a PNG.
+        "content-type": "image/png",
       },
     });
     const writer = writable.getWriter();
