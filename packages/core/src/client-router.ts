@@ -16,7 +16,7 @@
 // exposed ONLY via the `@junejs/core/client-router` subpath and is NOT
 // re-exported from the barrel.
 import { morph } from "./morph";
-import { FRAGMENT_ACCEPT, SEGMENT_HEADER, SHELL_ATTR, TITLE_HEADER } from "./nav-protocol";
+import { FRAGMENT_ACCEPT, SEGMENT_HEADER, SHELL_ATTR, TITLE_HEADER, decodeTitle } from "./nav-protocol";
 import { outletEl, resolveSwapTarget } from "./shell";
 
 // Called with each freshly swapped-in region so the host can hydrate the new
@@ -102,7 +102,8 @@ export function startClientRouter(rehydrate: Rehydrate): void {
       });
       if (!res.ok) throw new Error(`status ${res.status}`);
       html = await res.text();
-      title = res.headers.get(TITLE_HEADER);
+      // The server encodeTitles the header; decode it back before document.title.
+      title = decodeTitle(res.headers.get(TITLE_HEADER));
       fragmentShell = res.headers.get(SEGMENT_HEADER);
     } catch (err) {
       // Aborted or superseded: a newer navigation owns the screen now — do

@@ -34,7 +34,7 @@
 import React from "react";
 import { createRoot, type Root } from "react-dom/client";
 
-import { FLIGHT_ACCEPT, TITLE_HEADER } from "./nav-protocol";
+import { FLIGHT_ACCEPT, TITLE_HEADER, decodeTitle } from "./nav-protocol";
 
 // Deserialize a Flight byte stream into a React node. Injectable so the
 // navigation orchestration is testable without react-server-dom; the default
@@ -97,7 +97,8 @@ export function startFlightRouter(options: FlightRouterOptions = {}): void {
       root ??= createRoot(rootEl as Element);
       root.render(React.createElement(React.Fragment, null, node));
 
-      const title = res.headers.get(TITLE_HEADER);
+      // Server encodeTitles the header; decode before assigning to document.title.
+      const title = decodeTitle(res.headers.get(TITLE_HEADER));
       if (title) document.title = title;
       if (push) history.pushState(null, "", url.href);
       window.scrollTo(0, 0);

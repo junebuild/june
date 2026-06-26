@@ -48,7 +48,7 @@ import {
 } from "@junejs/core/i18n";
 import type { Resources } from "@junejs/core/resources";
 
-import { negotiate, TITLE_HEADER, SEGMENT_HEADER } from "./negotiate";
+import { negotiate, TITLE_HEADER, SEGMENT_HEADER, encodeTitle } from "./negotiate";
 
 // Minimal Cookie-header read for the locale negotiation chain (no dependency on
 // an auth/cookie integration — i18n must stand alone).
@@ -292,7 +292,9 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
     const html = await new Response(stream).text();
     const headers = new Headers({ "content-type": "text/html; charset=utf-8" });
     const title = typeof metadata?.title === "string" ? metadata.title : undefined;
-    if (title) headers.set(TITLE_HEADER, title);
+    // encodeTitle keeps the header ASCII-safe (a header value is Latin-1-only, but
+    // titles carry CJK/accents/emoji); the client decodeTitles it before document.title.
+    if (title) headers.set(TITLE_HEADER, encodeTitle(title));
     // The shell key tells the client which shell this content-only fragment is
     // for; it morphs the outlet only when that matches the mounted shell.
     if (segmented) headers.set(SEGMENT_HEADER, boundaryKey!);

@@ -24,7 +24,7 @@ import {
 } from "./islands";
 import { startClientRouter } from "./client-router";
 import { applyLiveUpdate } from "./client-live";
-import { FRAGMENT_ACCEPT, SEGMENT_HEADER, TITLE_HEADER } from "./nav-protocol";
+import { FRAGMENT_ACCEPT, SEGMENT_HEADER, TITLE_HEADER, decodeTitle } from "./nav-protocol";
 
 // Set on a marker once hydrated, so re-scanning a tree (the router re-hydrates each
 // swapped page) never hydrates the same node twice — and a persisted island carried
@@ -163,7 +163,7 @@ export function startJuneClient(options: StartOptions): void {
         if (!res.ok) return false;
         return applyLiveUpdate(
           await res.text(),
-          res.headers.get(TITLE_HEADER),
+          decodeTitle(res.headers.get(TITLE_HEADER)), // server encodeTitles it
           rehydrate,
           res.headers.get(SEGMENT_HEADER), // segment-scoped → morph the outlet, not the root
         );

@@ -11,7 +11,7 @@ import type { RenderTarget } from "@junejs/core/route";
 // The fragment media type + title header are the client-router wire protocol —
 // defined once in @junejs/core so the browser router and this negotiator share
 // the exact strings. Re-exported so existing server-side importers are unaffected.
-export { FRAGMENT_ACCEPT, TITLE_HEADER, SEGMENT_HEADER } from "@junejs/core/nav-protocol";
+export { FRAGMENT_ACCEPT, TITLE_HEADER, SEGMENT_HEADER, encodeTitle } from "@junejs/core/nav-protocol";
 
 const EXT_TARGET: Record<string, RenderTarget> = {
   ".json": "json",
