@@ -102,7 +102,10 @@ export function startClientRouter(rehydrate: Rehydrate): void {
       });
       if (!res.ok) throw new Error(`status ${res.status}`);
       html = await res.text();
-      title = res.headers.get(TITLE_HEADER);
+      // The server percent-encodes the title (a header value is Latin-1-only, but
+      // titles carry CJK/accents/emoji); decode it back before it hits document.title.
+      const rawTitle = res.headers.get(TITLE_HEADER);
+      title = rawTitle === null ? null : decodeURIComponent(rawTitle);
       fragmentShell = res.headers.get(SEGMENT_HEADER);
     } catch (err) {
       // Aborted or superseded: a newer navigation owns the screen now — do

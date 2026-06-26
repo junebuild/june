@@ -161,9 +161,12 @@ export function startJuneClient(options: StartOptions): void {
       try {
         const res = await fetch(location.href, { headers: { accept: FRAGMENT_ACCEPT } });
         if (!res.ok) return false;
+        const rawTitle = res.headers.get(TITLE_HEADER);
         return applyLiveUpdate(
           await res.text(),
-          res.headers.get(TITLE_HEADER),
+          // Server percent-encodes the title (header values are Latin-1-only but
+          // titles carry CJK/accents/emoji); decode before document.title.
+          rawTitle === null ? null : decodeURIComponent(rawTitle),
           rehydrate,
           res.headers.get(SEGMENT_HEADER), // segment-scoped → morph the outlet, not the root
         );

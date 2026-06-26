@@ -292,7 +292,12 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
     const html = await new Response(stream).text();
     const headers = new Headers({ "content-type": "text/html; charset=utf-8" });
     const title = typeof metadata?.title === "string" ? metadata.title : undefined;
-    if (title) headers.set(TITLE_HEADER, title);
+    // An HTTP header value is a ByteString (Latin-1, ≤0xFF), so a non-ASCII title
+    // (CJK, accents, emoji) would throw at headers.set — crashing the whole
+    // fragment render → the client router hard-navigates → the white flash the
+    // soft nav exists to avoid. Percent-encode to ASCII here; the client routers
+    // decodeURIComponent it back before setting document.title.
+    if (title) headers.set(TITLE_HEADER, encodeURIComponent(title));
     // The shell key tells the client which shell this content-only fragment is
     // for; it morphs the outlet only when that matches the mounted shell.
     if (segmented) headers.set(SEGMENT_HEADER, boundaryKey!);

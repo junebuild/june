@@ -28,6 +28,17 @@ describe("fragment projection", () => {
     expect(frag).not.toContain("<title"); // title is a header, not in the body
   });
 
+  test("a non-ASCII title is percent-encoded in the header (no ByteString throw → no 500)", async () => {
+    // Regression: an HTTP header value is a ByteString (Latin-1, ≤0xFF). A CJK
+    // (or accented/emoji) title set verbatim throws at headers.set, crashing the
+    // fragment render → 500 → the client router hard-navigates → white flash.
+    const res = await get("/cjk", { accept: FRAGMENT_ACCEPT });
+    expect(res.status).toBe(200);
+    const raw = res.headers.get(TITLE_HEADER);
+    expect(raw).toBe(encodeURIComponent("文件中心 — 整合指南")); // ASCII-safe on the wire
+    expect(decodeURIComponent(raw!)).toBe("文件中心 — 整合指南"); // client round-trips it back
+  });
+
   test("parity: the fragment is byte-identical to the full page's [data-june-root]", async () => {
     const full = await (await get("/")).text();
     const frag = (await (await get("/", { accept: FRAGMENT_ACCEPT })).text()).trim();

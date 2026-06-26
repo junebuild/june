@@ -97,8 +97,10 @@ export function startFlightRouter(options: FlightRouterOptions = {}): void {
       root ??= createRoot(rootEl as Element);
       root.render(React.createElement(React.Fragment, null, node));
 
+      // Server percent-encodes the title (header values are Latin-1-only but titles
+      // carry CJK/accents/emoji); decode before assigning to document.title.
       const title = res.headers.get(TITLE_HEADER);
-      if (title) document.title = title;
+      if (title) document.title = decodeURIComponent(title);
       if (push) history.pushState(null, "", url.href);
       window.scrollTo(0, 0);
     } catch {
