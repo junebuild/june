@@ -1,6 +1,6 @@
 {
   "name": "june.build",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "private": true,
   "description": "june.build — the framework site, dogfooded on June itself.",
   "type": "module",
