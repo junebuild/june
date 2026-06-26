@@ -9,6 +9,27 @@
 export const FRAGMENT_ACCEPT = "text/vnd.june.fragment+html";
 export const TITLE_HEADER = "x-june-title";
 
+// The title codec — the SERVER encodes before headers.set, the CLIENT decodes
+// before document.title. An HTTP header value is a ByteString (Latin-1, ≤0xFF),
+// so a non-ASCII title (CJK/accents/emoji) set verbatim throws at headers.set,
+// crashing the whole render with a 500 (the client then hard-navigates — the
+// white flash soft nav exists to avoid). Percent-encoding keeps the wire ASCII.
+// Lives here so the two ends can't drift on the encoding, like the constants above.
+export const encodeTitle = (title: string): string => encodeURIComponent(title);
+
+// Decode is DEFENSIVE: a value that isn't valid percent-encoding (a literal `%`
+// from a pre-encode/mixed-version server, or any malformed header) must NOT throw
+// — decodeURIComponent's URIError would force the very hard navigation the codec
+// exists to prevent. Fall back to the raw value (a raw ASCII title is still valid).
+export function decodeTitle(raw: string | null): string | null {
+  if (raw === null) return null;
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
 // The OPT-IN sibling of FRAGMENT_ACCEPT (clientRouter: "flight"). A soft
 // navigation asks for the SAME url with this media type to get the `flight`
 // projection — the route rendered through the server's react-server graph as a
