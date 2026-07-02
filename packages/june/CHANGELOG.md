@@ -1,5 +1,15 @@
 # @junejs/server
 
+## 0.0.55
+
+### Patch Changes
+
+- [`336f017`](https://github.com/junebuild/june/commit/336f017cabca77a451f9a36a10aa36686eb81bfc) Thanks [@linyiru](https://github.com/linyiru)! - Content: a doc's title falls back to its first H1 when the frontmatter has no `title:`.
+
+  So plain Markdown with no front-matter still gets a real title (from its `# Heading`) instead
+  of defaulting to the slug — "point June at a docs/ folder, change nothing" now holds. A
+  frontmatter `title:` still wins; a doc with neither has an undefined title as before.
+
 ## 0.0.54
 
 ### Patch Changes
