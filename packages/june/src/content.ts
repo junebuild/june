@@ -81,6 +81,13 @@ function loadEntry(file: string, slug: string, locale?: string): ContentEntry {
   if (hit && hit.mtime === mtime) return hit.entry;
   const original = readFileSync(file, "utf8");
   const { data, body } = parseFrontmatter(original);
+  // No `title:` in frontmatter → fall back to the document's first H1, so plain Markdown (no
+  // front-matter at all) still gets a real title. Keeps "point June at a docs/ folder, change
+  // nothing" true: the title lives in the content (the `# Heading`), not in injected metadata.
+  if (data.title === undefined) {
+    const h1 = body.match(/^#[ \t]+(.+?)[ \t]*$/m);
+    if (h1?.[1]) data.title = h1[1];
+  }
   ensureWasm(); // sync, idempotent — instantiate the renderer wasm on first use only
   const entry: ContentEntry = {
     slug,
