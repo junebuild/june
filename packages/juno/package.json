@@ -16,7 +16,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@junejs/core": ">=0.0.47",
+    "@junejs/core": ">=0.0.48",
     "@junejs/db": ">=0.0.31 <0.1.0"
   },
   "devDependencies": {
