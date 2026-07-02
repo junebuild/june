@@ -30,7 +30,7 @@ import type { ContentSource, JuneConfig } from "@junejs/core/config";
 import { buildLinkHeader } from "@junejs/core/discovery";
 import { localeHref } from "@junejs/core/i18n";
 import { routeFromModule, type BrandedRoute } from "@junejs/core/route";
-import { workers, type JuneAdapter, type ResourcePlan } from "./adapter";
+import { workers, staticSite, type JuneAdapter, type ResourcePlan } from "./adapter";
 import type { DocumentConfig } from "@junejs/core/document";
 import { generateContentModule } from "./content";
 import { createWorker, type WorkerManifest } from "./worker";
@@ -421,7 +421,12 @@ export async function juneBuild(
   // built-in workers()). It contributes the entry's export wrapper + emits the
   // deploy config.
   const fullConfig = await loadJuneConfig(appRoot);
-  const adapter = (fullConfig.deploy?.adapter as JuneAdapter | undefined) ?? workers();
+  // An explicit adapter instance wins; otherwise `target: "static"` selects the
+  // built-in staticSite() so a config can opt into SSG without importing it (Kura
+  // just sets deploy.target). Everything else defaults to workers() (unchanged).
+  const adapter =
+    (fullConfig.deploy?.adapter as JuneAdapter | undefined) ??
+    (fullConfig.deploy?.target === "static" ? staticSite() : workers());
 
   // Fail fast on a config the target can't honor (e.g. Vercel has no D1) BEFORE
   // the expensive bundle/prerender. The adapter only needs to know which

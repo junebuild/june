@@ -154,7 +154,10 @@ export type JuneConfig = {
   // `adapter` is a deploy adapter (e.g. vercel()) — absent ⇒ the built-in
   // workers() default. Typed loosely here so @junejs/core stays free of the
   // server-side adapter implementation; build.ts casts it to JuneAdapter.
-  deploy?: { target?: "workers"; name?: string; domain?: string; adapter?: unknown };
+  // target names the deploy target when no `adapter` instance is given: "static"
+  // selects the built-in SSG adapter (build & deploy). "vercel"/"deno" still expect
+  // an adapter() instance (they carry options); the string is accepted for typing.
+  deploy?: { target?: "workers" | "vercel" | "deno" | "static"; name?: string; domain?: string; adapter?: unknown };
   // Public-path prefix the whole site is served under, e.g. "/openab/docs" for a
   // GitHub Pages project site at https://user.github.io/openab/docs/. Prefixes the
   // framework asset URLs (styles/clientScript/favicon) baked into the rendered
