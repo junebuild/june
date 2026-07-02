@@ -192,6 +192,77 @@ describe("nested content (folders → slug paths)", () => {
   });
 });
 
+// Extra content sources (config content.sources): dirs OUTSIDE content/ merged into named
+// collections — the docs-as-code seam. Mount prefixes slugs; a collision fails LOUDLY.
+describe("generateContentModule with sources", () => {
+  let sroot: string; // app root: content/docs + two external sibling dirs (extdocs, schema)
+  const content = () => join(sroot, "content");
+  beforeAll(() => {
+    sroot = mkdtempSync(join(tmpdir(), "june-sources-"));
+    mkdirSync(join(sroot, "content", "docs"), { recursive: true });
+    writeFileSync(join(sroot, "content", "docs", "intro.md"), md("Intro", "2026-01-01", "Intro"));
+    // an external docs dir with a locale mirror — the repo's own docs/ in docs-as-code
+    mkdirSync(join(sroot, "extdocs", "de"), { recursive: true });
+    writeFileSync(join(sroot, "extdocs", "setup.md"), md("Setup", "2026-01-02", "Setup EN"));
+    writeFileSync(join(sroot, "extdocs", "de", "setup.md"), md("Einrichtung", "2026-01-02", "Setup DE"));
+    // a second external dir, mounted at a subpath; its README becomes the mount's page
+    mkdirSync(join(sroot, "schema"), { recursive: true });
+    writeFileSync(join(sroot, "schema", "README.md"), md("Schema", "2026-01-03", "Schema"));
+    writeFileSync(join(sroot, "schema", "types.md"), md("Types", "2026-01-04", "Types"));
+  });
+  afterAll(() => rmSync(sroot, { recursive: true, force: true }));
+
+  test("a source merges into an existing collection; a mounted source prefixes its slugs", () => {
+    const { code, names } = generateContentModule(content(), undefined, [
+      { dir: join(sroot, "extdocs"), collection: "docs" },
+      { dir: join(sroot, "schema"), collection: "docs", mount: "schema" },
+    ]);
+    expect(names).toEqual(["docs"]);
+    for (const slug of ["intro", "setup", "schema", "schema/types"]) {
+      expect(code).toContain(`"slug": "${slug}"`); // content/ + both sources, mount-prefixed
+    }
+    expect(code).toContain("DOCS_L"); // the source's de/ mirror made the collection localized
+    expect(code).toContain('"Einrichtung"');
+  });
+
+  test("a source for a NEW collection creates it (no content/<name>/ needed)", () => {
+    const { code, names } = generateContentModule(content(), undefined, [
+      { dir: join(sroot, "schema"), collection: "spec" },
+    ]);
+    expect(names).toEqual(["docs", "spec"]);
+    expect(code).toContain("export const SPEC: ContentEntry[]");
+  });
+
+  test("a sources-only app (no content/ dir at all) still generates", () => {
+    const { names } = generateContentModule(join(sroot, "no-such-content"), undefined, [
+      { dir: join(sroot, "extdocs"), collection: "docs" },
+    ]);
+    expect(names).toEqual(["docs"]);
+  });
+
+  test("a slug collision between sources fails loudly, naming both files", () => {
+    // extdocs/intro.md collides with content/docs/intro.md when unmounted
+    writeFileSync(join(sroot, "extdocs", "intro.md"), md("Dupe", "2026-01-05", "Dupe"));
+    try {
+      expect(() =>
+        generateContentModule(content(), undefined, [{ dir: join(sroot, "extdocs"), collection: "docs" }]),
+      ).toThrow(/slug collision.*"intro"[\s\S]*intro\.md[\s\S]*intro\.md/);
+    } finally {
+      rmSync(join(sroot, "extdocs", "intro.md"));
+    }
+  });
+
+  test("a missing configured source dir fails loudly (config error, not a silent skip)", () => {
+    expect(() =>
+      generateContentModule(content(), undefined, [{ dir: join(sroot, "gone"), collection: "docs" }]),
+    ).toThrow(/content source .* does not exist/);
+  });
+
+  test("no sources → byte-identical output to the two-arg call (zero regression)", () => {
+    expect(generateContentModule(content()).code).toBe(generateContentModule(content(), undefined, []).code);
+  });
+});
+
 describe("html rendering (sparkdown/gfm)", () => {
   // entry.html is rendered by the @momiji-rs/sparkdown/gfm wasm (CommonMark + GFM). This guards the renderer swap
   // from marked: GFM features must render, headings must stay BARE (Kura's anchor post-processor regex

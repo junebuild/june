@@ -59,8 +59,24 @@ export interface DataLayer {
   emitTypes?(db: JuneDb): Promise<string>;
 }
 
+// An extra content source: a directory OUTSIDE the default `content/` scan whose markdown merges
+// into a named collection. The docs-as-code seam — a repo's existing `docs/` (or `schema/`,
+// `examples/`) feeds a June content collection directly, no copy/move into `content/` required.
+export type ContentSource = {
+  /** Directory to scan, relative to the app root — may point outside it (e.g. "../docs"). */
+  dir: string;
+  /** Collection the entries merge into (e.g. "docs" → the DOCS export in app/_content.ts). */
+  collection: string;
+  /** Slug prefix inside the collection ("schema" → schema/<slug>). Default: none (collection root). */
+  mount?: string;
+};
+
 export type JuneConfig = {
   agent?: Partial<AgentConfig>;
+  // Content pipeline options. `sources` adds directories beyond the default `content/<collection>/`
+  // scan (each with the same locale-mirror layout); entries merge into the named collection with
+  // mount-prefixed slugs. A slug collision between sources fails `june gen` loudly.
+  content?: { sources?: ContentSource[] };
   cache?: CacheStoreFactory; // memory() (default) | redis({ url }) | custom
   // Data resources (db / blob / kv), declared = enabled. Generic names, not
   // Cloudflare-branded; each has a zero-config local default and deploy

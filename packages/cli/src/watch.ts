@@ -5,8 +5,8 @@
 // HMR belongs to the native runtime track; this is the Bun/Node host's story.
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { watch } from "node:fs";
-import { sep } from "node:path";
+import { existsSync, watch } from "node:fs";
+import { join, relative, resolve, sep } from "node:path";
 
 const IGNORED_DIRS = new Set(["node_modules", ".git", "dist", ".june"]);
 
@@ -42,10 +42,10 @@ export function superviseDev(root: string): undefined {
     });
   };
 
-  const restart = async (file: string) => {
+  const restart = async (file: string, contentChanged: boolean) => {
     if (restarting) return; // an edit mid-restart is picked up by the next save
     restarting = true;
-    if (file.startsWith(`content${sep}`)) {
+    if (contentChanged) {
       // The frozen manifest must be fresh BEFORE the new server boots.
       try {
         const { generateContent } = await import("@junejs/server");
@@ -80,14 +80,43 @@ export function superviseDev(root: string): undefined {
     c.kill();
   };
 
-  let pending: string | undefined;
+  // Debounced scheduling shared by the root watcher and any content-source watchers. `content`
+  // ORs across coalesced events, so an app edit landing right after a content edit can't cancel
+  // the pending regen.
+  let pending: { file: string; content: boolean } | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const schedule = (file: string, content: boolean) => {
+    pending = { file, content: content || (pending?.content ?? false) };
+    clearTimeout(timer);
+    timer = setTimeout(() => void restart(pending!.file, pending!.content), 80);
+  };
   watch(root, { recursive: true }, (_event, file) => {
     if (!file || ignoredPath(file)) return;
-    pending = file;
-    clearTimeout(timer);
-    timer = setTimeout(() => void restart(pending!), 80);
+    schedule(file, file.startsWith(`content${sep}`));
   });
+
+  // Extra content sources (config `content.sources`) live OUTSIDE the app root — fs.watch(root)
+  // can't see them, so each gets its own watcher; any change there is a content change (regen +
+  // restart). Config is loaded tolerantly and async: if it can't load yet (a generated config
+  // importing app/_content.ts before the first freeze), sources simply aren't watched this run —
+  // the next `june dev` picks them up. A config edit that CHANGES the source list also needs a
+  // dev rerun (the supervisor process caches the config module).
+  void (async () => {
+    try {
+      const { loadJuneConfig } = await import("@junejs/server");
+      const config = await loadJuneConfig(root);
+      for (const s of config.content?.sources ?? []) {
+        const dir = resolve(root, s.dir);
+        if (!existsSync(dir)) continue; // gen fails loudly on this; nothing to watch here
+        watch(dir, { recursive: true }, (_event, file) => {
+          if (!file || ignoredPath(file)) return;
+          schedule(relative(root, join(dir, file)), true);
+        });
+      }
+    } catch {
+      /* config not loadable yet — see above */
+    }
+  })();
 
   for (const sig of ["SIGINT", "SIGTERM"] as const) {
     process.on(sig, () => {

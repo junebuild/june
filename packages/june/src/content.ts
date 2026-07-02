@@ -13,6 +13,8 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { toHtmlSync, initSync } from "@momiji-rs/sparkdown/gfm";
 
+import type { ContentSource } from "@junejs/core/config";
+
 // The markdown→HTML wasm is initialized LAZILY on the first render, synchronously. loadEntry() is sync
 // (it runs from sync collection scanners and dev request handlers) and toHtmlSync needs the wasm ready;
 // initSync() instantiates it without an await (valid on Node/Bun — this module is build/dev-only, imports
@@ -211,7 +213,46 @@ export function entry(
   return fallback;
 }
 
-// Generate the frozen `app/_content.ts` module text from `content/<collection>/`.
+// Prefix every slug in a scanned set with a mount point ("schema" + "overview" → "schema/overview";
+// the source's own index/README, slug "", becomes the mount's page). No mount → the set as-is.
+function mountScanned(s: ScannedCollection, mount?: string): ScannedCollection {
+  if (!mount) return s;
+  const re = (e: ContentEntry): ContentEntry => ({ ...e, slug: e.slug ? `${mount}/${e.slug}` : mount });
+  return {
+    default: s.default.map(re),
+    byLocale: Object.fromEntries(Object.entries(s.byLocale).map(([l, es]) => [l, es.map(re)])),
+  };
+}
+
+// Merge an extra source's entries into a collection, failing LOUDLY on a slug collision — a silent
+// last-wins would ship one author's page under another's URL with no error and no filename.
+function mergeScanned(into: ScannedCollection, add: ScannedCollection, label: string): ScannedCollection {
+  const mergeEntries = (a: ContentEntry[], b: ContentEntry[], bucket: string): ContentEntry[] => {
+    const seen = new Map(a.map((e) => [e.slug, e.file]));
+    for (const e of b) {
+      const other = seen.get(e.slug);
+      if (other !== undefined) {
+        throw new Error(
+          `[june content] slug collision in collection "${label}"${bucket ? ` (${bucket})` : ""}: ` +
+            `"${e.slug}" is authored by both\n  ${other}\n  ${e.file}\n` +
+            `Give the source a distinct mount, or rename one file.`,
+        );
+      }
+      seen.set(e.slug, e.file);
+    }
+    return [...a, ...b].sort(byDate);
+  };
+  const byLocale: Record<string, ContentEntry[]> = { ...into.byLocale };
+  for (const [locale, entries] of Object.entries(add.byLocale)) {
+    byLocale[locale] = mergeEntries(byLocale[locale] ?? [], entries, locale);
+  }
+  return { default: mergeEntries(into.default, add.default, ""), byLocale };
+}
+
+// Generate the frozen `app/_content.ts` module text from `content/<collection>/`,
+// plus any configured extra `sources` (config `content.sources` — dirs outside
+// `content/`, e.g. a repo's own `docs/`, pre-resolved to ABSOLUTE paths by the
+// caller) merged into their named collections with mount-prefixed slugs.
 // The FREEZE that removes node:fs from the worker graph: routes import frozen
 // entries + finders instead of reading the filesystem at request time.
 //
@@ -224,6 +265,7 @@ export function entry(
 export function generateContentModule(
   contentDir: string,
   knownLocales?: readonly string[],
+  sources?: readonly ContentSource[],
 ): { code: string; names: string[] } {
   const strip = (e: ContentEntry) => ({
     slug: e.slug,
@@ -233,21 +275,37 @@ export function generateContentModule(
     html: e.html,
     ...(e.locale ? { locale: e.locale } : {}),
   });
-  const dirs = readdirSync(contentDir, { withFileTypes: true }).filter((e) => e.isDirectory());
+  // Default scan: each `content/<name>/` is a collection. Guarded — a sources-only app
+  // (all content outside `content/`) has no content dir at all, and that's fine now.
+  const collections = new Map<string, ScannedCollection>();
+  if (existsSync(contentDir)) {
+    for (const d of readdirSync(contentDir, { withFileTypes: true })) {
+      if (d.isDirectory()) collections.set(d.name, scanCollection(join(contentDir, d.name), knownLocales));
+    }
+  }
+  // Extra sources merge in AFTER the default scan (so a collision names both files). A missing
+  // configured dir is a config error — fail loudly, never silently ship a site missing its docs.
+  for (const s of sources ?? []) {
+    if (!existsSync(s.dir)) {
+      throw new Error(`[june content] content source "${s.dir}" (collection "${s.collection}") does not exist`);
+    }
+    const scanned = mountScanned(scanCollection(s.dir, knownLocales), s.mount);
+    const base = collections.get(s.collection);
+    collections.set(s.collection, base ? mergeScanned(base, scanned, s.collection) : scanned);
+  }
   const names: string[] = [];
   let anyLocale = false;
   let body = "";
-  for (const d of dirs) {
-    const { default: def, byLocale } = scanCollection(join(contentDir, d.name), knownLocales);
-    const CONST = d.name.replace(/[^A-Za-z0-9]/g, "_").toUpperCase();
+  for (const [name, { default: def, byLocale }] of collections) {
+    const CONST = name.replace(/[^A-Za-z0-9]/g, "_").toUpperCase();
     // Singular finder name: posts → post, otherwise <name>Entry.
-    const finder = d.name.endsWith("s") ? d.name.slice(0, -1) : `${d.name}Entry`;
+    const finder = name.endsWith("s") ? name.slice(0, -1) : `${name}Entry`;
     body += `export const ${CONST}: ContentEntry[] = ${JSON.stringify(def.map(strip), null, 2)};\n`;
     if (Object.keys(byLocale).length === 0) {
       body += `export const ${finder} = (slug: string): ContentEntry | null => ${CONST}.find((p) => p.slug === slug) ?? null;\n`;
       // Always export the locale lister (a no-op for single-locale collections) so consumers can
-      // import `${d.name}` unconditionally — adding/removing locales never changes the module's shape.
-      body += `export const ${d.name} = (_locale?: string): ContentEntry[] => ${CONST};\n`;
+      // import `${name}` unconditionally — adding/removing locales never changes the module's shape.
+      body += `export const ${name} = (_locale?: string): ContentEntry[] => ${CONST};\n`;
     } else {
       anyLocale = true;
       const map: Record<string, Record<string, unknown>> = {};
@@ -261,11 +319,11 @@ export function generateContentModule(
         `  if (v) return v;\n` +
         `  if (opts?.fallback === false) return null;\n` +
         `  const d = ${CONST}.find((p) => p.slug === slug) ?? null;\n` +
-        `  if (process.env.NODE_ENV !== "production" && locale && ${CONST}_L[locale] && d) console.warn(\`[june content] ${d.name}/\${slug}: no "\${locale}" variant — served default\`);\n` +
+        `  if (process.env.NODE_ENV !== "production" && locale && ${CONST}_L[locale] && d) console.warn(\`[june content] ${name}/\${slug}: no "\${locale}" variant — served default\`);\n` +
         `  return d;\n};\n`;
-      body += `export const ${d.name} = (locale?: string): ContentEntry[] => locale && ${CONST}_L[locale] ? ${CONST}.map((p) => ${CONST}_L[locale]![p.slug] ?? p) : ${CONST};\n`;
+      body += `export const ${name} = (locale?: string): ContentEntry[] => locale && ${CONST}_L[locale] ? ${CONST}.map((p) => ${CONST}_L[locale]![p.slug] ?? p) : ${CONST};\n`;
     }
-    names.push(d.name);
+    names.push(name);
   }
   const entryType = anyLocale
     ? "export type ContentEntry = { slug: string; data: Record<string, string | string[]>; body: string; original: string; html: string; locale?: string };\n"

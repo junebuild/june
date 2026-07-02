@@ -24,15 +24,22 @@ import type { JuneConfig } from "@junejs/core/config";
 //                                         june's own artifact dir (gitignored), so the
 //                                         wrapper framework never needs to add files to
 //                                         the app root.
-export async function loadJuneConfig(appDir: string): Promise<JuneConfig> {
+/** The config file loadJuneConfig would import, or null. Exported so callers that need a FRESH
+ *  load (a subprocess probe — see generateContent's bootstrap retry) target the same file the
+ *  in-process loader would. */
+export function findJuneConfigPath(appDir: string): string | null {
   for (const dir of [appDir, join(appDir, "..")]) {
     for (const name of ["june.config.ts", "june.config.js", ".june/config.ts"]) {
       const path = join(dir, name);
-      if (existsSync(path)) {
-        const mod = (await import(pathToFileURL(path).href)) as { default?: JuneConfig };
-        return mod.default ?? {};
-      }
+      if (existsSync(path)) return path;
     }
   }
-  return {};
+  return null;
+}
+
+export async function loadJuneConfig(appDir: string): Promise<JuneConfig> {
+  const path = findJuneConfigPath(appDir);
+  if (!path) return {};
+  const mod = (await import(pathToFileURL(path).href)) as { default?: JuneConfig };
+  return mod.default ?? {};
 }
