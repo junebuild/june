@@ -103,6 +103,24 @@ describe("entry(dir, slug, locale) — variant else flat", () => {
   });
 });
 
+describe("title ← first H1 when frontmatter has none", () => {
+  test("no title in frontmatter → uses the first H1; frontmatter title still wins; none → undefined", () => {
+    const d = mkdtempSync(join(tmpdir(), "june-h1-"));
+    try {
+      writeFileSync(join(d, "plain.md"), "# Plain Title\n\nBody — a `# not a heading` inline.\n"); // no frontmatter at all
+      writeFileSync(join(d, "desc.md"), "---\ndescription: d\n---\n# From H1\n"); // frontmatter without a title
+      writeFileSync(join(d, "both.md"), "---\ntitle: FM Wins\n---\n# H1 Ignored\n"); // explicit title wins
+      writeFileSync(join(d, "none.md"), "Just body, no heading.\n"); // nothing to derive from
+      expect(entry(d, "plain")!.data.title).toBe("Plain Title");
+      expect(entry(d, "desc")!.data.title).toBe("From H1");
+      expect(entry(d, "both")!.data.title).toBe("FM Wins");
+      expect(entry(d, "none")!.data.title).toBeUndefined();
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("generateContentModule — the frozen _content.ts", () => {
   test("a localized collection emits the locale map, finder, and lister", () => {
     const { code, names } = generateContentModule(root);
