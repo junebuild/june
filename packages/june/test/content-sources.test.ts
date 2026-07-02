@@ -85,3 +85,64 @@ describe("generateContent + content.sources", () => {
     expect(out).toContain('"slug": "intro"');
   });
 });
+
+// Locale buckets are DECLARED (config i18n), not guessed by folder shape. The old BCP-47 regex
+// swallowed ANY 2–3-letter top-level folder — content/docs/cli/ read as a locale and its pages
+// silently vanished from the default set.
+describe("generateContent + declared locales", () => {
+  const roots: string[] = [];
+  afterAll(() => {
+    for (const r of roots) rmSync(r, { recursive: true, force: true });
+  });
+  // content/docs with common short section folders AND a real de/ mirror
+  function makeI18nApp(config: string): string {
+    const root = mkdtempSync(join(tmpdir(), "june-gen-loc-"));
+    roots.push(root);
+    mkdirSync(join(root, "app"), { recursive: true });
+    for (const dir of ["cli", "sdk", "api", join("de", "cli")]) {
+      mkdirSync(join(root, "content", "docs", dir), { recursive: true });
+    }
+    writeFileSync(join(root, "content", "docs", "cli", "usage.md"), md("CLI", "2026-01-01"));
+    writeFileSync(join(root, "content", "docs", "sdk", "install.md"), md("SDK", "2026-01-02"));
+    writeFileSync(join(root, "content", "docs", "api", "auth.md"), md("API", "2026-01-03"));
+    writeFileSync(join(root, "content", "docs", "de", "cli", "usage.md"), md("CLI DE", "2026-01-01"));
+    writeFileSync(join(root, "june.config.ts"), config);
+    return root;
+  }
+
+  test("THE BUG: cli/sdk/api sections are CONTENT, not locales — only declared i18n dirs bucket", async () => {
+    const root = makeI18nApp(
+      `export default { i18n: { defaultLocale: "en", locales: { en: {}, de: {} } } };\n`,
+    );
+    await generateContent(root);
+    const out = readFileSync(join(root, "app", "_content.ts"), "utf8");
+    for (const slug of ["cli/usage", "sdk/install", "api/auth"]) {
+      expect(out).toContain(`"slug": "${slug}"`); // sections survive
+    }
+    expect(out).toContain("DOCS_L"); // de/ is a bucket (declared)
+    expect(out).toContain('"CLI DE"');
+  });
+
+  test("no i18n config → NO locale buckets at all (an undeclared locale is not a locale)", async () => {
+    const root = makeI18nApp(`export default { site: { name: "t" } };\n`);
+    await generateContent(root);
+    const out = readFileSync(join(root, "app", "_content.ts"), "utf8");
+    expect(out).toContain('"slug": "de/cli/usage"'); // de/ is plain content now
+    expect(out).not.toContain("DOCS_L");
+  });
+
+  test("bootstrap two-pass carries the declared locales (not just sources)", async () => {
+    const root = makeI18nApp(""); // placeholder, replaced below with a config that needs _content.ts
+    rmSync(join(root, "june.config.ts"));
+    mkdirSync(join(root, ".june"), { recursive: true });
+    writeFileSync(
+      join(root, ".june", "config.ts"),
+      `import { DOCS } from "../app/_content";\n` +
+        `export default { site: { name: \`n\${DOCS.length}\` }, i18n: { defaultLocale: "en", locales: { en: {}, de: {} } } };\n`,
+    );
+    await generateContent(root);
+    const out = readFileSync(join(root, "app", "_content.ts"), "utf8");
+    expect(out).toContain('"slug": "cli/usage"'); // pass 2 applied declared locales: cli is content…
+    expect(out).toContain("DOCS_L"); // …and de is a bucket
+  });
+});

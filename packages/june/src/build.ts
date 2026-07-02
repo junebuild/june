@@ -125,22 +125,31 @@ export async function scanRoutes(
 // Extra sources (config `content.sources`) merge dirs OUTSIDE `content/` into named
 // collections — the docs-as-code seam (a repo's own `docs/` feeds the site directly).
 // Their dirs resolve against the app root, so "../docs" reaches a sibling directory.
+//
+// Locale buckets are DECLARED, not guessed: only dirs named in config i18n
+// (defaultLocale + locales keys) split off as locale mirrors. Guessing by shape
+// (the old BCP-47 regex) silently swallowed any 2–3-letter folder — `cli/`,
+// `sdk/`, `api/`, `faq/` all read as locales and vanished from the default set.
+// No i18n config ⇒ NO buckets (an undeclared locale is not a locale). The regex
+// remains only as the fallback when the config itself cannot be loaded.
 export async function generateContent(appRoot: string): Promise<string[]> {
   const contentDir = join(appRoot, "content");
-  const emit = async (sources: ContentSource[]): Promise<string[]> => {
+  const emit = async (sources: ContentSource[], knownLocales: readonly string[] | undefined): Promise<string[]> => {
     // Emission (incl. the per-locale layout and source merging) lives in ./content so it's
     // pure and unit-testable; this stays the thin fs wrapper.
-    const { code, names } = generateContentModule(contentDir, undefined, sources);
+    const { code, names } = generateContentModule(contentDir, knownLocales, sources);
     if (names.length === 0) return [];
     await writeFile(join(appRoot, "app", "_content.ts"), code);
     return names;
   };
-  const resolveSources = (config: JuneConfig): ContentSource[] =>
-    (config.content?.sources ?? []).map((s) => ({ ...s, dir: resolve(appRoot, s.dir) }));
-  // Learn the sources from june.config.ts — TOLERANTLY. A wrapper-generated config (e.g. Kura's)
-  // imports app/_content.ts, which does not exist before the FIRST freeze. So on a failed config
-  // load: generate the default (no-sources) scan to create that import's target, then re-probe the
-  // config and regenerate if it declares sources. Self-healing, no bootstrap flag. Content errors
+  const resolveSources = (sources: ContentSource[]): ContentSource[] =>
+    sources.map((s) => ({ ...s, dir: resolve(appRoot, s.dir) }));
+  const declaredLocales = (config: JuneConfig): string[] =>
+    config.i18n ? [...new Set([config.i18n.defaultLocale, ...Object.keys(config.i18n.locales)])] : [];
+  // Learn sources + locales from june.config.ts — TOLERANTLY. A wrapper-generated config (e.g.
+  // Kura's) imports app/_content.ts, which does not exist before the FIRST freeze. So on a failed
+  // config load: generate a default scan to create that import's target, then re-probe the config
+  // and regenerate with the real sources/locales. Self-healing, no bootstrap flag. Content errors
   // from emit() (slug collision, missing source dir) stay loud — only the CONFIG LOAD is tolerated.
   let config: JuneConfig | null = null;
   try {
@@ -148,40 +157,43 @@ export async function generateContent(appRoot: string): Promise<string[]> {
   } catch {
     /* two-pass below */
   }
-  if (config) return emit(resolveSources(config));
-  const names = await emit([]); // default scan → writes app/_content.ts, unblocking the config
-  const sources = probeContentSourcesFresh(appRoot);
-  if (sources === null) {
-    console.warn("[june gen] june.config.ts failed to load — content.sources (if any) not applied");
+  if (config) return emit(resolveSources(config.content?.sources ?? []), declaredLocales(config));
+  // Pass 1 (throwaway when the probe succeeds): legacy regex locale detection, since the
+  // declared set is unknowable without the config.
+  const names = await emit([], undefined);
+  const probed = probeConfigFresh(appRoot);
+  if (probed === null) {
+    console.warn("[june gen] june.config.ts failed to load — content.sources/i18n locales (if any) not applied");
     return names;
   }
-  return sources.length
-    ? emit(sources.map((s) => ({ ...s, dir: resolve(appRoot, s.dir) })))
-    : names;
+  return emit(resolveSources(probed.sources), probed.locales);
 }
 
-// Re-probe ONLY `content.sources` from the config in a FRESH subprocess. The bootstrap retry can't
-// re-import in-process: a failed ESM load is cached as errored, and Bun also caches the failed
-// RESOLUTION of the config's own imports — so a same-process retry (even cache-busted) re-rejects
-// after the missing app/_content.ts appears. A child process has a clean module map, and sources
-// are plain JSON, so they survive the pipe. Returns null when the config is genuinely broken.
-function probeContentSourcesFresh(appRoot: string): ContentSource[] | null {
+// Re-probe ONLY the content-relevant config (sources + declared i18n locales) in a FRESH
+// subprocess. The bootstrap retry can't re-import in-process: a failed ESM load is cached as
+// errored, and Bun also caches the failed RESOLUTION of the config's own imports — so a
+// same-process retry (even cache-busted) re-rejects after the missing app/_content.ts appears.
+// A child process has a clean module map, and both fields are plain JSON, so they survive the
+// pipe. Returns null when the config is genuinely broken.
+function probeConfigFresh(appRoot: string): { sources: ContentSource[]; locales: string[] } | null {
   const path = findJuneConfigPath(appRoot);
-  if (!path) return [];
+  if (!path) return { sources: [], locales: [] };
   // Markers isolate the JSON from anything the config prints at import time. `.then` (not TLA)
   // so the eval works as CJS under both `bun -e` and `node -e`; execArgv carries loader flags
   // (e.g. --experimental-strip-types) so the child can read the same TS config the parent does.
   const code =
     `import(${JSON.stringify(pathToFileURL(path).href)}).then(` +
-    `(m) => process.stdout.write("\\n__JUNE_SOURCES__" + JSON.stringify((m.default ?? {}).content?.sources ?? []) + "__END__"),` +
-    `() => process.exit(42));`;
+    `(m) => { const c = m.default ?? {}; process.stdout.write("\\n__JUNE_CONTENT__" + JSON.stringify({ ` +
+    `sources: c.content?.sources ?? [], ` +
+    `locales: c.i18n ? [...new Set([c.i18n.defaultLocale, ...Object.keys(c.i18n.locales ?? {})])] : [] ` +
+    `}) + "__END__"); }, () => process.exit(42));`;
   try {
     const out = execFileSync(process.execPath, [...process.execArgv, "-e", code], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     });
-    const m = out.match(/__JUNE_SOURCES__(.*?)__END__/s);
-    return m ? (JSON.parse(m[1]!) as ContentSource[]) : null;
+    const m = out.match(/__JUNE_CONTENT__(.*?)__END__/s);
+    return m ? (JSON.parse(m[1]!) as { sources: ContentSource[]; locales: string[] }) : null;
   } catch {
     return null;
   }
