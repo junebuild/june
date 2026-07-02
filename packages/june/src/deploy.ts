@@ -52,7 +52,7 @@ export async function juneDeploy(appRoot: string, options: DeployOptions = {}): 
   // fallback. workers() is the default when neither names one.
   const adapterName = (cfg.deploy?.adapter as { name?: string } | undefined)?.name;
   const target = adapterName ?? cfg.deploy?.target ?? "workers";
-  if (target !== "workers" && target !== "vercel" && target !== "deno") {
+  if (target !== "workers" && target !== "vercel" && target !== "deno" && target !== "static") {
     throw new Error(`unknown deploy target: ${target}`);
   }
 
@@ -62,9 +62,31 @@ export async function juneDeploy(appRoot: string, options: DeployOptions = {}): 
   }
 
   const run = options.runCli ?? spawnCli;
+  if (target === "static") return deployStatic(appRoot);
   if (target === "vercel") return deployVercel(appRoot, options, run);
   if (target === "deno") return deployDeno(appRoot, cfg, options, run);
   return deployWorkers(appRoot, cfg, options, run);
+}
+
+// --- static: BUILD-ONLY. `june build` already prerendered the whole site into
+// dist/static/ (staticSite().emit). There's no platform CLI to invoke — a static
+// host (GitHub Pages, S3, …) is fed by git/CI, not a deploy command. So this just
+// verifies the tree and points at it; the CI step (e.g. actions/upload-pages-artifact
+// or peaceiris/actions-gh-pages) publishes dist/static/. `url` is null (unknown host).
+async function deployStatic(appRoot: string): Promise<DeployResult> {
+  const site = join(appRoot, "dist", "static");
+  const index = join(site, "index.html");
+  if (!existsSync(index)) {
+    throw new Error(
+      `no static site (expected ${index}) — run \`june build\` with the static() adapter first`,
+    );
+  }
+  console.log(
+    `static site built → ${site}\n` +
+      "  publish it with your host's CI (GitHub Pages: actions/upload-pages-artifact + deploy-pages,\n" +
+      "  or peaceiris/actions-gh-pages with publish_dir: dist/static). `june deploy` does not push.",
+  );
+  return { url: null, dryRun: false, configPath: site, migrated: [] };
 }
 
 // --- Deno Deploy: `deno deploy` ships the built dir (worker.js + assets/) -------

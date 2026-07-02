@@ -15,6 +15,7 @@ const DB_APP = fileURLToPath(new URL("./fixtures/deploy-db", import.meta.url));
 const NODB_APP = fileURLToPath(new URL("./fixtures/deploy-nodb", import.meta.url));
 const VERCEL_APP = fileURLToPath(new URL("./fixtures/vercel-app", import.meta.url));
 const DENO_APP = fileURLToPath(new URL("./fixtures/deno-app", import.meta.url));
+const STATIC_APP = fileURLToPath(new URL("./fixtures/static-app", import.meta.url));
 
 // Records the ordered sequence of side effects so we can assert "migrate, THEN
 // deploy" and "deploy never happened".
@@ -213,5 +214,35 @@ describe("juneDeploy → deno target", () => {
     await expect(
       juneDeploy(DENO_APP, { skipBuild: true, runCli: async () => ({ stdout: "", stderr: "", exitCode: 0 }) }),
     ).rejects.toThrow(/no built bundle/);
+  });
+});
+
+describe("juneDeploy → static target (build-only)", () => {
+  // static-app's config uses the staticSite() adapter → deploy dispatches to the
+  // build-only path: it verifies dist/static/ and NEVER invokes a platform CLI (a
+  // static host is fed by git/CI, not a deploy command).
+  afterEach(async () => {
+    await rm(join(STATIC_APP, "dist"), { recursive: true, force: true });
+  });
+
+  test("verifies dist/static/ and runs no CLI, no D1", async () => {
+    await mkdir(join(STATIC_APP, "dist", "static"), { recursive: true });
+    await writeFile(join(STATIC_APP, "dist", "static", "index.html"), "<h1>ok</h1>");
+    let called = false;
+    const r = await juneDeploy(STATIC_APP, {
+      skipBuild: true,
+      runCli: async () => {
+        called = true;
+        return { stdout: "", stderr: "", exitCode: 0 };
+      },
+    });
+    expect(called).toBe(false); // no wrangler/vercel/deno
+    expect(r.url).toBeNull();
+    expect(r.configPath).toBe(join(STATIC_APP, "dist", "static"));
+    expect(r.migrated).toEqual([]);
+  });
+
+  test("missing static site fails with a clear error", async () => {
+    await expect(juneDeploy(STATIC_APP, { skipBuild: true })).rejects.toThrow(/no static site/);
   });
 });
