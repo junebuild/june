@@ -23,6 +23,51 @@ describe("documentTitle()", () => {
   });
 });
 
+describe("Document basePath (deploy subpath)", () => {
+  const withAssets: DocumentConfig = {
+    ...baseConfig,
+    styles: "/_june/global.abc.css",
+    moduleStyles: "/_june/modules.abc.css",
+    clientScript: "/_june/client.abc.js",
+    site: { ...baseConfig.site, icon: undefined },
+  };
+
+  test("prefixes root-absolute framework asset URLs with basePath", () => {
+    const html = renderToStaticMarkup(
+      <Document config={{ ...withAssets, basePath: "/openab/docs" }}>
+        <main />
+      </Document>,
+    );
+    expect(html).toContain('href="/openab/docs/_june/global.abc.css"');
+    expect(html).toContain('href="/openab/docs/_june/modules.abc.css"');
+    expect(html).toContain('src="/openab/docs/_june/client.abc.js"');
+    expect(html).toContain('href="/openab/docs/favicon.svg"'); // generated favicon fallback
+  });
+
+  test("no basePath (default) leaves the root-absolute URLs untouched", () => {
+    const html = renderToStaticMarkup(
+      <Document config={withAssets}>
+        <main />
+      </Document>,
+    );
+    expect(html).toContain('href="/_june/global.abc.css"');
+    expect(html).toContain('src="/_june/client.abc.js"');
+    expect(html).toContain('href="/favicon.svg"');
+  });
+
+  test("never rewrites protocol-relative or absolute-URL assets", () => {
+    const html = renderToStaticMarkup(
+      <Document config={{ ...baseConfig, basePath: "/base", styles: "https://cdn.example/app.css", site: { icon: "//cdn.example/i.svg" } }}>
+        <main />
+      </Document>,
+    );
+    expect(html).toContain('href="https://cdn.example/app.css"');
+    expect(html).toContain('href="//cdn.example/i.svg"');
+    expect(html).not.toContain("/base/https:");
+    expect(html).not.toContain("/base//cdn");
+  });
+});
+
 describe("Document", () => {
   test("emits <meta charSet> (reminder #2: charset lives in the document)", () => {
     const html = renderToStaticMarkup(

@@ -343,3 +343,65 @@ export function deno(opts?: { org?: string; app?: string }): JuneAdapter {
     },
   };
 }
+
+// Static-site target (GitHub Pages, S3, any dumb file host). NO server runs: `june
+// build` prerenders EVERY page + projection to disk (build.ts's static branch keys
+// off capabilities.runtime === "static" — it prerenders all non-dynamic routes and
+// any dynamic route that exports `staticPaths`, writing <stem>/index.html so clean
+// URLs resolve without a rewrite server). The emitted worker.js is NOT deployed; it
+// exists only so the in-process prerender (createWorker(manifest)) renders through
+// the SAME graph as the other targets. `basePath` is the deploy subpath (e.g.
+// "/openab/docs" for a GitHub Pages project site) — the document prefixes its asset
+// URLs with it. emit() finalizes the publishable tree: dist/static/ = the prerendered
+// files + a .nojekyll (GitHub Pages runs Jekyll, which strips _june/ otherwise).
+//
+// The deploy subpath is JuneConfig.basePath (the single source of truth — the
+// document freezes it to prefix asset URLs); this adapter needs no options.
+// (`static` is a reserved word, so the export is `staticSite`; the target NAME is
+// "static".) db/kv/blob resources can't work without a server — validate() rejects them.
+export function staticSite(): JuneAdapter {
+  return {
+    name: "static",
+    capabilities: { runtime: "static", persistentConnections: false, assets: "none" },
+    // edge-light → react-dom resolves to server.edge.js (Web Streams), which the
+    // build host (Bun/Node) runs during prerender — the same choice as vercel()/deno().
+    conditions: ["edge-light", "edge", "import", "default"],
+    // Defensive: if an OG/image route ever slips into a static build, keep the WASM
+    // renderer external so the bundle still builds (Kura drops the OG route on static).
+    buildExternal: ["workers-og"],
+
+    validate({ config }) {
+      const kind = config.resources?.db?.kind;
+      if (kind) {
+        throw new Error(
+          `static(): a '${kind}' db needs a server — a static site has no runtime.\n` +
+            "  Drop the db resource, or deploy to workers()/vercel()/deno().",
+        );
+      }
+    },
+
+    entry() {
+      // worker.js is never deployed on static; this wrap only keeps the emitted
+      // bundle a valid module (the in-process prerender imports the manifest, not this).
+      return {
+        imports: [],
+        wrap: (pipelineVar) => `export default { fetch: (request) => ${pipelineVar}.fetch(request) };`,
+      };
+    },
+
+    async emit({ outDir }) {
+      // Prerender (build.ts static branch) has already written the full site tree
+      // into outDir/assets: page HTML as <stem>/index.html, flat .md/.json, _june/
+      // hashed assets, favicon.svg, and 404.html. Publish it as a clean, separately
+      // named dir so `dist/` can still hold worker.js + chunks (needed for prerender
+      // + byte-parity) while `dist/static/` is the self-contained publishable tree.
+      const src = join(outDir, "assets");
+      const site = join(outDir, "static");
+      await rm(site, { recursive: true, force: true });
+      await cp(src, site, { recursive: true });
+      // GitHub Pages runs Jekyll, which strips leading-underscore dirs (_june/ → the
+      // CSS + client JS 404). .nojekyll disables that. Harmless on every other host.
+      await writeFile(join(site, ".nojekyll"), "");
+    },
+  };
+}

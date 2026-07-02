@@ -28,8 +28,9 @@ import { findJuneConfigPath, loadJuneConfig } from "./config-loader";
 import { resolveAgent, resolveClientRouter, resolveSpeculationRules } from "@junejs/core/config";
 import type { ContentSource, JuneConfig } from "@junejs/core/config";
 import { buildLinkHeader } from "@junejs/core/discovery";
+import { localeHref } from "@junejs/core/i18n";
 import { routeFromModule, type BrandedRoute } from "@junejs/core/route";
-import { workers, type JuneAdapter, type ResourcePlan } from "./adapter";
+import { workers, staticSite, type JuneAdapter, type ResourcePlan } from "./adapter";
 import type { DocumentConfig } from "@junejs/core/document";
 import { generateContentModule } from "./content";
 import { createWorker, type WorkerManifest } from "./worker";
@@ -228,6 +229,10 @@ export async function freezeConfig(appRoot: string): Promise<{
       clientRouter: resolveClientRouter(cfg.clientRouter),
       clientScript: hasClient ? CLIENT_SCRIPT_URL : null,
       styles: hasCss ? STYLES_URL : null,
+      // Deploy subpath (JuneConfig.basePath). Frozen so the document prefixes its
+      // asset URLs; the prerender path re-freezes through buildManifest and gets the
+      // same value, keeping static pages' asset links correct under the subpath.
+      basePath: normalizeBase(cfg.basePath),
     },
     agent: resolveAgent(cfg.agent),
     // Pass i18n through as-is: the in-process buildManifest keeps a resolveLocale
@@ -237,6 +242,15 @@ export async function freezeConfig(appRoot: string): Promise<{
     earlyHints: cfg.earlyHints ?? [],
     buildExternal: cfg.build?.external ?? [],
   };
+}
+
+// A deploy basePath is stored with a leading slash and no trailing slash; empty
+// ("" — the default) means a root deploy. So "/openab/docs/" → "/openab/docs",
+// "openab" → "/openab", undefined → "".
+export function normalizeBase(base?: string): string {
+  if (!base) return "";
+  const b = base.startsWith("/") ? base : `/${base}`;
+  return b.endsWith("/") ? b.slice(0, -1) : b;
 }
 
 type ImportedLayout = { component: LayoutComponent; boundary: boolean };
@@ -407,7 +421,12 @@ export async function juneBuild(
   // built-in workers()). It contributes the entry's export wrapper + emits the
   // deploy config.
   const fullConfig = await loadJuneConfig(appRoot);
-  const adapter = (fullConfig.deploy?.adapter as JuneAdapter | undefined) ?? workers();
+  // An explicit adapter instance wins; otherwise `target: "static"` selects the
+  // built-in staticSite() so a config can opt into SSG without importing it (Kura
+  // just sets deploy.target). Everything else defaults to workers() (unchanged).
+  const adapter =
+    (fullConfig.deploy?.adapter as JuneAdapter | undefined) ??
+    (fullConfig.deploy?.target === "static" ? staticSite() : workers());
 
   // Fail fast on a config the target can't honor (e.g. Vercel has no D1) BEFORE
   // the expensive bundle/prerender. The adapter only needs to know which
@@ -690,28 +709,79 @@ ${adapterEntry.wrap("pipeline")}
   const worker = createWorker(manifest);
   let hasAssets = false;
 
-  for (const r of routes.filter((x) => !x.dynamic)) {
-    const def = manifest.routes[r.path];
-    if (!def || !def.prerender) continue;
-    const stem = r.path === "/" ? "index" : r.path.slice(1);
+  // static() target: prerender EVERY route (not just opted-in ones) + enumerate
+  // dynamic routes via their staticPaths, and write <stem>/index.html so clean URLs
+  // resolve on a dumb file host with no rewrite server. Other targets keep the
+  // opt-in `prerender: true` behavior and the flat <stem>.html naming (byte-identical).
+  const isStatic = adapter.capabilities.runtime === "static";
+  const i18n = frozen.i18n;
+
+  // Render ONE route pathname through the worker → HTML (+ .md/.json projections).
+  const prerenderOne = async (reqPath: string, def: BrandedRoute): Promise<void> => {
+    const stem = reqPath === "/" ? "index" : reqPath.slice(1);
+    // static → <stem>/index.html (dir-style, clean subpath URL); else flat <stem>.html.
+    const htmlFile = isStatic ? (reqPath === "/" ? "index.html" : `${stem}/index.html`) : `${stem}.html`;
     // The homepage's projection requests are `/index.md` / `/index.json` (negotiate
     // treats `/index` as the alias for `/`); these become the `index.md` /
     // `index.json` assets the worker serves at the same intuitive paths.
-    const mdReq = r.path === "/" ? "/index.md" : `${r.path}.md`;
-    const jsonReq = r.path === "/" ? "/index.json" : `${r.path}.json`;
-    const targets: Array<[string, string]> = [
-      [r.path, `${stem}.html`],
-      [mdReq, `${stem}.md`],
-    ];
+    const mdReq = reqPath === "/" ? "/index.md" : `${reqPath}.md`;
+    const jsonReq = reqPath === "/" ? "/index.json" : `${reqPath}.json`;
+    const targets: Array<[string, string]> = [[reqPath, htmlFile]];
+    if (def.md !== false) targets.push([mdReq, `${stem}.md`]); // .md/.json stay flat (exact-path negotiation)
     if (typeof def.json === "function") targets.push([jsonReq, `${stem}.json`]);
-    for (const [reqPath, file] of targets) {
-      const res = await worker.fetch(new Request(`https://prerender.june${reqPath}`));
-      if (!res.ok) throw new Error(`prerender ${reqPath} → ${res.status}`);
+    for (const [rp, file] of targets) {
+      const res = await worker.fetch(new Request(`https://prerender.june${rp}`));
+      if (!res.ok) throw new Error(`prerender ${rp} → ${res.status}`);
       const dest = join(assetsDir, file);
       await mkdir(dirname(dest), { recursive: true });
       await writeFile(dest, Buffer.from(await res.arrayBuffer()));
     }
-    prerendered.push(r.path);
+    prerendered.push(reqPath);
+    hasAssets = true;
+  };
+
+  // Locale variants a static route is emitted at: no i18n → [path]; with i18n → one
+  // per locale (defaultLocale keeps the bare path, others get their localeHref prefix).
+  const localeVariants = (path: string): string[] =>
+    isStatic && i18n
+      ? [...new Set(Object.keys(i18n.locales).map((l) => localeHref(i18n, path, l)))]
+      : [path];
+
+  for (const r of routes.filter((x) => !x.dynamic)) {
+    const def = manifest.routes[r.path];
+    if (!def) continue;
+    if (!isStatic && !def.prerender) continue; // other targets: opt-in only (unchanged)
+    for (const p of localeVariants(r.path)) await prerenderOne(p, def);
+  }
+
+  if (isStatic) {
+    // Dynamic routes freeze to files only when they enumerate their pages: a
+    // `staticPaths` export lists concrete pathnames (locale prefixes already applied
+    // by the producer — Kura hands over every locale × slug for the docs catch-all).
+    for (const dyn of manifest.dynamicRoutes ?? []) {
+      const sp = dyn.def.staticPaths;
+      if (!sp) continue;
+      const paths = typeof sp === "function" ? await sp() : sp;
+      for (const p of paths) await prerenderOne(p, dyn.def);
+    }
+    // Framework surfaces the worker would otherwise generate on the fly. Guarded on
+    // res.ok so a disabled agent (no llms.txt/sitemap) or a custom favicon simply
+    // skips its file rather than failing the build.
+    const extra: Array<[string, string]> = [
+      ["/favicon.svg", "favicon.svg"],
+      ["/llms.txt", "llms.txt"],
+      ["/sitemap.xml", "sitemap.xml"],
+    ];
+    for (const [reqPath, file] of extra) {
+      const res = await worker.fetch(new Request(`https://prerender.june${reqPath}`));
+      if (!res.ok) continue;
+      await writeFile(join(assetsDir, file), Buffer.from(await res.arrayBuffer()));
+      hasAssets = true;
+    }
+    // 404.html — GitHub Pages serves it for any unmatched URL. A deliberately-missing
+    // path renders June's not-found HTML (body is written regardless of the 404 status).
+    const nf = await worker.fetch(new Request("https://prerender.june/__june_not_found__"));
+    await writeFile(join(assetsDir, "404.html"), Buffer.from(await nf.arrayBuffer()));
     hasAssets = true;
   }
 

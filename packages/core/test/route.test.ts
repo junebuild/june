@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { route, isRouteDefinition, resolveProjection } from "@junejs/core/route";
+import { route, isRouteDefinition, resolveProjection, routeFromModule } from "@junejs/core/route";
 
 describe("route()", () => {
   test("brands a definition so isRouteDefinition recognizes it", () => {
@@ -39,5 +39,24 @@ describe("resolveProjection() content negotiation", () => {
 
   test("an empty route falls through to view", () => {
     expect(resolveProjection(route({}), "json")).toBe("view");
+  });
+});
+
+describe("routeFromModule() staticPaths (static-target prerender enumeration)", () => {
+  test("passes a staticPaths export through to the branded route", () => {
+    const paths = ["/guide/a", "/de/guide/a"];
+    const def = routeFromModule({ default: () => null, staticPaths: paths });
+    expect(def?.staticPaths).toBe(paths);
+  });
+
+  test("a module with ONLY staticPaths is still recognized as a route", () => {
+    // A dynamic catch-all may configure nothing but its prerender list.
+    const def = routeFromModule({ staticPaths: () => ["/x"] });
+    expect(def).not.toBeNull();
+    expect(typeof def?.staticPaths).toBe("function");
+  });
+
+  test("a plain non-route module is still null (no staticPaths → no route)", () => {
+    expect(routeFromModule({ notARoute: true })).toBeNull();
   });
 });

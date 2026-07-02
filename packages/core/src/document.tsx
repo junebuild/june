@@ -50,6 +50,12 @@ export type DocumentConfig = {
   // that registers each via navigator.modelContext.registerTool() so an
   // in-browser agent can call them (each tool's execute proxies to /mcp).
   webmcpTools?: Array<{ name: string; description?: string; inputSchema?: unknown }> | null;
+  // Public-path prefix the whole site is served under (JuneConfig.basePath), e.g.
+  // "/openab/docs" for a GitHub Pages project subpath. When set, the framework asset
+  // URLs below (favicon/styles/moduleStyles/clientScript) — which are root-absolute
+  // ("/_june/…") — are prefixed so they resolve under the subpath. Empty/absent =
+  // root deploy (unchanged). Only the static() target sets it.
+  basePath?: string;
 };
 
 // June's built-in baseline CSS reset — a minimal, Tailwind-Preflight-aligned normalize, NOT a layout
@@ -160,6 +166,11 @@ export function Document({
   const title = documentTitle(metadata, config.site);
   const description = metadata?.description ?? config.site.description;
   const og = metadata?.openGraph;
+  // basePath: prefix the framework's root-absolute asset URLs so they resolve under
+  // a deploy subpath (e.g. GitHub Pages "/openab/docs"). Only single-leading-slash
+  // URLs are rewritten (leaves "//cdn", "https://…", and empty basePath untouched).
+  const withBase = (u?: string | null): string | undefined =>
+    u && config.basePath && u.startsWith("/") && !u.startsWith("//") ? config.basePath + u : u ?? undefined;
   return (
     <html lang={lang ?? config.site.lang ?? "en"} dir={dir === "rtl" ? "rtl" : undefined}>
       <head>
@@ -171,7 +182,7 @@ export function Document({
             favicon answers /favicon.svg, so no June app 404s its icon. */}
         <link
           rel="icon"
-          href={config.site.icon ?? "/favicon.svg"}
+          href={withBase(config.site.icon ?? "/favicon.svg")}
           type={(config.site.icon ?? "/favicon.svg").endsWith(".svg") ? "image/svg+xml" : undefined}
         />
         <title>{title}</title>
@@ -204,9 +215,9 @@ export function Document({
 ${config.cssReset === false ? "" : BASE_RESET_CSS + "\n" + STARTER_CONTENT_CSS}`}</style>
         {/* The app's global.css — auto-linked, AFTER the inline base styles so it
             (and a Tailwind reset) wins. Absent → no stylesheet. */}
-        {config.styles ? <link rel="stylesheet" href={config.styles} /> : null}
+        {config.styles ? <link rel="stylesheet" href={withBase(config.styles)} /> : null}
         {/* Collected CSS Modules — after global so component-scoped rules win. */}
-        {config.moduleStyles ? <link rel="stylesheet" href={config.moduleStyles} /> : null}
+        {config.moduleStyles ? <link rel="stylesheet" href={withBase(config.moduleStyles)} /> : null}
       </head>
       <body>
         {/* clientRouter not "off" → wrap the page in the swap region. Its
@@ -227,7 +238,7 @@ ${config.cssReset === false ? "" : BASE_RESET_CSS + "\n" + STARTER_CONTENT_CSS}`
         )}
         {/* type="module" defers automatically: the island runtime runs after the
             markup is parsed, so markers exist when it scans for them. */}
-        {config.clientScript ? <script type="module" src={config.clientScript} /> : null}
+        {config.clientScript ? <script type="module" src={withBase(config.clientScript)} /> : null}
         {config.webmcpTools && config.webmcpTools.length ? (
           <>
             <script

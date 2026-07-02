@@ -88,6 +88,12 @@ export type RouteDefinition<TData = unknown> = {
   // files served by the Workers assets layer BEFORE the worker runs (0ms).
   // Static routes only; opt-in because it freezes per-request behavior.
   prerender?: boolean;
+  // Concrete pathnames to prerender for the static() target — lets a DYNAMIC
+  // catch-all route (e.g. docs `[[...slug]]`) emit one HTML file per page.
+  // FULL route pathnames relative to the site root, i18n locale prefix already
+  // applied, WITHOUT any deploy basePath (the producer owns param + locale
+  // expansion). Ignored by every non-static target.
+  staticPaths?: string[] | (() => string[] | Promise<string[]>);
   // Document metadata for the view projection (title/description/OG/...).
   metadata?: Metadata | ((data: TData, ctx: RouteContext) => Metadata);
 };
@@ -144,6 +150,7 @@ export type PageModule = {
   metadata?: Metadata | ((data: unknown, ctx: RouteContext) => Metadata);
   cache?: RouteCache;
   prerender?: boolean;
+  staticPaths?: string[] | (() => string[] | Promise<string[]>);
 };
 
 // Adapt a page module's exports into the internal BrandedRoute the pipeline
@@ -154,7 +161,8 @@ export function routeFromModule(mod: unknown): BrandedRoute | null {
   if (isRouteDefinition(m.default)) return m.default; // legacy route({})
   const View = typeof m.default === "function" ? m.default : undefined;
   const hasConfig =
-    "loader" in m || "json" in m || "md" in m || "metadata" in m || "prerender" in m;
+    "loader" in m || "json" in m || "md" in m || "metadata" in m || "prerender" in m ||
+    "staticPaths" in m;
   if (!View && !hasConfig) return null;
   return route({
     load: m.loader,
@@ -164,6 +172,7 @@ export function routeFromModule(mod: unknown): BrandedRoute | null {
     metadata: m.metadata,
     cache: m.cache,
     prerender: m.prerender,
+    staticPaths: m.staticPaths,
   });
 }
 
