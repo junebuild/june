@@ -23,6 +23,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { rolldownCssModulesPlugin, type ModuleMaps } from "./css-modules";
+import { jsxTransform } from "./tsconfig-jsx";
 
 // The URL the document loads + the asset path the bundle is written to. Single
 // source of truth so build (freeze) and dev (live) agree.
@@ -41,6 +42,16 @@ export function findClientEntry(appDir: string): string | undefined {
 
 type BundleMode = "development" | "production";
 
+// True for the logs the client bundle EXPECTS and should not surface. Exported for tests.
+// react-server-dom-webpack is an intentional optional dynamic import (client-router-flight's
+// defaultDecode): morph apps never install it, so rolldown can't resolve it and keeps it as a
+// runtime import() — which rejects in the browser and the nav hard-falls-back BY DESIGN.
+// Surfacing that as a red UNRESOLVED_IMPORT block on every build reads as a problem when it's
+// the documented graceful-degradation path. Everything else still warns.
+export function isExpectedClientLog(log: { code?: string; exporter?: string }): boolean {
+  return log.code === "UNRESOLVED_IMPORT" && (log.exporter ?? "").startsWith("react-server-dom-webpack");
+}
+
 async function bundleClient(entryFile: string, cwd: string, mode: BundleMode, maps: ModuleMaps = {}) {
   const { rolldown } = await import("rolldown");
   const bundle = await rolldown({
@@ -52,9 +63,16 @@ async function bundleClient(entryFile: string, cwd: string, mode: BundleMode, ma
     plugins: [rolldownCssModulesPlugin(maps)], // islands may import .module.css
     transform: {
       define: { "process.env.NODE_ENV": JSON.stringify(mode) },
-      jsx: { runtime: "automatic", importSource: "@junejs/core" }, // June's island JSX runtime
+      // June's island JSX runtime — via the shared jsxTransform, which skips the explicit
+      // importSource when the app's tsconfig already declares it (else rolldown emits
+      // CONFIGURATION_FIELD_CONFLICT, value-independent). See tsconfig-jsx.ts.
+      jsx: await jsxTransform(cwd),
     },
     resolve: { conditionNames: ["browser", "import", "default"] },
+    onLog(level, log, handler) {
+      if (isExpectedClientLog(log)) return;
+      handler(level, log);
+    },
   });
   return bundle;
 }
