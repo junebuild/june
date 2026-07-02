@@ -155,6 +155,12 @@ export type JuneConfig = {
   // workers() default. Typed loosely here so @junejs/core stays free of the
   // server-side adapter implementation; build.ts casts it to JuneAdapter.
   deploy?: { target?: "workers"; name?: string; domain?: string; adapter?: unknown };
+  // Public-path prefix the whole site is served under, e.g. "/openab/docs" for a
+  // GitHub Pages project site at https://user.github.io/openab/docs/. Prefixes the
+  // framework asset URLs (styles/clientScript/favicon) baked into the rendered
+  // document so they resolve under the subpath. Empty (default) = root deploy —
+  // every existing target renders byte-identically. Only the static() target sets it.
+  basePath?: string;
 };
 
 const DEFAULT_AGENT: AgentConfig = {
