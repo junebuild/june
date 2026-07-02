@@ -11,7 +11,8 @@ sources: [packages/db/**, packages/juno/**]
 
 Data is a declaration. Naming a resource in `june.config.ts` enables it — omit
 it and it doesn't exist; an unused one compiles away. Each gets a zero-config
-local default in `june dev` and a deploy binding on each target.
+local default in `june dev` and a deploy binding on each server target (a
+static target has no runtime, so it rejects data resources at build time).
 
 ```ts
 // june.config.ts

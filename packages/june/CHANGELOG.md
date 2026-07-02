@@ -1,5 +1,25 @@
 # @junejs/server
 
+## 0.0.54
+
+### Patch Changes
+
+- [#24](https://github.com/junebuild/june/pull/24) [`a6bc035`](https://github.com/junebuild/june/commit/a6bc0351a7e4c76a4c281b75450ef6250c3734bd) Thanks [@linyiru](https://github.com/linyiru)! - Add a first-class static (GitHub Pages) deploy target.
+
+  - `staticSite()` adapter (`runtime: "static"`): `june build` prerenders every route
+    - projection to `dist/static/` (page HTML as `<stem>/index.html`, flat `.md`/`.json`,
+      `_june/` assets, `favicon.svg`, `404.html`, `.nojekyll`). `deploy: { target: "static" }`
+      resolves it by name — no adapter import. `june deploy` is build-only for this target.
+  - `staticPaths` route export: a dynamic catch-all lists the concrete pathnames to
+    prerender (locale-expanded), so content-driven routes can ship as static files.
+  - `basePath` config: prefixes the framework asset URLs in the rendered document, so a
+    site served under a subpath (e.g. a GitHub Pages project path) resolves its assets.
+
+  All additive — `workers()`/`vercel()`/`deno()` and root deploys are unchanged.
+
+- Updated dependencies [[`a6bc035`](https://github.com/junebuild/june/commit/a6bc0351a7e4c76a4c281b75450ef6250c3734bd)]:
+  - @junejs/core@0.0.49
+
 ## 0.0.53
 
 ### Patch Changes
