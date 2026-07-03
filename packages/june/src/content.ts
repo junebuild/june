@@ -72,12 +72,19 @@ function parseFrontmatter(raw: string): { data: ContentEntry["data"]; body: stri
   return { data, body: raw.slice(end + 4).replace(/^\n+/, "") };
 }
 
-// mtime-keyed memo: correct under dev edits, free in production.
+// Memo keyed by (file, slug, locale) + mtime. mtime alone catches dev edits, but the cached entry
+// EMBEDS the slug/locale arguments, and those are scan-dependent: the bootstrap two-pass in
+// generateContent (build.ts) scans the same files twice in one process — pass 1 with regex-guessed
+// locales (where a 2–3-letter folder like adr/ becomes a locale bucket whose files get FLAT slugs),
+// pass 2 with the declared set (nested slugs). A file-only key handed the poisoned pass-1 entry
+// back to pass 2, freezing the wrong slugs into app/_content.ts on every fresh build.
 const memo = new Map<string, { mtime: number; entry: ContentEntry }>();
+const memoKey = (file: string, slug: string, locale?: string) => `${file}\u0000${slug}\u0000${locale ?? ""}`;
 
 function loadEntry(file: string, slug: string, locale?: string): ContentEntry {
   const mtime = statSync(file).mtimeMs;
-  const hit = memo.get(file);
+  const key = memoKey(file, slug, locale);
+  const hit = memo.get(key);
   if (hit && hit.mtime === mtime) return hit.entry;
   const original = readFileSync(file, "utf8");
   const { data, body } = parseFrontmatter(original);
@@ -98,7 +105,7 @@ function loadEntry(file: string, slug: string, locale?: string): ContentEntry {
     html: toHtmlSync(body),
     ...(locale ? { locale } : {}),
   };
-  memo.set(file, { mtime, entry });
+  memo.set(key, { mtime, entry });
   return entry;
 }
 

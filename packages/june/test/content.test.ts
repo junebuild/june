@@ -319,3 +319,40 @@ describe("html rendering (sparkdown/gfm)", () => {
   });
   test("a bare {…} stays literal text (no MDX expression footgun)", () => expect(html).toContain("{literal}"));
 });
+
+describe("bootstrap two-pass memo isolation (fresh-build slug poisoning)", () => {
+  // generateContent (build.ts) scans the same tree twice in one process when the config can't load
+  // yet: pass 1 guesses locales by folder shape (adr/ matches the BCP-47 regex → a locale bucket
+  // whose files get FLAT slugs), pass 2 re-scans with the declared set (adr/ is plain content →
+  // NESTED slugs). The entry memo must key on (file, slug, locale), not file alone — a file-keyed
+  // hit handed pass 1's entry back to pass 2, freezing flat slugs into app/_content.ts on every
+  // fresh build (docs/adr/0001-x.md rendered at /0001-x, and only on fresh CI builds).
+  let dir: string;
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), "june-twopass-"));
+    mkdirSync(join(dir, "notes", "adr"), { recursive: true });
+    writeFileSync(join(dir, "notes", "adr", "0001-x.md"), md("ADR 1", "2026-01-01", "ADR One"));
+  });
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  test("a guessed-locale scan does not poison the declared-locale rescan", () => {
+    const notes = join(dir, "notes");
+    // pass 1: locale set unknown → the regex claims adr/ as a locale bucket (flat slugs)
+    const p1 = scanCollection(notes);
+    expect(p1.default).toEqual([]);
+    expect(p1.byLocale.adr!.map((e) => e.slug)).toEqual(["0001-x"]);
+    // pass 2: declared locales (none) → adr/ is plain nested content; same file, same mtime
+    const p2 = scanCollection(notes, []);
+    expect(p2.default.map((e) => e.slug)).toEqual(["adr/0001-x"]);
+    expect(p2.default[0]!.locale).toBeUndefined();
+    expect(p2.byLocale).toEqual({});
+  });
+
+  test("the frozen _content.ts of the rescan carries the nested slugs", () => {
+    generateContentModule(dir, undefined); // pass 1 (throwaway)
+    const { code } = generateContentModule(dir, []); // pass 2 — what lands in app/_content.ts
+    expect(code).toMatch(/"slug": "adr\/0001-x"/);
+    expect(code).not.toMatch(/"slug": "0001-x"/);
+    expect(code).not.toMatch(/"locale": "adr"/);
+  });
+});
