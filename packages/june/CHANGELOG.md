@@ -1,5 +1,11 @@
 # @junejs/server
 
+## 0.0.57
+
+### Patch Changes
+
+- [#30](https://github.com/junebuild/june/pull/30) [`25afd3b`](https://github.com/junebuild/june/commit/25afd3b5cdaca9b5026a2356a66f4c7d19bfe9ab) Thanks [@linyiru](https://github.com/linyiru)! - Static prerender: a locale home's .md/.json projections are requested as "/<locale>/index.md" and emitted at "<locale>/index.md", mirroring the root home. "/<locale>.md" has no "/" boundary, so the locale matcher could not strip the prefix and the request fell into the docs catch-all as a phantom slug (a hard 404 on Kura sites, a silently wrong file otherwise). Unblocks i18n static sites.
+
 ## 0.0.56
 
 ### Patch Changes
