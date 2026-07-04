@@ -98,6 +98,10 @@ describe("staticSite() target — e2e (real juneBuild over an i18n app)", () => 
 
     // projections stay FLAT (exact-path negotiation, no rewrite server)
     expect(has("about.md")).toBe(true);
+    // the LOCALE home's projections live under the prefix dir ("/de.md" has no "/" boundary for
+    // the locale matcher, so it used to fall into the catch-all as a phantom "de.md" slug)
+    expect(has("de/index.md")).toBe(true);
+    expect(has("de.md")).toBe(false);
     expect(has("guide/getting-started.md")).toBe(true);
     expect(has("guide/getting-started.json")).toBe(true); // json is a function → emitted
 
