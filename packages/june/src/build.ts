@@ -723,12 +723,20 @@ ${adapterEntry.wrap("pipeline")}
     const htmlFile = isStatic ? (reqPath === "/" ? "index.html" : `${stem}/index.html`) : `${stem}.html`;
     // The homepage's projection requests are `/index.md` / `/index.json` (negotiate
     // treats `/index` as the alias for `/`); these become the `index.md` /
-    // `index.json` assets the worker serves at the same intuitive paths.
-    const mdReq = reqPath === "/" ? "/index.md" : `${reqPath}.md`;
-    const jsonReq = reqPath === "/" ? "/index.json" : `${reqPath}.json`;
+    // `index.json` assets the worker serves at the same intuitive paths. A LOCALE
+    // home ("/zh-cn") needs the same treatment: "/zh-cn.md" has no "/" boundary, so
+    // the locale matcher can't strip the prefix and it routes as a phantom slug —
+    // request "/zh-cn/index.md" (prefix strips to "/index.md") and emit
+    // "zh-cn/index.md", mirroring the root home exactly.
+    const isHome = reqPath === "/" ||
+      (i18n != null && Object.keys(i18n.locales).some((l) => localeHref(i18n, "/", l) === reqPath));
+    const mdReq = reqPath === "/" ? "/index.md" : isHome ? `${reqPath}/index.md` : `${reqPath}.md`;
+    const jsonReq = reqPath === "/" ? "/index.json" : isHome ? `${reqPath}/index.json` : `${reqPath}.json`;
+    const mdFile = reqPath === "/" ? "index.md" : isHome ? `${stem}/index.md` : `${stem}.md`;
+    const jsonFile = reqPath === "/" ? "index.json" : isHome ? `${stem}/index.json` : `${stem}.json`;
     const targets: Array<[string, string]> = [[reqPath, htmlFile]];
-    if (def.md !== false) targets.push([mdReq, `${stem}.md`]); // .md/.json stay flat (exact-path negotiation)
-    if (typeof def.json === "function") targets.push([jsonReq, `${stem}.json`]);
+    if (def.md !== false) targets.push([mdReq, mdFile]); // .md/.json stay flat (exact-path negotiation)
+    if (typeof def.json === "function") targets.push([jsonReq, jsonFile]);
     for (const [rp, file] of targets) {
       const res = await worker.fetch(new Request(`https://prerender.june${rp}`));
       if (!res.ok) throw new Error(`prerender ${rp} → ${res.status}`);
