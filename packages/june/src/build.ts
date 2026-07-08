@@ -179,7 +179,7 @@ export async function generateContent(appRoot: string): Promise<string[]> {
 // it, so the re-probe's config load resolves BEFORE the first real freeze. A docs-as-code app
 // (content only in external content.sources, no local content/) leaves Pass 1's default scan
 // empty — nothing seeds the collections — so here we stub the EXACT named imports the config
-// pulls from ./app/_content (`import { DOCS } from "…/app/_content"` → `export const DOCS = []`).
+// takes from the app/_content module (a bare `import { DOCS }` of it → `export const DOCS = []`).
 // Overwritten by the real freeze that follows a successful probe; a no-op once content exists.
 async function seedContentImports(appRoot: string): Promise<void> {
   const cfgPath = findJuneConfigPath(appRoot);
@@ -191,7 +191,7 @@ async function seedContentImports(appRoot: string): Promise<void> {
   if (!current) current = "// AUTO-GENERATED bootstrap seed — replaced by the content freeze.\n" + ENTRY_TYPE;
   const cfgSrc = await readFile(cfgPath, "utf8");
   const stubs: string[] = [];
-  // Each `import { A, B as C } from "…/app/_content"` in the config → stub every imported name.
+  // Each named `import { A, B as C }` the config takes from the app/_content module → stub each.
   for (const m of cfgSrc.matchAll(/import\s*(?:type\s+)?\{([^}]*)\}\s*from\s*["'][^"']*app\/_content["']/g)) {
     for (const part of (m[1] ?? "").split(",")) {
       const name = part.replace(/\btype\b/, "").split(/\s+as\s+/).pop()?.trim();
