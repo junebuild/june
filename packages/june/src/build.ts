@@ -30,7 +30,7 @@ import type { ContentSource, JuneConfig } from "@junejs/core/config";
 import { buildLinkHeader } from "@junejs/core/discovery";
 import { localeHref } from "@junejs/core/i18n";
 import { routeFromModule, type BrandedRoute } from "@junejs/core/route";
-import { workers, staticSite, type JuneAdapter, type ResourcePlan } from "./adapter";
+import { workers, vercel, deno, staticSite, type JuneAdapter, type ResourcePlan } from "./adapter";
 import type { DocumentConfig } from "@junejs/core/document";
 import { generateContentModule } from "./content";
 import { createWorker, type WorkerManifest } from "./worker";
@@ -73,6 +73,26 @@ const isRouteGroup = (name: string) => /^\(.+\)$/.test(name);
 // import(x)` runtime guard (in @junejs/core's cache.ts) and warning UNRESOLVED_IMPORT. Exported so
 // the build keeps externalizing them — see test/build-externals.test.ts.
 export const isBunSpecifier = (id: string): boolean => id === "bun" || id.startsWith("bun:");
+
+// Resolve the deploy adapter from config. An explicit `adapter` INSTANCE wins; otherwise the
+// `target` NAME selects the matching built-in — so a DECLARATIVE config (e.g. kura.toml, which
+// can't express a `vercel()` call) can pick any target by string, not just "static". "workers" is
+// the default. Kept in lockstep with deploy.ts's own target→deployer switch so a build for one
+// target is never deployed as another. vercel()/deno() take their opts (runtime/regions, org/app)
+// which JuneConfig.deploy doesn't carry yet, so they use defaults here.
+export function resolveDeployAdapter(deploy: JuneConfig["deploy"]): JuneAdapter {
+  if (deploy?.adapter) return deploy.adapter as JuneAdapter;
+  switch (deploy?.target) {
+    case "static":
+      return staticSite();
+    case "vercel":
+      return vercel();
+    case "deno":
+      return deno();
+    default:
+      return workers({ name: deploy?.name, domain: deploy?.domain });
+  }
+}
 
 function segmentFile(dir: string, base: string): string | undefined {
   return ROUTE_EXTS.map((e) => join(dir, `${base}${e}`)).find(existsSync);
@@ -477,12 +497,7 @@ export async function juneBuild(
   // built-in workers()). It contributes the entry's export wrapper + emits the
   // deploy config.
   const fullConfig = await loadJuneConfig(appRoot);
-  // An explicit adapter instance wins; otherwise `target: "static"` selects the
-  // built-in staticSite() so a config can opt into SSG without importing it (Kura
-  // just sets deploy.target). Everything else defaults to workers() (unchanged).
-  const adapter =
-    (fullConfig.deploy?.adapter as JuneAdapter | undefined) ??
-    (fullConfig.deploy?.target === "static" ? staticSite() : workers());
+  const adapter = resolveDeployAdapter(fullConfig.deploy);
 
   // Fail fast on a config the target can't honor (e.g. Vercel has no D1) BEFORE
   // the expensive bundle/prerender. The adapter only needs to know which
