@@ -95,6 +95,21 @@ describe("generateContent + content.sources", () => {
     expect(out).not.toContain('"slug": "intro"'); // there is no local content/ at all
   });
 
+  test("BOOTSTRAP: a non-identifier token in the _content import is skipped, never crashes the seed", async () => {
+    const root = makeApp();
+    roots.push(root);
+    rmSync(join(root, "content"), { recursive: true, force: true }); // external-only → seeding runs
+    mkdirSync(join(root, ".june"), { recursive: true });
+    // A comment inside the import list makes the captured name a non-identifier — it must be
+    // skipped (no `new RegExp(<bad>)` throw, no invalid TS written), degrading gracefully.
+    writeFileSync(
+      join(root, ".june", "config.ts"),
+      `import { DOCS /* keep */ } from "../app/_content";\n` +
+        `export default { content: { sources: [{ dir: "extdocs", collection: "docs" }] } };\n`,
+    );
+    expect(async () => await generateContent(root)).not.toThrow();
+  });
+
   test("a broken config (not the bootstrap case) degrades to the default scan with a warning, not a crash", async () => {
     const root = makeApp();
     roots.push(root);

@@ -139,7 +139,9 @@ export async function generateContent(appRoot: string): Promise<string[]> {
     // Emission (incl. the per-locale layout and source merging) lives in ./content so it's
     // pure and unit-testable; this stays the thin fs wrapper.
     const { code, names } = generateContentModule(contentDir, knownLocales, sources);
-    if (names.length === 0) return [];
+    // Always write, even with zero collections: `code` still carries the canonical ContentEntry
+    // type, which is the single source of truth the bootstrap seed appends its stubs against (an
+    // app with no local content/ — docs-as-code — needs this valid empty module to exist).
     await writeFile(join(appRoot, "app", "_content.ts"), code);
     return names;
   };
@@ -175,32 +177,34 @@ export async function generateContent(appRoot: string): Promise<string[]> {
   return emit(resolveSources(probed.sources), probed.locales);
 }
 
-// Bootstrap seed: guarantee app/_content.ts exists and exports every name the config imports from
-// it, so the re-probe's config load resolves BEFORE the first real freeze. A docs-as-code app
-// (content only in external content.sources, no local content/) leaves Pass 1's default scan
-// empty — nothing seeds the collections — so here we stub the EXACT named imports the config
-// takes from the app/_content module (a bare `import { DOCS }` of it → `export const DOCS = []`).
-// Overwritten by the real freeze that follows a successful probe; a no-op once content exists.
+// Bootstrap seed: ensure app/_content.ts exports every name the config imports from it, so the
+// re-probe's config load resolves BEFORE the first real freeze. A docs-as-code app (content only
+// in external content.sources, no local content/) leaves Pass 1's default scan empty — nothing
+// seeds the collections — so here we append stubs for the EXACT named imports the config takes
+// from the app/_content module (a bare `import { DOCS }` of it → `export const DOCS = []`). The
+// caller's emit() already wrote the module's canonical ContentEntry type (even when empty), so the
+// stubs type against that single source of truth. Overwritten by the real freeze that follows a
+// successful probe; a no-op once content exists.
 async function seedContentImports(appRoot: string): Promise<void> {
   const cfgPath = findJuneConfigPath(appRoot);
   if (!cfgPath) return;
   const contentFile = join(appRoot, "app", "_content.ts");
-  const ENTRY_TYPE =
-    "export type ContentEntry = { slug: string; data: Record<string, string | string[]>; body: string; original: string; html: string };\n";
-  let current = existsSync(contentFile) ? await readFile(contentFile, "utf8") : "";
-  if (!current) current = "// AUTO-GENERATED bootstrap seed — replaced by the content freeze.\n" + ENTRY_TYPE;
+  const current = existsSync(contentFile) ? await readFile(contentFile, "utf8") : "";
   const cfgSrc = await readFile(cfgPath, "utf8");
+  // Only stub valid JS identifiers — a name carrying comments/other tokens (rare, but valid TS)
+  // must never reach `new RegExp(...)` (would throw) or the emitted stub (would be invalid TS).
+  const isIdent = (s: string): boolean => /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(s);
   const stubs: string[] = [];
   // Each named `import { A, B as C }` the config takes from the app/_content module → stub each.
   for (const m of cfgSrc.matchAll(/import\s*(?:type\s+)?\{([^}]*)\}\s*from\s*["'][^"']*app\/_content["']/g)) {
     for (const part of (m[1] ?? "").split(",")) {
       const name = part.replace(/\btype\b/, "").split(/\s+as\s+/).pop()?.trim();
-      if (name && !new RegExp(`export (?:const|function|type) ${name}\\b`).test(current)) {
+      if (name && isIdent(name) && !new RegExp(`export (?:const|function|type) ${name}\\b`).test(current)) {
         stubs.push(`export const ${name}: ContentEntry[] = [];`);
       }
     }
   }
-  if (stubs.length || !existsSync(contentFile)) await writeFile(contentFile, current + stubs.join("\n") + "\n");
+  if (stubs.length) await writeFile(contentFile, current + stubs.join("\n") + "\n");
 }
 
 // Re-probe ONLY the content-relevant config (sources + declared i18n locales) in a FRESH
