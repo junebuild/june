@@ -3,13 +3,41 @@
 // would warn UNRESOLVED_IMPORT (and could try to pull a Bun-only module into the workerd graph) unless
 // the build declares `bun`/`bun:*` external. isBunSpecifier is that rule.
 import { describe, expect, test, beforeAll } from "bun:test";
-import { isBunSpecifier } from "../src/build";
+import { isBunSpecifier, resolveDeployAdapter } from "../src/build";
 import { workers, vercel, deno } from "../src/adapter";
 import { mkdtemp, rm, readFile, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { juneBuild } from "../src/build";
 import { fileURLToPath } from "node:url";
+
+describe("resolveDeployAdapter (deploy.target → built-in adapter)", () => {
+  test("resolves each target NAME to its built-in — so a declarative config (kura.toml) can pick it", () => {
+    // The bug this fixes: build only special-cased "static", so target:"vercel"/"deno" silently
+    // fell back to workers() — a Vercel build packaged as Cloudflare Workers.
+    expect(resolveDeployAdapter({ target: "static" }).name).toBe("static");
+    expect(resolveDeployAdapter({ target: "vercel" }).name).toBe("vercel");
+    expect(resolveDeployAdapter({ target: "deno" }).name).toBe("deno");
+    expect(resolveDeployAdapter({ target: "workers" }).name).toBe("workers");
+  });
+
+  test("defaults to workers() when no target/adapter is given", () => {
+    expect(resolveDeployAdapter(undefined).name).toBe("workers");
+    expect(resolveDeployAdapter({}).name).toBe("workers");
+  });
+
+  test("an explicit adapter INSTANCE wins over target", () => {
+    const custom = vercel();
+    // even with a conflicting target string, the passed instance is used verbatim
+    expect(resolveDeployAdapter({ target: "workers", adapter: custom })).toBe(custom);
+  });
+
+  test("the vercel target resolves to the edge-light bundle (not workers)", () => {
+    const a = resolveDeployAdapter({ target: "vercel" });
+    expect(a.conditions).toContain("edge-light");
+    expect(a.conditions).not.toContain("workerd");
+  });
+});
 
 describe("isBunSpecifier (worker-bundle externals)", () => {
   test("treats the bun namespace as external", () => {
