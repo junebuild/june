@@ -135,6 +135,10 @@ export async function scanRoutes(
 // remains only as the fallback when the config itself cannot be loaded.
 export async function generateContent(appRoot: string): Promise<string[]> {
   const contentDir = join(appRoot, "content");
+  // app/ is the output dir for _content.ts (and the seed). Ensure it exists so the now-always
+  // write can't throw an opaque ENOENT when called standalone (e.g. `june gen`); the full build's
+  // own "no app/ directory" check runs earlier, so this never masks that clearer error.
+  await mkdir(join(appRoot, "app"), { recursive: true });
   const emit = async (sources: ContentSource[], knownLocales: readonly string[] | undefined): Promise<string[]> => {
     // Emission (incl. the per-locale layout and source merging) lives in ./content so it's
     // pure and unit-testable; this stays the thin fs wrapper.
@@ -205,7 +209,10 @@ async function seedContentImports(appRoot: string): Promise<void> {
       const name = part.replace(/\btype\b/, "").split(/\s+as\s+/).pop()?.trim();
       if (!name || !isIdent(name) || seen.has(name)) continue;
       seen.add(name);
-      if (!new RegExp(`export (?:const|function|type) ${name}\\b`).test(current)) {
+      // Escape before interpolating: a valid identifier may contain `$`, a regex metachar (an
+      // anchor), which would corrupt the already-exported check. The stub below uses the raw name.
+      const reName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      if (!new RegExp(`export (?:const|function|type) ${reName}\\b`).test(current)) {
         stubs.push(`export const ${name}: ContentEntry[] = [];`);
       }
     }

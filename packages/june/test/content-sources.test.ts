@@ -5,7 +5,7 @@
 // dropping the configured sources.
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -127,6 +127,15 @@ describe("generateContent + content.sources", () => {
     );
     expect(await generateContent(root)).toEqual(["docs"]);
     expect(readFileSync(join(root, "app", "_content.ts"), "utf8")).toContain('"slug": "setup"'); // sources survived
+  });
+
+  test("generateContent creates app/ when missing instead of an opaque ENOENT", async () => {
+    // No app/, no content/ — the now-always write would ENOENT without the mkdir.
+    const root = mkdtempSync(join(tmpdir(), "june-gen-noapp-"));
+    roots.push(root);
+    writeFileSync(join(root, "june.config.ts"), `export default { site: { name: "t" } };\n`);
+    await expect(generateContent(root)).resolves.toEqual([]);
+    expect(existsSync(join(root, "app", "_content.ts"))).toBe(true); // seeded, not thrown
   });
 
   test("a broken config (not the bootstrap case) degrades to the default scan with a warning, not a crash", async () => {
