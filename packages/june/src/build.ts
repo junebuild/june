@@ -204,7 +204,9 @@ async function seedContentImports(appRoot: string): Promise<void> {
   const seen = new Set<string>();
   const stubs: string[] = [];
   // Each named `import { A, B as C }` the config takes from the app/_content module → stub each.
-  for (const m of cfgSrc.matchAll(/import\s*(?:type\s+)?\{([^}]*)\}\s*from\s*["'][^"']*app\/_content["']/g)) {
+  // The `(?:\.\w+)?` tolerates an explicit extension (`app/_content.ts`/`.js`/`.mjs`), which
+  // NodeNext / verbatimModuleSyntax configs require — else the import goes undetected and unstubbed.
+  for (const m of cfgSrc.matchAll(/import\s*(?:type\s+)?\{([^}]*)\}\s*from\s*["'][^"']*app\/_content(?:\.\w+)?["']/g)) {
     for (const part of (m[1] ?? "").split(",")) {
       const name = part.replace(/\btype\b/, "").split(/\s+as\s+/).pop()?.trim();
       if (!name || !isIdent(name) || seen.has(name)) continue;

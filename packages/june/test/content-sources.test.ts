@@ -129,6 +129,21 @@ describe("generateContent + content.sources", () => {
     expect(readFileSync(join(root, "app", "_content.ts"), "utf8")).toContain('"slug": "setup"'); // sources survived
   });
 
+  test("BOOTSTRAP: an explicit extension in the _content import (`.ts`/`.js`) is still detected + stubbed", async () => {
+    const root = makeApp();
+    roots.push(root);
+    rmSync(join(root, "content"), { recursive: true, force: true }); // external-only → seeding runs
+    mkdirSync(join(root, ".june"), { recursive: true });
+    // NodeNext / verbatimModuleSyntax configs write the extension; the scan must still find DOCS.
+    writeFileSync(
+      join(root, ".june", "config.ts"),
+      `import { DOCS } from "../app/_content.ts";\n` +
+        `export default { site: { name: \`n\${DOCS.length}\` }, content: { sources: [{ dir: "extdocs", collection: "docs" }] } };\n`,
+    );
+    expect(await generateContent(root)).toEqual(["docs"]);
+    expect(readFileSync(join(root, "app", "_content.ts"), "utf8")).toContain('"slug": "setup"'); // sources survived
+  });
+
   test("generateContent creates app/ when missing instead of an opaque ENOENT", async () => {
     // No app/, no content/ — the now-always write would ENOENT without the mkdir.
     const root = mkdtempSync(join(tmpdir(), "june-gen-noapp-"));
