@@ -5,7 +5,7 @@
 // dropping the configured sources.
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -73,6 +73,85 @@ describe("generateContent + content.sources", () => {
     const out = readFileSync(join(root, "app", "_content.ts"), "utf8");
     expect(out).toContain('"slug": "intro"');
     expect(out).toContain('"slug": "setup"'); // the sources survived the bootstrap
+  });
+
+  test("BOOTSTRAP with NO local content/ (docs-as-code): the config's DOCS import is stubbed so sources apply", async () => {
+    const root = makeApp();
+    roots.push(root);
+    // Docs-as-code: ALL content lives in the external source — remove the local content/ so Pass 1's
+    // default scan writes nothing. Without seeding the config's `import { DOCS }`, the re-probe can't
+    // load the config (its import graph needs a not-yet-frozen app/_content.ts) and the sources drop.
+    rmSync(join(root, "content"), { recursive: true, force: true });
+    mkdirSync(join(root, ".june"), { recursive: true });
+    writeFileSync(
+      join(root, ".june", "config.ts"),
+      `import { DOCS } from "../app/_content";\n` +
+        `export default { site: { name: \`n\${DOCS.length}\` }, content: { sources: [{ dir: "extdocs", collection: "docs" }] } };\n`,
+    );
+    const names = await generateContent(root);
+    expect(names).toEqual(["docs"]);
+    const out = readFileSync(join(root, "app", "_content.ts"), "utf8");
+    expect(out).toContain('"slug": "setup"'); // the external source is the ONLY content, and it survived
+    expect(out).not.toContain('"slug": "intro"'); // there is no local content/ at all
+  });
+
+  test("BOOTSTRAP: a comment inside the import is stripped, so the name is still stubbed and sources apply", async () => {
+    const root = makeApp();
+    roots.push(root);
+    rmSync(join(root, "content"), { recursive: true, force: true }); // external-only → seeding runs
+    mkdirSync(join(root, ".june"), { recursive: true });
+    // `{ DOCS /* keep */ }` is valid TS; comment-stripping must recover the identifier `DOCS` (not
+    // drop it) so the seed stubs it, the re-probe loads, and the sources apply — no crash, no
+    // invalid TS.
+    writeFileSync(
+      join(root, ".june", "config.ts"),
+      `import { DOCS /* keep */ } from "../app/_content";\n` +
+        `export default { site: { name: \`n\${DOCS.length}\` }, content: { sources: [{ dir: "extdocs", collection: "docs" }] } };\n`,
+    );
+    expect(await generateContent(root)).toEqual(["docs"]);
+    expect(readFileSync(join(root, "app", "_content.ts"), "utf8")).toContain('"slug": "setup"'); // sources survived
+  });
+
+  test("BOOTSTRAP: a name matched twice (comment + real import) yields ONE stub, not invalid TS", async () => {
+    const root = makeApp();
+    roots.push(root);
+    rmSync(join(root, "content"), { recursive: true, force: true }); // external-only → seeding runs
+    mkdirSync(join(root, ".june"), { recursive: true });
+    // The naive text scan matches DOCS in BOTH the comment and the real import. A duplicate
+    // `export const DOCS` in the seed is invalid TS → the re-probe's config load would SyntaxError
+    // → sources drop. Dedup keeps the seed valid, so the sources still apply.
+    writeFileSync(
+      join(root, ".june", "config.ts"),
+      `// see: import { DOCS } from "../app/_content"\n` +
+        `import { DOCS } from "../app/_content";\n` +
+        `export default { site: { name: \`n\${DOCS.length}\` }, content: { sources: [{ dir: "extdocs", collection: "docs" }] } };\n`,
+    );
+    expect(await generateContent(root)).toEqual(["docs"]);
+    expect(readFileSync(join(root, "app", "_content.ts"), "utf8")).toContain('"slug": "setup"'); // sources survived
+  });
+
+  test("BOOTSTRAP: an explicit extension in the _content import (`.ts`/`.js`) is still detected + stubbed", async () => {
+    const root = makeApp();
+    roots.push(root);
+    rmSync(join(root, "content"), { recursive: true, force: true }); // external-only → seeding runs
+    mkdirSync(join(root, ".june"), { recursive: true });
+    // NodeNext / verbatimModuleSyntax configs write the extension; the scan must still find DOCS.
+    writeFileSync(
+      join(root, ".june", "config.ts"),
+      `import { DOCS } from "../app/_content.ts";\n` +
+        `export default { site: { name: \`n\${DOCS.length}\` }, content: { sources: [{ dir: "extdocs", collection: "docs" }] } };\n`,
+    );
+    expect(await generateContent(root)).toEqual(["docs"]);
+    expect(readFileSync(join(root, "app", "_content.ts"), "utf8")).toContain('"slug": "setup"'); // sources survived
+  });
+
+  test("generateContent creates app/ when missing instead of an opaque ENOENT", async () => {
+    // No app/, no content/ — the now-always write would ENOENT without the mkdir.
+    const root = mkdtempSync(join(tmpdir(), "june-gen-noapp-"));
+    roots.push(root);
+    writeFileSync(join(root, "june.config.ts"), `export default { site: { name: "t" } };\n`);
+    await expect(generateContent(root)).resolves.toEqual([]);
+    expect(existsSync(join(root, "app", "_content.ts"))).toBe(true); // seeded, not thrown
   });
 
   test("a broken config (not the bootstrap case) degrades to the default scan with a warning, not a crash", async () => {
