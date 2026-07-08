@@ -20,7 +20,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -160,14 +160,47 @@ export async function generateContent(appRoot: string): Promise<string[]> {
   }
   if (config) return emit(resolveSources(config.content?.sources ?? []), declaredLocales(config));
   // Pass 1 (throwaway when the probe succeeds): legacy regex locale detection, since the
-  // declared set is unknowable without the config.
+  // declared set is unknowable without the config. This writes app/_content.ts only when
+  // content/ has local collections; a docs-as-code app keeps ALL content in external
+  // content.sources with NO local content/, so it writes nothing. seedContentImports then
+  // guarantees app/_content.ts exists and exports every name the config imports from it
+  // (e.g. Kura's `import { DOCS }`) — otherwise the re-probe's config load re-fails.
   const names = await emit([], undefined);
+  await seedContentImports(appRoot);
   const probed = probeConfigFresh(appRoot);
   if (probed === null) {
     console.warn("[june gen] june.config.ts failed to load — content.sources/i18n locales (if any) not applied");
     return names;
   }
   return emit(resolveSources(probed.sources), probed.locales);
+}
+
+// Bootstrap seed: guarantee app/_content.ts exists and exports every name the config imports from
+// it, so the re-probe's config load resolves BEFORE the first real freeze. A docs-as-code app
+// (content only in external content.sources, no local content/) leaves Pass 1's default scan
+// empty — nothing seeds the collections — so here we stub the EXACT named imports the config
+// pulls from ./app/_content (`import { DOCS } from "…/app/_content"` → `export const DOCS = []`).
+// Overwritten by the real freeze that follows a successful probe; a no-op once content exists.
+async function seedContentImports(appRoot: string): Promise<void> {
+  const cfgPath = findJuneConfigPath(appRoot);
+  if (!cfgPath) return;
+  const contentFile = join(appRoot, "app", "_content.ts");
+  const ENTRY_TYPE =
+    "export type ContentEntry = { slug: string; data: Record<string, string | string[]>; body: string; original: string; html: string };\n";
+  let current = existsSync(contentFile) ? await readFile(contentFile, "utf8") : "";
+  if (!current) current = "// AUTO-GENERATED bootstrap seed — replaced by the content freeze.\n" + ENTRY_TYPE;
+  const cfgSrc = await readFile(cfgPath, "utf8");
+  const stubs: string[] = [];
+  // Each `import { A, B as C } from "…/app/_content"` in the config → stub every imported name.
+  for (const m of cfgSrc.matchAll(/import\s*(?:type\s+)?\{([^}]*)\}\s*from\s*["'][^"']*app\/_content["']/g)) {
+    for (const part of (m[1] ?? "").split(",")) {
+      const name = part.replace(/\btype\b/, "").split(/\s+as\s+/).pop()?.trim();
+      if (name && !new RegExp(`export (?:const|function|type) ${name}\\b`).test(current)) {
+        stubs.push(`export const ${name}: ContentEntry[] = [];`);
+      }
+    }
+  }
+  if (stubs.length || !existsSync(contentFile)) await writeFile(contentFile, current + stubs.join("\n") + "\n");
 }
 
 // Re-probe ONLY the content-relevant config (sources + declared i18n locales) in a FRESH

@@ -75,6 +75,26 @@ describe("generateContent + content.sources", () => {
     expect(out).toContain('"slug": "setup"'); // the sources survived the bootstrap
   });
 
+  test("BOOTSTRAP with NO local content/ (docs-as-code): the config's DOCS import is stubbed so sources apply", async () => {
+    const root = makeApp();
+    roots.push(root);
+    // Docs-as-code: ALL content lives in the external source — remove the local content/ so Pass 1's
+    // default scan writes nothing. Without seeding the config's `import { DOCS }`, the re-probe can't
+    // load the config (its import graph needs a not-yet-frozen app/_content.ts) and the sources drop.
+    rmSync(join(root, "content"), { recursive: true, force: true });
+    mkdirSync(join(root, ".june"), { recursive: true });
+    writeFileSync(
+      join(root, ".june", "config.ts"),
+      `import { DOCS } from "../app/_content";\n` +
+        `export default { site: { name: \`n\${DOCS.length}\` }, content: { sources: [{ dir: "extdocs", collection: "docs" }] } };\n`,
+    );
+    const names = await generateContent(root);
+    expect(names).toEqual(["docs"]);
+    const out = readFileSync(join(root, "app", "_content.ts"), "utf8");
+    expect(out).toContain('"slug": "setup"'); // the external source is the ONLY content, and it survived
+    expect(out).not.toContain('"slug": "intro"'); // there is no local content/ at all
+  });
+
   test("a broken config (not the bootstrap case) degrades to the default scan with a warning, not a crash", async () => {
     const root = makeApp();
     roots.push(root);
