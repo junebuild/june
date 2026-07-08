@@ -207,8 +207,12 @@ async function seedContentImports(appRoot: string): Promise<void> {
   // The `(?:\.\w+)?` tolerates an explicit extension (`app/_content.ts`/`.js`/`.mjs`), which
   // NodeNext / verbatimModuleSyntax configs require — else the import goes undetected and unstubbed.
   for (const m of cfgSrc.matchAll(/import\s*(?:type\s+)?\{([^}]*)\}\s*from\s*["'][^"']*app\/_content(?:\.\w+)?["']/g)) {
-    for (const part of (m[1] ?? "").split(",")) {
-      const name = part.replace(/\btype\b/, "").split(/\s+as\s+/).pop()?.trim();
+    // Strip block + line comments from the specifier list BEFORE splitting: a valid
+    // `{ DOCS /* keep */ }` must still yield the identifier `DOCS` (not be dropped), and a comment
+    // could otherwise carry a `,` that breaks the split. Then drop `type` markers per specifier.
+    const inner = (m[1] ?? "").replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+    for (const part of inner.split(",")) {
+      const name = part.replace(/\btype\b/g, "").split(/\s+as\s+/).pop()?.trim();
       if (!name || !isIdent(name) || seen.has(name)) continue;
       seen.add(name);
       // Escape before interpolating: a valid identifier may contain `$`, a regex metachar (an

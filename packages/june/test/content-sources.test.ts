@@ -95,20 +95,21 @@ describe("generateContent + content.sources", () => {
     expect(out).not.toContain('"slug": "intro"'); // there is no local content/ at all
   });
 
-  test("BOOTSTRAP: a non-identifier token in the _content import is skipped, never crashes the seed", async () => {
+  test("BOOTSTRAP: a comment inside the import is stripped, so the name is still stubbed and sources apply", async () => {
     const root = makeApp();
     roots.push(root);
     rmSync(join(root, "content"), { recursive: true, force: true }); // external-only → seeding runs
     mkdirSync(join(root, ".june"), { recursive: true });
-    // A comment inside the import list makes the captured name a non-identifier — it must be
-    // skipped (no `new RegExp(<bad>)` throw, no invalid TS written), degrading gracefully.
+    // `{ DOCS /* keep */ }` is valid TS; comment-stripping must recover the identifier `DOCS` (not
+    // drop it) so the seed stubs it, the re-probe loads, and the sources apply — no crash, no
+    // invalid TS.
     writeFileSync(
       join(root, ".june", "config.ts"),
       `import { DOCS /* keep */ } from "../app/_content";\n` +
-        `export default { content: { sources: [{ dir: "extdocs", collection: "docs" }] } };\n`,
+        `export default { site: { name: \`n\${DOCS.length}\` }, content: { sources: [{ dir: "extdocs", collection: "docs" }] } };\n`,
     );
-    // Resolves (no reject/crash) — a bare synchronous not.toThrow() would pass on any Promise.
-    await expect(generateContent(root)).resolves.toBeInstanceOf(Array);
+    expect(await generateContent(root)).toEqual(["docs"]);
+    expect(readFileSync(join(root, "app", "_content.ts"), "utf8")).toContain('"slug": "setup"'); // sources survived
   });
 
   test("BOOTSTRAP: a name matched twice (comment + real import) yields ONE stub, not invalid TS", async () => {
