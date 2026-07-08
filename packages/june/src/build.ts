@@ -162,11 +162,11 @@ export async function generateContent(appRoot: string): Promise<string[]> {
   }
   if (config) return emit(resolveSources(config.content?.sources ?? []), declaredLocales(config));
   // Pass 1 (throwaway when the probe succeeds): legacy regex locale detection, since the
-  // declared set is unknowable without the config. This writes app/_content.ts only when
-  // content/ has local collections; a docs-as-code app keeps ALL content in external
-  // content.sources with NO local content/, so it writes nothing. seedContentImports then
-  // guarantees app/_content.ts exists and exports every name the config imports from it
-  // (e.g. Kura's `import { DOCS }`) — otherwise the re-probe's config load re-fails.
+  // declared set is unknowable without the config. emit() writes app/_content.ts with the
+  // canonical ContentEntry type plus a `const` per collection FOUND — but a docs-as-code app
+  // keeps ALL content in external content.sources with NO local content/, so it finds zero
+  // collections and thus emits no EXPORTS (no `DOCS`). seedContentImports then appends stubs for
+  // the exact names the config imports (e.g. Kura's `import { DOCS }`), so the re-probe can load.
   const names = await emit([], undefined);
   await seedContentImports(appRoot);
   const probed = probeConfigFresh(appRoot);
@@ -194,12 +194,18 @@ async function seedContentImports(appRoot: string): Promise<void> {
   // Only stub valid JS identifiers — a name carrying comments/other tokens (rare, but valid TS)
   // must never reach `new RegExp(...)` (would throw) or the emitted stub (would be invalid TS).
   const isIdent = (s: string): boolean => /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(s);
+  // A Set so a name matched more than once (e.g. a comment mentioning the import + the real one)
+  // yields ONE stub — a duplicate `export const <name>` would be invalid TS. Also skip names the
+  // module already exports.
+  const seen = new Set<string>();
   const stubs: string[] = [];
   // Each named `import { A, B as C }` the config takes from the app/_content module → stub each.
   for (const m of cfgSrc.matchAll(/import\s*(?:type\s+)?\{([^}]*)\}\s*from\s*["'][^"']*app\/_content["']/g)) {
     for (const part of (m[1] ?? "").split(",")) {
       const name = part.replace(/\btype\b/, "").split(/\s+as\s+/).pop()?.trim();
-      if (name && isIdent(name) && !new RegExp(`export (?:const|function|type) ${name}\\b`).test(current)) {
+      if (!name || !isIdent(name) || seen.has(name)) continue;
+      seen.add(name);
+      if (!new RegExp(`export (?:const|function|type) ${name}\\b`).test(current)) {
         stubs.push(`export const ${name}: ContentEntry[] = [];`);
       }
     }

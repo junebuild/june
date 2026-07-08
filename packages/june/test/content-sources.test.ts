@@ -107,7 +107,26 @@ describe("generateContent + content.sources", () => {
       `import { DOCS /* keep */ } from "../app/_content";\n` +
         `export default { content: { sources: [{ dir: "extdocs", collection: "docs" }] } };\n`,
     );
-    expect(async () => await generateContent(root)).not.toThrow();
+    // Resolves (no reject/crash) — a bare synchronous not.toThrow() would pass on any Promise.
+    await expect(generateContent(root)).resolves.toBeInstanceOf(Array);
+  });
+
+  test("BOOTSTRAP: a name matched twice (comment + real import) yields ONE stub, not invalid TS", async () => {
+    const root = makeApp();
+    roots.push(root);
+    rmSync(join(root, "content"), { recursive: true, force: true }); // external-only → seeding runs
+    mkdirSync(join(root, ".june"), { recursive: true });
+    // The naive text scan matches DOCS in BOTH the comment and the real import. A duplicate
+    // `export const DOCS` in the seed is invalid TS → the re-probe's config load would SyntaxError
+    // → sources drop. Dedup keeps the seed valid, so the sources still apply.
+    writeFileSync(
+      join(root, ".june", "config.ts"),
+      `// see: import { DOCS } from "../app/_content"\n` +
+        `import { DOCS } from "../app/_content";\n` +
+        `export default { site: { name: \`n\${DOCS.length}\` }, content: { sources: [{ dir: "extdocs", collection: "docs" }] } };\n`,
+    );
+    expect(await generateContent(root)).toEqual(["docs"]);
+    expect(readFileSync(join(root, "app", "_content.ts"), "utf8")).toContain('"slug": "setup"'); // sources survived
   });
 
   test("a broken config (not the bootstrap case) degrades to the default scan with a warning, not a crash", async () => {
