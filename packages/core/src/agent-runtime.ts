@@ -23,8 +23,19 @@ export type Msg =
 export type ModelReply = { text: string; toolCalls: ToolCall[] };
 export type ToolSpec = { name: string; description: string; input: unknown };
 
-// The Model seam — provider-agnostic.
-export type Model = (msgs: Msg[], tools: ToolSpec[]) => Promise<ModelReply>;
+// The Model seam — provider-agnostic. `opts.system` is the per-turn system prompt
+// (an agent's instructions); optional so the engine can call `model(msgs, specs)`
+// and a scripted model can ignore it. The runtime injects it from the agent def
+// (see withSystem) so instructions are single-sourced and can't be dropped.
+export type Model = (msgs: Msg[], tools: ToolSpec[], opts?: { system?: string }) => Promise<ModelReply>;
+
+// Wrap a Model so every call carries `system` (the agent's instructions). The
+// runtime applies this from the agent def, so a provider model needn't bake the
+// system prompt in at construction — one model instance can serve many agents,
+// each supplying its own system per turn. The def's system is authoritative.
+export function withSystem(model: Model, system: string): Model {
+  return (msgs, tools, opts) => model(msgs, tools, { ...opts, system });
+}
 
 // A tool's `run` gets a context: its session-local `store` (write app state in
 // the SAME tx as the checkpoint → exactly-once), and the `runtime` so a tool can

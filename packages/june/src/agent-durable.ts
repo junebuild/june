@@ -17,6 +17,7 @@
 
 import {
   AgentSession,
+  withSystem,
   type Broadcaster,
   type Model,
   type Msg,
@@ -111,7 +112,9 @@ const crossDoUnsupported: Runtime = {
   },
 };
 
-export type DoAgentDef = { name?: string; model: Model; tools: Tool[] };
+// `instructions` (system prompt) is injected into the model per turn (withSystem),
+// so it need not be baked into `model` at construction — single-sourced on the def.
+export type DoAgentDef = { name?: string; model: Model; tools: Tool[]; instructions?: string };
 
 // The agent runtime INSIDE a Durable Object. A plain class (constructor takes the
 // DO state) so this module needs no `cloudflare:workers` import. The app supplies
@@ -127,7 +130,8 @@ export class AgentDurableObject {
   private session: AgentSession;
   constructor(state: DurableObjectState, def: DoAgentDef) {
     const store = new DoSessionStore(state.storage);
-    this.session = new AgentSession(def.name ?? "agent", "self", store, new InProcBroadcaster(), def.model, def.tools, crossDoUnsupported);
+    const model = def.instructions ? withSystem(def.model, def.instructions) : def.model;
+    this.session = new AgentSession(def.name ?? "agent", "self", store, new InProcBroadcaster(), model, def.tools, crossDoUnsupported);
   }
   turn(input: { turnId?: string; userText: string }): Promise<string> {
     return this.session.turn(input);

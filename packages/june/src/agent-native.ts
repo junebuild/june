@@ -9,6 +9,7 @@
 
 import {
   AgentSession,
+  withSystem,
   type Broadcaster,
   type Model,
   type Msg,
@@ -82,7 +83,9 @@ class InProcBroadcaster implements Broadcaster {
   subscribe(cb: (t: string) => void): () => void { this.subs.add(cb); return () => this.subs.delete(cb); }
 }
 
-export type AgentDef = { model: Model; tools: Tool[] };
+// `instructions` (the agent's system prompt) is injected into the model per turn
+// by the runtime (withSystem) — single-sourced on the def, not baked into `model`.
+export type AgentDef = { model: Model; tools: Tool[]; instructions?: string };
 
 // The native Runtime: a registry of agent definitions over one SQLite handle,
 // handing out (and memoizing) an AgentSession actor per (agent, id).
@@ -103,7 +106,8 @@ export class NativeRuntime implements Runtime {
     if (!a) {
       const def = this.agents[agent];
       if (!def) throw new Error(`unknown agent: ${agent}`);
-      a = new AgentSession(agent, id, new SqliteSessionStore(this.db, key), new InProcBroadcaster(), def.model, def.tools, this);
+      const model = def.instructions ? withSystem(def.model, def.instructions) : def.model;
+      a = new AgentSession(agent, id, new SqliteSessionStore(this.db, key), new InProcBroadcaster(), model, def.tools, this);
       this.actors.set(key, a);
     }
     return a;
