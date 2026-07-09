@@ -16,6 +16,7 @@ import {
   type SessionStore,
   type Tool,
 } from "@junejs/core/agent-runtime";
+import { channelFetch, type AgentDefinition, type ChannelContext } from "@junejs/core/agent-config";
 import { openLocalSqliteSync, type SyncSqlite } from "./sqlite-driver";
 
 function initSchema(db: SyncSqlite) {
@@ -106,4 +107,26 @@ export async function createNativeRuntime(
   path = ":memory:",
 ): Promise<NativeRuntime> {
   return new NativeRuntime(agents, await openLocalSqliteSync(path));
+}
+
+// Mount a discovered agent's channels on a runtime: build the ChannelContext
+// whose `run` bridges to a durable turn, then expose a Web-standard fetch handler
+// (webhooks + http channels) and a `startAll` for one-shot channels (cli).
+export function mountAgent(agent: AgentDefinition, runtime: Runtime): {
+  fetch: (req: Request) => Promise<Response>;
+  startAll: () => Promise<void>;
+  ctx: ChannelContext;
+} {
+  const ctx: ChannelContext = {
+    agent,
+    run: (message, opts) =>
+      runtime.session(agent.name, opts?.session ?? "default").turn({ turnId: opts?.turnId, userText: message }),
+  };
+  return {
+    ctx,
+    fetch: channelFetch(agent, ctx),
+    startAll: async () => {
+      await Promise.all(agent.channels.filter((c) => c.start).map((c) => c.start!(ctx)));
+    },
+  };
 }

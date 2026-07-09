@@ -9,7 +9,7 @@ import { dirname, join } from "node:path";
 import { ACTION_REGISTRY } from "@junejs/core/agent";
 import type { Model, ModelReply } from "@junejs/core/agent-runtime";
 import { discoverAgent } from "../src/agent-discover";
-import { createNativeRuntime } from "../src/agent-native";
+import { createNativeRuntime, mountAgent } from "../src/agent-native";
 
 const FIXTURE = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "agent-ops");
 
@@ -35,6 +35,21 @@ describe("discoverAgent", () => {
     expect(agent.skills).toEqual([
       { name: "bulk_reorder", description: "Reorder many items at once from a supplier list, checking stock first.", body: expect.stringContaining("Read the supplier list") },
     ]);
+    // channels discovered too (a plain http channel + a factory-built slack one)
+    expect(agent.channels.map((c) => c.name).sort()).toEqual(["http", "slack"]);
+  });
+
+  test("mountAgent serves a discovered channel end-to-end (POST /message → durable turn)", async () => {
+    const agent = await discoverAgent(FIXTURE);
+    const model = scriptedModel([
+      { text: "Placing your order.", toolCalls: [{ id: "c1", name: "create_order", input: { item: "widget", qty: 3 } }] },
+      { text: "Done — order placed.", toolCalls: [] },
+    ]);
+    const rt = await createNativeRuntime({ [agent.name]: { model, tools: agent.tools } });
+    const { fetch } = mountAgent(agent, rt);
+
+    const res = await fetch(new Request("http://x/message", { method: "POST", body: JSON.stringify({ message: "Order 3 widgets", session: "s1" }) }));
+    expect(await res.json()).toEqual({ text: "Done — order placed." });
   });
 
   test("the discovered agent runs a durable turn calling its discovered tool", async () => {
