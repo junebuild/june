@@ -109,6 +109,64 @@ export async function createNativeRuntime(
   return new NativeRuntime(agents, await openLocalSqliteSync(path));
 }
 
+// ── memory backend — in-process, ephemeral (no DB, no disk) ───────────────────
+// The lightest "no Durable Object, no persistence" option: great for dev, tests,
+// and stateless previews. Same engine + seams; state is a Map that dies with the
+// process. (For durability pick `native` on a long-running host or the Durable
+// Object target on the edge.)
+class MemorySessionStore implements SessionStore {
+  private msgs: Msg[] = [];
+  private steps = new Map<string, unknown>();
+  private status = "new";
+  appendMessage(m: Msg) { this.msgs.push(m); }
+  messages(): Msg[] { return this.msgs.slice(); }
+  hasUserTurn(turnId: string): boolean { return this.msgs.some((m) => m.role === "user" && m.turnId === turnId); }
+  getStep(id: string): unknown | undefined { return this.steps.has(id) ? this.steps.get(id) : undefined; }
+  putStep(id: string, output: unknown) { this.steps.set(id, output); }
+  getStatus(): string { return this.status; }
+  setStatus(s: string) { this.status = s; }
+  tx<T>(fn: () => T): T { return fn(); } // no rollback: an in-memory store is not a durability tier
+  unwrap<H = unknown>(): H { return undefined as unknown as H; }
+}
+
+export class MemoryRuntime implements Runtime {
+  private actors = new Map<string, AgentSession>();
+  private stores = new Map<string, MemorySessionStore>();
+  constructor(private agents: Record<string, AgentDef>) {}
+  session(agent: string, id: string): AgentSession {
+    const key = `${agent}:${id}`;
+    let a = this.actors.get(key);
+    if (!a) {
+      const def = this.agents[agent];
+      if (!def) throw new Error(`unknown agent: ${agent}`);
+      const store = new MemorySessionStore();
+      this.stores.set(key, store);
+      a = new AgentSession(agent, id, store, new InProcBroadcaster(), def.model, def.tools, this);
+      this.actors.set(key, a);
+    }
+    return a;
+  }
+}
+
+// The selectable agent-runtime backends. `native` (SQLite via june/host, durable
+// on a long-running host) and `memory` (ephemeral) are in-process runtimes built
+// here; `durable` is the Cloudflare Durable Object target (see agent-durable.ts —
+// constructed by the worker, not here).
+export type AgentBackend = "native" | "memory" | "durable";
+
+// Build an in-process runtime for the chosen backend. Throws for `durable` (that
+// target is the DO the worker constructs, not an in-process object) — so the
+// choice is explicit and a mis-selection fails loudly.
+export async function createAgentRuntime(
+  agents: Record<string, AgentDef>,
+  opts: { backend?: AgentBackend; path?: string } = {},
+): Promise<Runtime> {
+  const backend = opts.backend ?? "native";
+  if (backend === "memory") return new MemoryRuntime(agents);
+  if (backend === "native") return createNativeRuntime(agents, opts.path);
+  throw new Error("backend 'durable' is the Cloudflare Durable Object target — construct AgentDurableObject in your worker, not via createAgentRuntime");
+}
+
 // Mount a discovered agent's channels on a runtime: build the ChannelContext
 // whose `run` bridges to a durable turn, then expose a Web-standard fetch handler
 // (webhooks + http channels) and a `startAll` for one-shot channels (cli).
