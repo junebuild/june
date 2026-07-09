@@ -49,7 +49,7 @@ describe("discoverAgent", () => {
     const { fetch } = mountAgent(agent, rt);
 
     const res = await fetch(new Request("http://x/message", { method: "POST", body: JSON.stringify({ message: "Order 3 widgets", session: "s1" }) }));
-    expect(await res.json()).toEqual({ text: "Done — order placed." });
+    expect(await res!.json()).toEqual({ text: "Done — order placed." });
   });
 
   test("the discovered agent runs a durable turn calling its discovered tool", async () => {

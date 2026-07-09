@@ -51,10 +51,10 @@ describe("httpChannel + channelFetch", () => {
     const agentRun = ctxWith(async (m) => `echo: ${m}`, [hook, httpChannel()]);
     const fetchHandler = channelFetch(agentRun.agent, agentRun);
 
-    expect(await (await fetchHandler(new Request("http://x/hook", { method: "POST" }))).text()).toBe("hooked");
+    expect(await (await fetchHandler(new Request("http://x/hook", { method: "POST" })))!.text()).toBe("hooked");
     const msg = await fetchHandler(new Request("http://x/message", { method: "POST", body: JSON.stringify({ message: "yo" }) }));
-    expect(await msg.json()).toEqual({ text: "echo: yo" });
-    expect((await fetchHandler(new Request("http://x/nope"))).status).toBe(404);
+    expect(await msg!.json()).toEqual({ text: "echo: yo" });
+    expect(await fetchHandler(new Request("http://x/nope"))).toBeNull(); // no channel → fall through
   });
 });
 

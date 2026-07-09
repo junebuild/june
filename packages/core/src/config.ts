@@ -14,6 +14,19 @@ import type { CacheStoreFactory } from "./cache";
 import type { I18nConfig } from "./i18n";
 import type { JuneDb, ResourceConfig } from "./resources";
 
+// The DURABLE conversational agent (the agent/ directory). Distinct from the
+// discoverability flags above, which make a web app agent-readable; this mounts a
+// running agent: its chat endpoint + inbound channels. Its tools are the SAME
+// defineActions the discovery/mcp surface already exposes. Off unless an agent/
+// directory + `runtime.enabled` are present.
+export type AgentRuntimeConfig = {
+  enabled: boolean; // mount the durable agent surface
+  dir: string; // the agent/ directory, relative to the app (default "agent")
+  backend: "native" | "memory" | "durable"; // native = SQLite; memory = ephemeral; durable = DO (edge)
+  chat: { path: string }; // where a turn is POSTed (default "/message")
+  channels: boolean; // mount discovered channels/* at their paths (slack/crisp/…)
+};
+
 export type AgentConfig = {
   enabled: boolean; // master switch
   discovery: boolean; // Link header, llms.txt, sitemap, api-catalog, mcp server-card
@@ -25,6 +38,8 @@ export type AgentConfig = {
   //   sections  — extra Markdown lines appended (e.g. a list of every doc page + its `.md`).
   // Both are plain string arrays so they freeze into the worker manifest as-is.
   llms?: { framework?: string[]; sections?: string[] };
+  // The durable agent runtime (opt-in). Resolved to full shape below.
+  runtime: AgentRuntimeConfig;
 };
 
 export type SpeculationConfig = {
@@ -72,7 +87,7 @@ export type ContentSource = {
 };
 
 export type JuneConfig = {
-  agent?: Partial<AgentConfig>;
+  agent?: AgentConfigInput;
   // Content pipeline options. `sources` adds directories beyond the default `content/<collection>/`
   // scan (each with the same locale-mirror layout); entries merge into the named collection with
   // mount-prefixed slugs. A slug collision between sources fails `june gen` loudly.
@@ -166,22 +181,44 @@ export type JuneConfig = {
   basePath?: string;
 };
 
+const DEFAULT_RUNTIME: AgentRuntimeConfig = {
+  // On by default, but the caller only mounts it when an agent/ directory
+  // actually exists — so "drop an agent/ folder and it works", nothing otherwise.
+  enabled: true,
+  dir: "agent",
+  backend: "native",
+  chat: { path: "/message" },
+  channels: true,
+};
+
 const DEFAULT_AGENT: AgentConfig = {
   enabled: true,
   discovery: true,
   mcp: true,
   webmcp: true,
+  runtime: DEFAULT_RUNTIME,
+};
+
+// What a user writes in june.config's `agent` — every field optional, and
+// `runtime` a shallow-partial (its `chat` too), resolved to the full shape below.
+export type AgentConfigInput = Partial<Omit<AgentConfig, "runtime">> & {
+  runtime?: Partial<Omit<AgentRuntimeConfig, "chat">> & { chat?: Partial<AgentRuntimeConfig["chat"]> };
 };
 
 export function defineJune(config: JuneConfig): JuneConfig {
   return config;
 }
 
-export function resolveAgent(partial?: Partial<AgentConfig>): AgentConfig {
-  const merged = { ...DEFAULT_AGENT, ...(partial ?? {}) };
-  // The master switch turns the whole agent surface off.
+export function resolveAgent(partial?: AgentConfigInput): AgentConfig {
+  const runtime: AgentRuntimeConfig = {
+    ...DEFAULT_RUNTIME,
+    ...(partial?.runtime ?? {}),
+    chat: { ...DEFAULT_RUNTIME.chat, ...(partial?.runtime?.chat ?? {}) },
+  };
+  const merged: AgentConfig = { ...DEFAULT_AGENT, ...(partial ?? {}), runtime };
+  // The master switch turns the whole agent surface off (including the runtime).
   if (!merged.enabled) {
-    return { enabled: false, discovery: false, mcp: false, webmcp: false };
+    return { enabled: false, discovery: false, mcp: false, webmcp: false, runtime: { ...runtime, enabled: false } };
   }
   return merged;
 }

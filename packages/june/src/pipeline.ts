@@ -106,6 +106,11 @@ export type RouteResolver = (pathname: string) => Promise<Resolved | ResolvedRes
 export type PipelineConfig = {
   docConfig: DocumentConfig;
   agent: AgentConfig;
+  // The durable agent surface (chat endpoint + inbound channels), mounted by the
+  // caller from the agent/ directory (dev discovers it from fs; the worker from a
+  // manifest/DO). Runs after the static agent surface (/mcp + discovery), before
+  // middleware/routes. Returns null to fall through. Gated by agent.runtime.enabled.
+  agentSurface?: MiddlewareHandler;
   // Locale routing config (june.config.ts `i18n`). Absent → no locale handling:
   // the resolution step below never runs and ctx.locale stays undefined.
   i18n?: I18nConfig;
@@ -470,6 +475,15 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
       if (request.method === "GET" && agent.discovery) {
         const d = await discovery(url);
         if (d) return d;
+      }
+
+      // --- durable agent surface (chat + channels) -------------------------
+      // The running agent from the agent/ directory: POST <chat.path> for a turn,
+      // /channels/* webhooks. Its tools are the SAME defineActions already on /mcp
+      // above. Null → not an agent route, fall through.
+      if (agent.runtime.enabled && cfg.agentSurface) {
+        const a = await cfg.agentSurface(request, url);
+        if (a) return a;
       }
 
       // --- app escape hatch --------------------------------------------------
