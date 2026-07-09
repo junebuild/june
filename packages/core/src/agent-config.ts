@@ -125,21 +125,23 @@ export function defineAgent(config: {
   };
 }
 
-// Build a Web-standard fetch handler that dispatches to the agent's channels:
-// a webhook channel by exact `path`, then any `fetch` channels (first non-404
-// wins). Pure — the caller supplies `ctx.run` (the bridge to a runtime), so this
+// Build a Web-standard handler that dispatches to the agent's channels: a webhook
+// channel by exact `path`, then any `fetch` channels (first non-404 wins).
+// Returns `null` when no channel claims the request, so it composes as a
+// fall-through surface inside June's router (and standalone servers treat null as
+// 404). Pure — the caller supplies `ctx.run` (the bridge to a runtime), so this
 // works identically on native and edge.
-export function channelFetch(agent: AgentDefinition, ctx: ChannelContext): (req: Request) => Promise<Response> {
+export function channelFetch(agent: AgentDefinition, ctx: ChannelContext): (req: Request) => Promise<Response | null> {
   const webhooks = agent.channels.filter((c) => c.path && c.webhook);
   const fetchers = agent.channels.filter((c) => c.fetch).map((c) => c.fetch!(ctx));
-  return async (req: Request): Promise<Response> => {
+  return async (req: Request): Promise<Response | null> => {
     const url = new URL(req.url);
     for (const c of webhooks) if (url.pathname === c.path) return c.webhook!(req, ctx);
     for (const f of fetchers) {
       const res = await f(req);
       if (res.status !== 404) return res; // first channel that handles the route wins
     }
-    return new Response("no channel matched", { status: 404 });
+    return null; // not an agent route — fall through
   };
 }
 

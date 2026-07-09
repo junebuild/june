@@ -181,22 +181,43 @@ export async function createAgentRuntime(
   throw new Error("backend 'durable' is the Cloudflare Durable Object target — construct AgentDurableObject in your worker, not via createAgentRuntime");
 }
 
-// Mount a discovered agent's channels on a runtime: build the ChannelContext
-// whose `run` bridges to a durable turn, then expose a Web-standard fetch handler
-// (webhooks + http channels) and a `startAll` for one-shot channels (cli).
-export function mountAgent(agent: AgentDefinition, runtime: Runtime): {
-  fetch: (req: Request) => Promise<Response>;
+// Mount a discovered agent on a runtime. Builds the ChannelContext whose `run`
+// bridges to a durable turn, and exposes:
+//   • surface(req) — the composable agent surface for June's router: a framework
+//     chat endpoint at `chatPath` (POST {message, session?} → a turn) PLUS the
+//     discovered channels; returns null when the request isn't an agent route.
+//   • fetch(req)  — just the discovered channels (webhooks + http), null on no match.
+//   • startAll()  — run one-shot channels (cli) once at boot.
+export function mountAgent(
+  agent: AgentDefinition,
+  runtime: Runtime,
+  opts: { chatPath?: string; channels?: boolean } = {},
+): {
+  surface: (req: Request) => Promise<Response | null>;
+  fetch: (req: Request) => Promise<Response | null>;
   startAll: () => Promise<void>;
   ctx: ChannelContext;
 } {
+  const chatPath = opts.chatPath ?? "/message";
+  const channelsOn = opts.channels ?? true;
   const ctx: ChannelContext = {
     agent,
-    run: (message, opts) =>
-      runtime.session(agent.name, opts?.session ?? "default").turn({ turnId: opts?.turnId, userText: message }),
+    run: (message, o) =>
+      runtime.session(agent.name, o?.session ?? "default").turn({ turnId: o?.turnId, userText: message }),
+  };
+  const channels = channelFetch(agent, ctx);
+  const surface = async (req: Request): Promise<Response | null> => {
+    const url = new URL(req.url);
+    if (req.method === "POST" && url.pathname === chatPath) {
+      const { message, session } = (await req.json()) as { message: string; session?: string };
+      return Response.json({ text: await ctx.run(message, { session }) });
+    }
+    return channelsOn ? channels(req) : null;
   };
   return {
     ctx,
-    fetch: channelFetch(agent, ctx),
+    surface,
+    fetch: channels,
     startAll: async () => {
       await Promise.all(agent.channels.filter((c) => c.start).map((c) => c.start!(ctx)));
     },

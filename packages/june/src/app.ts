@@ -25,7 +25,11 @@ import type { DocumentConfig } from "@junejs/core/document";
 import { runWithTrace, type RequestTrace } from "@junejs/core/instrumentation";
 
 import { findMiddlewareFile, isResourceFile, listRoutes, matchRouteTree, resolveNotFound, routeFiles, type SegmentMatch } from "./router";
-import { createPipeline, type ExtraHandler, type LayoutComponent, type Pipeline, type Resolved, type ResourceHandler } from "./pipeline";
+import { createPipeline, type ExtraHandler, type LayoutComponent, type MiddlewareHandler, type Pipeline, type Resolved, type ResourceHandler } from "./pipeline";
+import { discoverAgent } from "./agent-discover";
+import { createAgentRuntime, mountAgent } from "./agent-native";
+import { buildSystemPrompt } from "@junejs/core/agent-config";
+import { anthropic } from "@junejs/core/agent-models";
 import { resolveBoundary } from "./segment";
 import { memoizeResources } from "./resources";
 import {
@@ -195,10 +199,27 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
       const mod = (await import(pathToFileURL(extraFile).href)) as { default?: unknown };
       if (typeof mod.default === "function") extra = mod.default as ExtraHandler;
     }
+
+    // Durable agent surface: if enabled and an agent/ directory exists, discover
+    // it, build a native runtime + Anthropic model, and mount its chat endpoint +
+    // channels. "Drop an agent/ folder and it works"; nothing otherwise.
+    let agentSurface: MiddlewareHandler | undefined;
+    const agentDir = join(appDir, agent.runtime.dir);
+    if (agent.runtime.enabled && existsSync(agentDir)) {
+      const def = await discoverAgent(agentDir);
+      // dev has no Durable Object — a "durable" backend falls back to native here.
+      const backend = agent.runtime.backend === "durable" ? "native" : agent.runtime.backend;
+      const model = anthropic({ model: def.model, system: buildSystemPrompt(def) });
+      const rt = await createAgentRuntime({ [def.name]: { model, tools: def.tools } }, { backend });
+      const mounted = mountAgent(def, rt, { chatPath: agent.runtime.chat.path, channels: agent.runtime.channels });
+      agentSurface = (req) => mounted.surface(req);
+      await mounted.startAll();
+    }
     return createPipeline({
       extra,
       docConfig,
       agent,
+      agentSurface,
       i18n: config.i18n,
       routeList: routePaths,
       earlyHints: config.earlyHints,
