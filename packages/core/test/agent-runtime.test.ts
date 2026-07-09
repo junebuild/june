@@ -51,7 +51,10 @@ type AgentDef = { model: Model; tools: Tool[] };
 class MemRuntime implements Runtime {
   private actors = new Map<string, AgentSession>();
   private apps = new Map<string, { orders: { item: string; qty: number }[] }>();
-  constructor(private agents: Record<string, AgentDef>) {}
+  private readonly agents: Record<string, AgentDef>;
+  constructor(agents: Record<string, AgentDef>) {
+    this.agents = agents;
+  }
   session(agent: string, id: string): AgentSession {
     const key = `${agent}:${id}`;
     let a = this.actors.get(key);

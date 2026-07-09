@@ -67,15 +67,20 @@ function isOperators(v: unknown): v is Operators {
 }
 
 export class Table<T extends Row = Row> {
-  constructor(
-    private readonly db: JuneDb,
-    private readonly name: string,
-    // Per-request ambient-loader registry, shared across the juno() handle's
-    // .table() calls so concurrent findBy/all coalesce. Holds both point and list
-    // loaders (keyed apart). Optional/defaulted so a standalone `new Table(db,
-    // name)` still works (it just batches alone).
-    private readonly loaders: Map<string, unknown> = new Map(),
-  ) {}
+  // Explicit fields, not parameter properties — parameter properties aren't
+  // erasable, and June ships raw .ts that consumers type-strip (erasableSyntaxOnly).
+  private readonly db: JuneDb;
+  private readonly name: string;
+  // Per-request ambient-loader registry, shared across the juno() handle's
+  // .table() calls so concurrent findBy/all coalesce. Holds both point and list
+  // loaders (keyed apart). Optional/defaulted so a standalone `new Table(db,
+  // name)` still works (it just batches alone).
+  private readonly loaders: Map<string, unknown>;
+  constructor(db: JuneDb, name: string, loaders: Map<string, unknown> = new Map()) {
+    this.db = db;
+    this.name = name;
+    this.loaders = loaders;
+  }
 
   // The compiler for THIS table's db — picked from the handle's dialect tag (sqlite
   // by default). So `table()` emits the right SQL whether db is sqlite/D1, Postgres,

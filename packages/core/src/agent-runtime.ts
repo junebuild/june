@@ -202,15 +202,25 @@ export function foldTranscript(msgs: Msg[]): Turn[] {
 export class AgentSession {
   private chain: Promise<unknown> = Promise.resolve();
   private seq = 0;
-  constructor(
-    private agent: string,
-    private id: string,
-    private store: SessionStore,
-    private bcast: Broadcaster,
-    private model: Model,
-    private tools: Tool[],
-    private runtime: Runtime,
-  ) {}
+  // Explicit fields + assignment (not constructor parameter properties): June
+  // ships raw .ts, so consumers type-strip it — parameter properties aren't
+  // erasable and break `erasableSyntaxOnly` / Node native strip-types.
+  private readonly agent: string;
+  private readonly id: string;
+  private readonly store: SessionStore;
+  private readonly bcast: Broadcaster;
+  private readonly model: Model;
+  private readonly tools: Tool[];
+  private readonly runtime: Runtime;
+  constructor(agent: string, id: string, store: SessionStore, bcast: Broadcaster, model: Model, tools: Tool[], runtime: Runtime) {
+    this.agent = agent;
+    this.id = id;
+    this.store = store;
+    this.bcast = bcast;
+    this.model = model;
+    this.tools = tools;
+    this.runtime = runtime;
+  }
 
   // turns are serialized: each awaits the previous. Two concurrent turn() calls
   // to the same session run one-after-another — no interleaving on the shared

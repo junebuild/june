@@ -28,7 +28,14 @@ function initSchema(db: SyncSqlite) {
 }
 
 class SqliteSessionStore implements SessionStore {
-  constructor(private db: SyncSqlite, private sid: string) {}
+  // Explicit fields (not parameter properties) — see agent-runtime.ts: keep the
+  // shipped source erasable for consumers that type-strip it.
+  private readonly db: SyncSqlite;
+  private readonly sid: string;
+  constructor(db: SyncSqlite, sid: string) {
+    this.db = db;
+    this.sid = sid;
+  }
 
   appendMessage(m: Msg) {
     this.db.query("INSERT INTO agent_messages (session_id, body) VALUES (?, ?)").run(this.sid, JSON.stringify(m));
@@ -81,8 +88,12 @@ export type AgentDef = { model: Model; tools: Tool[] };
 // handing out (and memoizing) an AgentSession actor per (agent, id).
 export class NativeRuntime implements Runtime {
   private actors = new Map<string, AgentSession>();
+  private readonly agents: Record<string, AgentDef>;
+  private readonly db: SyncSqlite;
 
-  constructor(private agents: Record<string, AgentDef>, private db: SyncSqlite) {
+  constructor(agents: Record<string, AgentDef>, db: SyncSqlite) {
+    this.agents = agents;
+    this.db = db;
     initSchema(db);
   }
 
@@ -132,7 +143,10 @@ class MemorySessionStore implements SessionStore {
 export class MemoryRuntime implements Runtime {
   private actors = new Map<string, AgentSession>();
   private stores = new Map<string, MemorySessionStore>();
-  constructor(private agents: Record<string, AgentDef>) {}
+  private readonly agents: Record<string, AgentDef>;
+  constructor(agents: Record<string, AgentDef>) {
+    this.agents = agents;
+  }
   session(agent: string, id: string): AgentSession {
     const key = `${agent}:${id}`;
     let a = this.actors.get(key);
