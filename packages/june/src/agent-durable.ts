@@ -111,14 +111,14 @@ const crossDoUnsupported: Runtime = {
 export type DoAgentDef = { name?: string; model: Model; tools: Tool[] };
 
 // The agent runtime INSIDE a Durable Object. A plain class (constructor takes the
-// DO state) so this module needs no `cloudflare:workers` import — the app extends
-// the real DurableObject and delegates:
+// DO state) so this module needs no `cloudflare:workers` import. The app supplies
+// the thin shell in its worker — a class extending Cloudflare's DurableObject
+// base (the `cloudflare:workers` export, imported there, not here) that news up an
+// AgentDurableObject from `this.ctx` and forwards `fetch()`:
 //
-//   import { DurableObject } from "cloudflare:workers";
-//   import { AgentDurableObject } from "@junejs/server/agent-durable";
 //   export class JuneAgentDO extends DurableObject {
-//     private agent = new AgentDurableObject(this.ctx, { model, tools });
-//     fetch(req: Request) { return this.agent.fetch(req); }
+//     agent = new AgentDurableObject(this.ctx, { model, tools });
+//     fetch(req) { return this.agent.fetch(req); }
 //   }
 export class AgentDurableObject {
   private session: AgentSession;
