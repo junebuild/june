@@ -70,7 +70,14 @@ jobs:
               echo "$name@$v already on the registry — skipping"
               continue
             fi
-            out=$(cd "packages/$p" && bun pm pack && npm publish ./*.tgz --access public 2>&1) && echo "ok $name@$v" || {
+            # A prerelease version (e.g. 0.1.0-dev.0) must NOT move `latest`. Publish it
+            # under a dist-tag derived from its prerelease id (dev / next / beta / rc …);
+            # a stable version (no `-`) publishes with npm's default `latest`.
+            tag=""
+            case "$v" in
+              *-*) tag="--tag $(printf '%s' "$v" | sed -E 's/^[0-9]+\.[0-9]+\.[0-9]+-([0-9A-Za-z]+).*/\1/')";;
+            esac
+            out=$(cd "packages/$p" && bun pm pack && npm publish ./*.tgz --access public $tag 2>&1) && echo "ok $name@$v${tag:+ ($tag)}" || {
               echo "$out" | grep -q "cannot publish over the previously published versions" \
                 && echo "skip $name@$v (already published, different provenance)" \
                 || { echo "$out"; exit 1; }

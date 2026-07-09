@@ -1,5 +1,64 @@
 # @junejs/core
 
+## 0.1.0-dev.0
+
+### Minor Changes
+
+- [`a20cc98`](https://github.com/junebuild/june/commit/a20cc98abdad5d4ccee8ff7d6fd01ee01895bee3) Thanks [@linyiru](https://github.com/linyiru)! - Add agent channels — inbound edges (http / slack / crisp).
+
+  - `@junejs/core/agent-config` — the `Channel` / `ChannelContext` contract,
+    `defineChannel`, and `channelFetch` (a pure Web-standard router that dispatches
+    webhook channels by path and http channels by fall-through). `AgentDefinition`
+    now carries `channels`.
+  - `@junejs/core/channels` — built-in channel factories: `httpChannel` (POST
+    /message + optional /mcp), `slackChannel`, `crispChannel`. Web-standard
+    (`crypto.subtle` HMAC verification, `fetch` reply-out — zero `node:*`, edge-
+    ready). Secrets are injected as options, so the channel stays portable across
+    native and edge; loop guards (bot/operator self-messages) prevent reply loops.
+  - `@junejs/server` — `discoverAgent` now scans `channels/*.ts`; new `mountAgent`
+    builds a `ChannelContext` whose `run` bridges to a durable turn and returns a
+    fetch handler (webhooks + http) plus `startAll` for one-shot channels (cli).
+
+- [`f1bdcc6`](https://github.com/junebuild/june/commit/f1bdcc66e4db1e91f5a2e58b15bcd8bd5d8bf45d) Thanks [@linyiru](https://github.com/linyiru)! - Add agent connections — outbound tool sources (the mirror of channels).
+
+  - `@junejs/core/connections` — `defineMcpConnection` / `defineOpenapiConnection`
+    and `connectAll`: wire an agent into an external MCP server or an OpenAPI
+    service and turn each remote operation into a `<connection>__<tool>`
+    `defineAction`. Because they register in the unified action registry, June both
+    consumes external MCP/OpenAPI (client) AND re-serves them from its own `/mcp`
+    (gateway). Web-standard (fetch + JSON-RPC + a minimal OpenAPI subset, zero
+    `node:*`); credentials resolve per call, server-side, and never reach the
+    model; a down connection is reported, not thrown.
+  - `@junejs/server` — `discoverAgent` now scans `connections/*.ts`, calls
+    `connectAll`, merges the remote tools into the agent's tool set, and records the
+    connection report on `AgentDefinition.connections`.
+
+- [`d5e5563`](https://github.com/junebuild/june/commit/d5e55631f488fb73cc804588e539706e8451017e) Thanks [@linyiru](https://github.com/linyiru)! - Add `defineAgent` + directory discovery (agent-runtime build order step 2).
+
+  - `@junejs/core/agent-config` — `defineAgent()` assembles an agent from config +
+    tools + skills. `actionToTool()` bridges a `defineAction` into a runtime `Tool`
+    (sync ⇒ exactly-once local, async ⇒ at-least-once remote), so an agent's tools
+    ARE your server actions — no new tool concept. `readSkillTool` +
+    `buildSystemPrompt` give progressive skill disclosure.
+  - `@junejs/server/agent-discover` — `discoverAgent(dir)` scans the `agent/`
+    directory convention (`agent.ts` + `instructions.md` + `tools/*.ts` +
+    `skills/*.md`) into an `AgentDefinition`, ready to mount with
+    `createNativeRuntime({ [name]: { model, tools } })`.
+
+- [`56e0dfd`](https://github.com/junebuild/june/commit/56e0dfd96c16e4b9e8e58b9069e62460f3b05090) Thanks [@linyiru](https://github.com/linyiru)! - Add the durable agent-runtime foundation.
+
+  - `@junejs/core/agent-runtime` — a pure (zero `node:*`) durable turn engine and
+    its seams: `SessionStore` / `Broadcaster` / `Model`, the `AgentSession` actor
+    (turn serialization), and `Runtime`. Durability is log-replay + step-checkpoint
+    with session-scoped checkpoint keys; exactly-once for local tool side effects,
+    at-least-once for remote/subagent tools. Sibling to `@junejs/core/agent` (the
+    `defineAction` registry it consumes), not a replacement.
+  - `@junejs/server/agent-native` — the native seam: `NativeRuntime` /
+    `createNativeRuntime` over a synchronous SQLite handle (a new
+    `openLocalSqliteSync` export from the sqlite driver — the durability
+    transaction must be synchronous, so it uses the raw handle rather than the
+    async `JuneDb`).
+
 ## 0.0.49
 
 ### Patch Changes
