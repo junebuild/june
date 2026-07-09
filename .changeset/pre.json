@@ -20,6 +20,7 @@
     "agent-connections",
     "agent-durable-object",
     "define-agent-discovery",
-    "durable-agent-runtime"
+    "durable-agent-runtime",
+    "erasable-syntax"
   ]
 }
