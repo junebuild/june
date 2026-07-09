@@ -193,7 +193,12 @@ interface RedisLike {
 }
 
 class RedisStore implements CacheStore {
-  constructor(private readonly client: RedisLike) {}
+  // Explicit field, not a parameter property — parameter properties aren't
+  // erasable, and June ships raw .ts that consumers type-strip (erasableSyntaxOnly).
+  private readonly client: RedisLike;
+  constructor(client: RedisLike) {
+    this.client = client;
+  }
 
   async get(key: string): Promise<CacheEntry | null> {
     const raw = await this.client.get(key);

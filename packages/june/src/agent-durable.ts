@@ -53,7 +53,10 @@ export interface DurableObjectNamespace {
 // the exactly-once contract (side effect + checkpoint + append in one tx) holds
 // on the edge exactly as it does natively.
 export class DoSessionStore implements SessionStore {
-  constructor(private storage: DurableStorage) {
+  // Explicit field (not a parameter property) — keep the shipped source erasable.
+  private readonly storage: DurableStorage;
+  constructor(storage: DurableStorage) {
+    this.storage = storage;
     const sql = storage.sql;
     sql.exec(`CREATE TABLE IF NOT EXISTS agent_messages (seq INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT)`);
     sql.exec(`CREATE TABLE IF NOT EXISTS agent_steps (id TEXT PRIMARY KEY, output TEXT)`);
