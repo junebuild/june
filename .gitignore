@@ -12,6 +12,10 @@ target/
 .env.*
 !.env.example
 
+# Cloudflare / wrangler local state (workerd cache, dev DO storage) — regenerated
+.wrangler/
+.dev.vars
+
 # Editor
 .idea/
 .vscode/
