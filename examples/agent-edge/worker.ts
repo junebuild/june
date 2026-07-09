@@ -45,8 +45,11 @@ export class JuneAgentDO extends DurableObject<Env> {
   #agent = new AgentDurableObject(this.ctx, {
     name: "ops",
     tools,
+    // instructions live on the def; the runtime injects them as the system prompt
+    // per turn (works for the real model AND the scripted fallback).
+    instructions: INSTRUCTIONS,
     model: this.env.ANTHROPIC_API_KEY
-      ? anthropic({ model: "claude-opus-4-8", apiKey: this.env.ANTHROPIC_API_KEY, system: INSTRUCTIONS })
+      ? anthropic({ model: "claude-opus-4-8", apiKey: this.env.ANTHROPIC_API_KEY })
       : scripted,
   });
   fetch(req: Request): Promise<Response> {

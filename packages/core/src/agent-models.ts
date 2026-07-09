@@ -69,7 +69,10 @@ export type AnthropicOptions = {
 export function anthropic(opts: AnthropicOptions = {}): Model {
   const model = opts.model ?? "claude-opus-4-8";
   const maxTokens = opts.maxTokens ?? 16000;
-  return async (msgs: Msg[], tools: ToolSpec[]): Promise<ModelReply> => {
+  return async (msgs: Msg[], tools: ToolSpec[], callOpts?: { system?: string }): Promise<ModelReply> => {
+    // Per-call system (the runtime injects the agent's instructions) wins over a
+    // construction-time default.
+    const system = callOpts?.system ?? opts.system;
     // Non-literal specifier (typed `string`) so tsc/bundlers don't require the
     // optional dep and it stays lazy.
     const specifier: string = "@anthropic-ai/sdk";
@@ -90,7 +93,7 @@ export function anthropic(opts: AnthropicOptions = {}): Model {
       model,
       max_tokens: maxTokens,
       thinking: opts.thinking ? { type: "adaptive" } : { type: "disabled" },
-      ...(opts.system ? { system: opts.system } : {}),
+      ...(system ? { system } : {}),
       tools: tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.input })),
       messages: toAnthropicMessages(msgs),
     });

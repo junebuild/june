@@ -6,6 +6,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   AgentSession,
+  withSystem,
   type Broadcaster,
   type Model,
   type ModelReply,
@@ -214,5 +215,15 @@ describe("agent-runtime engine", () => {
     const childTranscript = rt.session("researcher", "s1:sub:c1").transcript();
     expect(childTranscript).toHaveLength(1);
     expect(childTranscript[0]!.text).toBe("widgets are trending; buy 3");
+  });
+});
+
+describe("withSystem", () => {
+  test("injects the system prompt into every model call (def-authoritative)", async () => {
+    let seen: string | undefined;
+    const capture: Model = async (_m, _t, opts) => { seen = opts?.system; return { text: "ok", toolCalls: [] }; };
+    const wrapped = withSystem(capture, "You are Ops.");
+    await wrapped([{ role: "user", turnId: "t1", text: "hi" }], []);
+    expect(seen).toBe("You are Ops.");
   });
 });

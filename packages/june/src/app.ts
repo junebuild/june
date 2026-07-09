@@ -209,8 +209,13 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
       const def = await discoverAgent(agentDir);
       // dev has no Durable Object — a "durable" backend falls back to native here.
       const backend = agent.runtime.backend === "durable" ? "native" : agent.runtime.backend;
-      const model = anthropic({ model: def.model, system: buildSystemPrompt(def) });
-      const rt = await createAgentRuntime({ [def.name]: { model, tools: def.tools } }, { backend });
+      // instructions live on the def (single source); the runtime injects them
+      // into the model per turn via withSystem — no need to bake into anthropic().
+      const model = anthropic({ model: def.model });
+      const rt = await createAgentRuntime(
+        { [def.name]: { model, tools: def.tools, instructions: buildSystemPrompt(def) } },
+        { backend },
+      );
       const mounted = mountAgent(def, rt, { chatPath: agent.runtime.chat.path, channels: agent.runtime.channels });
       agentSurface = (req) => mounted.surface(req);
       await mounted.startAll();

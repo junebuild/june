@@ -99,4 +99,16 @@ describe("agent-native (native SessionStore seam)", () => {
     expect(rt.session("ops", "alice").transcript()).toHaveLength(1);
     expect(rt.session("ops", "bob").transcript()).toHaveLength(1);
   });
+
+  test("instructions on the AgentDef reach the model as the system prompt (per turn)", async () => {
+    let seenSystem: string | undefined;
+    const captureModel: Model = async (_msgs, _tools, opts) => {
+      seenSystem = opts?.system;
+      return { text: "ok", toolCalls: [] };
+    };
+    const def: AgentDef = { model: captureModel, tools: [], instructions: "You are the ops assistant." };
+    const rt = await createNativeRuntime({ ops: def });
+    await rt.session("ops", "s1").turn({ turnId: "t1", userText: "hi" });
+    expect(seenSystem).toBe("You are the ops assistant."); // runtime injected it — not baked into the model
+  });
 });
