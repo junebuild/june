@@ -27,6 +27,7 @@
     "./agent": "./src/agent.ts",
     "./agent-runtime": "./src/agent-runtime.ts",
     "./agent-config": "./src/agent-config.ts",
+    "./agent-models": "./src/agent-models.ts",
     "./channels": "./src/channels.ts",
     "./connections": "./src/connections.ts",
     "./mcp": "./src/mcp.ts",
@@ -43,10 +44,14 @@
   },
   "peerDependencies": {
     "react": "catalog:",
-    "react-dom": "catalog:"
+    "react-dom": "catalog:",
+    "@anthropic-ai/sdk": ">=0.60.0"
   },
   "peerDependenciesMeta": {
     "react": {
+      "optional": true
+    },
+    "@anthropic-ai/sdk": {
       "optional": true
     }
   },
