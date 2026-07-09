@@ -153,3 +153,32 @@ export class AgentDurableObject {
 export function durableFetch(namespace: DurableObjectNamespace, agent: string, session: string, req: Request): Promise<Response> {
   return namespace.get(namespace.idFromName(`${agent}:${session}`)).fetch(req);
 }
+
+// The EDGE agent surface for June's router: route the chat endpoint to the
+// per-session Durable Object. `getNamespace` reads the DO binding off the
+// per-fetch env (like the env-aware resources provider), so the surface is null
+// (fall through) when no DO is bound. Returns null for non-chat requests.
+//
+// Channel webhooks on the edge route by a session derived from the platform
+// payload (slack channel:thread, crisp website:session) — that needs parsing
+// before picking the DO, so it's a follow-up; this ships the chat endpoint.
+export function durableAgentSurface(
+  getNamespace: () => DurableObjectNamespace | undefined,
+  opts: { agentName: string; chatPath?: string },
+): (req: Request) => Promise<Response | null> {
+  const chatPath = opts.chatPath ?? "/message";
+  return async (req: Request): Promise<Response | null> => {
+    const url = new URL(req.url);
+    if (req.method !== "POST" || url.pathname !== chatPath) return null;
+    const namespace = getNamespace();
+    if (!namespace) return null; // no DO binding → not mounted here
+    const { message, session } = (await req.json()) as { message: string; session?: string };
+    // Forward to the session's DO on its /turn contract (AgentDurableObject.fetch).
+    return durableFetch(
+      namespace,
+      opts.agentName,
+      session ?? "default",
+      new Request("https://do/turn", { method: "POST", body: JSON.stringify({ userText: message }) }),
+    );
+  };
+}

@@ -18,6 +18,7 @@ import type { I18nConfig } from "@junejs/core/i18n";
 import type { Resources } from "@junejs/core/resources";
 
 import { createPipeline, type ExtraHandler, type LayoutComponent, type LoadingComponent, type Resolved, type ResolvedResource, type ResourceHandler } from "./pipeline";
+import { durableAgentSurface, type DurableObjectNamespace } from "./agent-durable";
 
 export type WorkerManifest = {
   // Static paths → route definitions ("/", "/users", ...).
@@ -39,6 +40,10 @@ export type WorkerManifest = {
   loadings?: Record<string, LoadingComponent>;
   document: DocumentConfig;
   agent: AgentConfig;
+  // The discovered agent's name (for the Durable Object address idFromName). Set
+  // by the build when an agent/ directory exists; absent → no durable agent on
+  // the edge. The DO namespace binding is `env.AGENT`.
+  agentName?: string;
   // Locale routing config, frozen from june.config.ts `i18n`. The locales table
   // is plain data; a `resolveLocale` hook survives the in-process freeze (parity
   // test) but not JSON codegen — worker hook support lands with the codegen pass.
@@ -127,9 +132,25 @@ export function createWorker(
   let currentEnv: unknown;
   const provider = manifest.resources;
 
+  // Durable agent (edge): route the chat endpoint to the per-session DO bound at
+  // env.AGENT. Built only when the app has an agent (manifest.agentName) and the
+  // runtime is enabled; the surface is inert (null → fall through) until env.AGENT
+  // is present, so a worker without the DO binding is unaffected.
+  const agentSurface =
+    manifest.agent.runtime.enabled && manifest.agentName
+      ? (() => {
+          const route = durableAgentSurface(
+            () => (currentEnv as { AGENT?: DurableObjectNamespace } | undefined)?.AGENT,
+            { agentName: manifest.agentName, chatPath: manifest.agent.runtime.chat.path },
+          );
+          return (req: Request) => route(req);
+        })()
+      : undefined;
+
   const pipeline = createPipeline({
     docConfig: manifest.document,
     agent: manifest.agent,
+    agentSurface,
     i18n: manifest.i18n,
     routeList: () => routeList,
     earlyHints: manifest.earlyHints,
