@@ -8,6 +8,7 @@
 
 import type { AnyAction } from "./agent";
 import type { Tool, ToolSpec } from "./agent-runtime";
+import type { ConnectionReport } from "./connections";
 
 // A skill: a named procedure loaded on demand (progressive disclosure). The
 // system prompt lists them; the model pulls a body via the read_skill tool.
@@ -55,6 +56,8 @@ export type AgentDefinition = {
   tools: Tool[];
   skills: Skill[];
   channels: Channel[];
+  // report of external connections wired in (their tools are already in `tools`)
+  connections: ConnectionReport[];
 };
 
 // Bridge a `defineAction` into a runtime Tool. The action's run(input, ctx) is
@@ -105,6 +108,7 @@ export function defineAgent(config: {
   tools?: (AnyAction | Tool)[];
   skills?: Skill[];
   channels?: Channel[];
+  connections?: ConnectionReport[];
 }): AgentDefinition {
   const skills = config.skills ?? [];
   const tools: Tool[] = (config.tools ?? []).map((t) => (isTool(t) ? t : actionToTool(t)));
@@ -117,6 +121,7 @@ export function defineAgent(config: {
     tools,
     skills,
     channels: config.channels ?? [],
+    connections: config.connections ?? [],
   };
 }
 

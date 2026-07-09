@@ -15,7 +15,7 @@ async function hmacHex(secret: string, message: string): Promise<string> {
 }
 
 function ctxWith(run: ChannelContext["run"], channels: Channel[] = []): ChannelContext {
-  const agent: AgentDefinition = { name: "ops", instructions: "", tools: [], skills: [], channels };
+  const agent: AgentDefinition = { name: "ops", instructions: "", tools: [], skills: [], channels, connections: [] };
   return { agent, run };
 }
 
