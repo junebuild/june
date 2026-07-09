@@ -16,9 +16,11 @@
     "@junejs/og": "0.0.5"
   },
   "changesets": [
+    "agent-auto-mount",
     "agent-channels",
     "agent-connections",
     "agent-durable-object",
+    "agent-models",
     "define-agent-discovery",
     "durable-agent-runtime",
     "erasable-syntax"
