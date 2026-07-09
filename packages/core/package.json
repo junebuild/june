@@ -28,6 +28,7 @@
     "./agent-runtime": "./src/agent-runtime.ts",
     "./agent-config": "./src/agent-config.ts",
     "./channels": "./src/channels.ts",
+    "./connections": "./src/connections.ts",
     "./mcp": "./src/mcp.ts",
     "./discovery": "./src/discovery.ts",
     "./cache": "./src/cache.ts",

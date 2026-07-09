@@ -8,6 +8,7 @@
 //     tools/*.ts       → each default-exports a defineAction (a tool)
 //     skills/*.md      → each a procedure, loaded on demand (progressive disclosure)
 //     channels/*.ts    → each default-exports a Channel (an inbound edge)
+//     connections/*.ts → each default-exports a Connection (an outbound tool source)
 //
 // There is no central registry to keep in sync — the directory IS the manifest.
 // Because tools are `defineAction`s, the SAME directory is also an MCP server and
@@ -21,6 +22,7 @@ import { pathToFileURL } from "node:url";
 
 import type { AnyAction } from "@junejs/core/agent";
 import { defineAgent, type AgentConfigFile, type AgentDefinition, type Channel, type Skill } from "@junejs/core/agent-config";
+import { connectAll, type Connection } from "@junejs/core/connections";
 
 async function scan(dir: string, ext: string): Promise<string[]> {
   if (!existsSync(dir)) return [];
@@ -83,6 +85,18 @@ export async function discoverAgent(dir: string): Promise<AgentDefinition> {
     if (mod.default) channels.push(mod.default as Channel);
   }
 
+  // connections/*.ts — outbound: wire external MCP/OpenAPI servers, turning their
+  // operations into `<connection>__<tool>` defineActions that join `tools`.
+  const connectionDefs: Connection[] = [];
+  for (const f of await scan(join(dir, "connections"), ".ts")) {
+    const mod = await import(pathToFileURL(f).href);
+    if (mod.default) connectionDefs.push(mod.default as Connection);
+  }
+  const { actions: connectionActions, report: connections } = connectionDefs.length
+    ? await connectAll(connectionDefs)
+    : { actions: [], report: [] };
+  tools.push(...connectionActions);
+
   return defineAgent({
     name: config.name,
     model: config.model,
@@ -91,5 +105,6 @@ export async function discoverAgent(dir: string): Promise<AgentDefinition> {
     tools,
     skills,
     channels,
+    connections,
   });
 }
