@@ -1,0 +1,99 @@
+// defineAgent + the defineAction→Tool bridge. The point of the bridge is the
+// thesis "an agent's tools ARE your server actions" — so this asserts a real
+// defineAction becomes a runnable Tool with sync/async semantics preserved (the
+// engine keys exactly-once vs at-least-once off that).
+
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { ACTION_REGISTRY, defineAction } from "@junejs/core/agent";
+import { actionToTool, buildSystemPrompt, defineAgent, readSkillTool, type Skill } from "@junejs/core/agent-config";
+
+// defineAction self-registers globally; isolate the registry per test.
+let preexisting = new Map(ACTION_REGISTRY);
+beforeEach(() => { preexisting = new Map(ACTION_REGISTRY); ACTION_REGISTRY.clear(); });
+afterEach(() => { ACTION_REGISTRY.clear(); for (const [id, a] of preexisting) ACTION_REGISTRY.set(id, a); });
+
+const orderSchema = {
+  type: "object",
+  properties: { item: { type: "string" }, qty: { type: "number" } },
+  required: ["item"],
+} as const;
+
+describe("actionToTool", () => {
+  test("bridges a sync defineAction into a sync (exactly-once) Tool", async () => {
+    const createOrder = defineAction({
+      id: "create_order",
+      description: "Place an order",
+      input: orderSchema,
+      run: (input) => ({ orderId: 1, item: input.item, qty: input.qty ?? 1 }),
+    });
+    const tool = actionToTool(createOrder);
+
+    expect(tool.spec).toEqual({ name: "create_order", description: "Place an order", input: orderSchema });
+    expect(tool.run.constructor.name).toBe("Function"); // sync ⇒ engine runs it in-tx (exactly-once)
+    expect(await tool.run({ item: "widget", qty: 3 }, {} as never)).toEqual({ orderId: 1, item: "widget", qty: 3 });
+  });
+
+  test("bridges an async defineAction into an async (at-least-once) Tool", async () => {
+    const lookup = defineAction({
+      id: "lookup_inventory",
+      description: "Look up stock",
+      input: { type: "object", properties: { item: { type: "string" } }, required: ["item"] } as const,
+      run: async (input) => ({ item: input.item, inStock: 42 }),
+    });
+    const tool = actionToTool(lookup);
+
+    expect(tool.run.constructor.name).toBe("AsyncFunction"); // async ⇒ engine treats it remote (at-least-once)
+    expect(await tool.run({ item: "widget" }, {} as never)).toEqual({ item: "widget", inStock: 42 });
+  });
+});
+
+describe("defineAgent", () => {
+  test("assembles config + adapted tools; adds read_skill when skills exist", () => {
+    const createOrder = defineAction({
+      id: "create_order", description: "Place an order", input: orderSchema,
+      run: (input) => ({ item: input.item }),
+    });
+    const skills: Skill[] = [{ name: "bulk_reorder", description: "Reorder many items", body: "1. ...\n2. ..." }];
+
+    const agent = defineAgent({
+      name: "ops",
+      model: "claude-opus-4-8",
+      description: "Ops assistant",
+      instructions: "You place orders.",
+      tools: [createOrder],
+      skills,
+    });
+
+    expect(agent.name).toBe("ops");
+    expect(agent.model).toBe("claude-opus-4-8");
+    expect(agent.instructions).toBe("You place orders.");
+    expect(agent.tools.map((t) => t.spec.name)).toEqual(["create_order", "read_skill"]);
+    expect(agent.skills).toEqual(skills);
+  });
+
+  test("no skills ⇒ no read_skill tool", () => {
+    const agent = defineAgent({ name: "bare", tools: [] });
+    expect(agent.tools).toHaveLength(0);
+    expect(agent.instructions).toBe("");
+  });
+
+  test("read_skill returns a known skill's body and errors on an unknown one", async () => {
+    const tool = readSkillTool([{ name: "bulk_reorder", description: "d", body: "the steps" }]);
+    expect(await tool.run({ name: "bulk_reorder" }, {} as never)).toEqual({ name: "bulk_reorder", body: "the steps" });
+    expect(await tool.run({ name: "nope" }, {} as never)).toEqual({ error: "unknown skill: nope" });
+  });
+});
+
+describe("buildSystemPrompt", () => {
+  test("appends a one-line skill index to the instructions", () => {
+    const agent = defineAgent({
+      name: "ops",
+      instructions: "You place orders.",
+      skills: [{ name: "bulk_reorder", description: "Reorder many items", body: "..." }],
+    });
+    const prompt = buildSystemPrompt(agent);
+    expect(prompt).toContain("You place orders.");
+    expect(prompt).toContain("## Available skills (call read_skill to load one)");
+    expect(prompt).toContain("- bulk_reorder: Reorder many items");
+  });
+});
