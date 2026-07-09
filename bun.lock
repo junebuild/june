@@ -35,6 +35,13 @@
         "typescript": "^5.9.0",
       },
     },
+    "examples/agent-edge": {
+      "name": "@junejs-examples/agent-edge",
+      "dependencies": {
+        "@junejs/core": "workspace:*",
+        "@junejs/server": "workspace:*",
+      },
+    },
     "examples/basic": {
       "name": "@june-examples/basic",
       "version": "0.0.4-dev.2",
@@ -103,7 +110,7 @@
       "name": "@junejs/db",
       "version": "0.0.33-dev.0",
       "dependencies": {
-        "@junejs/core": ">=0.0.46 <0.1.0",
+        "@junejs/core": ">=0.1.0-dev.0",
       },
     },
     "packages/i18n": {
@@ -121,8 +128,8 @@
       "name": "@junejs/server",
       "version": "0.1.0-dev.2",
       "dependencies": {
-        "@junejs/core": ">=0.0.46 <0.1.0",
-        "@junejs/db": ">=0.0.31 <0.1.0",
+        "@junejs/core": ">=0.1.0-dev.2",
+        "@junejs/db": ">=0.0.33-dev.0",
         "@momiji-rs/sparkdown": "^0.0.4",
         "lightningcss": "^1.27.0",
         "oxc-parser": "^0.137.0",
@@ -366,6 +373,8 @@
     "@june-examples/i18n": ["@june-examples/i18n@workspace:examples/i18n"],
 
     "@june-examples/juno-crud": ["@june-examples/juno-crud@workspace:examples/juno-crud"],
+
+    "@junejs-examples/agent-edge": ["@junejs-examples/agent-edge@workspace:examples/agent-edge"],
 
     "@junejs/cli": ["@junejs/cli@workspace:packages/cli"],
 

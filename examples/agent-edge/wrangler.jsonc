@@ -1,0 +1,11 @@
+{
+  "name": "june-agent-edge",
+  "main": "worker.ts",
+  "compatibility_date": "2025-04-01",
+  // One SQLite-backed Durable Object class = the AgentSession actor on the edge.
+  // The DO's ctx.storage.sql is the synchronous store the durable loop commits to.
+  "durable_objects": {
+    "bindings": [{ "name": "AGENT", "class_name": "JuneAgentDO" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["JuneAgentDO"] }]
+}
