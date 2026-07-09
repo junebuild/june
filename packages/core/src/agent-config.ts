@@ -13,6 +13,30 @@ import type { Tool, ToolSpec } from "./agent-runtime";
 // system prompt lists them; the model pulls a body via the read_skill tool.
 export type Skill = { name: string; description: string; body: string };
 
+// A channel is an INBOUND edge — how a message reaches the agent: an HTTP
+// endpoint, a Slack/Crisp webhook, a CLI. It maps the inbound message to a
+// session, runs a durable turn via ctx.run, and (for chat platforms) posts the
+// reply back out. Web-standard (Request→Response, no node:*) so it runs on both
+// native and edge targets.
+export type ChannelContext = {
+  agent: AgentDefinition;
+  run: (message: string, opts?: { session?: string; turnId?: string }) => Promise<string>;
+};
+export type Channel = {
+  name: string;
+  // one-shot input source (e.g. cli): run once at startup
+  start?: (ctx: ChannelContext) => Promise<void> | void;
+  // a general fetch handler (e.g. http: POST /message + /mcp)
+  fetch?: (ctx: ChannelContext) => (req: Request) => Promise<Response>;
+  // a webhook mounted at `path` (e.g. Slack/Crisp): verify signature, ACK fast,
+  // run the turn, post the reply out-of-band
+  path?: string;
+  webhook?: (req: Request, ctx: ChannelContext) => Promise<Response>;
+};
+export function defineChannel(channel: Channel): Channel {
+  return channel;
+}
+
 // What `agent.ts` default-exports in the directory convention (the rest —
 // instructions/tools/skills — is discovered from sibling files).
 export type AgentConfigFile = {
@@ -30,6 +54,7 @@ export type AgentDefinition = {
   instructions: string;
   tools: Tool[];
   skills: Skill[];
+  channels: Channel[];
 };
 
 // Bridge a `defineAction` into a runtime Tool. The action's run(input, ctx) is
@@ -79,6 +104,7 @@ export function defineAgent(config: {
   instructions?: string;
   tools?: (AnyAction | Tool)[];
   skills?: Skill[];
+  channels?: Channel[];
 }): AgentDefinition {
   const skills = config.skills ?? [];
   const tools: Tool[] = (config.tools ?? []).map((t) => (isTool(t) ? t : actionToTool(t)));
@@ -90,6 +116,25 @@ export function defineAgent(config: {
     instructions: config.instructions ?? "",
     tools,
     skills,
+    channels: config.channels ?? [],
+  };
+}
+
+// Build a Web-standard fetch handler that dispatches to the agent's channels:
+// a webhook channel by exact `path`, then any `fetch` channels (first non-404
+// wins). Pure — the caller supplies `ctx.run` (the bridge to a runtime), so this
+// works identically on native and edge.
+export function channelFetch(agent: AgentDefinition, ctx: ChannelContext): (req: Request) => Promise<Response> {
+  const webhooks = agent.channels.filter((c) => c.path && c.webhook);
+  const fetchers = agent.channels.filter((c) => c.fetch).map((c) => c.fetch!(ctx));
+  return async (req: Request): Promise<Response> => {
+    const url = new URL(req.url);
+    for (const c of webhooks) if (url.pathname === c.path) return c.webhook!(req, ctx);
+    for (const f of fetchers) {
+      const res = await f(req);
+      if (res.status !== 404) return res; // first channel that handles the route wins
+    }
+    return new Response("no channel matched", { status: 404 });
   };
 }
 

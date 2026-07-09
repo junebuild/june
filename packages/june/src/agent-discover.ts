@@ -7,6 +7,7 @@
 //     instructions.md  → system prompt
 //     tools/*.ts       → each default-exports a defineAction (a tool)
 //     skills/*.md      → each a procedure, loaded on demand (progressive disclosure)
+//     channels/*.ts    → each default-exports a Channel (an inbound edge)
 //
 // There is no central registry to keep in sync — the directory IS the manifest.
 // Because tools are `defineAction`s, the SAME directory is also an MCP server and
@@ -19,7 +20,7 @@ import { basename, extname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import type { AnyAction } from "@junejs/core/agent";
-import { defineAgent, type AgentConfigFile, type AgentDefinition, type Skill } from "@junejs/core/agent-config";
+import { defineAgent, type AgentConfigFile, type AgentDefinition, type Channel, type Skill } from "@junejs/core/agent-config";
 
 async function scan(dir: string, ext: string): Promise<string[]> {
   if (!existsSync(dir)) return [];
@@ -76,6 +77,12 @@ export async function discoverAgent(dir: string): Promise<AgentDefinition> {
     skills.push(parseSkill(basename(f, ".md"), await readFile(f, "utf8")));
   }
 
+  const channels: Channel[] = [];
+  for (const f of await scan(join(dir, "channels"), ".ts")) {
+    const mod = await import(pathToFileURL(f).href);
+    if (mod.default) channels.push(mod.default as Channel);
+  }
+
   return defineAgent({
     name: config.name,
     model: config.model,
@@ -83,5 +90,6 @@ export async function discoverAgent(dir: string): Promise<AgentDefinition> {
     instructions,
     tools,
     skills,
+    channels,
   });
 }
