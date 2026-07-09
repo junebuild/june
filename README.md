@@ -1,8 +1,10 @@
 # June
 
-**The agent-ready React framework.** One page definition serves humans
-(streamed HTML, zero client JS) and agents (markdown, JSON, MCP) — nothing
-drifts, because nothing is duplicated.
+**The React framework for building agents into real apps.** One definition
+serves humans (streamed HTML, zero client JS) and agents (markdown, JSON, MCP) —
+nothing drifts, because nothing is duplicated. An agent is a feature, not a
+separate runtime: its tools are your server actions, its API is the `/mcp` your
+app already speaks.
 
 > **Status: 0.0.x preview.** The spec is still being drafted and APIs will
 > change. Early feedback is the point — [open an issue](https://github.com/junebuild/june/issues).
