@@ -14,12 +14,12 @@ import type { JuneDb } from "@junejs/core/resources";
 
 // The shape bun:sqlite exposes directly and node:sqlite is adapted to: a
 // prepared statement with positional binding.
-type SyncStatement = {
+export type SyncStatement = {
   all(...params: unknown[]): unknown[];
   get(...params: unknown[]): unknown;
   run(...params: unknown[]): { changes: number | bigint; lastInsertRowid?: number | bigint };
 };
-type SyncSqlite = {
+export type SyncSqlite = {
   query(sql: string): SyncStatement;
   exec(sql: string): void;
   close(): void;
@@ -135,9 +135,12 @@ export function makeWarningFilter(original: EmitWarning): EmitWarning {
 // runtime, which is exactly what the typeof guard checks.
 declare const Bun: unknown;
 
-// Open a LOCAL sqlite file (or ":memory:") on whichever runtime we're under.
-// The single seam host.openDb() delegates to.
-export async function openLocalSqlite(path: string): Promise<JuneDb> {
+// Open a LOCAL *synchronous* sqlite handle on whichever runtime we're under —
+// bun:sqlite under Bun, node:sqlite under Node. This is the raw synchronous
+// surface: asyncSqlite() wraps it as the edge-safe async JuneDb (below), while
+// the agent runtime's SessionStore uses it directly because its durability
+// transaction MUST be synchronous (no await between side effect and checkpoint).
+export async function openLocalSqliteSync(path: string): Promise<SyncSqlite> {
   if (typeof Bun !== "undefined") {
     // Non-literal specifier so a bundler can't FOLLOW bun:sqlite into a Node
     // build (it only exists under Bun, and is only reached under Bun).
@@ -145,7 +148,7 @@ export async function openLocalSqlite(path: string): Promise<JuneDb> {
     const { Database } = (await import(specifier)) as {
       Database: new (p: string, o?: { create?: boolean }) => SyncSqlite;
     };
-    return asyncSqlite(new Database(path, { create: true }));
+    return new Database(path, { create: true });
   }
 
   // Node: node:sqlite is a builtin, but only flag-free on a recent-enough
@@ -169,9 +172,15 @@ export async function openLocalSqlite(path: string): Promise<JuneDb> {
   }
   const db = new mod.DatabaseSync(path);
   // Adapt node:sqlite (prepare()) to the query()-shaped SyncSqlite surface.
-  return asyncSqlite({
+  return {
     query: (sql) => db.prepare(sql),
     exec: (sql) => db.exec(sql),
     close: () => db.close(),
-  });
+  };
+}
+
+// Open a LOCAL sqlite file (or ":memory:") as the async JuneDb — the single seam
+// host.openDb() delegates to.
+export async function openLocalSqlite(path: string): Promise<JuneDb> {
+  return asyncSqlite(await openLocalSqliteSync(path));
 }

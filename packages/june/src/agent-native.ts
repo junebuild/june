@@ -1,0 +1,109 @@
+// agent-native.ts — the NATIVE seam implementation of @junejs/core/agent-runtime.
+//
+// SessionStore = a session-scoped view over one shared synchronous SQLite handle
+// (bun:sqlite under Bun, node:sqlite under Node — the same handle openLocalSqlite
+// wraps as the async JuneDb, opened here directly because the durability tx must
+// be synchronous). Broadcaster = an in-process subscriber set. Turn serialization
+// comes from the AgentSession actor in core. On the edge target this same shape
+// is reimplemented over a Durable Object's ctx.storage.sql (build order step 5).
+
+import {
+  AgentSession,
+  type Broadcaster,
+  type Model,
+  type Msg,
+  type Runtime,
+  type SessionStore,
+  type Tool,
+} from "@junejs/core/agent-runtime";
+import { openLocalSqliteSync, type SyncSqlite } from "./sqlite-driver";
+
+function initSchema(db: SyncSqlite) {
+  db.exec(`CREATE TABLE IF NOT EXISTS agent_sessions (session_id TEXT PRIMARY KEY, status TEXT)`);
+  db.exec(`CREATE TABLE IF NOT EXISTS agent_messages (seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, body TEXT)`);
+  // NOTE: PRIMARY KEY (session_id, id) — never id alone. The store view scopes
+  // every query by session, so a step id can't leak across sessions.
+  db.exec(`CREATE TABLE IF NOT EXISTS agent_steps (session_id TEXT, id TEXT, output TEXT, PRIMARY KEY (session_id, id))`);
+}
+
+class SqliteSessionStore implements SessionStore {
+  constructor(private db: SyncSqlite, private sid: string) {}
+
+  appendMessage(m: Msg) {
+    this.db.query("INSERT INTO agent_messages (session_id, body) VALUES (?, ?)").run(this.sid, JSON.stringify(m));
+  }
+  messages(): Msg[] {
+    return (this.db.query("SELECT body FROM agent_messages WHERE session_id = ? ORDER BY seq").all(this.sid) as { body: string }[])
+      .map((r) => JSON.parse(r.body));
+  }
+  hasUserTurn(turnId: string): boolean {
+    return this.messages().some((m) => m.role === "user" && m.turnId === turnId);
+  }
+  getStep(id: string): unknown | undefined {
+    const r = this.db.query("SELECT output FROM agent_steps WHERE session_id = ? AND id = ?").get(this.sid, id) as { output: string } | undefined;
+    return r ? JSON.parse(r.output) : undefined;
+  }
+  putStep(id: string, output: unknown) {
+    this.db.query("INSERT INTO agent_steps (session_id, id, output) VALUES (?, ?, ?)").run(this.sid, id, JSON.stringify(output));
+  }
+  getStatus(): string {
+    return (this.db.query("SELECT status FROM agent_sessions WHERE session_id = ?").get(this.sid) as { status: string } | undefined)?.status ?? "new";
+  }
+  setStatus(s: string) {
+    this.db.query("INSERT INTO agent_sessions (session_id, status) VALUES (?, ?) ON CONFLICT(session_id) DO UPDATE SET status = ?").run(this.sid, s, s);
+  }
+  // Synchronous transaction on the single connection (sqlite is single-writer).
+  // No nesting: the engine runs one tx per step, each committing before the next.
+  tx<T>(fn: () => T): T {
+    this.db.exec("BEGIN");
+    try {
+      const out = fn();
+      this.db.exec("COMMIT");
+      return out;
+    } catch (e) {
+      this.db.exec("ROLLBACK");
+      throw e;
+    }
+  }
+  unwrap<H = unknown>(): H { return this.db as unknown as H; }
+}
+
+class InProcBroadcaster implements Broadcaster {
+  private subs = new Set<(t: string) => void>();
+  publish(turnId: string) { this.subs.forEach((cb) => { try { cb(turnId); } catch { /* a bad subscriber must not break publish */ } }); }
+  subscribe(cb: (t: string) => void): () => void { this.subs.add(cb); return () => this.subs.delete(cb); }
+}
+
+export type AgentDef = { model: Model; tools: Tool[] };
+
+// The native Runtime: a registry of agent definitions over one SQLite handle,
+// handing out (and memoizing) an AgentSession actor per (agent, id).
+export class NativeRuntime implements Runtime {
+  private actors = new Map<string, AgentSession>();
+
+  constructor(private agents: Record<string, AgentDef>, private db: SyncSqlite) {
+    initSchema(db);
+  }
+
+  session(agent: string, id: string): AgentSession {
+    const key = `${agent}:${id}`;
+    let a = this.actors.get(key);
+    if (!a) {
+      const def = this.agents[agent];
+      if (!def) throw new Error(`unknown agent: ${agent}`);
+      a = new AgentSession(agent, id, new SqliteSessionStore(this.db, key), new InProcBroadcaster(), def.model, def.tools, this);
+      this.actors.set(key, a);
+    }
+    return a;
+  }
+}
+
+// Open the sync SQLite handle (bun:sqlite / node:sqlite) and build a NativeRuntime
+// over it. `path` defaults to ":memory:"; pass a file path for durability across
+// restarts.
+export async function createNativeRuntime(
+  agents: Record<string, AgentDef>,
+  path = ":memory:",
+): Promise<NativeRuntime> {
+  return new NativeRuntime(agents, await openLocalSqliteSync(path));
+}
