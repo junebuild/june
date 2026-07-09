@@ -21,6 +21,7 @@
     "agent-connections",
     "agent-durable-object",
     "agent-edge-routing",
+    "agent-instructions-seam",
     "agent-models",
     "define-agent-discovery",
     "durable-agent-runtime",

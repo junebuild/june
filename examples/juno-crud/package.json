@@ -1,6 +1,6 @@
 {
   "name": "@june-examples/juno-crud",
-  "version": "0.0.4-dev.2",
+  "version": "0.0.4-dev.3",
   "private": true,
   "type": "module",
   "dependencies": {
