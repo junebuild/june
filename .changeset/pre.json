@@ -20,6 +20,7 @@
     "agent-channels",
     "agent-connections",
     "agent-durable-object",
+    "agent-edge-routing",
     "agent-models",
     "define-agent-discovery",
     "durable-agent-runtime",
