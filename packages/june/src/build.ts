@@ -19,7 +19,7 @@
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, lstatSync } from "node:fs";
 import { copyFile, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -800,7 +800,21 @@ ${adapterEntry.wrap("pipeline")}
   // is the relative-path list adapters need to place these on their static tier.
   const publicDir = join(appRoot, "public");
   const publicFiles: string[] = [];
-  if (existsSync(publicDir)) {
+  // Only a REAL directory: a symlinked public/ (e.g. `public -> ..`) would copy
+  // files from OUTSIDE the app root into the deploy output. collectFiles already
+  // drops symlinked entries UNDER public/ (Dirent.isFile()/isDirectory()); this
+  // guards the root itself. lstatSync doesn't follow the symlink, so a symlinked
+  // public/ has isDirectory() === false.
+  let publicIsDir = false;
+  try {
+    publicIsDir = lstatSync(publicDir).isDirectory();
+  } catch {
+    /* no public/ */
+  }
+  if (existsSync(publicDir) && !publicIsDir) {
+    console.warn(`[june] public/ is not a real directory (symlink?) — skipped`);
+  }
+  if (publicIsDir) {
     for (const rel of await collectFiles(publicDir)) {
       if (rel.split("/")[0] === "_june") {
         console.warn(`[june] public/${rel} ignored — _june/ is reserved for framework assets`);

@@ -61,6 +61,21 @@ describe("dev: app.ts serves public/ verbatim, before the pipeline", () => {
     }
   });
 
+  test("a symlinked DIRECTORY under public/ is not traversed (no escape via subdir)", async () => {
+    // public/up -> examples/ (outside public/): a request through it must not serve
+    // files from outside the public root. Guards against the leaf-only lstat gap —
+    // realpath leaves publicRoot, so it's rejected.
+    const linkDir = join(BASIC, "public", "up");
+    symlinkSync(join(BASIC, ".."), linkDir, "dir");
+    try {
+      const res = await app.fetch(new Request("http://x/up/basic/package.json"));
+      expect(res.status).toBe(404);
+      expect(await res.text()).not.toContain("@june-examples/basic");
+    } finally {
+      unlinkSync(linkDir);
+    }
+  });
+
   test("a missing public file falls through to the render pipeline (not a public 200)", async () => {
     const res = await app.fetch(new Request("http://x/does-not-exist.png"));
     // The pipeline 404-renders HTML — proof we fell through instead of serving bytes.
