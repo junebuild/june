@@ -43,7 +43,8 @@ export type InboundEvent = {
   user?: { id: string; name?: string };         // WHO
   text?: string;                                // message / app_mention carry text; reactions don't
   reaction?: { name: string; itemTs: string };  // WHICH emoji, on WHICH message
-  raw: unknown;                                 // untouched platform payload (escape hatch)
+  raw?: unknown;                                // untouched platform payload (escape hatch); may
+                                                // be dropped crossing the /turn RPC if unserializable
 };
 
 // The Model seam — provider-agnostic. `opts.system` is the per-turn system prompt

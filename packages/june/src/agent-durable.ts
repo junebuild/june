@@ -271,21 +271,6 @@ export function durableAgentSurface(
 // Note: if the DO namespace is unbound, a matched webhook still ACKs but the turn
 // fails in the background — surfaced via the channel's onError IF one is configured,
 // otherwise swallowed (runBackground never rejects). The app is expected to bind
-// Serialize a turn for the /turn RPC body. InboundEvent.raw is `unknown` — the
-// untouched platform payload — so a (third-party) channel could attach something
-// JSON.stringify chokes on (a circular object, a BigInt). raw isn't needed to route or
-// run the turn, so on a serialization failure we drop it rather than let an
-// unserializable payload take down turn forwarding entirely.
-function serializeTurn(userText: string, o?: { turnId?: string; event?: InboundEvent }): string {
-  const payload = { userText, turnId: o?.turnId, event: o?.event };
-  try {
-    return JSON.stringify(payload);
-  } catch {
-    const event = o?.event ? { ...o.event, raw: undefined } : undefined;
-    return JSON.stringify({ ...payload, event });
-  }
-}
-
 // env.AGENT when it mounts channels. Returns null for unclaimed requests.
 export function durableChannelSurface(
   getNamespace: () => DurableObjectNamespace | undefined,
@@ -316,4 +301,20 @@ export function durableChannelSurface(
     },
   };
   return channelDispatch(resolved, ctx);
+}
+
+// Serialize a turn for the /turn RPC body. InboundEvent.raw is `unknown` — the
+// untouched platform payload — so a (third-party) channel could attach something
+// JSON.stringify chokes on (a circular object, a BigInt). raw isn't needed to route or
+// run the turn, so on a serialization failure we drop it rather than let an
+// unserializable payload take down turn forwarding entirely. (raw is optional on
+// InboundEvent precisely because it may not survive this boundary.)
+function serializeTurn(userText: string, o?: { turnId?: string; event?: InboundEvent }): string {
+  const payload = { userText, turnId: o?.turnId, event: o?.event };
+  try {
+    return JSON.stringify(payload);
+  } catch {
+    const event = o?.event ? { ...o.event, raw: undefined } : undefined;
+    return JSON.stringify({ ...payload, event });
+  }
 }
