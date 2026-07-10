@@ -9,6 +9,12 @@
 
 import { type Channel, type ChannelContext } from "./agent-config";
 
+// Re-export the normalized inbound envelope from where channel authors live, so an
+// adapter can `import { type InboundEvent } from "@junejs/core/channels"` alongside
+// the factories it builds on. Canonical definition stays in agent-config.ts (with
+// Channel/ChannelContext) to keep the run-signature and the type in one module.
+export type { InboundEvent } from "./agent-config";
+
 const enc = new TextEncoder();
 
 // A webhook ACKs fast (within the platform's timeout) and does the real work — run

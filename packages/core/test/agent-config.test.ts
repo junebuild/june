@@ -5,7 +5,8 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { ACTION_REGISTRY, defineAction } from "@junejs/core/agent";
-import { actionToTool, buildSystemPrompt, defineAgent, readSkillTool, type Skill } from "@junejs/core/agent-config";
+import { actionToTool, buildSystemPrompt, defineAgent, readSkillTool, type Channel, type Skill } from "@junejs/core/agent-config";
+import type { Tool } from "@junejs/core/agent-runtime";
 
 // defineAction self-registers globally; isolate the registry per test.
 let preexisting = new Map(ACTION_REGISTRY);
@@ -69,6 +70,27 @@ describe("defineAgent", () => {
     expect(agent.instructions).toBe("You place orders.");
     expect(agent.tools.map((t) => t.spec.name)).toEqual(["create_order", "read_skill"]);
     expect(agent.skills).toEqual(skills);
+  });
+
+  test("merges a channel's capability tools into agent.tools (before read_skill)", () => {
+    const readThread: Tool = {
+      spec: { name: "slack_read_thread", description: "Read a thread's replies", input: { type: "object", properties: {} } },
+      run: () => ({ messages: [] }),
+    };
+    const slackish: Channel = { name: "slack", path: "/channels/slack", tools: () => [readThread] };
+    const skills: Skill[] = [{ name: "triage", description: "Triage a thread", body: "..." }];
+
+    const agent = defineAgent({ name: "ops", tools: [], channels: [slackish], skills });
+
+    // channel tool is present, and read_skill stays last (ordering contract)
+    expect(agent.tools.map((t) => t.spec.name)).toEqual(["slack_read_thread", "read_skill"]);
+    expect(agent.channels).toEqual([slackish]);
+  });
+
+  test("a channel without tools contributes none", () => {
+    const bare: Channel = { name: "http" };
+    const agent = defineAgent({ name: "ops", tools: [], channels: [bare] });
+    expect(agent.tools).toHaveLength(0);
   });
 
   test("no skills ⇒ no read_skill tool", () => {

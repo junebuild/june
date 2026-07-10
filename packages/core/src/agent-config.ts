@@ -14,6 +14,29 @@ import type { ConnectionReport } from "./connections";
 // system prompt lists them; the model pulls a body via the read_skill tool.
 export type Skill = { name: string; description: string; body: string };
 
+// A normalized inbound event — the platform-agnostic envelope a turn receives.
+// Each channel maps its native payload (Slack Events API, Crisp plugin hook, …)
+// into this ONE shape, so the turn — and the agent's instructions/tools — can read
+// "who did what, where" without knowing the platform. The flat `message: string`
+// that `run` still takes is the human-readable text; `event` carries the structure
+// the text alone drops (the actor, the event kind, an emoji reaction's target).
+//
+// `kind` distinguishes a user message from a reaction (emoji) or an edit, so a
+// channel that subscribes to `reaction_added`/`reaction_removed` can route those as
+// turns too — `text` is present for message/app_mention, `reaction` for the emoji
+// events. `raw` is the untouched platform payload: an escape hatch for anything the
+// normalized fields don't cover yet, without forcing a type change here first.
+export type InboundEvent = {
+  kind: "message" | "app_mention" | "reaction_added" | "reaction_removed" | "message_changed";
+  channelId: string;                            // slack channel id / crisp website:session
+  threadId?: string;                            // thread root (slack thread_ts / crisp session)
+  ts: string;                                   // this event's message ts
+  user?: { id: string; name?: string };         // WHO — dropped entirely by a text-only turn today
+  text?: string;                                // message / app_mention carry text; reactions don't
+  reaction?: { name: string; itemTs: string };  // WHICH emoji, on WHICH message
+  raw: unknown;                                 // untouched platform payload (escape hatch)
+};
+
 // A channel is an INBOUND edge — how a message reaches the agent: an HTTP
 // endpoint, a Slack/Crisp webhook, a CLI. It maps the inbound message to a
 // session, runs a durable turn via ctx.run, and (for chat platforms) posts the
@@ -21,7 +44,11 @@ export type Skill = { name: string; description: string; body: string };
 // native and edge targets.
 export type ChannelContext = {
   agent: AgentDefinition;
-  run: (message: string, opts?: { session?: string; turnId?: string }) => Promise<string>;
+  // `event` is additive: existing callers pass only the text; a channel that has a
+  // normalized envelope threads it through so the turn (and its tools) can see the
+  // actor/kind/reaction. Batch 1 defines the seam; the Slack/Crisp adapters and the
+  // durable /turn edge start populating it in the following batches.
+  run: (message: string, opts?: { session?: string; turnId?: string; event?: InboundEvent }) => Promise<string>;
   // Extend the invocation past the fast-ACK response so a webhook's background work
   // (run the turn, post the reply out-of-band) reliably completes. On the edge the
   // host passes workerd's `ctx.waitUntil` — without it, a promise left floating after
@@ -39,6 +66,14 @@ export type Channel = {
   // run the turn, post the reply out-of-band
   path?: string;
   webhook?: (req: Request, ctx: ChannelContext) => Promise<Response>;
+  // OUTBOUND capabilities this channel gives the agent, as Tools merged into
+  // `agent.tools` by defineAgent. This is the second channel seam: a channel is no
+  // longer just "text in → text out" — it can also let the agent act on the platform
+  // (read a Slack thread's replies, list who reacted with which emoji, resolve a user
+  // id to a name, post/react back). Secrets (bot token) are captured in the factory
+  // closure, so the returned Tools are already authenticated. Kept a thunk so the
+  // tool list is built lazily at assembly time, mirroring `webhook`/`fetch`.
+  tools?: () => Tool[];
 };
 export function defineChannel(channel: Channel): Channel {
   return channel;
@@ -139,7 +174,13 @@ export function defineAgent(config: {
   connections?: ConnectionReport[];
 }): AgentDefinition {
   const skills = config.skills ?? [];
+  const channels = config.channels ?? [];
   const tools: Tool[] = (config.tools ?? []).map((t) => (isTool(t) ? t : actionToTool(t)));
+  // Merge each channel's OUTBOUND capabilities (see Channel.tools) into the agent's
+  // tools — so mounting the Slack channel also gives the agent slack_read_thread /
+  // slack_list_reactions / … with no separate wiring. Added before read_skill so the
+  // skill tool stays last (cosmetic, matches the prior ordering contract in tests).
+  for (const c of channels) if (c.tools) tools.push(...c.tools());
   if (skills.length) tools.push(readSkillTool(skills));
   return {
     name: config.name,
@@ -148,7 +189,7 @@ export function defineAgent(config: {
     instructions: config.instructions ?? "",
     tools,
     skills,
-    channels: config.channels ?? [],
+    channels,
     connections: config.connections ?? [],
   };
 }
