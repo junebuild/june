@@ -13,6 +13,13 @@ import { createNativeRuntime, mountAgent } from "../src/agent-native";
 
 const FIXTURE = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "agent-ops");
 
+const enc = new TextEncoder();
+async function hmacHex(secret: string, message: string): Promise<string> {
+  const key = await crypto.subtle.importKey("raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const mac = await crypto.subtle.sign("HMAC", key, enc.encode(message));
+  return [...new Uint8Array(mac)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 // Discovering a tool imports a defineAction that self-registers globally; isolate.
 let preexisting = new Map(ACTION_REGISTRY);
 beforeEach(() => { preexisting = new Map(ACTION_REGISTRY); ACTION_REGISTRY.clear(); });
@@ -37,6 +44,27 @@ describe("discoverAgent", () => {
     ]);
     // channels discovered too (a plain http channel + a factory-built slack one)
     expect(agent.channels.map((c) => c.name).sort()).toEqual(["http", "slack"]);
+  });
+
+  test("resolves a Shape-B (env)=>Channel factory channel from process.env (native)", async () => {
+    process.env.SLACK_SIGNING_SECRET = "env-secret-xyz";
+    try {
+      const agent = await discoverAgent(FIXTURE);
+      const slack = agent.channels.find((c) => c.name === "slack")!;
+      expect(slack.webhook).toBeInstanceOf(Function); // resolved to a Channel, not left as the raw factory
+
+      // A request signed with the ENV secret verifies — proving the factory read
+      // process.env at discovery, not the fallback literal. (valid() runs before the
+      // url_verification branch, so a 200 + challenge echo ⇒ the signature passed.)
+      const body = JSON.stringify({ type: "url_verification", challenge: "ok" });
+      const ts = String(Math.floor(Date.now() / 1000));
+      const sig = "v0=" + (await hmacHex("env-secret-xyz", `v0:${ts}:${body}`));
+      const req = new Request("http://x/channels/slack", { method: "POST", headers: { "x-slack-request-timestamp": ts, "x-slack-signature": sig }, body });
+      const res = await slack.webhook!(req, { agent, run: async () => "" });
+      expect(await res.json()).toEqual({ challenge: "ok" });
+    } finally {
+      delete process.env.SLACK_SIGNING_SECRET;
+    }
   });
 
   test("mountAgent serves a discovered channel end-to-end (POST /message → durable turn)", async () => {

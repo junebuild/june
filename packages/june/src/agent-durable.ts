@@ -26,6 +26,14 @@ import {
   type Tool,
 } from "@junejs/core/agent-runtime";
 import type { Resources } from "@junejs/core/resources";
+import {
+  channelDispatch,
+  resolveChannel,
+  type AgentDefinition,
+  type Channel,
+  type ChannelContext,
+  type ChannelFactory,
+} from "@junejs/core/agent-config";
 import { ensureScope, runInScope } from "@junejs/db";
 
 // ── minimal structural Cloudflare surface (no @cloudflare/workers-types dep) ──
@@ -224,4 +232,60 @@ export function durableAgentSurface(
       new Request("https://do/turn", { method: "POST", body: JSON.stringify({ userText: message }) }),
     );
   };
+}
+
+// The EDGE channel surface: mount an agent's INBOUND channels (Slack/Crisp webhooks,
+// an http endpoint) on the Worker entry and route each turn into the per-session
+// Durable Object. The sibling of durableAgentSurface, which mounts only the chat
+// endpoint; a worker composes both (`await chat(req) ?? await channels(req) ?? 404`).
+//
+// Channels are resolved from the Worker's `env`, because on workerd a signing secret
+// lives only there (never at module top-level) — so a channel module can default-
+// export a factory: `export default (env) => crispChannel({ signingSecret:
+// env.CRISP_SIGNATURE_SECRET, ... })`. `waitUntil` (workerd's `ctx.waitUntil`) keeps
+// the isolate alive for the fast-ACK background work (run the turn, post the reply
+// back out). The webhook's own signature check still runs first, in the channel.
+//
+//   export default {
+//     fetch(req, env, ctx) {
+//       const channels = durableChannelSurface(() => env.AGENT, {
+//         agentName: "crisp-support", channels: [crispCh], env,
+//         waitUntil: ctx.waitUntil.bind(ctx),
+//       });
+//       return channels(req).then((r) => r ?? new Response("not found", { status: 404 }));
+//     },
+//   }
+//
+// Note: if the DO namespace is unbound, a matched webhook still ACKs but the turn
+// fails in the background (surfaced via the channel's onError) — the app is expected
+// to bind env.AGENT when it mounts channels. Returns null for unclaimed requests.
+export function durableChannelSurface(
+  getNamespace: () => DurableObjectNamespace | undefined,
+  opts: {
+    agentName: string;
+    channels: (Channel | ChannelFactory)[];
+    env: unknown;
+    waitUntil?: (p: Promise<unknown>) => void;
+  },
+): (req: Request) => Promise<Response | null> {
+  const resolved = opts.channels.map((c) => resolveChannel(c, opts.env));
+  const ctx: ChannelContext = {
+    // A minimal but complete AgentDefinition — channels only read ctx.agent.name; the
+    // full def isn't present in the worker (tools/model live in the DO).
+    agent: { name: opts.agentName, instructions: "", tools: [], skills: [], channels: [], connections: [] } satisfies AgentDefinition,
+    waitUntil: opts.waitUntil,
+    run: async (message, o) => {
+      const namespace = getNamespace();
+      if (!namespace) throw new Error("durableChannelSurface: no Durable Object namespace bound (env.AGENT)");
+      const res = await durableFetch(
+        namespace,
+        opts.agentName,
+        o?.session ?? "default",
+        new Request("https://do/turn", { method: "POST", body: JSON.stringify({ userText: message, turnId: o?.turnId }) }),
+      );
+      const { text } = (await res.json()) as { text: string };
+      return text;
+    },
+  };
+  return channelDispatch(resolved, ctx);
 }
