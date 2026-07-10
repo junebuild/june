@@ -37,12 +37,23 @@ import {
 import { ensureScope, runInScope } from "@junejs/db";
 
 // ── minimal structural Cloudflare surface (no @cloudflare/workers-types dep) ──
-export interface SqlStorageCursor<T = Record<string, unknown>> {
+// SqlStorage row values are exactly what workerd's SQLite returns. Mirroring
+// @cloudflare/workers-types' `T extends Record<string, SqlStorageValue>` constraint
+// STRUCTURALLY (not importing it) makes `this.ctx.storage` directly assignable to
+// these interfaces, so a DO shell needs no `as unknown as JuneDoState` cast. The
+// constraint (not just a default) is what lets the two `exec` signatures unify:
+// an unconstrained `T` promises `toArray(): T[]` for arbitrary T, which workerd's
+// cursor — only ever `Record<string, SqlStorageValue>` rows — cannot satisfy.
+export type SqlStorageValue = ArrayBuffer | string | number | null;
+export interface SqlStorageCursor<T extends Record<string, SqlStorageValue> = Record<string, SqlStorageValue>> {
   toArray(): T[];
   one(): T;
 }
 export interface SqlStorage {
-  exec<T = Record<string, unknown>>(query: string, ...bindings: unknown[]): SqlStorageCursor<T>;
+  exec<T extends Record<string, SqlStorageValue> = Record<string, SqlStorageValue>>(
+    query: string,
+    ...bindings: unknown[]
+  ): SqlStorageCursor<T>;
 }
 export interface DurableStorage {
   sql: SqlStorage;
