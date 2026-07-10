@@ -99,6 +99,22 @@ describe("slackChannel", () => {
     expect((await ch.webhook!(req, ctxWith(async () => ""))).status).toBe(401);
   });
 
+  test("rejects a stale timestamp with 401 (replay guard)", async () => {
+    const oldTs = String(Math.floor(Date.now() / 1000) - 600); // 10 min ago
+    const body = "{}";
+    const sig = "v0=" + (await hmacHex(secret, `v0:${oldTs}:${body}`)); // a VALID signature…
+    const req = new Request("http://x/channels/slack", { method: "POST", headers: { "x-slack-request-timestamp": oldTs, "x-slack-signature": sig }, body });
+    expect((await ch.webhook!(req, ctxWith(async () => ""))).status).toBe(401); // …still rejected: too old
+  });
+
+  test("a signed but malformed body ACKs 200 (no retry storm), runs nothing", async () => {
+    captureFetch();
+    const res = await ch.webhook!(await signed("not json {"), ctxWith(async () => "should not run"));
+    expect(res.status).toBe(200);
+    await flush();
+    expect(calls).toHaveLength(0);
+  });
+
   test("ignores the bot's own message (no reply loop)", async () => {
     captureFetch();
     const body = JSON.stringify({ type: "event_callback", event: { type: "message", bot_id: "B1", text: "my own reply", channel: "C1", ts: "1" } });
@@ -325,13 +341,37 @@ describe("crispChannel", () => {
   });
 
   test("rejects a bad signature with 401", async () => {
-    const req = new Request("http://x/channels/crisp", { method: "POST", headers: { "x-crisp-request-timestamp": "1", "x-crisp-signature": "nope" }, body: "{}" });
+    const req = new Request("http://x/channels/crisp", { method: "POST", headers: { "x-crisp-request-timestamp": String(Date.now()), "x-crisp-signature": "nope" }, body: "{}" });
     expect((await ch.webhook!(req, ctxWith(async () => ""))).status).toBe(401);
+  });
+
+  test("rejects a stale timestamp with 401 (replay guard — parity with slack)", async () => {
+    const oldTs = String(Date.now() - 600_000); // 10 min ago (crisp uses ms)
+    const body = "{}";
+    const sig = await hmacHex(secret, `[${oldTs};${body}]`); // valid signature, but too old
+    const req = new Request("http://x/channels/crisp", { method: "POST", headers: { "x-crisp-request-timestamp": oldTs, "x-crisp-signature": sig }, body });
+    expect((await ch.webhook!(req, ctxWith(async () => ""))).status).toBe(401);
+  });
+
+  test("a signed but malformed body ACKs 200 (no retry storm), runs nothing", async () => {
+    captureFetch();
+    const res = await ch.webhook!(await signed("}{ not json"), ctxWith(async () => "should not run"));
+    expect(res.status).toBe(200);
+    await flush();
+    expect(calls).toHaveLength(0);
   });
 
   test("ignores an operator message (our own reply — no loop)", async () => {
     captureFetch();
     const body = JSON.stringify({ event: "message:send", data: { from: "operator", type: "text", content: "our reply", website_id: "w1", session_id: "s1" } });
+    await ch.webhook!(await signed(body), ctxWith(async () => "should not run"));
+    await flush();
+    expect(calls).toHaveLength(0);
+  });
+
+  test("a whitespace-only visitor message does not run a turn (inbound guard)", async () => {
+    captureFetch();
+    const body = JSON.stringify({ event: "message:send", data: { from: "user", type: "text", content: "   \n ", website_id: "w1", session_id: "s1" } });
     await ch.webhook!(await signed(body), ctxWith(async () => "should not run"));
     await flush();
     expect(calls).toHaveLength(0);

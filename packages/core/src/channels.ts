@@ -58,6 +58,29 @@ async function hmacSha256Hex(secret: string, message: string): Promise<string> {
   return hex(await crypto.subtle.sign("HMAC", key, enc.encode(message)));
 }
 
+// Parse a webhook body that has ALREADY passed signature verification, tolerating a
+// malformed payload. A signed-but-unparseable body is authentic yet permanently
+// unprocessable (retrying yields the same bytes), so the caller ACKs 200 and drops it
+// rather than throwing — an uncaught throw here would surface as a 5xx and make the
+// platform (Slack/Crisp) redeliver the same broken event forever.
+function tryParseJson<T>(body: string): T | undefined {
+  try {
+    return JSON.parse(body) as T;
+  } catch {
+    return undefined;
+  }
+}
+
+// Replay/freshness guard: reject a request whose timestamp is more than 5 minutes from
+// now. `ts` may be epoch seconds (Slack) or milliseconds (Crisp), so normalize by
+// magnitude — a value past ~1e11 can only be milliseconds (1e11 s ≈ year 5138).
+function timestampFresh(ts: string, toleranceSec = 300): boolean {
+  const n = Number(ts);
+  if (!Number.isFinite(n) || n <= 0) return false;
+  const tsSec = n > 1e11 ? n / 1000 : n;
+  return Math.abs(Date.now() / 1000 - tsSec) <= toleranceSec;
+}
+
 // ── http — a generic Web channel: POST /message runs a turn; optionally serve
 // /mcp (pass your app's mcpHandler) so the same directory is also an MCP server.
 export function httpChannel(opts: { path?: string; mcp?: (req: Request) => Promise<Response> } = {}): Channel {
@@ -137,7 +160,7 @@ export function slackChannel(opts: {
   }
   async function valid(ts: string, body: string, sig: string): Promise<boolean> {
     if (!opts.signingSecret || !ts || !sig) return false;
-    if (Math.abs(Date.now() / 1000 - Number(ts)) > 300) return false; // 5-min replay guard
+    if (!timestampFresh(ts)) return false; // 5-min replay guard
     return timingSafeEqual("v0=" + (await hmacSha256Hex(opts.signingSecret, `v0:${ts}:${body}`)), sig);
   }
   return {
@@ -153,7 +176,8 @@ export function slackChannel(opts: {
       );
       if (!ok) return new Response("bad signature", { status: 401 });
 
-      const payload = JSON.parse(body) as { type?: string; challenge?: string; event?: SlackEvent };
+      const payload = tryParseJson<{ type?: string; challenge?: string; event?: SlackEvent }>(body);
+      if (!payload) return new Response("", { status: 200 }); // signed but unparseable → ACK, don't retry
       if (payload.type === "url_verification") return Response.json({ challenge: payload.challenge });
 
       if (payload.type === "event_callback") {
@@ -206,8 +230,9 @@ function normalizeSlackEvent(
   events: SlackEventKind[],
   botUserId?: string,
 ): { event: InboundEvent; session: string; userText: string } | null {
-  // text turns: a channel message or an @-mention. Skip our own bot + non-user subtypes.
-  if ((e.type === "message" || e.type === "app_mention") && events.includes(e.type) && !e.bot_id && !e.subtype && e.text && e.channel && e.ts) {
+  // text turns: a channel message or an @-mention. Skip our own bot + non-user subtypes,
+  // and blank text (a whitespace-only message shouldn't burn a turn).
+  if ((e.type === "message" || e.type === "app_mention") && events.includes(e.type) && !e.bot_id && !e.subtype && e.text && e.text.trim() && e.channel && e.ts) {
     const thread = e.thread_ts ?? e.ts; // reply in-thread; one session per thread
     return {
       event: { source: "slack", kind: e.type, channelId: e.channel, threadId: thread, ts: e.ts, user: e.user ? { id: e.user } : undefined, text: e.text, raw: e },
@@ -370,6 +395,7 @@ export function crispChannel(opts: {
   }
   async function valid(ts: string, body: string, sig: string): Promise<boolean> {
     if (!opts.signingSecret || !ts || !sig) return false;
+    if (!timestampFresh(ts)) return false; // 5-min replay guard (parity with slack)
     return timingSafeEqual(await hmacSha256Hex(opts.signingSecret, `[${ts};${body}]`), sig);
   }
   return {
@@ -385,13 +411,15 @@ export function crispChannel(opts: {
       );
       if (!ok) return new Response("bad signature", { status: 401 });
 
-      const payload = JSON.parse(body) as {
+      const payload = tryParseJson<{
         event?: string;
         data?: { from?: string; type?: string; content?: unknown; website_id?: string; session_id?: string; fingerprint?: number; user?: { user_id?: string; nickname?: string } };
-      };
+      }>(body);
+      if (!payload) return new Response("", { status: 200 }); // signed but unparseable → ACK, don't retry
       const d = payload.data ?? {};
-      // only a VISITOR text message; operator messages are our own reply (loop guard)
-      if (payload.event === "message:send" && d.from === "user" && d.type === "text" && d.content && d.website_id && d.session_id) {
+      // only a VISITOR text message; operator messages are our own reply (loop guard).
+      // require non-blank content — a whitespace-only message shouldn't burn a turn.
+      if (payload.event === "message:send" && d.from === "user" && d.type === "text" && typeof d.content === "string" && d.content.trim() && d.website_id && d.session_id) {
         const session = `crisp:${d.website_id}:${d.session_id}`; // one conversation = one session
         // channelId = website, threadId = conversation session → crisp_read_conversation
         // defaults its target from these (NOT ts — Crisp keys a conversation by
