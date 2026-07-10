@@ -120,6 +120,21 @@ describe("durableChannelSurface (edge channel routing)", () => {
     expect(body.event.raw).toBeUndefined(); // the unserializable raw was dropped
   });
 
+  test("the services factory is resolved and exposed to channel hooks as ctx.services (F)", async () => {
+    const { ns } = fakeAgentNS();
+    let sawServices: unknown;
+    const ch = defineChannel({
+      name: "x", path: "/channels/x",
+      async webhook(_req, ctx) { sawServices = ctx.services; return new Response("", { status: 200 }); },
+    });
+    const surface = durableChannelSurface(() => ns, {
+      agentName: AGENT, channels: [ch], env: { DB: "d1" },
+      services: (env) => ({ feedback: { boundTo: env } }), // same factory the DO would use
+    });
+    await surface(new Request("http://edge/channels/x", { method: "POST", body: "{}" }));
+    expect(sawServices).toEqual({ feedback: { boundTo: { DB: "d1" } } }); // resolved from env, one DI story
+  });
+
   test("a bad signature is rejected (the env-resolved secret is actually enforced)", async () => {
     const { ns } = fakeAgentNS();
     const surface = durableChannelSurface(() => ns, { agentName: AGENT, channels: [crispFactory], env: envWith(ns) });

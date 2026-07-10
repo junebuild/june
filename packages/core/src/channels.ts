@@ -123,6 +123,11 @@ export type ChannelObserver = (e: { raw: unknown; event?: InboundEvent }, ctx: C
 // LLM cost, the channel never talks back to the platform.
 export type ChannelMode = "respond" | "observe";
 
+// A typed, single-kind observer (see `on` below): unlike onEvent it fires only for its
+// kind and only when a normalized event exists (post bot/loop guards), so `event` is
+// non-optional and no `event.kind` demux is needed.
+export type KindObserver = (event: InboundEvent, ctx: ChannelContext) => Promise<void> | void;
+
 // The extension opts both channel factories accept, so an app can sit on the built-in
 // instead of forking its webhook. `accept` gates a verified event before any work (an
 // allowlist lives here) — returning false ACKs 200 and ignores it.
@@ -187,11 +192,21 @@ export function slackChannel(opts: {
   // `events` (every subscribed kind responds — the prior behavior). `mode:"observe"`
   // forces this empty (respond to nothing).
   respondTo?: SlackEventKind[];
+  // Per-kind observers: `on[kind]` fires (background) only for that kind, only when a
+  // normalized event exists — no onEvent-style `event.kind` demux or `event?` guard.
+  // Coexists with onEvent (which stays the "observe everything incl. un-normalizable"
+  // firehose). A kind present here is auto-subscribed (see the `events` derivation).
+  on?: Partial<Record<SlackEventKind, KindObserver>>;
   botUserId?: string;
   onError?: (err: unknown) => void;
 } & ChannelExtensions): Channel {
   const api = opts.apiUrl ?? "https://slack.com/api";
-  const events = opts.events ?? ["message", "app_mention"];
+  // Derive the subscribe list from intent (respondTo + on keys) so kinds aren't written
+  // twice and can't drift; explicit `events` overrides. When the app expresses no intent
+  // at all, keep the friendly default (message + app_mention).
+  const onKinds = Object.keys(opts.on ?? {}) as SlackEventKind[];
+  const events: SlackEventKind[] =
+    opts.events ?? (opts.respondTo || opts.on ? [...new Set([...(opts.respondTo ?? []), ...onKinds])] : ["message", "app_mention"]);
   const respondTo: string[] = opts.mode === "observe" ? [] : (opts.respondTo ?? events);
   async function postMessage(channel: string, text: string, thread_ts?: string) {
     await fetch(`${api}/chat.postMessage`, {
@@ -240,6 +255,11 @@ export function slackChannel(opts: {
         const norm = normalizeSlackEvent(payload.event ?? {}, events, opts.botUserId);
         // observe: mirror EVERY verified event_callback (raw always; normalized when available)
         if (opts.onEvent) runBackground(ctx, async () => opts.onEvent!({ raw: payload, event: norm?.event }, ctx), opts.onError);
+        // typed per-kind observer: fires only for its kind, with a non-optional event
+        if (norm) {
+          const handler = opts.on?.[norm.event.kind as SlackEventKind];
+          if (handler) runBackground(ctx, async () => handler(norm.event, ctx), opts.onError);
+        }
         // respond: only kinds in respondTo drive a turn + reply (reactions can stay observe-only)
         if (norm && respondTo.includes(norm.event.kind)) {
           const { event, session, userText } = norm;
@@ -438,6 +458,9 @@ export function crispChannel(opts: {
   key: string;
   path?: string;
   apiUrl?: string;
+  // Crisp normalizes a single kind (a visitor text message); `on.message` is the typed,
+  // event-non-optional observer for it (onEvent stays the raw firehose over all events).
+  on?: { message?: KindObserver };
   onError?: (err: unknown) => void;
 } & ChannelExtensions): Channel {
   const api = opts.apiUrl ?? "https://api.crisp.chat/v1";
@@ -492,6 +515,8 @@ export function crispChannel(opts: {
       // observe: mirror EVERY verified event (visitor + operator + non-text) — this is how
       // an app records the whole conversation without forking the channel.
       if (opts.onEvent) runBackground(ctx, async () => opts.onEvent!({ raw: payload, event }, ctx), opts.onError);
+      // typed per-kind observer (only the normalized visitor-text event)
+      if (event && opts.on?.message) runBackground(ctx, async () => opts.on!.message!(event, ctx), opts.onError);
 
       // respond: a visitor text message runs a turn + reply — unless we're in observe (shadow) mode.
       if (opts.mode !== "observe" && event) {

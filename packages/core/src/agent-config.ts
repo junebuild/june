@@ -37,6 +37,13 @@ export type ChannelContext = {
   // the 200 ACK can be killed when the isolate is reclaimed. Absent on native (Node
   // keeps floating promises alive), so a channel must treat it as optional.
   waitUntil?: (p: Promise<unknown>) => void;
+  // The app's resolved services bag — the SAME shape `currentServices()` gives a turn,
+  // but reachable from a channel HOOK (onEvent / on[kind]), which runs at the edge OUTSIDE
+  // the Durable Object and so can't read the DO's ambient scope. The host resolves it from
+  // the same factory the DO uses (see durableChannelSurface/mountAgent `services`) so an
+  // observer writes via `ctx.services.feedback.record(...)` instead of re-plumbing bindings.
+  // Opaque here (the app types it at the read), like RequestScope.services.
+  services?: unknown;
 };
 export type Channel = {
   name: string;

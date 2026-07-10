@@ -92,12 +92,24 @@ only let some drive a turn:
 
 ```ts
 slackChannel({
-  events: ["app_mention", "reaction_added"],
-  respondTo: ["app_mention"],       // mention → turn+reply; reaction → onEvent only (no LLM)
+  respondTo: ["app_mention"],       // mention → turn+reply
   botUserId: "U…",
-  onEvent: ({ event }) => recordReaction(event),
+  on: {                             // deterministic, no LLM — typed, non-optional event per kind
+    reaction_added:   (e, ctx) => ctx.services.feedback.record(e),
+    reaction_removed: (e, ctx) => ctx.services.feedback.record(e),
+  },
 })
 ```
+
+- `on[kind]` — a typed per-kind observer: fires only for that kind, only when a normalized
+  event exists, so `event` is non-optional (no `event.kind` demux, no `event?` guard).
+  `onEvent` stays the catch-all firehose (`{ raw, event? }`) for observing everything.
+- `events` is **derived** from `respondTo` + `on` keys when omitted — no separate subscribe
+  line to drift. Pass `events` explicitly only to override.
+- `ctx.services` — the app's resolved services bag, the same shape `currentServices()` gives
+  a turn. A channel hook runs at the edge (outside the DO), so wire it once:
+  `durableChannelSurface({ …, services: (env) => makeServices(env) })` — then a hook writes
+  via `ctx.services.feedback.record(…)` instead of re-plumbing bindings.
 
 ### Channel tools on the edge, and source-aware instructions
 
