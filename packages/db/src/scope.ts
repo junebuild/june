@@ -33,6 +33,15 @@ export type RequestScope = {
   // opt-in layer (e.g. @junejs/i18n's ambient `t`) reads it WITHOUT the core
   // pipeline depending on that layer. Undefined when no i18n is configured.
   locale?: string;
+  // App-defined services bag, seeded by the host at each ISOLATE ENTRY from that
+  // isolate's env — the Worker pipeline from the worker env, a Durable Object from
+  // its own env (env only exists inside an invocation on workerd, never at module
+  // top-level). This is the seam for resources June does NOT model (Vectorize,
+  // Workers AI, an app ledger, a signing secret): the app builds it where env lives
+  // and reads it ambiently via currentServices(), so a tool needs neither a
+  // module-global setter nor `env` on ctx. Opaque here on purpose — @junejs/db
+  // never names the app's service shape; the app supplies the type at the read.
+  services?: unknown;
 };
 
 // The minimal slice of AsyncLocalStorage we use — kept structural so this module
@@ -98,6 +107,17 @@ export function setRequestLocale(locale: string): void {
 // generic read an opt-in i18n layer's ambient `t` uses — no dependency on i18n here.
 export function currentLocale(): string | undefined {
   return als?.getStore()?.locale;
+}
+
+// The current isolate's app-defined services bag (see RequestScope.services), or
+// undefined outside a scope / when none was seeded. Soft (returns undefined) rather
+// than throwing, because services are optional and app-defined: the app wraps this
+// in its OWN typed accessor that throws when a specific service it needs is missing.
+// @junejs/db stays generic — it carries the bag, never inspects it. A nullish bag
+// (unset OR explicitly `null`) normalizes to `undefined` so the `T | undefined`
+// return type is sound — a caller guarding only `undefined` can't be handed a null.
+export function currentServices<T = unknown>(): T | undefined {
+  return (als?.getStore()?.services ?? undefined) as T | undefined;
 }
 
 function pick<K extends keyof Resources>(name: K): NonNullable<Resources[K]> {

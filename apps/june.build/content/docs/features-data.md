@@ -56,6 +56,29 @@ This is why an agent and a human run identical data code: there is no `ctx` to
 thread or mock, and the authorization that matters lives in one place —
 `run(input, ctx)` (see [Auth & the scoped principal](/docs/concept-auth)).
 
+## Services June doesn't model
+
+`db` / `kv` / `blob` are the resources June models. For everything else an app
+reaches for — Vectorize, Workers AI, a ledger writer, a signing secret — the
+same scope carries an app-defined **`services`** bag, read ambiently with
+`currentServices()`:
+
+```ts
+import { currentServices } from "@junejs/db";
+
+type AppServices = { retriever: Retriever };
+
+// Soft read: undefined outside a scope or when no bag was seeded — so the app
+// wraps this in its own typed accessor that decides whether a missing service
+// throws. Works anywhere the scope is active: a loader, an action, an agent tool.
+const retriever = currentServices<AppServices>()?.retriever;
+```
+
+The host seeds the bag at each isolate entry from that isolate's `env`, so the
+app builds it where `env` lives and types it at the read — `@junejs/db` carries
+it opaquely and never inspects it. A tool reaches these resources with neither a
+module-global setter nor an `env` on `ctx`.
+
 ## Bring your own
 
 The default layer is **Juno**, but the magic — auto-batched reads and

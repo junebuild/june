@@ -27,6 +27,10 @@ export {
 // raw queries when Juno is installed (Juno registers the tagger via @junejs/db) —
 // so the framework never imports Juno, yet `db` is the tagging one in a Juno app.
 export { db, kv, blob } from "@junejs/db";
+// The app-services seam (see AgentDurableObject's `services` / RequestScope.services):
+// read the isolate's app-defined bag from any tool or loader. The app builds it from
+// env at the isolate entry and types it here — `currentServices<AppServices>()`.
+export { currentServices } from "@junejs/db";
 export { loadJuneConfig } from "./config-loader";
 export {
   migrate,
