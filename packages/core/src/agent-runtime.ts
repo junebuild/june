@@ -107,9 +107,39 @@ export interface SessionStore {
   unwrap<H = unknown>(): H;
 }
 
-export interface Broadcaster {
-  publish(turnId: string): void;
-  subscribe(cb: (turnId: string) => void): () => void;
+// ── the turn as a live event stream (see docs/rfc-turn-as-live-process.md) ────
+// A turn emits a stream of typed events as it runs. Structural events (turn.started,
+// action.*, message.completed, input.requested, turn.completed/failed) have a durable
+// counterpart in the message/step log — a reconnecting subscriber folds them back. The
+// *.delta events are LIVE ONLY: emitted while the turn runs, never on replay (a cached
+// step re-emits its message.completed, not a re-typed stream). P1 emits the structural
+// set; reasoning.delta/message.delta arrive with the streaming Model (P2); input.requested
+// with suspend/resume (P3).
+export type InputRequest = { id: string; prompt: string; schema?: unknown };
+export type TurnTrigger =
+  | { kind: "inbound"; event: InboundEvent }          // a channel event (message, mention, reaction)
+  | { kind: "proactive"; by: string; note?: string }   // a schedule, another channel, the agent itself
+  | { kind: "resume"; callId: string };                // continuation after an input.requested suspend
+export type TurnEvent =
+  | { type: "turn.started"; turnId: string; trigger: TurnTrigger }
+  | { type: "action.requested"; turnId: string; call: ToolCall }
+  | { type: "action.completed"; turnId: string; call: ToolCall; result: unknown }
+  | { type: "message.completed"; turnId: string; text: string }
+  | { type: "input.requested"; turnId: string; request: InputRequest }
+  | { type: "turn.completed"; turnId: string; text: string }
+  | { type: "turn.failed"; turnId: string; error: { message: string } }
+  | { type: "reasoning.delta"; turnId: string; text: string }
+  | { type: "message.delta"; turnId: string; text: string };
+export type TurnResult =
+  | { status: "completed"; text: string }
+  | { status: "suspended"; request: InputRequest }
+  | { status: "failed"; error: { message: string } };
+
+// The event bus a turn emits to; observers (channels, an SSE surface) subscribe. Replaces
+// the old coarse `Broadcaster.publish(turnId)` poke with typed events.
+export interface EventSink {
+  emit(e: TurnEvent): void;
+  subscribe(cb: (e: TurnEvent) => void): () => void;
 }
 
 // Crash injection for the durability contract: throw at a chosen checkpoint
@@ -128,7 +158,7 @@ function assertCrash(crash: Crash | undefined, at: Crash["at"], step: string) {
 // ── the engine: one durable turn ──────────────────────────────────────────────
 export async function runTurn(
   store: SessionStore,
-  bcast: Broadcaster,
+  sink: EventSink,
   model: Model,
   tools: Tool[],
   opts: { turnId: string; userText: string; crash?: Crash },
@@ -138,31 +168,38 @@ export async function runTurn(
     store.tx(() => store.appendMessage({ role: "user", turnId: opts.turnId, text: opts.userText }));
   }
   store.setStatus("running");
-  bcast.publish(opts.turnId);
+  const trigger: TurnTrigger = env.event ? { kind: "inbound", event: env.event } : { kind: "proactive", by: "system" };
+  sink.emit({ type: "turn.started", turnId: opts.turnId, trigger });
 
   const specs = tools.map((t) => t.spec);
-  while (true) {
-    const msgs = store.messages();
-    // Non-null: the loop always runs with ≥1 message (the user turn is appended
-    // above before the first iteration), so the transcript is never empty here.
-    const last = msgs[msgs.length - 1]!;
+  try {
+    while (true) {
+      const msgs = store.messages();
+      // Non-null: the loop always runs with ≥1 message (the user turn is appended
+      // above before the first iteration), so the transcript is never empty here.
+      const last = msgs[msgs.length - 1]!;
 
-    if (last.role === "assistant" && last.toolCalls.length === 0) {
-      store.setStatus("done");
-      bcast.publish(opts.turnId);
-      return last.text;
+      if (last.role === "assistant" && last.toolCalls.length === 0) {
+        store.setStatus("done");
+        sink.emit({ type: "turn.completed", turnId: opts.turnId, text: last.text });
+        return last.text;
+      }
+      if (last.role === "assistant" && last.toolCalls.length > 0) {
+        for (const call of last.toolCalls) await toolStep(store, sink, tools, call, opts, env);
+        continue;
+      }
+      await modelStep(store, sink, model, specs, `model:${msgs.length}`, msgs, opts, env.systemOverlay);
     }
-    if (last.role === "assistant" && last.toolCalls.length > 0) {
-      for (const call of last.toolCalls) await toolStep(store, bcast, tools, call, opts, env);
-      continue;
-    }
-    await modelStep(store, bcast, model, specs, `model:${msgs.length}`, msgs, opts, env.systemOverlay);
+  } catch (err) {
+    // includes intentional crash-injection throws (a failed ATTEMPT; replay re-runs).
+    sink.emit({ type: "turn.failed", turnId: opts.turnId, error: { message: err instanceof Error ? err.message : String(err) } });
+    throw err;
   }
 }
 
 async function modelStep(
   store: SessionStore,
-  bcast: Broadcaster,
+  sink: EventSink,
   model: Model,
   specs: ToolSpec[],
   stepId: string,
@@ -178,12 +215,14 @@ async function modelStep(
     store.appendMessage({ role: "assistant", turnId: opts.turnId, text: reply.text, toolCalls: reply.toolCalls });
   });
   assertCrash(opts.crash, "after-model-commit", stepId); // committed → replay skips (exactly-once append)
-  bcast.publish(opts.turnId);
+  // an assistant message finalized (text when present) + one action.requested per tool call
+  if (reply.text.trim()) sink.emit({ type: "message.completed", turnId: opts.turnId, text: reply.text });
+  for (const call of reply.toolCalls) sink.emit({ type: "action.requested", turnId: opts.turnId, call });
 }
 
 async function toolStep(
   store: SessionStore,
-  bcast: Broadcaster,
+  sink: EventSink,
   tools: Tool[],
   call: ToolCall,
   opts: { turnId: string; crash?: Crash },
@@ -199,21 +238,22 @@ async function toolStep(
   assertCrash(opts.crash, "before-tool-commit", stepId); // nothing done → safe clean re-run
   const toolMsg = (result: unknown): Msg => ({ role: "tool", turnId: opts.turnId, toolCallId: call.id, name: call.name, result });
 
+  let out: unknown;
   if (remote) {
     // network / subagent side effect: at-least-once (can't 2PC with local storage;
     // a subagent is itself durable, and its child turnId makes replay idempotent)
-    const out = await tool.run(call.input, ctx);
+    out = await tool.run(call.input, ctx);
     store.tx(() => { store.putStep(stepId, out); store.appendMessage(toolMsg(out)); });
   } else {
     // local side effect: exactly-once (side effect + checkpoint + append in ONE tx)
     store.tx(() => {
-      const out = tool.run(call.input, ctx);
+      out = tool.run(call.input, ctx);
       store.putStep(stepId, out);
       store.appendMessage(toolMsg(out));
     });
   }
   assertCrash(opts.crash, "after-tool-commit", stepId); // committed → replay skips (no duplicate side effect)
-  bcast.publish(opts.turnId);
+  sink.emit({ type: "action.completed", turnId: opts.turnId, call, result: out });
 }
 
 // ── transcript fold (pure; used by observe/transcript surfaces) ───────────────
@@ -251,7 +291,7 @@ export class AgentSession {
   private readonly agent: string;
   private readonly id: string;
   private readonly store: SessionStore;
-  private readonly bcast: Broadcaster;
+  private readonly sink: EventSink;
   private readonly model: Model;
   private readonly tools: Tool[];
   private readonly runtime: Runtime;
@@ -259,11 +299,11 @@ export class AgentSession {
   // text is appended to the system prompt for the turn (see withSystem). Lets ONE shared
   // agent branch its behavior by real, unforgeable channel source — no userText markers.
   private readonly channelInstructions?: Record<string, string>;
-  constructor(agent: string, id: string, store: SessionStore, bcast: Broadcaster, model: Model, tools: Tool[], runtime: Runtime, channelInstructions?: Record<string, string>) {
+  constructor(agent: string, id: string, store: SessionStore, sink: EventSink, model: Model, tools: Tool[], runtime: Runtime, channelInstructions?: Record<string, string>) {
     this.agent = agent;
     this.id = id;
     this.store = store;
-    this.bcast = bcast;
+    this.sink = sink;
     this.model = model;
     this.tools = tools;
     this.runtime = runtime;
@@ -280,7 +320,7 @@ export class AgentSession {
     const run = () =>
       runTurn(
         this.store,
-        this.bcast,
+        this.sink,
         this.model,
         this.tools,
         { turnId, userText: input.userText, crash: input.crash },
@@ -291,7 +331,8 @@ export class AgentSession {
     return p;
   }
 
-  observe(cb: (turnId: string) => void): () => void { return this.bcast.subscribe(cb); }
+  // Subscribe to this session's live TurnEvent stream (all turns; filter by e.turnId).
+  observe(cb: (e: TurnEvent) => void): () => void { return this.sink.subscribe(cb); }
   transcript(): Turn[] { return foldTranscript(this.store.messages()); }
   snapshot() { return { transcript: this.transcript(), status: this.store.getStatus() }; }
 }
