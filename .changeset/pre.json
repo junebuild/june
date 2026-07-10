@@ -16,6 +16,7 @@
     "@junejs/og": "0.0.6"
   },
   "changesets": [
-    "channel-capabilities"
+    "channel-capabilities",
+    "channel-hardening"
   ]
 }
