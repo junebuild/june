@@ -113,9 +113,11 @@ export function currentLocale(): string | undefined {
 // undefined outside a scope / when none was seeded. Soft (returns undefined) rather
 // than throwing, because services are optional and app-defined: the app wraps this
 // in its OWN typed accessor that throws when a specific service it needs is missing.
-// @junejs/db stays generic — it carries the bag, never inspects it.
+// @junejs/db stays generic — it carries the bag, never inspects it. A nullish bag
+// (unset OR explicitly `null`) normalizes to `undefined` so the `T | undefined`
+// return type is sound — a caller guarding only `undefined` can't be handed a null.
 export function currentServices<T = unknown>(): T | undefined {
-  return als?.getStore()?.services as T | undefined;
+  return (als?.getStore()?.services ?? undefined) as T | undefined;
 }
 
 function pick<K extends keyof Resources>(name: K): NonNullable<Resources[K]> {

@@ -182,7 +182,7 @@ function probeTool(seen: Probe[], nextLocalId: () => number): Tool {
       const rows = await db.query<{ v: string }>("SELECT 'from-do-db' AS v");
       const svc = currentServices<{ retriever: { fetch(): string } }>();
       const local = requestLocal(PROBE_LOCAL, () => ({ id: nextLocalId() }));
-      const obs: Probe = { db: rows[0]!.v, svc: svc?.retriever.fetch() ?? "no-services", localId: local.id };
+      const obs: Probe = { db: rows[0]!.v, svc: svc?.retriever?.fetch() ?? "no-services", localId: local.id };
       seen.push(obs);
       return obs;
     },
