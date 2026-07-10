@@ -1,5 +1,14 @@
 # @june-examples/juno-crud
 
+## 0.0.5-dev.0
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @junejs/core@0.1.1-dev.0
+  - @junejs/db@0.0.34-dev.0
+  - @junejs/juno@0.0.31-dev.0
+
 ## 0.0.4
 
 ### Patch Changes
