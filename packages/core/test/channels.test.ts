@@ -337,6 +337,14 @@ describe("crispChannel", () => {
     expect(calls).toHaveLength(0);
   });
 
+  test("an empty reply is not posted (agent acted via a tool — mirrors slack)", async () => {
+    captureFetch();
+    const body = JSON.stringify({ event: "message:send", data: { from: "user", type: "text", content: "react please", website_id: "w1", session_id: "s1" } });
+    await ch.webhook!(await signed(body), ctxWith(async () => "   ")); // whitespace-only reply
+    await flush();
+    expect(calls).toHaveLength(0);
+  });
+
   test("a visitor message carries a normalized InboundEvent (website/session/user)", async () => {
     let seen: InboundEvent | undefined;
     const body = JSON.stringify({ event: "message:send", data: { from: "user", type: "text", content: "help", website_id: "w1", session_id: "s1", fingerprint: 12345, user: { user_id: "v9", nickname: "Ada" } } });

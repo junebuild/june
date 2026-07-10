@@ -406,7 +406,11 @@ export function crispChannel(opts: {
           text: String(d.content),
           raw: payload,
         };
-        runBackground(ctx, async () => sendMessage(d.website_id!, d.session_id!, await ctx.run(String(d.content), { session, event })), opts.onError);
+        runBackground(ctx, async () => {
+          const reply = await ctx.run(String(d.content), { session, event });
+          // don't post an empty operator message when the agent acted via a tool (mirror slack)
+          if (reply && reply.trim()) await sendMessage(d.website_id!, d.session_id!, reply);
+        }, opts.onError);
       }
       return new Response("", { status: 200 }); // fast ACK
     },

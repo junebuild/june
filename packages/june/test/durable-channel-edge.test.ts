@@ -9,6 +9,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { crispChannel } from "@junejs/core/channels";
+import { defineChannel, type InboundEvent } from "@junejs/core/agent-config";
 import { durableChannelSurface, type DurableObjectNamespace } from "../src/agent-durable";
 
 const enc = new TextEncoder();
@@ -94,6 +95,29 @@ describe("durableChannelSurface (edge channel routing)", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]!.url).toBe("https://crisp.test/website/w1/conversation/s1/message");
     expect(calls[0]!.body).toMatchObject({ from: "operator", content: "DO replied" });
+  });
+
+  test("an unserializable event.raw is dropped, not fatal — the turn still forwards", async () => {
+    const { ns, forwarded } = fakeAgentNS();
+    // a channel that emits an event whose raw is circular (a third-party channel could) —
+    // JSON.stringify would throw, so serializeTurn must strip raw and still forward.
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    const event = { source: "x", kind: "message", channelId: "c", threadId: "t", ts: "1", text: "hi", raw: circular } satisfies InboundEvent;
+    const held: Promise<unknown>[] = [];
+    const badChannel = defineChannel({
+      name: "x", path: "/channels/x",
+      async webhook(_req, ctx) { await ctx.run("hi", { session: "x:c:t", event }); return new Response("", { status: 200 }); },
+    });
+    const surface = durableChannelSurface(() => ns, { agentName: AGENT, channels: [badChannel], env: envWith(ns), waitUntil: (p) => { held.push(p); } });
+
+    const res = await surface(new Request("http://edge/channels/x", { method: "POST", body: "{}" }));
+    expect(res!.status).toBe(200);
+    await Promise.all(held);
+    const body = forwarded() as { userText: string; event: InboundEvent };
+    expect(body.userText).toBe("hi");
+    expect(body.event).toMatchObject({ kind: "message", channelId: "c", text: "hi" }); // survived
+    expect(body.event.raw).toBeUndefined(); // the unserializable raw was dropped
   });
 
   test("a bad signature is rejected (the env-resolved secret is actually enforced)", async () => {
