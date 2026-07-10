@@ -336,7 +336,11 @@ export class AgentSession {
       );
     const p = this.chain.then(run);
     this.chain = p.catch(() => {}); // a failed turn must not break the inbox
-    this.running.set(turnId, p); // held for result(); settled-promise refs are cheap (no auto-prune yet)
+    this.running.set(turnId, p); // held so result() can await a start()ed turn
+    // prune on settle so `running` stays bounded (~in-flight; turns run serially) on a
+    // long-lived actor. Both branches run cleanup, so the rejection is handled here — no
+    // unhandled rejection (result() and the chain hold their own handlers on `p`).
+    p.then(() => this.running.delete(turnId), () => this.running.delete(turnId));
     return { turnId };
   }
 
@@ -368,6 +372,12 @@ export class AgentSession {
   // catches up, THEN live events. `turn.started`'s trigger + `turn.failed` are live-only (not
   // persisted), so they aren't part of the folded prefix.
   observe(cb: (e: TurnEvent) => void, opts?: { turnId?: string; replay?: boolean }): () => void {
+    // Fold-then-subscribe is race-free HERE despite looking like a gap: this method is fully
+    // SYNCHRONOUS (store.messages() + cb are sync) and the engine emits synchronously right
+    // after each store.tx commit (no await between). Single-threaded JS therefore can't run an
+    // engine step between the fold and the subscribe, so no event is missed or duplicated. (A
+    // subscribe-first + buffer approach would instead double-deliver any event committed-before-
+    // fold-but-emitted-after-subscribe.) If either invariant ever changes, revisit this.
     if (opts?.replay && opts.turnId) for (const e of this.foldEvents(opts.turnId)) cb(e);
     const { turnId } = opts ?? {};
     return this.sink.subscribe(turnId ? (e) => { if (e.turnId === turnId) cb(e); } : cb);
@@ -388,8 +398,10 @@ export class AgentSession {
         out.push({ type: "action.completed", turnId, call: inputs.get(m.toolCallId) ?? { id: m.toolCallId, name: m.name, input: undefined }, result: m.result });
       }
     }
+    // terminal iff the last assistant message has no tool calls — same condition the live
+    // engine uses (regardless of whether the final text is empty), so replay and live agree.
     const lastAssistant = [...msgs].reverse().find((m): m is Extract<Msg, { role: "assistant" }> => m.role === "assistant");
-    if (lastAssistant && lastAssistant.toolCalls.length === 0 && lastAssistant.text.trim())
+    if (lastAssistant && lastAssistant.toolCalls.length === 0)
       out.push({ type: "turn.completed", turnId, text: lastAssistant.text });
     return out;
   }

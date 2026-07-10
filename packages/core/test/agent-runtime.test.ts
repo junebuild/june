@@ -289,6 +289,22 @@ describe("TurnEvent stream (P1)", () => {
     const done = replayed.find((e) => e.type === "action.completed") as Extract<TurnEvent, { type: "action.completed" }>;
     expect(done.call).toMatchObject({ name: "create_order", input: { item: "widget", qty: 3 } }); // input recovered
   });
+
+  test("fold emits turn.completed even for an empty final response (matches the live engine)", async () => {
+    const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), scriptedModel([{ text: "", toolCalls: [] }]), [], noRuntime);
+    await s.turn({ turnId: "t1", userText: "hi" });
+    const replayed: TurnEvent[] = [];
+    s.observe((e) => replayed.push(e), { turnId: "t1", replay: true });
+    expect(replayed).toEqual([{ type: "turn.completed", turnId: "t1", text: "" }]); // no message.completed (empty), but a terminal event
+  });
+
+  test("result() still resolves after the in-flight promise is pruned (durable log fallback)", async () => {
+    const rt = new MemRuntime({ ops: { model: scriptedModel(ORDER_SCRIPT), tools: [createOrderTool()] } });
+    const s = rt.session("ops", "s1");
+    s.start({ turnId: "t1", userText: "Order 3 widgets" });
+    expect(await s.result("t1")).toEqual({ status: "completed", text: "Done — order placed." }); // from the in-flight promise
+    expect(await s.result("t1")).toEqual({ status: "completed", text: "Done — order placed." }); // after prune → from the log
+  });
 });
 
 describe("withSystem", () => {
