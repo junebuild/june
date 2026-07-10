@@ -1,5 +1,65 @@
 # @junejs/server
 
+## 0.1.0-dev.6
+
+### Patch Changes
+
+- [#38](https://github.com/junebuild/june/pull/38) [`9950e93`](https://github.com/junebuild/june/commit/9950e93ec899bc117682d2c73169176bb0f195fa) Thanks [@linyiru](https://github.com/linyiru)! - Make the Durable Object a first-class scope root, so tools reach ambient `db` and
+  app-defined services WITHOUT a module-global setter or `env` on ctx.
+
+  A DO is a separate isolate from the Worker entry, reached by RPC — so the
+  pipeline's request scope (and its ambient `db`/`kv`/`blob`) never crossed into it.
+  That left tools running in a DO with only `ToolContext` and no way to reach
+  resources June doesn't model (Vectorize, Workers AI, an app ledger, a signing
+  secret), forcing apps to a per-isolate module-global setter that is null if
+  injected in the wrong isolate.
+
+  Now:
+
+  - `@junejs/db` — `RequestScope` gains an app-defined `services?: unknown` bag
+    (opaque here; the app types it at the read), seeded by the host at each isolate
+    entry from that isolate's env. New `currentServices<T>()` reads it (soft —
+    returns `undefined` outside a scope / when unseeded, so the app's own typed
+    accessor decides whether a missing service throws). Re-exported from
+    `@junejs/server`.
+  - `@junejs/server/agent-durable` — `DoAgentDef` gains `resources?` and `services?`.
+    The app builds them from the DO's own env in the DO constructor (where env
+    lives), and `AgentDurableObject` runs every turn inside `runInScope(...)` seeded
+    with them. So a tool reads ambient `db` (from `resources`) and `currentServices()`
+    exactly as a route loader does. `locals` is fresh per turn — a fresh scope per
+    turn means per-turn state (e.g. Juno's batch-loader registry) can't leak across
+    turns on a long-lived DO. Additive: a def without `resources`/`services` runs in
+    an empty scope, unchanged.
+
+  This also fixes a latent gap: ambient `db` was previously unavailable (it threw)
+  inside a DO tool, since no scope was ever entered there.
+
+- [#37](https://github.com/junebuild/june/pull/37) [`9dc99d5`](https://github.com/junebuild/june/commit/9dc99d5bd0851bdd1aa261311ce108e697b85b3f) Thanks [@linyiru](https://github.com/linyiru)! - Serve `public/` static files verbatim — dev and every deploy target.
+
+  Drop a file in the app-root `public/` directory and it is served at the matching
+  URL (`public/logo.svg` → `/logo.svg`), passthrough only: no content-hashing, no
+  optimization (that stays a future image service's job). Zero config.
+
+  - New internal `static-files` module (not a public entrypoint): `contentTypeFor`
+    (extension → MIME) and `safeRelativePath` (a pure, traversal-safe path cleaner —
+    rejects `..`, backslashes, NUL, and malformed encoding). No `node:*`, so the
+    worker bundle imports it too.
+  - Dev (`app.ts`): serves `public/` off disk before the render pipeline, so a
+    public file shadows a same-path route exactly as it does when deployed.
+  - Build (`build.ts`): copies `public/**` into `dist/assets/**`, skipping the
+    reserved `_june/` segment (framework assets) with a warning; the copied paths
+    are threaded to adapters via a new `AdapterEmitContext.publicFiles`.
+  - Adapters: **Cloudflare** and **static** serve them via the whole-`assets/`
+    tier (unchanged). **Vercel** places `publicFiles` on the Build Output `static/`
+    tier (prerendered pages stay on the SSR function). **Deno** (`withDenoAssets`)
+    now serves any co-located `assets/` file, not just `/_june/*`. Public files are
+    `cache-control: must-revalidate` (not `immutable` — they are not hashed).
+
+  See `docs/static-files.md`.
+
+- Updated dependencies [[`9950e93`](https://github.com/junebuild/june/commit/9950e93ec899bc117682d2c73169176bb0f195fa)]:
+  - @junejs/db@0.0.33-dev.2
+
 ## 0.1.0-dev.5
 
 ### Patch Changes

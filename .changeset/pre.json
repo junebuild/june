@@ -19,6 +19,7 @@
     "agent-auto-mount",
     "agent-channels",
     "agent-connections",
+    "agent-do-scope-services",
     "agent-durable-object",
     "agent-edge-routing",
     "agent-instructions-seam",
@@ -27,6 +28,7 @@
     "durable-agent-runtime",
     "erasable-syntax",
     "packaging-dual-export-rollout",
-    "packaging-dual-export"
+    "packaging-dual-export",
+    "public-static-files"
   ]
 }
