@@ -8,12 +8,13 @@
 //   export default slackChannel({ signingSecret: process.env.SLACK_SIGNING_SECRET! , botToken: ... })
 
 import { type Channel, type ChannelContext } from "./agent-config";
+import type { InboundEvent, Tool, ToolContext } from "./agent-runtime";
 
 // Re-export the normalized inbound envelope from where channel authors live, so an
 // adapter can `import { type InboundEvent } from "@junejs/core/channels"` alongside
-// the factories it builds on. Canonical definition stays in agent-config.ts (with
-// Channel/ChannelContext) to keep the run-signature and the type in one module.
-export type { InboundEvent } from "./agent-config";
+// the factories it builds on. Canonical definition lives in agent-runtime (ToolContext
+// carries it); this is a convenience re-export at the channel entry point.
+export type { InboundEvent } from "./agent-runtime";
 
 const enc = new TextEncoder();
 
@@ -81,6 +82,14 @@ export function httpChannel(opts: { path?: string; mcp?: (req: Request) => Promi
 // Slack signs each request v0=HMAC-SHA256("v0:{ts}:{rawBody}"). Fast-ACK within
 // 3s and run the turn in the background; the bot_id/subtype guard prevents the
 // agent replying to itself.
+//
+// Beyond replying, the channel gives the agent READ capabilities on the workspace
+// via `tools` (merged into agent.tools by defineAgent): read a thread's replies, list
+// who reacted with which emoji, resolve a user id to a name. Each tool defaults its
+// target — channel / thread / message ts — from the CURRENT turn's InboundEvent
+// (ToolContext.event), so the model can call `slack_read_thread` with no arguments and
+// get the thread it's already in. All of these need a bot token with the matching
+// scopes (channels:history / groups:history, reactions:read, users:read).
 export function slackChannel(opts: {
   signingSecret: string;
   botToken: string;
@@ -96,6 +105,14 @@ export function slackChannel(opts: {
       body: JSON.stringify({ channel, text, thread_ts }),
     });
   }
+  // Slack Web API read helper: GET with query params + bearer token. Read methods
+  // (conversations.replies, reactions.get, users.info) all accept this shape. Returns
+  // the parsed JSON — callers check `ok`/`error` per Slack's envelope.
+  async function slackGet(method: string, params: Record<string, string>): Promise<SlackResponse> {
+    const qs = new URLSearchParams(params).toString();
+    const res = await fetch(`${api}/${method}?${qs}`, { headers: { authorization: `Bearer ${opts.botToken}` } });
+    return (await res.json()) as SlackResponse;
+  }
   async function valid(ts: string, body: string, sig: string): Promise<boolean> {
     if (!opts.signingSecret || !ts || !sig) return false;
     if (Math.abs(Date.now() / 1000 - Number(ts)) > 300) return false; // 5-min replay guard
@@ -104,6 +121,7 @@ export function slackChannel(opts: {
   return {
     name: "slack",
     path: opts.path ?? "/channels/slack",
+    tools: () => slackReadTools(slackGet),
     async webhook(req, ctx) {
       const body = await req.text();
       const ok = await valid(
@@ -116,22 +134,113 @@ export function slackChannel(opts: {
       const payload = JSON.parse(body) as {
         type?: string;
         challenge?: string;
-        event?: { type?: string; bot_id?: string; subtype?: string; text?: string; channel?: string; ts?: string; thread_ts?: string };
+        event?: { type?: string; bot_id?: string; subtype?: string; text?: string; channel?: string; ts?: string; thread_ts?: string; user?: string };
       };
       if (payload.type === "url_verification") return Response.json({ challenge: payload.challenge });
 
       if (payload.type === "event_callback") {
         const e = payload.event ?? {};
         // ignore our own bot + non-user subtypes → no self-reply loop
-        if (e.type === "message" && !e.bot_id && !e.subtype && e.text && e.channel) {
+        if (e.type === "message" && !e.bot_id && !e.subtype && e.text && e.channel && e.ts) {
           const thread = e.thread_ts ?? e.ts; // reply in-thread; one session per thread
           const session = `slack:${e.channel}:${thread}`;
-          runBackground(ctx, async () => postMessage(e.channel!, await ctx.run(e.text!, { session }), thread), opts.onError);
+          // The normalized envelope the turn (and its read tools) see: who, where, which
+          // thread — so slack_read_thread/list_reactions can default their target.
+          const event: InboundEvent = {
+            kind: "message",
+            channelId: e.channel,
+            threadId: thread,
+            ts: e.ts,
+            user: e.user ? { id: e.user } : undefined,
+            text: e.text,
+            raw: payload,
+          };
+          runBackground(ctx, async () => postMessage(e.channel!, await ctx.run(e.text!, { session, event }), thread), opts.onError);
         }
       }
       return new Response("", { status: 200 }); // fast ACK
     },
   };
+}
+
+// Slack Web API envelope shape (only the fields the read tools touch). `[k: string]`
+// keeps it permissive — Slack returns far more; we normalize just what an agent needs.
+type SlackResponse = {
+  ok?: boolean;
+  error?: string;
+  messages?: { user?: string; text?: string; ts?: string; thread_ts?: string; reply_count?: number }[];
+  message?: { reactions?: { name: string; count: number; users: string[] }[] };
+  user?: { id?: string; name?: string; real_name?: string; profile?: { real_name?: string; display_name?: string } };
+};
+
+// The Slack capability toolset. Split out so slackChannel stays readable and the
+// tools are unit-testable against a fake `get`. Each tool resolves its target from
+// the explicit input first, then falls back to the current turn's event
+// (ctx.event) — so the model can omit the ids for "this thread" / "this message".
+function slackReadTools(get: (method: string, params: Record<string, string>) => Promise<SlackResponse>): Tool[] {
+  const noTarget = (what: string) => ({ error: `no ${what} in context — pass it explicitly (this turn has no Slack event)` });
+  return [
+    {
+      spec: {
+        name: "slack_read_thread",
+        description: "Read the replies in a Slack thread (defaults to the current thread). Returns each reply's author id, text, and ts.",
+        input: {
+          type: "object",
+          properties: {
+            channelId: { type: "string", description: "Channel id; defaults to the current channel" },
+            threadId: { type: "string", description: "Thread root ts; defaults to the current thread" },
+          },
+        },
+      },
+      run: async (input: { channelId?: string; threadId?: string }, ctx: ToolContext) => {
+        const channel = input.channelId ?? ctx.event?.channelId;
+        const ts = input.threadId ?? ctx.event?.threadId ?? ctx.event?.ts;
+        if (!channel || !ts) return noTarget("thread");
+        const r = await get("conversations.replies", { channel, ts });
+        if (!r.ok) return { error: r.error ?? "slack error" };
+        return { messages: (r.messages ?? []).map((m) => ({ user: m.user, text: m.text, ts: m.ts })) };
+      },
+    },
+    {
+      spec: {
+        name: "slack_list_reactions",
+        description: "List the emoji reactions on a Slack message (defaults to the message that triggered this turn): each reaction's name, count, and the user ids who reacted.",
+        input: {
+          type: "object",
+          properties: {
+            channelId: { type: "string", description: "Channel id; defaults to the current channel" },
+            ts: { type: "string", description: "Message ts; defaults to the current/reacted message" },
+          },
+        },
+      },
+      run: async (input: { channelId?: string; ts?: string }, ctx: ToolContext) => {
+        const channel = input.channelId ?? ctx.event?.channelId;
+        const ts = input.ts ?? ctx.event?.reaction?.itemTs ?? ctx.event?.ts;
+        if (!channel || !ts) return noTarget("message");
+        const r = await get("reactions.get", { channel, timestamp: ts });
+        if (!r.ok) return { error: r.error ?? "slack error" };
+        return { reactions: (r.message?.reactions ?? []).map((x) => ({ name: x.name, count: x.count, users: x.users })) };
+      },
+    },
+    {
+      spec: {
+        name: "slack_resolve_user",
+        description: "Resolve a Slack user id to their name/display name (defaults to the user who triggered this turn).",
+        input: {
+          type: "object",
+          properties: { userId: { type: "string", description: "User id (e.g. U0123); defaults to the current user" } },
+        },
+      },
+      run: async (input: { userId?: string }, ctx: ToolContext) => {
+        const user = input.userId ?? ctx.event?.user?.id;
+        if (!user) return noTarget("user");
+        const r = await get("users.info", { user });
+        if (!r.ok) return { error: r.error ?? "slack error" };
+        const u = r.user ?? {};
+        return { id: u.id ?? user, name: u.name, realName: u.profile?.real_name ?? u.real_name, displayName: u.profile?.display_name };
+      },
+    },
+  ];
 }
 
 // ── crisp — customer-chat: signed webhooks in, REST out. Crisp signs plugin

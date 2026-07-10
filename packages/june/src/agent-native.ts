@@ -207,7 +207,7 @@ export function mountAgent(
   const ctx: ChannelContext = {
     agent,
     run: (message, o) =>
-      runtime.session(agent.name, o?.session ?? "default").turn({ turnId: o?.turnId, userText: message }),
+      runtime.session(agent.name, o?.session ?? "default").turn({ turnId: o?.turnId, userText: message, event: o?.event }),
   };
   const channels = channelFetch(agent, ctx);
   const surface = async (req: Request): Promise<Response | null> => {
