@@ -1,6 +1,6 @@
 {
   "name": "@junejs/server",
-  "version": "0.1.0-dev.5",
+  "version": "0.1.0-dev.6",
   "description": "June host adapters + dev server. Host-coupled; depends on the pure @junejs/core contract layer.",
   "type": "module",
   "license": "MIT",
@@ -126,7 +126,7 @@
   },
   "dependencies": {
     "@junejs/core": ">=0.1.0-dev.4",
-    "@junejs/db": ">=0.0.33-dev.1",
+    "@junejs/db": ">=0.0.33-dev.2",
     "@momiji-rs/sparkdown": "^0.0.4",
     "lightningcss": "^1.27.0",
     "oxc-parser": "^0.137.0",
