@@ -2,19 +2,40 @@
   "name": "@junejs/og",
   "version": "0.0.5",
   "type": "module",
-  "description": "June — cross-platform OG image generation. Cloudflare Workers, Vercel Edge, and Node.js dev all share one import; the right backend is selected at build time via export conditions.",
+  "description": "June \u2014 cross-platform OG image generation. Cloudflare Workers, Vercel Edge, and Node.js dev all share one import; the right backend is selected at build time via export conditions.",
   "exports": {
     ".": {
-      "workerd": "./src/workerd.ts",
-      "edge-light": "./src/edge.ts",
-      "default": "./src/node.ts"
+      "source": {
+        "workerd": "./src/workerd.ts",
+        "edge-light": "./src/edge.ts",
+        "default": "./src/node.ts"
+      },
+      "bun": {
+        "workerd": "./src/workerd.ts",
+        "edge-light": "./src/edge.ts",
+        "default": "./src/node.ts"
+      },
+      "workerd": {
+        "types": "./dist/workerd.d.ts",
+        "default": "./dist/workerd.js"
+      },
+      "edge-light": {
+        "types": "./dist/edge.d.ts",
+        "default": "./dist/edge.js"
+      },
+      "default": {
+        "types": "./dist/node.d.ts",
+        "default": "./dist/node.js"
+      }
     }
   },
   "files": [
+    "dist",
     "src"
   ],
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build": "tsdown"
   },
   "keywords": [
     "june",

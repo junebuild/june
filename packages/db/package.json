@@ -1,19 +1,26 @@
 {
   "name": "@junejs/db",
   "version": "0.0.33-dev.0",
-  "description": "June — the agent-native React framework. Ambient data resources (db/kv/blob).",
+  "description": "June \u2014 the agent-native React framework. Ambient data resources (db/kv/blob).",
   "type": "module",
   "license": "MIT",
   "homepage": "https://june.build",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "source": "./src/index.ts",
+      "bun": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
   },
   "files": [
+    "dist",
     "src"
   ],
   "scripts": {
     "test": "bun test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build": "tsdown"
   },
   "dependencies": {
     "@junejs/core": ">=0.1.0-dev.0"

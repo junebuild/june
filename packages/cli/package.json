@@ -1,7 +1,7 @@
 {
   "name": "@junejs/cli",
   "version": "0.0.51-dev.0",
-  "description": "The `june` CLI — dev / build / deploy / gen / info. A thin bin over @junejs/server.",
+  "description": "The `june` CLI \u2014 dev / build / deploy / gen / info. A thin bin over @junejs/server.",
   "type": "module",
   "license": "MIT",
   "homepage": "https://june.build",
@@ -9,15 +9,22 @@
     "june": "./bin.mjs"
   },
   "exports": {
-    ".": "./src/cli.ts"
+    ".": {
+      "source": "./src/cli.ts",
+      "bun": "./src/cli.ts",
+      "types": "./dist/cli.d.ts",
+      "default": "./dist/cli.js"
+    }
   },
   "files": [
     "src",
-    "bin.mjs"
+    "bin.mjs",
+    "dist"
   ],
   "scripts": {
     "test": "bun test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build": "tsdown"
   },
   "dependencies": {
     "@junejs/core": ">=0.1.0-dev.0",

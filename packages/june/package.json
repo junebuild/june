@@ -6,31 +6,123 @@
   "license": "MIT",
   "homepage": "https://june.build",
   "exports": {
-    ".": "./src/index.ts",
-    "./host": "./src/host.ts",
-    "./agent-native": "./src/agent-native.ts",
-    "./agent-durable": "./src/agent-durable.ts",
-    "./agent-discover": "./src/agent-discover.ts",
-    "./db": "./src/db.ts",
-    "./kv": "./src/kv.ts",
-    "./blob": "./src/blob.ts",
-    "./resources": "./src/resources.ts",
-    "./config": "./src/config-loader.ts",
-    "./content": "./src/content.ts",
-    "./router": "./src/router.ts",
-    "./instrumentation": "./src/instrumentation.ts",
-    "./pipeline": "./src/pipeline.ts",
-    "./worker": "./src/worker.ts",
-    "./build": "./src/build.ts",
-    "./deploy": "./src/deploy.ts",
-    "./dev": "./src/dev.ts"
+    ".": {
+      "source": "./src/index.ts",
+      "bun": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./host": {
+      "source": "./src/host.ts",
+      "bun": "./src/host.ts",
+      "types": "./dist/host.d.ts",
+      "default": "./dist/host.js"
+    },
+    "./agent-native": {
+      "source": "./src/agent-native.ts",
+      "bun": "./src/agent-native.ts",
+      "types": "./dist/agent-native.d.ts",
+      "default": "./dist/agent-native.js"
+    },
+    "./agent-durable": {
+      "source": "./src/agent-durable.ts",
+      "bun": "./src/agent-durable.ts",
+      "types": "./dist/agent-durable.d.ts",
+      "default": "./dist/agent-durable.js"
+    },
+    "./agent-discover": {
+      "source": "./src/agent-discover.ts",
+      "bun": "./src/agent-discover.ts",
+      "types": "./dist/agent-discover.d.ts",
+      "default": "./dist/agent-discover.js"
+    },
+    "./db": {
+      "source": "./src/db.ts",
+      "bun": "./src/db.ts",
+      "types": "./dist/db.d.ts",
+      "default": "./dist/db.js"
+    },
+    "./kv": {
+      "source": "./src/kv.ts",
+      "bun": "./src/kv.ts",
+      "types": "./dist/kv.d.ts",
+      "default": "./dist/kv.js"
+    },
+    "./blob": {
+      "source": "./src/blob.ts",
+      "bun": "./src/blob.ts",
+      "types": "./dist/blob.d.ts",
+      "default": "./dist/blob.js"
+    },
+    "./resources": {
+      "source": "./src/resources.ts",
+      "bun": "./src/resources.ts",
+      "types": "./dist/resources.d.ts",
+      "default": "./dist/resources.js"
+    },
+    "./config": {
+      "source": "./src/config-loader.ts",
+      "bun": "./src/config-loader.ts",
+      "types": "./dist/config-loader.d.ts",
+      "default": "./dist/config-loader.js"
+    },
+    "./content": {
+      "source": "./src/content.ts",
+      "bun": "./src/content.ts",
+      "types": "./dist/content.d.ts",
+      "default": "./dist/content.js"
+    },
+    "./router": {
+      "source": "./src/router.ts",
+      "bun": "./src/router.ts",
+      "types": "./dist/router.d.ts",
+      "default": "./dist/router.js"
+    },
+    "./instrumentation": {
+      "source": "./src/instrumentation.ts",
+      "bun": "./src/instrumentation.ts",
+      "types": "./dist/instrumentation.d.ts",
+      "default": "./dist/instrumentation.js"
+    },
+    "./pipeline": {
+      "source": "./src/pipeline.ts",
+      "bun": "./src/pipeline.ts",
+      "types": "./dist/pipeline.d.ts",
+      "default": "./dist/pipeline.js"
+    },
+    "./worker": {
+      "source": "./src/worker.ts",
+      "bun": "./src/worker.ts",
+      "types": "./dist/worker.d.ts",
+      "default": "./dist/worker.js"
+    },
+    "./build": {
+      "source": "./src/build.ts",
+      "bun": "./src/build.ts",
+      "types": "./dist/build.d.ts",
+      "default": "./dist/build.js"
+    },
+    "./deploy": {
+      "source": "./src/deploy.ts",
+      "bun": "./src/deploy.ts",
+      "types": "./dist/deploy.d.ts",
+      "default": "./dist/deploy.js"
+    },
+    "./dev": {
+      "source": "./src/dev.ts",
+      "bun": "./src/dev.ts",
+      "types": "./dist/dev.d.ts",
+      "default": "./dist/dev.js"
+    }
   },
   "files": [
-    "src"
+    "src",
+    "dist"
   ],
   "scripts": {
     "test": "bun test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build": "tsdown"
   },
   "dependencies": {
     "@junejs/core": ">=0.1.0-dev.3",
