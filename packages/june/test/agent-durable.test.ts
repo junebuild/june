@@ -22,6 +22,8 @@ import {
 } from "../src/agent-durable";
 import { createAgentRuntime } from "../src/agent-native";
 import { openLocalSqliteSync } from "../src/sqlite-driver";
+import { db, currentServices, requestLocal } from "@junejs/db";
+import type { JuneDb } from "@junejs/core/resources";
 
 // A stand-in for ctx.storage: the Cloudflare SqlStorage surface (synchronous
 // .exec() + a synchronous transaction) over bun:sqlite.
@@ -144,6 +146,93 @@ describe("AgentDurableObject", () => {
     const t = await agent.fetch(new Request("https://do/transcript"));
     const { transcript } = (await t.json()) as { transcript: { user: string }[] };
     expect(transcript[0]!.user).toBe("Order 3 widgets");
+  });
+});
+
+// ── the DI seam: ambient resources/services reach a tool INSIDE the DO ────────
+// A DO is a separate isolate from the Worker entry, so the pipeline's request scope
+// never crosses into it. AgentDurableObject instead runs each turn inside a scope
+// seeded from the def's resources/services (which the app builds from the DO's env).
+// This proves a tool reads ambient `db` + currentServices() with no module-global,
+// across turns, and that per-turn `locals` do not leak on a long-lived DO.
+
+// A fake ambient `db` handle (the app would pass `d1(env.DB)`); only query() is used.
+function fakeJuneDb(): JuneDb {
+  const notUsed = async () => { throw new Error("not used in this test"); };
+  return {
+    query: (async () => [{ v: "from-do-db" }]) as JuneDb["query"],
+    get: notUsed as JuneDb["get"],
+    run: notUsed as JuneDb["run"],
+    exec: async () => {},
+    transaction: (async (fn: (tx: JuneDb) => unknown) => fn(fakeJuneDb())) as JuneDb["transaction"],
+    close: async () => {},
+    dialect: "sqlite",
+  };
+}
+
+// An ASYNC tool (⇒ the remote / at-least-once path) that reads everything a real
+// retriever/ledger tool would: ambient `db`, the app services bag, and a per-turn
+// local. It records what it saw into `seen` so the test can assert reachability.
+const PROBE_LOCAL = Symbol("probe-local");
+type Probe = { db: string; svc: string; localId: number };
+function probeTool(seen: Probe[], nextLocalId: () => number): Tool {
+  return {
+    spec: { name: "probe", description: "read ambient db + services + a per-turn local", input: { type: "object" } },
+    run: async () => {
+      const rows = await db.query<{ v: string }>("SELECT 'from-do-db' AS v");
+      const svc = currentServices<{ retriever: { fetch(): string } }>();
+      const local = requestLocal(PROBE_LOCAL, () => ({ id: nextLocalId() }));
+      const obs: Probe = { db: rows[0]!.v, svc: svc?.retriever.fetch() ?? "no-services", localId: local.id };
+      seen.push(obs);
+      return obs;
+    },
+  };
+}
+
+// A model that emits ONE probe call per turn with a turn-unique id (so a later turn's
+// step can't be skipped by the DO's step cache), then finishes the turn.
+function probeModel(): Model {
+  return async (msgs): Promise<ModelReply> => {
+    const last = msgs[msgs.length - 1]!;
+    if (last.role === "tool") return { text: "done", toolCalls: [] };
+    const turnId = last.role === "user" ? last.turnId : "t?";
+    return { text: "probing", toolCalls: [{ id: `probe-${turnId}`, name: "probe", input: {} }] };
+  };
+}
+
+describe("AgentDurableObject — DI scope (ambient db/services reach a DO tool)", () => {
+  test("ambient db + services resolve inside a tool, across turns, with per-turn locals", async () => {
+    const s = await storage();
+    const seen: Probe[] = [];
+    let localIds = 0;
+    const agent = new AgentDurableObject(
+      { storage: s },
+      {
+        name: "support",
+        model: probeModel(),
+        tools: [probeTool(seen, () => ++localIds)],
+        resources: { db: fakeJuneDb() },
+        services: { retriever: { fetch: () => "retriever-ok" } },
+      },
+    );
+
+    expect(await agent.turn({ turnId: "t1", userText: "hi" })).toBe("done");
+    expect(await agent.turn({ turnId: "t2", userText: "again" })).toBe("done");
+
+    expect(seen).toHaveLength(2);
+    // ambient db + services reached the tool on BOTH turns (scope re-entered each turn)…
+    expect(seen[0]).toEqual({ db: "from-do-db", svc: "retriever-ok", localId: 1 });
+    // …and locals are per-turn: turn 2's local was freshly made (id 2), not turn 1's (id 1).
+    expect(seen[1]).toEqual({ db: "from-do-db", svc: "retriever-ok", localId: 2 });
+  });
+
+  test("no resources/services declared ⇒ turn still runs (scope is empty, not broken)", async () => {
+    const s = await storage();
+    // The exactly-once sync tool uses ctx.store.unwrap (not ambient) — it must keep
+    // working now that every turn is wrapped in a scope.
+    const agent = new AgentDurableObject({ storage: s }, { name: "ops", model: scriptedModel(ORDER_SCRIPT), tools: [createOrderTool()] });
+    expect(await agent.turn({ turnId: "t1", userText: "Order 3 widgets" })).toBe("Done — order placed.");
+    expect(countOrders(s)).toBe(1);
   });
 });
 

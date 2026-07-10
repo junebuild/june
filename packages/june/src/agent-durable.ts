@@ -25,6 +25,8 @@ import {
   type SessionStore,
   type Tool,
 } from "@junejs/core/agent-runtime";
+import type { Resources } from "@junejs/core/resources";
+import { ensureScope, runInScope } from "@junejs/db";
 
 // ── minimal structural Cloudflare surface (no @cloudflare/workers-types dep) ──
 export interface SqlStorageCursor<T = Record<string, unknown>> {
@@ -114,7 +116,26 @@ const crossDoUnsupported: Runtime = {
 
 // `instructions` (system prompt) is injected into the model per turn (withSystem),
 // so it need not be baked into `model` at construction — single-sourced on the def.
-export type DoAgentDef = { name?: string; model: Model; tools: Tool[]; instructions?: string };
+//
+// `resources` / `services` are the DI seam that closes the isolate gap: a DO is a
+// SEPARATE isolate from the Worker entry, reached by RPC, so the pipeline's request
+// scope (and its ambient `db`/`kv`/`blob`) never crosses into it. Instead the app
+// builds these from the DO's OWN env in the DO constructor (where env lives) and the
+// AgentDurableObject runs every turn inside a scope holding them — so a tool reads
+// ambient `db` (from `resources`) and app-defined services (via `currentServices()`)
+// exactly as a route loader does, with no module-global setter and no `env` on ctx.
+//   • resources — db/kv/blob handles bound from env (e.g. `{ db: d1(env.DB) }`).
+//   • services  — the app's own bag for things June doesn't model (Vectorize,
+//     Workers AI, a ledger writer, a retriever). Opaque here; the app types it at
+//     the `currentServices<T>()` read.
+export type DoAgentDef = {
+  name?: string;
+  model: Model;
+  tools: Tool[];
+  instructions?: string;
+  resources?: Resources;
+  services?: unknown;
+};
 
 // The agent runtime INSIDE a Durable Object. A plain class (constructor takes the
 // DO state) so this module needs no `cloudflare:workers` import. The app supplies
@@ -123,18 +144,36 @@ export type DoAgentDef = { name?: string; model: Model; tools: Tool[]; instructi
 // AgentDurableObject from `this.ctx` and forwards `fetch()`:
 //
 //   export class JuneAgentDO extends DurableObject {
-//     agent = new AgentDurableObject(this.ctx, { model, tools });
+//     agent = new AgentDurableObject(this.ctx, {
+//       model, tools,
+//       resources: { db: d1(this.env.DB) },   // ambient `db` inside tools
+//       services: makeServices(this.env),     // retriever, ledger writer, Vectorize…
+//     });
 //     fetch(req) { return this.agent.fetch(req); }
 //   }
 export class AgentDurableObject {
   private session: AgentSession;
+  // Built from the DO's env in the constructor (this isolate), shared across turns —
+  // env is stable per isolate, like bindWorkerResources memoizes per worker isolate.
+  private readonly resources: Resources;
+  private readonly services: unknown;
   constructor(state: DurableObjectState, def: DoAgentDef) {
     const store = new DoSessionStore(state.storage);
     const model = def.instructions ? withSystem(def.model, def.instructions) : def.model;
+    this.resources = def.resources ?? {};
+    this.services = def.services;
     this.session = new AgentSession(def.name ?? "agent", "self", store, new InProcBroadcaster(), model, def.tools, crossDoUnsupported);
   }
-  turn(input: { turnId?: string; userText: string }): Promise<string> {
-    return this.session.turn(input);
+  // Run the whole turn inside a request scope seeded from this DO's env, so ambient
+  // `db`/`kv`/`blob` and `currentServices()` resolve inside a tool exactly as in a
+  // route loader. `locals` is intentionally NOT set here: a fresh scope object per
+  // turn means a fresh (lazily-created) locals Map per turn, so per-turn state (e.g.
+  // Juno's batch-loader registry) can't leak across turns on a long-lived DO.
+  // ensureScope() lazily wires node:async_hooks (workerd via nodejs_compat), as the
+  // pipeline does; without it runInScope is a pass-through and ambient reads throw.
+  async turn(input: { turnId?: string; userText: string }): Promise<string> {
+    await ensureScope();
+    return runInScope({ resources: this.resources, services: this.services }, () => this.session.turn(input));
   }
   transcript() {
     return this.session.transcript();

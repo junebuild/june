@@ -12,6 +12,7 @@ export {
   requestLocal,
   setRequestLocale,
   currentLocale,
+  currentServices,
   registerSqlTagger,
   type RequestScope,
 } from "./scope";
