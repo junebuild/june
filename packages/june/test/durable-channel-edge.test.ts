@@ -84,7 +84,12 @@ describe("durableChannelSurface (edge channel routing)", () => {
 
     // routed to the per-session DO (agent : channel-derived session), forwarded on /turn:
     expect(addressed()).toBe(`${AGENT}:crisp:w1:s1`);
-    expect(forwarded()).toEqual({ userText: "how many widgets?" }); // turnId undefined → omitted
+    // userText + the normalized InboundEvent (crisp threads the envelope, symmetric with
+    // slack); turnId undefined → omitted.
+    expect(forwarded()).toMatchObject({
+      userText: "how many widgets?",
+      event: { kind: "message", channelId: "w1", threadId: "s1", text: "how many widgets?" },
+    });
     // reply-out went back to Crisp with the DO's turn text:
     expect(calls).toHaveLength(1);
     expect(calls[0]!.url).toBe("https://crisp.test/website/w1/conversation/s1/message");

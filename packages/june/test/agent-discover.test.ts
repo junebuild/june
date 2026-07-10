@@ -40,7 +40,7 @@ describe("discoverAgent", () => {
     // discovered tool + the slack channel's capability tools (merged by defineAgent)
     // + the synthesized read_skill (skills/ is non-empty)
     expect(agent.tools.map((t) => t.spec.name).sort()).toEqual([
-      "create_order", "read_skill", "slack_list_reactions", "slack_read_thread", "slack_resolve_user",
+      "create_order", "read_skill", "slack_add_reaction", "slack_list_reactions", "slack_read_thread", "slack_resolve_user",
     ]);
     expect(agent.skills).toEqual([
       { name: "bulk_reorder", description: "Reorder many items at once from a supplier list, checking stock first.", body: expect.stringContaining("Read the supplier list") },
