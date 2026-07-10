@@ -66,8 +66,15 @@ const scripted: Model = async (msgs: Msg[]): Promise<ModelReply> => {
 export class JuneSlackDO extends DurableObject<Env> {
   #agent = new AgentDurableObject(this.ctx, {
     name: "slack-helper",
-    tools: makeSlack(this.env).tools!(),
+    tools: [],
+    // The DO builds the channel's capability tools from ITS OWN env (a tool's run
+    // closure can't cross the worker→DO RPC). Pass the same factory you mount below.
+    channels: [makeSlack],
+    env: this.env,
     instructions: INSTRUCTIONS,
+    // Optional: per-source system overlay — the model learns, from the real (unforgeable)
+    // event source, that this turn came from Slack. No userText marker needed.
+    channelInstructions: { slack: "This turn was triggered from Slack; keep replies to one short Slack message." },
     model: this.env.ANTHROPIC_API_KEY
       ? anthropic({ model: "claude-opus-4-8", apiKey: this.env.ANTHROPIC_API_KEY })
       : scripted,

@@ -8,6 +8,7 @@ import {
   AgentSession,
   withSystem,
   type Broadcaster,
+  type InboundEvent,
   type Model,
   type ModelReply,
   type Msg,
@@ -225,5 +226,44 @@ describe("withSystem", () => {
     const wrapped = withSystem(capture, "You are Ops.");
     await wrapped([{ role: "user", turnId: "t1", text: "hi" }], []);
     expect(seen).toBe("You are Ops.");
+  });
+
+  test("APPENDS a per-turn overlay (opts.system) to the base, or uses base alone", async () => {
+    let seen: string | undefined;
+    const capture: Model = async (_m, _t, opts) => { seen = opts?.system; return { text: "ok", toolCalls: [] }; };
+    const wrapped = withSystem(capture, "BASE");
+    await wrapped([], [], { system: "OVERLAY" });
+    expect(seen).toBe("BASE\n\nOVERLAY");
+    await wrapped([], []);
+    expect(seen).toBe("BASE");
+  });
+});
+
+describe("channelInstructions overlay (C — real source into the prompt)", () => {
+  const capturingSession = (channelInstructions?: Record<string, string>) => {
+    const seen: (string | undefined)[] = [];
+    const capture: Model = async (_m, _t, opts) => { seen.push(opts?.system); return { text: "ok", toolCalls: [] }; };
+    const { store } = memStore();
+    const session = new AgentSession("ops", "s1", store, new MemBroadcaster(), withSystem(capture, "BASE"), [], noRuntime, channelInstructions);
+    return { session, seen };
+  };
+  const ev = (source: string): InboundEvent => ({ source, kind: "message", channelId: "C", threadId: "T", ts: "1", raw: {} });
+
+  test("appends the source-matched overlay for that turn; base-only otherwise", async () => {
+    const { session, seen } = capturingSession({ slack: "ASSIST-MODE", crisp: "CRISP-NOTE" });
+    await session.turn({ turnId: "t1", userText: "hi", event: ev("slack") });
+    expect(seen.at(-1)).toBe("BASE\n\nASSIST-MODE");            // real source → overlay
+    await session.turn({ turnId: "t2", userText: "hi", event: ev("crisp") });
+    expect(seen.at(-1)).toBe("BASE\n\nCRISP-NOTE");
+    await session.turn({ turnId: "t3", userText: "hi", event: ev("web") });
+    expect(seen.at(-1)).toBe("BASE");                          // unknown source → no overlay
+    await session.turn({ turnId: "t4", userText: "hi" });
+    expect(seen.at(-1)).toBe("BASE");                          // no event → no overlay
+  });
+
+  test("no channelInstructions ⇒ always base only", async () => {
+    const { session, seen } = capturingSession(undefined);
+    await session.turn({ turnId: "t1", userText: "hi", event: ev("slack") });
+    expect(seen.at(-1)).toBe("BASE");
   });
 });

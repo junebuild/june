@@ -153,6 +153,16 @@ export type DoAgentDef = {
   model: Model;
   tools: Tool[];
   instructions?: string;
+  // Per-channel-source system overlays (see AgentDefinition.channelInstructions) — the
+  // shared agent branches by real inbound source, no userText marker.
+  channelInstructions?: Record<string, string>;
+  // Channels whose CAPABILITY tools should be available to this session's turns. Their
+  // tools are built HERE, in the DO isolate, from `env` — because a channel's tool `run`
+  // is a closure (over the bot token, etc.) that can't cross the worker→DO RPC. This is
+  // the edge equivalent of defineAgent merging channel.tools() on native: pass the same
+  // channel factories you mount on the worker, plus this DO's env.
+  channels?: (Channel | ChannelFactory)[];
+  env?: unknown;
   resources?: Resources;
   services?: unknown;
 };
@@ -182,7 +192,18 @@ export class AgentDurableObject {
     const model = def.instructions ? withSystem(def.model, def.instructions) : def.model;
     this.resources = def.resources ?? {};
     this.services = def.services;
-    this.session = new AgentSession(def.name ?? "agent", "self", store, new InProcBroadcaster(), model, def.tools, crossDoUnsupported);
+    // Merge the mounted channels' capability tools (built here from this DO's env, since a
+    // tool's `run` closure can't cross the RPC). The cross-channel source gate on each tool
+    // keeps a Slack tool inert during a Crisp turn, so merging all of them is safe.
+    const channelTools = (def.channels ?? []).flatMap((c) => resolveChannel(c, def.env).tools?.() ?? []);
+    const tools: Tool[] = [...def.tools];
+    const seen = new Set(tools.map((t) => t.spec.name));
+    for (const t of channelTools) {
+      if (seen.has(t.spec.name)) throw new Error(`AgentDurableObject(${def.name ?? "agent"}): duplicate tool name "${t.spec.name}" from a channel — rename so dispatch is unambiguous.`);
+      seen.add(t.spec.name);
+      tools.push(t);
+    }
+    this.session = new AgentSession(def.name ?? "agent", "self", store, new InProcBroadcaster(), model, tools, crossDoUnsupported, def.channelInstructions);
   }
   // Run the whole turn inside a request scope seeded from this DO's env, so ambient
   // `db`/`kv`/`blob` and `currentServices()` resolve inside a tool exactly as in a

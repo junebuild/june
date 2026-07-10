@@ -85,6 +85,31 @@ crispChannel({
 `mode: "respond"` (default) keeps the reply behavior AND still fires `onEvent` if set —
 so you can mirror and answer at the same time.
 
+### Per-kind `respondTo` — mention runs a turn, reaction just observes
+
+`mode` is channel-wide; `respondTo` is per event kind. Subscribe to several kinds but
+only let some drive a turn:
+
+```ts
+slackChannel({
+  events: ["app_mention", "reaction_added"],
+  respondTo: ["app_mention"],       // mention → turn+reply; reaction → onEvent only (no LLM)
+  botUserId: "U…",
+  onEvent: ({ event }) => recordReaction(event),
+})
+```
+
+### Channel tools on the edge, and source-aware instructions
+
+- `AgentDurableObject({ channels: [makeSlack], env })` builds the channel's capability
+  tools inside the DO — the edge equivalent of `defineAgent` merging them on native.
+- `channelInstructions: { slack: "…" }` appends a system overlay when the turn's real
+  `event.source` matches — a shared agent branches on the unforgeable source, not a
+  userText marker.
+- Building a fully custom channel? The signing/normalization primitives are exported —
+  `verifySlackSignature`, `verifyCrispSignature`, `normalizeSlackEvent`, `tryParseJson`,
+  `timestampFresh` — so a fork is ~30 lines of domain logic, no re-implemented crypto.
+
 ## What's next (not in this example yet)
 
 - **Block Kit / rich output** and updating a posted message.

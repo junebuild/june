@@ -21,6 +21,7 @@ import {
   type SqlStorage,
 } from "../src/agent-durable";
 import { createAgentRuntime } from "../src/agent-native";
+import { defineChannel } from "@junejs/core/agent-config";
 import { openLocalSqliteSync } from "../src/sqlite-driver";
 import { db, currentServices, requestLocal } from "@junejs/db";
 import type { JuneDb } from "@junejs/core/resources";
@@ -136,6 +137,24 @@ describe("DoSessionStore (edge durability seam)", () => {
 });
 
 describe("AgentDurableObject", () => {
+  test("merges a channel's capability tools, built from the DO env, into the turn (B)", async () => {
+    const s = await storage();
+    let sawEnv: unknown;
+    // a channel FACTORY: its tools() run closures can't cross the RPC, so the DO builds
+    // them here from its own env. The turn must be able to dispatch the channel tool.
+    const factory = (env: unknown) => { sawEnv = env; return defineChannel({ name: "x", path: "/x", tools: () => [channelPing] }); };
+    const channelPing: Tool = { spec: { name: "channel_ping", description: "d", input: { type: "object" } }, run: () => ({ pong: true }) };
+    const model = scriptedModel([
+      { text: "calling channel tool", toolCalls: [{ id: "c1", name: "channel_ping", input: {} }] },
+      { text: "done", toolCalls: [] },
+    ]);
+    const agent = new AgentDurableObject({ storage: s }, { name: "ops", model, tools: [], channels: [factory], env: { BOT: "xoxb" } });
+
+    const res = await agent.fetch(new Request("https://do/turn", { method: "POST", body: JSON.stringify({ userText: "go", turnId: "t1" }) }));
+    expect(await res.json()).toEqual({ text: "done" }); // dispatched channel_ping (not "unknown tool")
+    expect(sawEnv).toEqual({ BOT: "xoxb" });            // channel tools were resolved with the DO env
+  });
+
   test("POST /turn runs a durable turn; GET /transcript reads the log", async () => {
     const s = await storage();
     const agent = new AgentDurableObject({ storage: s }, { name: "ops", model: scriptedModel(ORDER_SCRIPT), tools: [createOrderTool()] });

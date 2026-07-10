@@ -81,6 +81,31 @@ function timestampFresh(ts: string, toleranceSec = 300): boolean {
   return Math.abs(Date.now() / 1000 - tsSec) <= toleranceSec;
 }
 
+// ── exported primitives (composability floor) ────────────────────────────────
+// Security-critical building blocks, exported so a hand-rolled channel never has to
+// re-implement crypto: verify a signed request, then normalize its payload. A fork
+// reads the raw body once and calls these — ~30 lines of domain logic, no HMAC of its
+// own. `tryParseJson` and `normalizeSlackEvent` (below) round out the set.
+
+// Verify a Slack request signature (v0 = HMAC-SHA256 of "v0:{ts}:{body}") AND its
+// freshness (±5 min replay guard). Pass the raw body exactly as received.
+export async function verifySlackSignature(signingSecret: string, timestamp: string, body: string, signature: string): Promise<boolean> {
+  if (!signingSecret || !timestamp || !signature) return false;
+  if (!timestampFresh(timestamp)) return false;
+  return timingSafeEqual("v0=" + (await hmacSha256Hex(signingSecret, `v0:${timestamp}:${body}`)), signature);
+}
+
+// Verify a Crisp plugin hook signature (HMAC-SHA256 of "[{ts};{body}]") + freshness.
+export async function verifyCrispSignature(signingSecret: string, timestamp: string, body: string, signature: string): Promise<boolean> {
+  if (!signingSecret || !timestamp || !signature) return false;
+  if (!timestampFresh(timestamp)) return false;
+  return timingSafeEqual(await hmacSha256Hex(signingSecret, `[${timestamp};${body}]`), signature);
+}
+
+// Re-exported for hand-rolled channels: parse a signed body tolerating malformed input,
+// and check a timestamp's freshness. (Definitions above.)
+export { tryParseJson, timestampFresh };
+
 // ── channel extension seams (shared by slack + crisp) ─────────────────────────
 // An observe/mirror hook: called for EVERY signature-verified inbound webhook event —
 // before the turn's loop guard, so it also sees operator/bot/non-text events the turn
@@ -155,11 +180,19 @@ export function slackChannel(opts: {
   path?: string;
   apiUrl?: string;
   events?: SlackEventKind[];
+  // Which of the subscribed `events` actually drive a turn + reply; the rest only reach
+  // `onEvent`. Decouples noticing an event from responding to it, per KIND — e.g.
+  // events:["app_mention","reaction_added"], respondTo:["app_mention"] runs a turn for a
+  // mention but treats a reaction as a deterministic observe (no LLM). Defaults to all of
+  // `events` (every subscribed kind responds — the prior behavior). `mode:"observe"`
+  // forces this empty (respond to nothing).
+  respondTo?: SlackEventKind[];
   botUserId?: string;
   onError?: (err: unknown) => void;
 } & ChannelExtensions): Channel {
   const api = opts.apiUrl ?? "https://slack.com/api";
   const events = opts.events ?? ["message", "app_mention"];
+  const respondTo: string[] = opts.mode === "observe" ? [] : (opts.respondTo ?? events);
   async function postMessage(channel: string, text: string, thread_ts?: string) {
     await fetch(`${api}/chat.postMessage`, {
       method: "POST",
@@ -184,11 +217,7 @@ export function slackChannel(opts: {
     });
     return (await res.json()) as SlackResponse;
   }
-  async function valid(ts: string, body: string, sig: string): Promise<boolean> {
-    if (!opts.signingSecret || !ts || !sig) return false;
-    if (!timestampFresh(ts)) return false; // 5-min replay guard
-    return timingSafeEqual("v0=" + (await hmacSha256Hex(opts.signingSecret, `v0:${ts}:${body}`)), sig);
-  }
+  const valid = (ts: string, body: string, sig: string) => verifySlackSignature(opts.signingSecret, ts, body, sig);
   return {
     name: "slack",
     path: opts.path ?? "/channels/slack",
@@ -211,8 +240,8 @@ export function slackChannel(opts: {
         const norm = normalizeSlackEvent(payload.event ?? {}, events, opts.botUserId);
         // observe: mirror EVERY verified event_callback (raw always; normalized when available)
         if (opts.onEvent) runBackground(ctx, async () => opts.onEvent!({ raw: payload, event: norm?.event }, ctx), opts.onError);
-        // respond: an eligible message runs a turn + reply — unless we're in observe (shadow) mode
-        if (opts.mode !== "observe" && norm) {
+        // respond: only kinds in respondTo drive a turn + reply (reactions can stay observe-only)
+        if (norm && respondTo.includes(norm.event.kind)) {
           const { event, session, userText } = norm;
           runBackground(ctx, async () => {
             const reply = await ctx.run(userText, { session, event });
@@ -254,8 +283,9 @@ type SlackEvent = {
 
 // Map a raw Slack event to June's normalized envelope + the turn's session and text.
 // Returns null when the event isn't one we route (not in `events`, self-authored, or
-// missing required fields) so the webhook simply fast-ACKs and does nothing.
-function normalizeSlackEvent(
+// missing required fields) so the webhook simply fast-ACKs and does nothing. Exported so
+// a hand-rolled Slack channel can reuse the normalization instead of re-deriving it.
+export function normalizeSlackEvent(
   e: SlackEvent,
   events: SlackEventKind[],
   botUserId?: string,
@@ -423,11 +453,7 @@ export function crispChannel(opts: {
     const res = await fetch(`${api}${path}`, { headers: { authorization: auth(), "X-Crisp-Tier": "plugin" } });
     return (await res.json()) as CrispResponse;
   }
-  async function valid(ts: string, body: string, sig: string): Promise<boolean> {
-    if (!opts.signingSecret || !ts || !sig) return false;
-    if (!timestampFresh(ts)) return false; // 5-min replay guard (parity with slack)
-    return timingSafeEqual(await hmacSha256Hex(opts.signingSecret, `[${ts};${body}]`), sig);
-  }
+  const valid = (ts: string, body: string, sig: string) => verifyCrispSignature(opts.signingSecret, ts, body, sig);
   return {
     name: "crisp",
     path: opts.path ?? "/channels/crisp",
