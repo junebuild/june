@@ -220,17 +220,68 @@ export class AgentDurableObject {
   transcript() {
     return this.session.transcript();
   }
-  // Default HTTP surface: POST …/turn runs a durable turn; GET …/transcript reads
-  // the log. The app can call turn()/transcript() directly instead.
+  // Default HTTP surface: POST …/turn STREAMS the turn's TurnEvents as SSE (start the
+  // turn in-scope, then stream from the session sink); GET …/transcript reads the log.
+  // The app can call turn()/transcript() directly instead (turn() awaits the final text).
   async fetch(req: Request): Promise<Response> {
     const url = new URL(req.url);
     if (req.method === "POST" && url.pathname.endsWith("/turn")) {
       const { userText, turnId, event } = (await req.json()) as { userText: string; turnId?: string; event?: InboundEvent };
-      return Response.json({ text: await this.turn({ userText, turnId, event }) });
+      await ensureScope();
+      // start() schedules the turn on the chain WITHIN the scope, so it runs with ambient
+      // db/services (ALS propagates to the .then continuation registered here); subscribing
+      // happens synchronously right after, before any event can emit.
+      const started = runInScope({ resources: this.resources, services: this.services }, () => this.session.start({ userText, turnId, event }));
+      return new Response(sseTurnStream(this.session, started.turnId), { headers: SSE_HEADERS });
     }
     if (url.pathname.endsWith("/transcript")) return Response.json({ transcript: this.transcript() });
     return new Response("agent DO — POST /turn or GET /transcript", { status: 404 });
   }
+}
+
+// ── SSE transport for the turn event stream (crosses the worker→DO isolate) ───
+// The DO streams a turn's TurnEvents as text/event-stream; the worker either pipes
+// that straight to a browser (live chat) or collapses it to the final text (channels).
+const SSE_HEADERS = { "content-type": "text/event-stream", "cache-control": "no-cache" };
+
+// A ReadableStream of SSE frames from a session's live event stream, scoped to one turn
+// and closed on its terminal event. Subscribes synchronously (no replay needed — we
+// start the turn then subscribe before any event can emit).
+function sseTurnStream(session: AgentSession, turnId: string): ReadableStream<Uint8Array> {
+  const enc = new TextEncoder();
+  let unsub: (() => void) | undefined;
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      unsub = session.observe((e) => {
+        controller.enqueue(enc.encode(`data: ${JSON.stringify(e)}\n\n`));
+        if (e.type === "turn.completed" || e.type === "turn.failed") { unsub?.(); controller.close(); }
+      }, { turnId });
+    },
+    cancel() { unsub?.(); },
+  });
+}
+
+// Consume an SSE turn stream to its terminal state: the final text, or throw on failure.
+// The non-streaming path (channels, a JSON chat response) uses this.
+export async function sseTurnFinalText(res: Response): Promise<string> {
+  const reader = res.body!.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (value) buf += dec.decode(value, { stream: true });
+    let i: number;
+    while ((i = buf.indexOf("\n\n")) >= 0) {
+      const line = buf.slice(0, i).split("\n").find((l) => l.startsWith("data:"));
+      buf = buf.slice(i + 2);
+      if (!line) continue;
+      const e = JSON.parse(line.slice(5).trim()) as TurnEvent;
+      if (e.type === "turn.completed") return e.text;
+      if (e.type === "turn.failed") throw new Error(e.error.message);
+    }
+    if (done) break;
+  }
+  throw new Error("turn stream ended without a terminal event");
 }
 
 // Worker-side routing: address a session's DO by (agent, session) and forward the
@@ -258,13 +309,17 @@ export function durableAgentSurface(
     const namespace = getNamespace();
     if (!namespace) return null; // no DO binding → not mounted here
     const { message, session } = (await req.json()) as { message: string; session?: string };
-    // Forward to the session's DO on its /turn contract (AgentDurableObject.fetch).
-    return durableFetch(
+    // Forward to the session's DO on its /turn contract — which now STREAMS SSE. A client
+    // that asks for the stream (Accept: text/event-stream) gets live TurnEvents piped
+    // through; otherwise collapse to the final { text } (the prior JSON contract).
+    const res = await durableFetch(
       namespace,
       opts.agentName,
       session ?? "default",
       new Request("https://do/turn", { method: "POST", body: JSON.stringify({ userText: message }) }),
     );
+    if (req.headers.get("accept")?.includes("text/event-stream")) return res;
+    return Response.json({ text: await sseTurnFinalText(res) });
   };
 }
 
@@ -324,8 +379,9 @@ export function durableChannelSurface(
         o?.session ?? "default",
         new Request("https://do/turn", { method: "POST", body: serializeTurn(message, o) }),
       );
-      const { text } = (await res.json()) as { text: string };
-      return text;
+      // /turn streams SSE now; a channel replies once, so collapse to the final text.
+      // (P1b-3 will let a channel render the live stream instead of just the terminal text.)
+      return sseTurnFinalText(res);
     },
   };
   return channelDispatch(resolved, ctx);

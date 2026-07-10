@@ -28,7 +28,12 @@ function fakeAgentNS() {
     idFromName(name: string) { addressed = name; return { name }; },
     get() {
       return {
-        async fetch(req: Request) { forwarded = await req.json(); return Response.json({ text: "DO replied" }); },
+        // the DO now streams SSE; return a terminal turn.completed carrying the final text
+        async fetch(req: Request) {
+          forwarded = await req.json();
+          const frame = `data: ${JSON.stringify({ type: "turn.completed", turnId: "t1", text: "DO replied" })}\n\n`;
+          return new Response(frame, { headers: { "content-type": "text/event-stream" } });
+        },
       };
     },
   };

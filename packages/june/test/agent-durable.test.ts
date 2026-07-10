@@ -13,10 +13,12 @@ import {
   type ModelReply,
   type Runtime,
   type Tool,
+  type TurnEvent,
 } from "@junejs/core/agent-runtime";
 import {
   AgentDurableObject,
   DoSessionStore,
+  sseTurnFinalText,
   type DurableStorage,
   type SqlStorage,
 } from "../src/agent-durable";
@@ -151,8 +153,35 @@ describe("AgentDurableObject", () => {
     const agent = new AgentDurableObject({ storage: s }, { name: "ops", model, tools: [], channels: [factory], env: { BOT: "xoxb" } });
 
     const res = await agent.fetch(new Request("https://do/turn", { method: "POST", body: JSON.stringify({ userText: "go", turnId: "t1" }) }));
-    expect(await res.json()).toEqual({ text: "done" }); // dispatched channel_ping (not "unknown tool")
+    expect(await sseTurnFinalText(res)).toBe("done"); // dispatched channel_ping (not "unknown tool")
     expect(sawEnv).toEqual({ BOT: "xoxb" });            // channel tools were resolved with the DO env
+  });
+
+  test("POST /turn streams the TurnEvent sequence as SSE", async () => {
+    const s = await storage();
+    const agent = new AgentDurableObject({ storage: s }, { name: "ops", model: scriptedModel(ORDER_SCRIPT), tools: [createOrderTool()] });
+    const res = await agent.fetch(new Request("https://do/turn", { method: "POST", body: JSON.stringify({ userText: "Order 3 widgets", turnId: "t1" }) }));
+    expect(res.headers.get("content-type")).toBe("text/event-stream");
+
+    const events: TurnEvent[] = [];
+    const reader = res.body!.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (value) buf += dec.decode(value, { stream: true });
+      let i: number;
+      while ((i = buf.indexOf("\n\n")) >= 0) {
+        const line = buf.slice(0, i).split("\n").find((l) => l.startsWith("data:"));
+        buf = buf.slice(i + 2);
+        if (line) events.push(JSON.parse(line.slice(5).trim()));
+      }
+      if (done) break;
+    }
+    expect(events.map((e) => e.type)).toEqual([
+      "turn.started", "message.completed", "action.requested", "action.completed", "message.completed", "turn.completed",
+    ]);
+    expect(events.at(-1)).toMatchObject({ type: "turn.completed", text: "Done — order placed." });
   });
 
   test("POST /turn runs a durable turn; GET /transcript reads the log", async () => {
@@ -160,7 +189,7 @@ describe("AgentDurableObject", () => {
     const agent = new AgentDurableObject({ storage: s }, { name: "ops", model: scriptedModel(ORDER_SCRIPT), tools: [createOrderTool()] });
 
     const res = await agent.fetch(new Request("https://do/turn", { method: "POST", body: JSON.stringify({ userText: "Order 3 widgets", turnId: "t1" }) }));
-    expect(await res.json()).toEqual({ text: "Done — order placed." });
+    expect(await sseTurnFinalText(res)).toBe("Done — order placed.");
 
     const t = await agent.fetch(new Request("https://do/transcript"));
     const { transcript } = (await t.json()) as { transcript: { user: string }[] };
