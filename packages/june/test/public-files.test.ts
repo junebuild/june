@@ -17,6 +17,20 @@ import { withDenoAssets } from "../src/worker";
 const BASIC = fileURLToPath(new URL("../../../examples/basic", import.meta.url));
 const APP_DIR = join(BASIC, "app");
 
+// Some environments (Windows without Developer Mode, restricted sandboxes) reject
+// symlink creation with EPERM/EACCES/ENOSYS. Skip those tests there rather than
+// fail the suite over an unrelated capability gap.
+function trySymlink(target: string, path: string, type?: "dir" | "file"): boolean {
+  try {
+    symlinkSync(target, path, type);
+    return true;
+  } catch (e) {
+    const code = (e as { code?: string }).code;
+    if (code === "EPERM" || code === "EACCES" || code === "ENOSYS") return false;
+    throw e;
+  }
+}
+
 describe("dev: app.ts serves public/ verbatim, before the pipeline", () => {
   const app = createApp({ appDir: APP_DIR, config: {} });
 
@@ -50,7 +64,7 @@ describe("dev: app.ts serves public/ verbatim, before the pipeline", () => {
     // build (collectFiles → Dirent.isFile()) drops symlinks, so dev matches it,
     // and a hostile template can't exfiltrate a file via `june dev`.
     const link = join(BASIC, "public", "escape.json");
-    symlinkSync(join(BASIC, "package.json"), link); // target lives outside public/
+    if (!trySymlink(join(BASIC, "package.json"), link)) return; // symlinks unavailable → skip
     try {
       const res = await app.fetch(new Request("http://x/escape.json"));
       expect(res.status).toBe(404); // fell through — symlink ignored
@@ -66,7 +80,7 @@ describe("dev: app.ts serves public/ verbatim, before the pipeline", () => {
     // files from outside the public root. Guards against the leaf-only lstat gap —
     // realpath leaves publicRoot, so it's rejected.
     const linkDir = join(BASIC, "public", "up");
-    symlinkSync(join(BASIC, ".."), linkDir, "dir");
+    if (!trySymlink(join(BASIC, ".."), linkDir, "dir")) return; // symlinks unavailable → skip
     try {
       const res = await app.fetch(new Request("http://x/up/basic/package.json"));
       expect(res.status).toBe(404);
@@ -129,6 +143,11 @@ describe("deno: withDenoAssets serves public files (non-immutable) via the co-lo
         if (s.endsWith("/assets/a%3Fb.txt")) return new TextEncoder().encode("q");
         throw new Error("ENOENT");
       },
+      // HEAD path: stat for size only (no body read).
+      stat: async (p: URL) => {
+        if (p.toString().endsWith("/assets/logo.svg")) return { isFile: true, size: 6 };
+        throw new Error("ENOENT");
+      },
     };
     try {
       const pipeline = { fetch: async () => new Response("rendered") };
@@ -163,6 +182,12 @@ describe("deno: withDenoAssets serves public files (non-immutable) via the co-lo
 
       // An extensionless path with no matching file → falls through to the pipeline.
       expect(await (await handler(new Request("http://x/about"))).text()).toBe("rendered");
+
+      // HEAD answers from stat (content-length, empty body) without reading the file.
+      const head = await handler(new Request("http://x/logo.svg", { method: "HEAD" }));
+      expect(head.status).toBe(200);
+      expect(head.headers.get("content-length")).toBe("6");
+      expect(await head.text()).toBe("");
     } finally {
       (globalThis as Record<string, unknown>).Deno = realDeno;
     }

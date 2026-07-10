@@ -298,6 +298,7 @@ export function withAssets(
 // referenced only inside the body, so non-Deno bundles tree-shake this out.
 declare const Deno: {
   readFile(path: string | URL): Promise<Uint8Array>;
+  stat(path: string | URL): Promise<{ isFile: boolean; size: number }>;
 };
 
 export function withDenoAssets(pipeline: FetchPipeline): (request: Request) => Promise<Response> {
@@ -323,19 +324,25 @@ export function withDenoAssets(pipeline: FetchPipeline): (request: Request) => P
               `./assets/${rel.split("/").map(encodeURIComponent).join("/")}`,
               import.meta.url,
             );
-            const file = await Deno.readFile(assetUrl);
             // Derive both from the CANONICAL rel, not the raw url.pathname: a
             // percent-encoded separator (e.g. /_june%2Fapp.js) decodes to the same
             // asset but would miss a startsWith("/_june/") test on the raw path.
             const immutable = rel.startsWith(`${RESERVED_PREFIX}/`); // hashed → immutable
-            return new Response(method === "HEAD" ? null : (file as BodyInit), {
-              headers: {
-                "content-type": contentTypeFor(rel),
-                "cache-control": immutable
-                  ? "public, max-age=31536000, immutable"
-                  : "public, max-age=0, must-revalidate",
-              },
-            });
+            const headers: Record<string, string> = {
+              "content-type": contentTypeFor(rel),
+              "cache-control": immutable
+                ? "public, max-age=31536000, immutable"
+                : "public, max-age=0, must-revalidate",
+            };
+            // HEAD: stat for size only — don't read a (possibly large) body just to
+            // discard it. A non-file (directory) stat falls through to the pipeline.
+            if (method === "HEAD") {
+              const info = await Deno.stat(assetUrl);
+              if (!info.isFile) throw new Error("not a file");
+              return new Response(null, { headers: { ...headers, "content-length": String(info.size) } });
+            }
+            const file = await Deno.readFile(assetUrl);
+            return new Response(file as BodyInit, { headers });
           } catch {
             /* not on disk → fall through (the pipeline 404s) */
           }
