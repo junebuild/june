@@ -85,7 +85,7 @@ class InProcBroadcaster implements Broadcaster {
 
 // `instructions` (the agent's system prompt) is injected into the model per turn
 // by the runtime (withSystem) — single-sourced on the def, not baked into `model`.
-export type AgentDef = { model: Model; tools: Tool[]; instructions?: string };
+export type AgentDef = { model: Model; tools: Tool[]; instructions?: string; channelInstructions?: Record<string, string> };
 
 // The native Runtime: a registry of agent definitions over one SQLite handle,
 // handing out (and memoizing) an AgentSession actor per (agent, id).
@@ -107,7 +107,7 @@ export class NativeRuntime implements Runtime {
       const def = this.agents[agent];
       if (!def) throw new Error(`unknown agent: ${agent}`);
       const model = def.instructions ? withSystem(def.model, def.instructions) : def.model;
-      a = new AgentSession(agent, id, new SqliteSessionStore(this.db, key), new InProcBroadcaster(), model, def.tools, this);
+      a = new AgentSession(agent, id, new SqliteSessionStore(this.db, key), new InProcBroadcaster(), model, def.tools, this, def.channelInstructions);
       this.actors.set(key, a);
     }
     return a;

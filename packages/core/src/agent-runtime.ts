@@ -56,9 +56,11 @@ export type Model = (msgs: Msg[], tools: ToolSpec[], opts?: { system?: string })
 // Wrap a Model so every call carries `system` (the agent's instructions). The
 // runtime applies this from the agent def, so a provider model needn't bake the
 // system prompt in at construction — one model instance can serve many agents,
-// each supplying its own system per turn. The def's system is authoritative.
+// each supplying its own system per turn. A per-turn `opts.system` (e.g. a channel
+// instruction overlay derived from the inbound event's source) is APPENDED to the
+// base, not dropped — so the base instructions and the per-turn overlay compose.
 export function withSystem(model: Model, system: string): Model {
-  return (msgs, tools, opts) => model(msgs, tools, { ...opts, system });
+  return (msgs, tools, opts) => model(msgs, tools, { ...opts, system: [system, opts?.system].filter(Boolean).join("\n\n") });
 }
 
 // A tool's `run` gets a context: its session-local `store` (write app state in
@@ -130,7 +132,7 @@ export async function runTurn(
   model: Model,
   tools: Tool[],
   opts: { turnId: string; userText: string; crash?: Crash },
-  env: { runtime: Runtime; agent: string; sessionId: string; event?: InboundEvent },
+  env: { runtime: Runtime; agent: string; sessionId: string; event?: InboundEvent; systemOverlay?: string },
 ): Promise<string> {
   if (!store.hasUserTurn(opts.turnId)) {
     store.tx(() => store.appendMessage({ role: "user", turnId: opts.turnId, text: opts.userText }));
@@ -154,7 +156,7 @@ export async function runTurn(
       for (const call of last.toolCalls) await toolStep(store, bcast, tools, call, opts, env);
       continue;
     }
-    await modelStep(store, bcast, model, specs, `model:${msgs.length}`, msgs, opts);
+    await modelStep(store, bcast, model, specs, `model:${msgs.length}`, msgs, opts, env.systemOverlay);
   }
 }
 
@@ -166,9 +168,10 @@ async function modelStep(
   stepId: string,
   msgs: Msg[],
   opts: { turnId: string; crash?: Crash },
+  systemOverlay?: string,
 ) {
   if (store.getStep(stepId) !== undefined) return; // cached: assistant already appended in the same tx
-  const reply = await model(msgs, specs);
+  const reply = await model(msgs, specs, systemOverlay ? { system: systemOverlay } : undefined);
   assertCrash(opts.crash, "before-model-commit", stepId); // nothing persisted → replay re-asks the model
   store.tx(() => {
     store.putStep(stepId, reply);
@@ -252,7 +255,11 @@ export class AgentSession {
   private readonly model: Model;
   private readonly tools: Tool[];
   private readonly runtime: Runtime;
-  constructor(agent: string, id: string, store: SessionStore, bcast: Broadcaster, model: Model, tools: Tool[], runtime: Runtime) {
+  // Per-source system overlays: when a turn's InboundEvent.source matches a key, that
+  // text is appended to the system prompt for the turn (see withSystem). Lets ONE shared
+  // agent branch its behavior by real, unforgeable channel source — no userText markers.
+  private readonly channelInstructions?: Record<string, string>;
+  constructor(agent: string, id: string, store: SessionStore, bcast: Broadcaster, model: Model, tools: Tool[], runtime: Runtime, channelInstructions?: Record<string, string>) {
     this.agent = agent;
     this.id = id;
     this.store = store;
@@ -260,6 +267,7 @@ export class AgentSession {
     this.model = model;
     this.tools = tools;
     this.runtime = runtime;
+    this.channelInstructions = channelInstructions;
   }
 
   // turns are serialized: each awaits the previous. Two concurrent turn() calls
@@ -268,6 +276,7 @@ export class AgentSession {
   // promise chain. Same guarantee, both targets.)
   turn(input: { turnId?: string; userText: string; crash?: Crash; event?: InboundEvent }): Promise<string> {
     const turnId = input.turnId ?? `t${++this.seq}`;
+    const systemOverlay = input.event ? this.channelInstructions?.[input.event.source] : undefined;
     const run = () =>
       runTurn(
         this.store,
@@ -275,7 +284,7 @@ export class AgentSession {
         this.model,
         this.tools,
         { turnId, userText: input.userText, crash: input.crash },
-        { runtime: this.runtime, agent: this.agent, sessionId: this.id, event: input.event },
+        { runtime: this.runtime, agent: this.agent, sessionId: this.id, event: input.event, systemOverlay },
       );
     const p = this.chain.then(run);
     this.chain = p.catch(() => {}); // a failed turn must not break the inbox

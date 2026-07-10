@@ -6,7 +6,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { channelFetch, defineChannel, resolveChannel, type AgentDefinition, type Channel, type ChannelContext } from "@junejs/core/agent-config";
 import type { InboundEvent, ToolContext } from "@junejs/core/agent-runtime";
-import { crispChannel, httpChannel, slackChannel } from "@junejs/core/channels";
+import { crispChannel, httpChannel, slackChannel, verifySlackSignature, verifyCrispSignature, tryParseJson, timestampFresh, normalizeSlackEvent } from "@junejs/core/channels";
 
 const enc = new TextEncoder();
 async function hmacHex(secret: string, message: string): Promise<string> {
@@ -121,6 +121,28 @@ describe("slackChannel", () => {
     await ch.webhook!(await signed(body), ctxWith(async () => "should not run"));
     await flush();
     expect(calls).toHaveLength(0);
+  });
+
+  test("respondTo: a reaction is observed-only while a mention runs a turn + reply", async () => {
+    captureFetch();
+    const ran: string[] = [];
+    const kinds: (string | undefined)[] = [];
+    const ch2 = slackChannel({
+      signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test",
+      events: ["app_mention", "reaction_added"], respondTo: ["app_mention"], botUserId: "UBOT",
+      onEvent: (e) => { kinds.push((e.event as { kind?: string } | undefined)?.kind ?? "raw"); },
+    });
+    async function s(b: string) {
+      const ts = String(Math.floor(Date.now() / 1000));
+      return new Request("http://x/channels/slack", { method: "POST", headers: { "x-slack-request-timestamp": ts, "x-slack-signature": "v0=" + (await hmacHex(secret, `v0:${ts}:${b}`)) }, body: b });
+    }
+    const ctx = ctxWith(async (m) => { ran.push(m); return `re: ${m}`; });
+    await ch2.webhook!(await s(JSON.stringify({ type: "event_callback", event: { type: "reaction_added", user: "U2", reaction: "tada", item: { type: "message", channel: "C1", ts: "1.1" } } })), ctx);
+    await ch2.webhook!(await s(JSON.stringify({ type: "event_callback", event: { type: "app_mention", text: "<@B> hi", channel: "C1", ts: "2.2", user: "U2" } })), ctx);
+    await flush();
+    expect(ran).toEqual(["<@B> hi"]);                       // only the mention drove a turn
+    expect(calls).toHaveLength(1);                          // only the mention replied
+    expect(kinds).toEqual(["reaction_added", "app_mention"]); // BOTH were observed
   });
 
   test("observe mode: mirrors the event, runs no turn and posts nothing", async () => {
@@ -281,6 +303,35 @@ describe("slackChannel read tools (capability surface)", () => {
     expect(await tool("slack_list_reactions").run({}, crispCtx)).toMatchObject({ error: expect.stringContaining("no message in context") });
     expect(await tool("slack_resolve_user").run({}, crispCtx)).toMatchObject({ error: expect.stringContaining("no user in context") });
     expect(fetched).toBe(false);
+  });
+});
+
+describe("exported verify/normalize primitives (D — composability floor)", () => {
+  test("verifySlackSignature: fresh+valid true; forged/stale false", async () => {
+    const secret = "s", body = "{}";
+    const ts = String(Math.floor(Date.now() / 1000));
+    const sig = "v0=" + (await hmacHex(secret, `v0:${ts}:${body}`));
+    expect(await verifySlackSignature(secret, ts, body, sig)).toBe(true);
+    expect(await verifySlackSignature(secret, ts, body, "v0=deadbeef")).toBe(false);
+    expect(await verifySlackSignature(secret, String(Math.floor(Date.now() / 1000) - 600), body, sig)).toBe(false); // stale
+    expect(await verifySlackSignature("", ts, body, sig)).toBe(false); // no secret
+  });
+
+  test("verifyCrispSignature, tryParseJson, timestampFresh, normalizeSlackEvent are exported and work", async () => {
+    const secret = "k", body = '{"x":1}';
+    const ts = String(Date.now()); // crisp = ms
+    const sig = await hmacHex(secret, `[${ts};${body}]`);
+    expect(await verifyCrispSignature(secret, ts, body, sig)).toBe(true);
+
+    expect(tryParseJson<{ x: number }>(body)).toEqual({ x: 1 });
+    expect(tryParseJson("}{ not json")).toBeUndefined();
+
+    expect(timestampFresh(ts)).toBe(true);                                      // ms accepted
+    expect(timestampFresh(String(Math.floor(Date.now() / 1000)))).toBe(true);  // seconds accepted
+    expect(timestampFresh(String(Date.now() - 600_000))).toBe(false);          // stale
+
+    const norm = normalizeSlackEvent({ type: "message", text: "hi", channel: "C1", ts: "1.1", user: "U1" }, ["message"], undefined);
+    expect(norm?.event).toMatchObject({ source: "slack", kind: "message", text: "hi" });
   });
 });
 

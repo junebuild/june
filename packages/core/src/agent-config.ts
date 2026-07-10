@@ -101,6 +101,11 @@ export type AgentDefinition = {
   tools: Tool[];
   skills: Skill[];
   channels: Channel[];
+  // Per-channel-source system overlays. When a turn's InboundEvent.source (e.g. "slack")
+  // matches a key, that text is appended to the system prompt for that turn — so ONE
+  // shared agent can branch its behavior by the real, unforgeable inbound source instead
+  // of a userText marker. Applied by the runtime (see AgentSession/withSystem).
+  channelInstructions?: Record<string, string>;
   // report of external connections wired in (their tools are already in `tools`)
   connections: ConnectionReport[];
 };
@@ -153,6 +158,7 @@ export function defineAgent(config: {
   tools?: (AnyAction | Tool)[];
   skills?: Skill[];
   channels?: Channel[];
+  channelInstructions?: Record<string, string>;
   connections?: ConnectionReport[];
 }): AgentDefinition {
   const skills = config.skills ?? [];
@@ -183,6 +189,7 @@ export function defineAgent(config: {
     tools,
     skills,
     channels,
+    channelInstructions: config.channelInstructions,
     connections: config.connections ?? [],
   };
 }
