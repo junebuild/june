@@ -26,6 +26,7 @@
     "agent-models",
     "define-agent-discovery",
     "durable-agent-runtime",
+    "edge-channel-routing",
     "erasable-syntax",
     "packaging-dual-export-rollout",
     "packaging-dual-export",
