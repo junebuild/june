@@ -19,6 +19,7 @@ import {
   AgentDurableObject,
   DoSessionStore,
   sseTurnFinalText,
+  sseTurnEvents,
   type DurableStorage,
   type SqlStorage,
 } from "../src/agent-durable";
@@ -182,6 +183,19 @@ describe("AgentDurableObject", () => {
       "turn.started", "message.completed", "action.requested", "action.completed", "message.completed", "turn.completed",
     ]);
     expect(events.at(-1)).toMatchObject({ type: "turn.completed", text: "Done — order placed." });
+  });
+
+  test("sseTurnEvents parses the SSE stream into TurnEvents (skipping :hb heartbeats)", async () => {
+    const frames =
+      ":hb\n\n" +
+      `data: ${JSON.stringify({ type: "turn.started", turnId: "t1", trigger: { kind: "proactive", by: "x" } })}\n\n` +
+      ":hb\n\n" +
+      `data: ${JSON.stringify({ type: "turn.completed", turnId: "t1", text: "hi" })}\n\n`;
+    const res = new Response(frames, { headers: { "content-type": "text/event-stream" } });
+    const out: TurnEvent[] = [];
+    for await (const e of sseTurnEvents(res)) out.push(e);
+    expect(out.map((e) => e.type)).toEqual(["turn.started", "turn.completed"]);
+    expect(out.at(-1)).toMatchObject({ type: "turn.completed", text: "hi" });
   });
 
   test("sseTurnFinalText throws a clear error on a non-SSE / error response", async () => {

@@ -299,6 +299,30 @@ export async function sseTurnFinalText(res: Response): Promise<string> {
   throw new Error("turn stream ended without a terminal event");
 }
 
+// Parse an SSE turn response into the stream of TurnEvents (skipping `:hb` heartbeats).
+// The streaming consumer (a channel's render path) iterates this to drive live UI.
+export async function* sseTurnEvents(res: Response): AsyncIterable<TurnEvent> {
+  const ct = res.headers.get("content-type") ?? "";
+  if (!res.body || !ct.includes("text/event-stream")) {
+    const detail = res.body ? (await res.text()).slice(0, 200) : "no body";
+    throw new Error(`turn stream: expected an SSE response, got ${ct || "no content-type"} (status ${res.status}): ${detail}`);
+  }
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (value) buf += dec.decode(value, { stream: true });
+    let i: number;
+    while ((i = buf.indexOf("\n\n")) >= 0) {
+      const line = buf.slice(0, i).split("\n").find((l) => l.startsWith("data:"));
+      buf = buf.slice(i + 2);
+      if (line) yield JSON.parse(line.slice(5).trim()) as TurnEvent;
+    }
+    if (done) break;
+  }
+}
+
 // Worker-side routing: address a session's DO by (agent, session) and forward the
 // request to it. `env.AGENT` is the DO namespace binding.
 export function durableFetch(namespace: DurableObjectNamespace, agent: string, session: string, req: Request): Promise<Response> {
@@ -394,9 +418,20 @@ export function durableChannelSurface(
         o?.session ?? "default",
         new Request("https://do/turn", { method: "POST", body: serializeTurn(message, o) }),
       );
-      // /turn streams SSE now; a channel replies once, so collapse to the final text.
-      // (P1b-3 will let a channel render the live stream instead of just the terminal text.)
+      // /turn streams SSE; the simple path collapses it to the final text.
       return sseTurnFinalText(res);
+    },
+    // The LIVE path: hand the channel the TurnEvent stream so it can render as the turn runs.
+    runStream: async function* (message, o) {
+      const namespace = getNamespace();
+      if (!namespace) throw new Error("durableChannelSurface: no Durable Object namespace bound (env.AGENT)");
+      const res = await durableFetch(
+        namespace,
+        opts.agentName,
+        o?.session ?? "default",
+        new Request("https://do/turn", { method: "POST", body: serializeTurn(message, o) }),
+      );
+      yield* sseTurnEvents(res);
     },
   };
   return channelDispatch(resolved, ctx);

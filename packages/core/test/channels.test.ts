@@ -5,7 +5,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { channelFetch, defineChannel, resolveChannel, type AgentDefinition, type Channel, type ChannelContext } from "@junejs/core/agent-config";
-import type { InboundEvent, ToolContext } from "@junejs/core/agent-runtime";
+import type { InboundEvent, ToolContext, TurnEvent } from "@junejs/core/agent-runtime";
 import { crispChannel, httpChannel, slackChannel, verifySlackSignature, verifyCrispSignature, tryParseJson, timestampFresh, normalizeSlackEvent } from "@junejs/core/channels";
 
 const enc = new TextEncoder();
@@ -113,6 +113,38 @@ describe("slackChannel", () => {
     expect(res.status).toBe(200);
     await flush();
     expect(calls).toHaveLength(0);
+  });
+
+  test("stream render: posts Thinking…, edits to Running <tool>…, then the final answer", async () => {
+    // a fetch stub that returns a ts for chat.postMessage so renderStream can chat.update it
+    calls = [];
+    globalThis.fetch = (async (url: unknown, init?: { body?: string }) => {
+      calls.push({ url: String(url), body: init?.body ? JSON.parse(init.body) : undefined });
+      const isPost = String(url).endsWith("/chat.postMessage");
+      return new Response(JSON.stringify(isPost ? { ok: true, ts: "111.9" } : { ok: true }), { status: 200 });
+    }) as typeof fetch;
+
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true });
+    const stream: TurnEvent[] = [
+      { type: "turn.started", turnId: "t1", trigger: { kind: "inbound", event: { source: "slack", kind: "message", channelId: "C1", ts: "1.1", raw: {} } } },
+      { type: "action.requested", turnId: "t1", call: { id: "c1", name: "create_order", input: {} } },
+      { type: "action.completed", turnId: "t1", call: { id: "c1", name: "create_order", input: {} }, result: {} },
+      { type: "message.completed", turnId: "t1", text: "Done." },
+      { type: "turn.completed", turnId: "t1", text: "Done." },
+    ];
+    const ctx = ctxWith(async () => "run() should not be used when streaming");
+    ctx.runStream = async function* () { for (const e of stream) yield e; };
+
+    const body = JSON.stringify({ type: "event_callback", event: { type: "message", text: "order", channel: "C1", ts: "1.1", user: "U1" } });
+    await ch2.webhook!(await signed(body), ctx);
+    await flush();
+
+    expect(calls.map((c) => [c.url.split("/").pop(), (c.body as { text?: string }).text])).toEqual([
+      ["chat.postMessage", "_Thinking…_"],            // initial placeholder
+      ["chat.update", "_Running create_order…_"],       // tool status (edited in place)
+      ["chat.update", "Done."],                         // final answer (same message)
+    ]);
+    expect((calls[1]!.body as { ts?: string }).ts).toBe("111.9"); // edits target the posted message
   });
 
   test("ignores the bot's own message (no reply loop)", async () => {
