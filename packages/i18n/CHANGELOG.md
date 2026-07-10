@@ -1,5 +1,12 @@
 # @junejs/i18n
 
+## 0.0.30-dev.0
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @junejs/db@0.0.34-dev.0
+
 ## 0.0.29
 
 ### Patch Changes
