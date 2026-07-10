@@ -19,8 +19,8 @@
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
-import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { existsSync, lstatSync } from "node:fs";
+import { copyFile, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -38,6 +38,7 @@ import { findMiddlewareFile } from "./router";
 import { resolveBoundary } from "./segment";
 import type { ExtraHandler, LayoutComponent, LoadingComponent, ResourceHandler } from "./pipeline";
 import { findClientEntry, bundleClientToFile, CLIENT_SCRIPT_URL } from "./client-bundle";
+import { RESERVED_PREFIX } from "./static-files";
 import { jsxTransform } from "./tsconfig-jsx";
 import { generateIslandRegistry } from "./island-registry";
 import { buildRsc, findRscRoutes } from "./rsc-build";
@@ -460,6 +461,19 @@ function importPath(fromDir: string, file: string): string {
   return p.startsWith(".") ? p : `./${p}`;
 }
 
+// Recursively list every file under `dir` as a forward-slash relative path. Used
+// to enumerate public/ for the verbatim asset copy (dot-files included — a
+// `.well-known/` under public/ is a legitimate thing to ship).
+async function collectFiles(dir: string, base = dir): Promise<string[]> {
+  const out: string[] = [];
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    const abs = join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...(await collectFiles(abs, base)));
+    else if (entry.isFile()) out.push(relative(base, abs).split(sep).join("/"));
+  }
+  return out;
+}
+
 export async function juneBuild(
   appRoot: string,
   options: { outDir?: string; external?: string[] } = {},
@@ -780,6 +794,41 @@ ${adapterEntry.wrap("pipeline")}
   const worker = createWorker(manifest);
   let hasAssets = false;
 
+  // ---- public/ → assets/ : verbatim static files (favicon, images, fonts) ----
+  // Copied here, BEFORE the framework's hashed assets are written below, so a
+  // stray public/_june/* can never overwrite the real client bundle / CSS (it is
+  // skipped outright). Passthrough only — no hashing/optimization. `publicFiles`
+  // is the relative-path list adapters need to place these on their static tier.
+  const publicDir = join(appRoot, "public");
+  const publicFiles: string[] = [];
+  // Only a REAL directory: a symlinked public/ (e.g. `public -> ..`) would copy
+  // files from OUTSIDE the app root into the deploy output. collectFiles already
+  // drops symlinked entries UNDER public/ (Dirent.isFile()/isDirectory()); this
+  // guards the root itself. lstatSync doesn't follow the symlink, so a symlinked
+  // public/ has isDirectory() === false.
+  let publicIsDir = false;
+  try {
+    publicIsDir = lstatSync(publicDir).isDirectory();
+  } catch {
+    /* no public/ */
+  }
+  if (existsSync(publicDir) && !publicIsDir) {
+    console.warn(`[june] public/ is not a real directory (symlink?) — skipped`);
+  }
+  if (publicIsDir) {
+    for (const rel of await collectFiles(publicDir)) {
+      if (rel.split("/")[0] === RESERVED_PREFIX) {
+        console.warn(`[june] public/${rel} ignored — ${RESERVED_PREFIX}/ is reserved for framework assets`);
+        continue;
+      }
+      const dest = join(assetsDir, rel);
+      await mkdir(dirname(dest), { recursive: true });
+      await copyFile(join(publicDir, ...rel.split("/")), dest);
+      publicFiles.push(rel);
+    }
+    if (publicFiles.length) hasAssets = true;
+  }
+
   // static() target: prerender EVERY route (not just opted-in ones) + enumerate
   // dynamic routes via their staticPaths, and write <stem>/index.html so clean URLs
   // resolve on a dumb file host with no rewrite server. Other targets keep the
@@ -898,7 +947,7 @@ ${adapterEntry.wrap("pipeline")}
     resourcesCfg?.db && resourcesCfg.db.kind !== "turso"
       ? { db: { binding: "DB", databaseName: `${defaultName}-db` } }
       : {};
-  await adapter.emit({ appRoot, outDir, hasAssets, linkHeader, config: fullConfig, plan, defaultName });
+  await adapter.emit({ appRoot, outDir, hasAssets, linkHeader, config: fullConfig, plan, defaultName, publicFiles });
   if (plan.db) {
     console.log(
       `  ↳ d1 binding "${plan.db.binding}" emitted — set database_id in wrangler.jsonc (wrangler d1 create ${plan.db.databaseName})`,

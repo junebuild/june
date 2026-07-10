@@ -9,7 +9,8 @@
 // all change observable output (test/config-output.test.ts) — the PoC shipped a
 // dev server that silently ignored june.config.ts for days.
 
-import { existsSync } from "node:fs";
+import { existsSync, lstatSync, realpathSync, type Stats } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ComponentType } from "react";
@@ -41,6 +42,7 @@ import {
 import { generateIslandRegistry } from "./island-registry";
 import { findGlobalCss, globalCssUsesTailwind, processCssCached, STYLES_URL } from "./css";
 import { buildModuleCss, registerCssModules, MODULE_STYLES_URL, type ModuleMaps } from "./css-modules";
+import { contentTypeFor, RESERVED_PREFIX, safeRelativePath } from "./static-files";
 
 export type CreateAppOptions = {
   appDir: string;
@@ -117,6 +119,20 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
   // app/ stays the priority/escape-hatch; this is the framework slot, consulted as a fallback.
   const juneRoutesDir = join(dirname(appDir), ".june", "routes");
   const hasJuneRoutes = existsSync(juneRoutesDir);
+  // App-root public/ (sibling of app/): verbatim static files served in dev the
+  // same way the platform serves them in prod. Copied into dist/assets at build.
+  // Resolve to the REAL directory once: if public/ itself is a symlink (e.g.
+  // `public -> ..`, a hostile template), path resolution would follow it and
+  // escape the app root — refuse to serve then (publicRoot stays null). The build
+  // ignores a symlinked public/ too, so this keeps dev/prod parity. Anchoring
+  // later reads on the realpath also lets us reject symlinked entries underneath.
+  const publicDir = join(dirname(appDir), "public");
+  let publicRoot: string | null = null;
+  try {
+    if (lstatSync(publicDir).isDirectory()) publicRoot = realpathSync(publicDir);
+  } catch {
+    /* no public/ dir → nothing to serve */
+  }
   const agent = resolveAgent(config.agent);
   const speculation = config.speculation;
   // app/_client.* present → the dev document loads /client.js and we serve it
@@ -321,7 +337,63 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
           );
         }
       }
-      return runWithTrace(newTrace(), async () => (await getPipeline()).fetch(request));
+      // Static files under app-root public/, served verbatim. Mirrors the prod
+      // asset layer (Cloudflare ASSETS / Vercel filesystem / Deno withDenoAssets
+      // all answer before the pipeline), so a public/ file shadows a same-path
+      // route in dev exactly as it does when deployed. Passthrough — no hashing
+      // or optimization. GET/HEAD only; a miss falls through to the render core.
+      const toPipeline = () => runWithTrace(newTrace(), async () => (await getPipeline()).fetch(request));
+      if (publicRoot !== null && (request.method === "GET" || request.method === "HEAD")) {
+        const rel = safeRelativePath(new URL(request.url).pathname);
+        if (rel !== null && rel.split("/")[0] !== RESERVED_PREFIX) {
+          const segments = rel.split("/");
+          const file = join(publicRoot, ...segments); // anchor on the REAL public root
+          // lstatSync (NOT statSync) gets existence+type+size in one syscall
+          // without following a leaf symlink. ENOENT / EACCES → treat as a miss.
+          let stat: Stats | undefined;
+          try {
+            stat = lstatSync(file);
+          } catch {
+            /* not a readable file → fall through */
+          }
+          // Serve only a real file whose resolved path is STILL inside publicRoot:
+          // realpathSync(file) === file holds iff no path component (leaf OR an
+          // intermediate dir) is a symlink. That blocks symlink escapes AND matches
+          // the build, which drops every symlinked entry under public/.
+          let real: string | null = null;
+          if (stat?.isFile()) {
+            try {
+              real = realpathSync(file);
+            } catch {
+              /* race: gone between stat and realpath → miss */
+            }
+          }
+          if (real === file) {
+            const headers = {
+              "content-type": contentTypeFor(rel),
+              // Not content-hashed → must revalidate, never immutable.
+              "cache-control": "public, max-age=0, must-revalidate",
+            };
+            // HEAD: existence + size already proven — answer without reading the
+            // body (a large asset would otherwise be read and discarded).
+            if (request.method === "HEAD") {
+              return Promise.resolve(
+                new Response(null, { headers: { ...headers, "content-length": String(stat!.size) } }),
+              );
+            }
+            // A file deleted/locked between stat and read (dev editors do atomic
+            // save = write-temp + rename) must not crash the request — fall
+            // through to the pipeline on a read error, same as any other miss.
+            // readFile returns a Buffer (a Uint8Array) — pass it straight through;
+            // re-wrapping in new Uint8Array(buf) would copy every byte.
+            return readFile(file).then(
+              (buf) => new Response(buf, { headers }),
+              () => toPipeline(),
+            );
+          }
+        }
+      }
+      return toPipeline();
     },
     async warmup() {
       const files = await routeFiles(appDir, { pageConvention: true });

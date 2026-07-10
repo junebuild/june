@@ -8,7 +8,7 @@
 // are explicit `deploy: { adapter: vercel() }` from their own package.
 import { existsSync } from "node:fs";
 import { cp, copyFile, mkdir, readdir, rm, writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import type { JuneConfig } from "@junejs/core/config";
 
@@ -49,6 +49,10 @@ export type AdapterEmitContext = {
   plan: ResourcePlan;
   // package.json name (or sanitized dir name) — the fallback worker/app name.
   defaultName: string;
+  // Verbatim public/ files (forward-slash paths relative to assets/), already
+  // copied into outDir/assets. Adapters that build a separate static tier (vercel)
+  // place these there; whole-assets targets (workers/static/deno) ignore it.
+  publicFiles?: string[];
 };
 
 export interface JuneAdapter {
@@ -214,7 +218,7 @@ export function vercel(opts?: { runtime?: "node" | "edge"; regions?: string[] })
       };
     },
 
-    async emit({ appRoot, outDir, hasAssets }) {
+    async emit({ appRoot, outDir, hasAssets, publicFiles }) {
       const out = join(appRoot, ".vercel", "output");
       const fnDir = join(out, "functions", `${VERCEL_FUNCTION}.func`);
       await rm(out, { recursive: true, force: true }); // clean — no stale outputs
@@ -249,10 +253,19 @@ export function vercel(opts?: { runtime?: "node" | "edge"; regions?: string[] })
         await writeFile(join(fnDir, "package.json"), JSON.stringify({ type: "module" }, null, 2) + "\n");
       }
 
-      // static: only the hashed framework assets under /_june/ (exact-path URLs)
+      // static: the hashed framework assets under /_june/ (exact-path URLs)...
       if (hasAssets) {
         const src = join(outDir, "assets", "_june");
         if (existsSync(src)) await cp(src, join(out, "static", "_june"), { recursive: true });
+      }
+      // ...plus verbatim public/ files, served by the `filesystem` route handle
+      // below. Only these — prerendered page HTML stays on the SSR function.
+      for (const rel of publicFiles ?? []) {
+        const from = join(outDir, "assets", rel);
+        if (!existsSync(from)) continue;
+        const to = join(out, "static", rel);
+        await mkdir(dirname(to), { recursive: true });
+        await copyFile(from, to);
       }
 
       await writeFile(

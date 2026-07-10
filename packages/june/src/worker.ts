@@ -19,6 +19,7 @@ import type { Resources } from "@junejs/core/resources";
 
 import { createPipeline, type ExtraHandler, type LayoutComponent, type LoadingComponent, type Resolved, type ResolvedResource, type ResourceHandler } from "./pipeline";
 import { durableAgentSurface, type DurableObjectNamespace } from "./agent-durable";
+import { contentTypeFor, RESERVED_PREFIX, safeRelativePath } from "./static-files";
 
 export type WorkerManifest = {
   // Static paths → route definitions ("/", "/users", ...).
@@ -297,39 +298,55 @@ export function withAssets(
 // referenced only inside the body, so non-Deno bundles tree-shake this out.
 declare const Deno: {
   readFile(path: string | URL): Promise<Uint8Array>;
-};
-
-const ASSET_CONTENT_TYPES: Record<string, string> = {
-  css: "text/css; charset=utf-8",
-  js: "text/javascript; charset=utf-8",
-  json: "application/json; charset=utf-8",
-  map: "application/json; charset=utf-8",
-  svg: "image/svg+xml",
-  png: "image/png",
-  jpg: "image/jpeg",
-  jpeg: "image/jpeg",
-  webp: "image/webp",
-  avif: "image/avif",
-  ico: "image/x-icon",
-  woff2: "font/woff2",
-  woff: "font/woff",
+  stat(path: string | URL): Promise<{ isFile: boolean; size: number }>;
 };
 
 export function withDenoAssets(pipeline: FetchPipeline): (request: Request) => Promise<Response> {
   return async (request) => {
-    const url = new URL(request.url);
-    if (request.method === "GET" && url.pathname.startsWith("/_june/")) {
-      try {
-        const file = await Deno.readFile(new URL(`./assets${url.pathname}`, import.meta.url));
-        const ext = url.pathname.split(".").pop()?.toLowerCase() ?? "";
-        return new Response(file as BodyInit, {
-          headers: {
-            "content-type": ASSET_CONTENT_TYPES[ext] ?? "application/octet-stream",
-            "cache-control": "public, max-age=31536000, immutable",
-          },
-        });
-      } catch {
-        /* not on disk → fall through (the pipeline 404s) */
+    const method = request.method;
+    if (method === "GET" || method === "HEAD") {
+      const url = new URL(request.url);
+      // Probe the co-located assets/ dir for ANY non-root path (safeRelativePath
+      // rejects "/"): /_june/* (hashed framework assets) plus public/ files copied
+      // there at build — INCLUDING extensionless ones (e.g. .well-known/
+      // apple-app-site-association), so "public/ served verbatim" holds on Deno
+      // like every other target. A miss (ENOENT) falls through to the pipeline.
+      // The reserved /_june/ prefix is served here too — safeRelativePath is
+      // traversal-only. (An extra ENOENT syscall per page nav is dwarfed by SSR.)
+      {
+        const rel = safeRelativePath(url.pathname);
+        if (rel !== null) {
+          try {
+            // Build the file URL from rel by encoding EACH segment — interpolating
+            // the raw (decoded) rel would let a literal `?`/`#` in a filename start
+            // a query/fragment and read the wrong file.
+            const assetUrl = new URL(
+              `./assets/${rel.split("/").map(encodeURIComponent).join("/")}`,
+              import.meta.url,
+            );
+            // Derive both from the CANONICAL rel, not the raw url.pathname: a
+            // percent-encoded separator (e.g. /_june%2Fapp.js) decodes to the same
+            // asset but would miss a startsWith("/_june/") test on the raw path.
+            const immutable = rel.startsWith(`${RESERVED_PREFIX}/`); // hashed → immutable
+            const headers: Record<string, string> = {
+              "content-type": contentTypeFor(rel),
+              "cache-control": immutable
+                ? "public, max-age=31536000, immutable"
+                : "public, max-age=0, must-revalidate",
+            };
+            // HEAD: stat for size only — don't read a (possibly large) body just to
+            // discard it. A non-file (directory) stat falls through to the pipeline.
+            if (method === "HEAD") {
+              const info = await Deno.stat(assetUrl);
+              if (!info.isFile) throw new Error("not a file");
+              return new Response(null, { headers: { ...headers, "content-length": String(info.size) } });
+            }
+            const file = await Deno.readFile(assetUrl);
+            return new Response(file as BodyInit, { headers });
+          } catch {
+            /* not on disk → fall through (the pipeline 404s) */
+          }
+        }
       }
     }
     // No env arg: Deno has no platform bindings (unlike D1/KV on workers); env-
