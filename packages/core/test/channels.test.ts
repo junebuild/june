@@ -5,6 +5,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { channelFetch, defineChannel, resolveChannel, type AgentDefinition, type Channel, type ChannelContext } from "@junejs/core/agent-config";
+import type { InboundEvent, ToolContext } from "@junejs/core/agent-runtime";
 import { crispChannel, httpChannel, slackChannel } from "@junejs/core/channels";
 
 const enc = new TextEncoder();
@@ -84,6 +85,15 @@ describe("slackChannel", () => {
     expect(calls[0]!.body).toMatchObject({ channel: "C1", text: "did: order 3 widgets", thread_ts: "111.1" });
   });
 
+  test("passes a normalized InboundEvent (who/where/thread) into the turn", async () => {
+    let seen: InboundEvent | undefined;
+    const body = JSON.stringify({ type: "event_callback", event: { type: "message", text: "hi", channel: "C1", ts: "222.2", user: "U9" } });
+    const run = (async (_m: string, o?: { event?: InboundEvent }) => { seen = o?.event; return "ok"; }) as ChannelContext["run"];
+    await ch.webhook!(await signed(body), ctxWith(run));
+    await flush();
+    expect(seen).toMatchObject({ kind: "message", channelId: "C1", threadId: "222.2", ts: "222.2", user: { id: "U9" }, text: "hi" });
+  });
+
   test("rejects a bad signature with 401", async () => {
     const req = new Request("http://x/channels/slack", { method: "POST", headers: { "x-slack-request-timestamp": String(Math.floor(Date.now() / 1000)), "x-slack-signature": "v0=deadbeef" }, body: "{}" });
     expect((await ch.webhook!(req, ctxWith(async () => ""))).status).toBe(401);
@@ -95,6 +105,148 @@ describe("slackChannel", () => {
     await ch.webhook!(await signed(body), ctxWith(async () => "should not run"));
     await flush();
     expect(calls).toHaveLength(0);
+  });
+
+  test("an app_mention runs a turn (kind app_mention) and replies in-thread", async () => {
+    captureFetch();
+    let seen: InboundEvent | undefined;
+    const body = JSON.stringify({ type: "event_callback", event: { type: "app_mention", text: "<@B> hi", channel: "C1", ts: "333.3", user: "U2" } });
+    const run = (async (m: string, o?: { event?: InboundEvent }) => { seen = o?.event; return `re: ${m}`; }) as ChannelContext["run"];
+    await ch.webhook!(await signed(body), ctxWith(run));
+    await flush();
+    expect(seen).toMatchObject({ kind: "app_mention", channelId: "C1", threadId: "333.3", user: { id: "U2" } });
+    expect(calls[0]!.body).toMatchObject({ channel: "C1", text: "re: <@B> hi", thread_ts: "333.3" });
+  });
+
+  test("reaction events are ignored by default (not opted in)", async () => {
+    captureFetch();
+    const body = JSON.stringify({ type: "event_callback", event: { type: "reaction_added", user: "U2", reaction: "tada", item: { type: "message", channel: "C1", ts: "444.4" } } });
+    await ch.webhook!(await signed(body), ctxWith(async () => "should not run"));
+    await flush();
+    expect(calls).toHaveLength(0);
+  });
+
+  test("with reactions opted in, reaction_added runs a turn carrying the emoji + target", async () => {
+    captureFetch();
+    const reactCh = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", events: ["message", "reaction_added"], botUserId: "UBOT" });
+    async function signedFor(b: string) {
+      const ts = String(Math.floor(Date.now() / 1000));
+      return new Request("http://x/channels/slack", { method: "POST", headers: { "x-slack-request-timestamp": ts, "x-slack-signature": "v0=" + (await hmacHex(secret, `v0:${ts}:${b}`)) }, body: b });
+    }
+    let seen: InboundEvent | undefined;
+    const body = JSON.stringify({ type: "event_callback", event: { type: "reaction_added", user: "U2", reaction: "tada", item: { type: "message", channel: "C1", ts: "444.4" } } });
+    const run = (async (_m: string, o?: { event?: InboundEvent }) => { seen = o?.event; return ""; }) as ChannelContext["run"]; // empty reply → no post
+    await reactCh.webhook!(await signedFor(body), ctxWith(run));
+    await flush();
+    expect(seen).toMatchObject({ kind: "reaction_added", channelId: "C1", ts: "444.4", user: { id: "U2" }, reaction: { name: "tada", itemTs: "444.4" } });
+    expect(calls).toHaveLength(0); // empty reply is not posted
+
+    // the bot's OWN reaction (user === botUserId) is guarded out
+    seen = undefined;
+    const own = JSON.stringify({ type: "event_callback", event: { type: "reaction_added", user: "UBOT", reaction: "eyes", item: { type: "message", channel: "C1", ts: "444.4" } } });
+    await reactCh.webhook!(await signedFor(own), ctxWith(run));
+    await flush();
+    expect(seen).toBeUndefined();
+  });
+});
+
+describe("slackChannel read tools (capability surface)", () => {
+  const ch = slackChannel({ signingSecret: "s", botToken: "xoxb", apiUrl: "https://slack.test" });
+  const tools = ch.tools!();
+  const tool = (name: string) => tools.find((t) => t.spec.name === name)!;
+  // the current turn's event — tools default their target from it
+  const event: InboundEvent = { source: "slack", kind: "message", channelId: "C1", threadId: "111.1", ts: "111.1", user: { id: "U1" }, raw: {} };
+  const ctx = { event } as unknown as ToolContext;
+
+  // fetch stub keyed by Slack method → canned envelope; also records the query
+  let seenUrl = "";
+  function stub(byMethod: Record<string, unknown>) {
+    globalThis.fetch = (async (url: unknown) => {
+      seenUrl = String(url);
+      const method = seenUrl.split("?")[0]!.split("/").pop()!;
+      return new Response(JSON.stringify(byMethod[method] ?? { ok: false, error: "not_stubbed" }), { status: 200 });
+    }) as typeof fetch;
+  }
+
+  test("exposes the read tools plus slack_add_reaction", () => {
+    expect(tools.map((t) => t.spec.name)).toEqual(["slack_read_thread", "slack_list_reactions", "slack_resolve_user", "slack_add_reaction"]);
+  });
+
+  test("slack_read_thread defaults to the current thread and normalizes replies", async () => {
+    stub({ "conversations.replies": { ok: true, messages: [
+      { user: "U1", text: "parent", ts: "111.1" },
+      { user: "U2", text: "a reply", ts: "111.2" },
+    ] } });
+    const out = await tool("slack_read_thread").run({}, ctx);
+    expect(seenUrl).toBe("https://slack.test/conversations.replies?channel=C1&ts=111.1");
+    expect(out).toEqual({ messages: [
+      { user: "U1", text: "parent", ts: "111.1" },
+      { user: "U2", text: "a reply", ts: "111.2" },
+    ] });
+  });
+
+  test("slack_list_reactions returns who reacted with which emoji", async () => {
+    stub({ "reactions.get": { ok: true, message: { reactions: [
+      { name: "white_check_mark", count: 2, users: ["U1", "U2"] },
+      { name: "eyes", count: 1, users: ["U3"] },
+    ] } } });
+    const out = await tool("slack_list_reactions").run({}, ctx);
+    expect(seenUrl).toBe("https://slack.test/reactions.get?channel=C1&timestamp=111.1");
+    expect(out).toEqual({ reactions: [
+      { name: "white_check_mark", count: 2, users: ["U1", "U2"] },
+      { name: "eyes", count: 1, users: ["U3"] },
+    ] });
+  });
+
+  test("slack_resolve_user defaults to the triggering user and returns names", async () => {
+    stub({ "users.info": { ok: true, user: { id: "U1", name: "ada", profile: { real_name: "Ada Lovelace", display_name: "ada" } } } });
+    const out = await tool("slack_resolve_user").run({}, ctx);
+    expect(seenUrl).toBe("https://slack.test/users.info?user=U1");
+    expect(out).toEqual({ id: "U1", name: "ada", realName: "Ada Lovelace", displayName: "ada" });
+  });
+
+  test("explicit args override the event; a Slack error is surfaced", async () => {
+    stub({ "conversations.replies": { ok: false, error: "channel_not_found" } });
+    const out = await tool("slack_read_thread").run({ channelId: "C9", threadId: "9.9" }, ctx);
+    expect(seenUrl).toBe("https://slack.test/conversations.replies?channel=C9&ts=9.9");
+    expect(out).toEqual({ error: "channel_not_found" });
+  });
+
+  test("no target in context and none passed ⇒ a clear error, no fetch", async () => {
+    let fetched = false;
+    globalThis.fetch = (async () => { fetched = true; return new Response("{}"); }) as unknown as typeof fetch;
+    const out = await tool("slack_read_thread").run({}, {} as ToolContext);
+    expect(fetched).toBe(false);
+    expect(out).toMatchObject({ error: expect.stringContaining("no thread in context") });
+  });
+
+  test("slack_add_reaction posts reactions.add, defaulting the target message", async () => {
+    let body: unknown;
+    globalThis.fetch = (async (url: unknown, init?: { body?: string }) => {
+      seenUrl = String(url); body = init?.body ? JSON.parse(init.body) : undefined;
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as typeof fetch;
+    const out = await tool("slack_add_reaction").run({ name: "tada" }, ctx);
+    expect(seenUrl).toBe("https://slack.test/reactions.add");
+    expect(body).toEqual({ channel: "C1", timestamp: "111.1", name: "tada" });
+    expect(out).toEqual({ ok: true });
+  });
+
+  test("slack_add_reaction treats already_reacted as success (idempotent)", async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({ ok: false, error: "already_reacted" }), { status: 200 })) as unknown as typeof fetch;
+    expect(await tool("slack_add_reaction").run({ name: "tada" }, ctx)).toEqual({ ok: true });
+  });
+
+  test("does NOT default from a non-Slack event (cross-channel safety)", async () => {
+    // a Crisp event carried into a Slack tool (multi-channel agent) must not be read as
+    // Slack ids — the tool requires explicit args instead of firing a garbage call.
+    let fetched = false;
+    globalThis.fetch = (async () => { fetched = true; return new Response("{}"); }) as unknown as typeof fetch;
+    const crispCtx = { event: { source: "crisp", kind: "message", channelId: "w1", threadId: "s1", ts: "1", raw: {} } } as unknown as ToolContext;
+    expect(await tool("slack_read_thread").run({}, crispCtx)).toMatchObject({ error: expect.stringContaining("no thread in context") });
+    expect(await tool("slack_list_reactions").run({}, crispCtx)).toMatchObject({ error: expect.stringContaining("no message in context") });
+    expect(await tool("slack_resolve_user").run({}, crispCtx)).toMatchObject({ error: expect.stringContaining("no user in context") });
+    expect(fetched).toBe(false);
   });
 });
 
@@ -183,5 +335,43 @@ describe("crispChannel", () => {
     await ch.webhook!(await signed(body), ctxWith(async () => "should not run"));
     await flush();
     expect(calls).toHaveLength(0);
+  });
+
+  test("an empty reply is not posted (agent acted via a tool — mirrors slack)", async () => {
+    captureFetch();
+    const body = JSON.stringify({ event: "message:send", data: { from: "user", type: "text", content: "react please", website_id: "w1", session_id: "s1" } });
+    await ch.webhook!(await signed(body), ctxWith(async () => "   ")); // whitespace-only reply
+    await flush();
+    expect(calls).toHaveLength(0);
+  });
+
+  test("a visitor message carries a normalized InboundEvent (website/session/user)", async () => {
+    let seen: InboundEvent | undefined;
+    const body = JSON.stringify({ event: "message:send", data: { from: "user", type: "text", content: "help", website_id: "w1", session_id: "s1", fingerprint: 12345, user: { user_id: "v9", nickname: "Ada" } } });
+    const run = (async (_m: string, o?: { event?: InboundEvent }) => { seen = o?.event; return "ok"; }) as ChannelContext["run"];
+    await ch.webhook!(await signed(body), ctxWith(run));
+    await flush();
+    expect(seen).toMatchObject({ kind: "message", channelId: "w1", threadId: "s1", ts: "12345", user: { id: "v9", name: "Ada" }, text: "help" });
+  });
+
+  test("crisp_read_conversation defaults website/session from the event and normalizes", async () => {
+    const tools = ch.tools!();
+    const readConvo = tools.find((t) => t.spec.name === "crisp_read_conversation")!;
+    expect(tools.map((t) => t.spec.name)).toEqual(["crisp_read_conversation"]);
+    let seenUrl = "";
+    globalThis.fetch = (async (url: unknown) => {
+      seenUrl = String(url);
+      return new Response(JSON.stringify({ error: false, data: [
+        { from: "user", type: "text", content: "hi", user: { nickname: "Ada" } },
+        { from: "operator", type: "text", content: "hello" },
+      ] }), { status: 200 });
+    }) as typeof fetch;
+    const ctx = { event: { source: "crisp", kind: "message", channelId: "w1", threadId: "s1", ts: "1", raw: {} } } as unknown as ToolContext;
+    const out = await readConvo.run({}, ctx);
+    expect(seenUrl).toBe("https://crisp.test/website/w1/conversation/s1/messages");
+    expect(out).toEqual({ messages: [
+      { from: "user", type: "text", content: "hi", nickname: "Ada" },
+      { from: "operator", type: "text", content: "hello", nickname: undefined },
+    ] });
   });
 });

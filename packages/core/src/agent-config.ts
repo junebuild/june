@@ -7,8 +7,13 @@
 // this module is the pure config layer it produces.
 
 import type { AnyAction } from "./agent";
-import type { Tool, ToolSpec } from "./agent-runtime";
+import type { InboundEvent, Tool, ToolSpec } from "./agent-runtime";
 import type { ConnectionReport } from "./connections";
+
+// InboundEvent's canonical definition lives in agent-runtime (ToolContext carries it);
+// re-export from here — where Channel/ChannelContext live — so channel authors import
+// the envelope alongside the types they build on.
+export type { InboundEvent } from "./agent-runtime";
 
 // A skill: a named procedure loaded on demand (progressive disclosure). The
 // system prompt lists them; the model pulls a body via the read_skill tool.
@@ -21,7 +26,11 @@ export type Skill = { name: string; description: string; body: string };
 // native and edge targets.
 export type ChannelContext = {
   agent: AgentDefinition;
-  run: (message: string, opts?: { session?: string; turnId?: string }) => Promise<string>;
+  // `event` is additive: existing callers pass only the text; a channel that has a
+  // normalized envelope threads it through so the turn (and its tools) can see the
+  // actor/kind/reaction. Batch 1 defines the seam; the Slack/Crisp adapters and the
+  // durable /turn edge start populating it in the following batches.
+  run: (message: string, opts?: { session?: string; turnId?: string; event?: InboundEvent }) => Promise<string>;
   // Extend the invocation past the fast-ACK response so a webhook's background work
   // (run the turn, post the reply out-of-band) reliably completes. On the edge the
   // host passes workerd's `ctx.waitUntil` — without it, a promise left floating after
@@ -39,6 +48,14 @@ export type Channel = {
   // run the turn, post the reply out-of-band
   path?: string;
   webhook?: (req: Request, ctx: ChannelContext) => Promise<Response>;
+  // OUTBOUND capabilities this channel gives the agent, as Tools merged into
+  // `agent.tools` by defineAgent. This is the second channel seam: a channel is no
+  // longer just "text in → text out" — it can also let the agent act on the platform
+  // (read a Slack thread's replies, list who reacted with which emoji, resolve a user
+  // id to a name, post/react back). Secrets (bot token) are captured in the factory
+  // closure, so the returned Tools are already authenticated. Kept a thunk so the
+  // tool list is built lazily at assembly time, mirroring `webhook`/`fetch`.
+  tools?: () => Tool[];
 };
 export function defineChannel(channel: Channel): Channel {
   return channel;
@@ -139,8 +156,25 @@ export function defineAgent(config: {
   connections?: ConnectionReport[];
 }): AgentDefinition {
   const skills = config.skills ?? [];
+  const channels = config.channels ?? [];
   const tools: Tool[] = (config.tools ?? []).map((t) => (isTool(t) ? t : actionToTool(t)));
+  // Merge each channel's OUTBOUND capabilities (see Channel.tools) into the agent's
+  // tools — so mounting the Slack channel also gives the agent slack_read_thread /
+  // slack_list_reactions / … with no separate wiring. Added before read_skill so the
+  // skill tool stays last (cosmetic, matches the prior ordering contract in tests).
+  for (const c of channels) if (c.tools) tools.push(...c.tools());
   if (skills.length) tools.push(readSkillTool(skills));
+  // Fail fast on a duplicate tool name. The engine dispatches by name (tools.find), so a
+  // collision — two channels/connections exposing the same id, or a channel tool shadowing
+  // an app tool — would silently bind to the first and make behavior order-dependent. As
+  // agents accrue more channels this gets likelier; surface it at assembly, not at runtime.
+  const seen = new Set<string>();
+  for (const t of tools) {
+    if (seen.has(t.spec.name)) {
+      throw new Error(`defineAgent(${config.name}): duplicate tool name "${t.spec.name}" — two tools (or channel capabilities) share an id; rename one so dispatch is unambiguous.`);
+    }
+    seen.add(t.spec.name);
+  }
   return {
     name: config.name,
     model: config.model,
@@ -148,7 +182,7 @@ export function defineAgent(config: {
     instructions: config.instructions ?? "",
     tools,
     skills,
-    channels: config.channels ?? [],
+    channels,
     connections: config.connections ?? [],
   };
 }

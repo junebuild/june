@@ -23,6 +23,30 @@ export type Msg =
 export type ModelReply = { text: string; toolCalls: ToolCall[] };
 export type ToolSpec = { name: string; description: string; input: unknown };
 
+// A normalized inbound event — the platform-agnostic envelope a turn was triggered
+// by. Defined at this (lowest) layer because ToolContext carries it: a channel's
+// capability tool (e.g. slack_read_thread) defaults its target — channel / thread /
+// message ts — from the CURRENT turn's event, so the model can call it with no args.
+// A channel adapter maps its native payload (Slack Events API, Crisp hook, …) into
+// this one shape; agent-config and channels re-export it for adapter authors.
+//
+// `kind` distinguishes a user message from a reaction (emoji) or an edit, so a
+// channel subscribing to reaction_added/removed can route those as turns too — `text`
+// is present for message/app_mention, `reaction` for the emoji events. `raw` is the
+// untouched platform payload: an escape hatch for anything not yet normalized.
+export type InboundEvent = {
+  source: string;                               // the channel that produced it ("slack" / "crisp")
+  kind: "message" | "app_mention" | "reaction_added" | "reaction_removed" | "message_changed";
+  channelId: string;                            // the conversation container: slack channel id / crisp website id
+  threadId?: string;                            // thread within it: slack thread_ts / crisp conversation session id
+  ts: string;                                   // this event's message ts
+  user?: { id: string; name?: string };         // WHO
+  text?: string;                                // message / app_mention carry text; reactions don't
+  reaction?: { name: string; itemTs: string };  // WHICH emoji, on WHICH message
+  raw?: unknown;                                // untouched platform payload (escape hatch); may
+                                                // be dropped crossing the /turn RPC if unserializable
+};
+
 // The Model seam — provider-agnostic. `opts.system` is the per-turn system prompt
 // (an agent's instructions); optional so the engine can call `model(msgs, specs)`
 // and a scripted model can ignore it. The runtime injects it from the agent def
@@ -47,6 +71,11 @@ export interface ToolContext {
   agent: string;
   sessionId: string;
   callId: string;
+  // The inbound event that triggered this turn (when the turn came from a channel
+  // that supplies one). A channel capability tool reads it to default its target —
+  // e.g. slack_read_thread with no args reads ctx.event.threadId. Undefined for turns
+  // not driven by a channel envelope (a bare /message POST, a scripted test).
+  event?: InboundEvent;
 }
 export type Tool = {
   spec: ToolSpec;
@@ -101,7 +130,7 @@ export async function runTurn(
   model: Model,
   tools: Tool[],
   opts: { turnId: string; userText: string; crash?: Crash },
-  env: { runtime: Runtime; agent: string; sessionId: string },
+  env: { runtime: Runtime; agent: string; sessionId: string; event?: InboundEvent },
 ): Promise<string> {
   if (!store.hasUserTurn(opts.turnId)) {
     store.tx(() => store.appendMessage({ role: "user", turnId: opts.turnId, text: opts.userText }));
@@ -155,14 +184,14 @@ async function toolStep(
   tools: Tool[],
   call: ToolCall,
   opts: { turnId: string; crash?: Crash },
-  env: { runtime: Runtime; agent: string; sessionId: string },
+  env: { runtime: Runtime; agent: string; sessionId: string; event?: InboundEvent },
 ) {
   const stepId = `tool:${call.id}`;
   if (store.getStep(stepId) !== undefined) return;
   const tool = tools.find((t) => t.spec.name === call.name);
   if (!tool) throw new Error(`unknown tool ${call.name}`);
   const remote = tool.run.constructor.name === "AsyncFunction";
-  const ctx: ToolContext = { store, runtime: env.runtime, agent: env.agent, sessionId: env.sessionId, callId: call.id };
+  const ctx: ToolContext = { store, runtime: env.runtime, agent: env.agent, sessionId: env.sessionId, callId: call.id, event: env.event };
 
   assertCrash(opts.crash, "before-tool-commit", stepId); // nothing done → safe clean re-run
   const toolMsg = (result: unknown): Msg => ({ role: "tool", turnId: opts.turnId, toolCallId: call.id, name: call.name, result });
@@ -237,7 +266,7 @@ export class AgentSession {
   // to the same session run one-after-another — no interleaving on the shared
   // transcript. (On a Durable Object this is blockConcurrencyWhile; here it's a
   // promise chain. Same guarantee, both targets.)
-  turn(input: { turnId?: string; userText: string; crash?: Crash }): Promise<string> {
+  turn(input: { turnId?: string; userText: string; crash?: Crash; event?: InboundEvent }): Promise<string> {
     const turnId = input.turnId ?? `t${++this.seq}`;
     const run = () =>
       runTurn(
@@ -246,7 +275,7 @@ export class AgentSession {
         this.model,
         this.tools,
         { turnId, userText: input.userText, crash: input.crash },
-        { runtime: this.runtime, agent: this.agent, sessionId: this.id },
+        { runtime: this.runtime, agent: this.agent, sessionId: this.id, event: input.event },
       );
     const p = this.chain.then(run);
     this.chain = p.catch(() => {}); // a failed turn must not break the inbox

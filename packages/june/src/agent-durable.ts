@@ -22,6 +22,7 @@ import {
   type Model,
   type Msg,
   type Runtime,
+  type InboundEvent,
   type SessionStore,
   type Tool,
 } from "@junejs/core/agent-runtime";
@@ -190,7 +191,7 @@ export class AgentDurableObject {
   // Juno's batch-loader registry) can't leak across turns on a long-lived DO.
   // ensureScope() lazily wires node:async_hooks (workerd via nodejs_compat), as the
   // pipeline does; without it runInScope is a pass-through and ambient reads throw.
-  async turn(input: { turnId?: string; userText: string }): Promise<string> {
+  async turn(input: { turnId?: string; userText: string; event?: InboundEvent }): Promise<string> {
     await ensureScope();
     return runInScope({ resources: this.resources, services: this.services }, () => this.session.turn(input));
   }
@@ -202,8 +203,8 @@ export class AgentDurableObject {
   async fetch(req: Request): Promise<Response> {
     const url = new URL(req.url);
     if (req.method === "POST" && url.pathname.endsWith("/turn")) {
-      const { userText, turnId } = (await req.json()) as { userText: string; turnId?: string };
-      return Response.json({ text: await this.turn({ userText, turnId }) });
+      const { userText, turnId, event } = (await req.json()) as { userText: string; turnId?: string; event?: InboundEvent };
+      return Response.json({ text: await this.turn({ userText, turnId, event }) });
     }
     if (url.pathname.endsWith("/transcript")) return Response.json({ transcript: this.transcript() });
     return new Response("agent DO — POST /turn or GET /transcript", { status: 404 });
@@ -293,11 +294,27 @@ export function durableChannelSurface(
         namespace,
         opts.agentName,
         o?.session ?? "default",
-        new Request("https://do/turn", { method: "POST", body: JSON.stringify({ userText: message, turnId: o?.turnId }) }),
+        new Request("https://do/turn", { method: "POST", body: serializeTurn(message, o) }),
       );
       const { text } = (await res.json()) as { text: string };
       return text;
     },
   };
   return channelDispatch(resolved, ctx);
+}
+
+// Serialize a turn for the /turn RPC body. InboundEvent.raw is `unknown` — the
+// untouched platform payload — so a (third-party) channel could attach something
+// JSON.stringify chokes on (a circular object, a BigInt). raw isn't needed to route or
+// run the turn, so on a serialization failure we drop it rather than let an
+// unserializable payload take down turn forwarding entirely. (raw is optional on
+// InboundEvent precisely because it may not survive this boundary.)
+function serializeTurn(userText: string, o?: { turnId?: string; event?: InboundEvent }): string {
+  const payload = { userText, turnId: o?.turnId, event: o?.event };
+  try {
+    return JSON.stringify(payload);
+  } catch {
+    const event = o?.event ? { ...o.event, raw: undefined } : undefined;
+    return JSON.stringify({ ...payload, event });
+  }
 }
