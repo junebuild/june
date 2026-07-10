@@ -302,7 +302,9 @@ P1+P2 are foundational; P3 is the deep, high-value one; P4 is smaller and rides 
 
 ## 14. Resolved decisions (v0)
 
-These were the open questions; resolved as follows and now binding for implementation.
+These were the open questions; resolved as follows and now binding **design commitments** —
+realized across the P1–P4 phases below, **not** all implemented in the P1a event-bus slice. Each
+note marks the phase that lands it.
 
 1. **Event granularity** — the engine forwards **provider-native deltas** as they arrive (no
    re-chunking); a consumer coalesces for its transport (e.g. the Slack renderer debounces edits to
@@ -326,7 +328,9 @@ These were the open questions; resolved as follows and now binding for implement
 6. **Proactive seed** — **a distinct `trigger`-role Msg in the durable log** (honest transcript /
    attribution), **mapped to a user/system message at the model adapter** (providers needn't support a
    new role) — reusing the system-overlay pattern. Lighter alternative (an optional `trigger` field on
-   a user Msg) rejected for weaker semantic separation.
+   a user Msg) rejected for weaker semantic separation. **Lands in P4** — P1a does not add a `trigger`
+   role to the `Msg` union; `turn.started`'s trigger is derived live from the inbound event and is not
+   persisted.
 7. **Subagent events** — **reference, not flatten**. A subagent is a tool, so the parent stream carries
    its `action.requested`/`action.completed` with the child `turnId`; drilling in = subscribing to the
    child's own stream. Automatic cross-DO forwarding is deferred (opt-in later).

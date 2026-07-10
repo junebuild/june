@@ -108,13 +108,16 @@ export interface SessionStore {
 }
 
 // ── the turn as a live event stream (see docs/rfc-turn-as-live-process.md) ────
-// A turn emits a stream of typed events as it runs. Structural events (turn.started,
-// action.*, message.completed, input.requested, turn.completed/failed) have a durable
-// counterpart in the message/step log — a reconnecting subscriber folds them back. The
-// *.delta events are LIVE ONLY: emitted while the turn runs, never on replay (a cached
-// step re-emits its message.completed, not a re-typed stream). P1 emits the structural
-// set; reasoning.delta/message.delta arrive with the streaming Model (P2); input.requested
-// with suspend/resume (P3).
+// A turn emits a stream of typed events as it runs. In THIS slice (P1a) events are LIVE:
+// emitted during a fresh execution and observed via AgentSession.observe. There is NOT yet
+// a replay/catch-up path — on a crash-replay a cached step short-circuits WITHOUT
+// re-emitting, so a subscriber that attaches mid-turn misses the prior events; and
+// turn.started's `trigger` + turn.failed are live-only (not persisted in the message/step
+// log). The RFC's target splits events into structural (foldable from the log) vs live
+// *.delta and adds a fold-on-reconnect catch-up — that durable story lands in P1b (SSE +
+// observe replay), not here. P1a emits the structural set (turn.started, action.requested/
+// completed, message.completed, turn.completed/failed); reasoning.delta/message.delta arrive
+// with the streaming Model (P2); input.requested with suspend/resume (P3).
 export type InputRequest = { id: string; prompt: string; schema?: unknown };
 export type TurnTrigger =
   | { kind: "inbound"; event: InboundEvent }          // a channel event (message, mention, reaction)

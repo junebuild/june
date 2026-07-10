@@ -9,7 +9,6 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
   AgentSession,
   type EventSink,
-  type TurnEvent,
   type Model,
   type ModelReply,
   type Runtime,
