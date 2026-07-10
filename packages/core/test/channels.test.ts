@@ -147,6 +147,30 @@ describe("slackChannel", () => {
     expect((calls[1]!.body as { ts?: string }).ts).toBe("111.9"); // edits target the posted message
   });
 
+  test("stream render: an iterator exception updates the placeholder (not stuck at Thinking…)", async () => {
+    calls = [];
+    globalThis.fetch = (async (url: unknown, init?: { body?: string }) => {
+      calls.push({ url: String(url), body: init?.body ? JSON.parse(init.body) : undefined });
+      const isPost = String(url).endsWith("/chat.postMessage");
+      return new Response(JSON.stringify(isPost ? { ok: true, ts: "111.9" } : { ok: true }), { status: 200 });
+    }) as typeof fetch;
+
+    let reported: unknown;
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true, onError: (e) => { reported = e; } });
+    const ctx = ctxWith(async () => "unused");
+    ctx.runStream = async function* () { yield { type: "turn.started", turnId: "t1", trigger: { kind: "proactive", by: "x" } } as TurnEvent; throw new Error("SSE dropped"); };
+
+    const body = JSON.stringify({ type: "event_callback", event: { type: "message", text: "order", channel: "C1", ts: "1.1", user: "U1" } });
+    await ch2.webhook!(await signed(body), ctx);
+    await flush();
+
+    expect(calls.map((c) => [c.url.split("/").pop(), (c.body as { text?: string }).text])).toEqual([
+      ["chat.postMessage", "_Thinking…_"],
+      ["chat.update", "_(the turn failed)_"], // not left stuck at Thinking…
+    ]);
+    expect((reported as Error).message).toBe("SSE dropped"); // onError still records it
+  });
+
   test("ignores the bot's own message (no reply loop)", async () => {
     captureFetch();
     const body = JSON.stringify({ type: "event_callback", event: { type: "message", bot_id: "B1", text: "my own reply", channel: "C1", ts: "1" } });

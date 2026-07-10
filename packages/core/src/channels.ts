@@ -227,15 +227,23 @@ export function slackChannel(opts: {
   // or when we couldn't obtain the message ts to edit.
   async function renderStream(ctx: ChannelContext, event: InboundEvent, userText: string, session: string) {
     const ts = await postMessage(event.channelId, "_Thinking…_", event.threadId);
-    let finalText = "";
-    for await (const e of ctx.runStream!(userText, { session, event })) {
-      if (e.type === "action.requested" && ts) await updateMessage(event.channelId, ts, `_Running ${e.call.name}…_`);
-      else if (e.type === "turn.completed") finalText = e.text;
-      else if (e.type === "turn.failed") { if (ts) await updateMessage(event.channelId, ts, "_(the turn failed)_"); return; }
+    // never leave the placeholder stuck on failure — update it (best-effort) on a turn.failed
+    // event OR an iterator exception (network / SSE parse error).
+    const fail = async () => { if (ts) await updateMessage(event.channelId, ts, "_(the turn failed)_").catch(() => {}); };
+    try {
+      let finalText = "";
+      for await (const e of ctx.runStream!(userText, { session, event })) {
+        if (e.type === "action.requested" && ts) await updateMessage(event.channelId, ts, `_Running ${e.call.name}…_`);
+        else if (e.type === "turn.completed") finalText = e.text;
+        else if (e.type === "turn.failed") { await fail(); return; }
+      }
+      const out = finalText.trim();
+      if (ts) await updateMessage(event.channelId, ts, out || "_(no reply)_");
+      else if (out) await postMessage(event.channelId, out, event.threadId);
+    } catch (err) {
+      await fail(); // the stream threw mid-iteration — surface it in the message…
+      throw err;    // …and still let runBackground → onError record it
     }
-    const out = finalText.trim();
-    if (ts) await updateMessage(event.channelId, ts, out || "_(no reply)_");
-    else if (out) await postMessage(event.channelId, out, event.threadId);
   }
   // Slack Web API read helper: GET with query params + bearer token. Read methods
   // (conversations.replies, reactions.get, users.info) all accept this shape. Returns
