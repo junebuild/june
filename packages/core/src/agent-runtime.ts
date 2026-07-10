@@ -285,9 +285,13 @@ export function foldTranscript(msgs: Msg[]): Turn[] {
 }
 
 // ── the outer seam: AgentSession actor (serializes turns via an inbox) ─────────
+export type TurnInput = { turnId?: string; userText: string; crash?: Crash; event?: InboundEvent };
+
 export class AgentSession {
   private chain: Promise<unknown> = Promise.resolve();
   private seq = 0;
+  // Per-turn terminal promise, so result(turnId) can await a turn started with start().
+  private readonly running = new Map<string, Promise<string>>();
   // Explicit fields + assignment (not constructor parameter properties): June
   // ships raw .ts, so consumers type-strip it — parameter properties aren't
   // erasable and break `erasableSyntaxOnly` / Node native strip-types.
@@ -313,11 +317,12 @@ export class AgentSession {
     this.channelInstructions = channelInstructions;
   }
 
-  // turns are serialized: each awaits the previous. Two concurrent turn() calls
-  // to the same session run one-after-another — no interleaving on the shared
-  // transcript. (On a Durable Object this is blockConcurrencyWhile; here it's a
-  // promise chain. Same guarantee, both targets.)
-  turn(input: { turnId?: string; userText: string; crash?: Crash; event?: InboundEvent }): Promise<string> {
+  // Kick a turn off WITHOUT awaiting it — returns its id so a caller can `observe` the
+  // live event stream and `result(turnId)` for the terminal state. This is the primary
+  // interface for live/streaming consumers (channels, SSE). Turns are serialized: each
+  // awaits the previous on the chain — no interleaving on the shared transcript. (On a
+  // Durable Object this is blockConcurrencyWhile; here it's a promise chain.)
+  start(input: TurnInput): { turnId: string } {
     const turnId = input.turnId ?? `t${++this.seq}`;
     const systemOverlay = input.event ? this.channelInstructions?.[input.event.source] : undefined;
     const run = () =>
@@ -331,11 +336,64 @@ export class AgentSession {
       );
     const p = this.chain.then(run);
     this.chain = p.catch(() => {}); // a failed turn must not break the inbox
-    return p;
+    this.running.set(turnId, p); // held for result(); settled-promise refs are cheap (no auto-prune yet)
+    return { turnId };
   }
 
-  // Subscribe to this session's live TurnEvent stream (all turns; filter by e.turnId).
-  observe(cb: (e: TurnEvent) => void): () => void { return this.sink.subscribe(cb); }
+  // Await a turn's terminal state (completed | failed). `suspended` lands with P3. Reads
+  // the in-flight promise from start(); if the turn already finished, falls back to the
+  // durable log (status + the final assistant text) so a late result() call still resolves.
+  async result(turnId: string): Promise<TurnResult> {
+    const p = this.running.get(turnId);
+    if (p) {
+      try { return { status: "completed", text: await p }; }
+      catch (err) { return { status: "failed", error: { message: err instanceof Error ? err.message : String(err) } }; }
+    }
+    const msgs = this.store.messages().filter((m) => m.turnId === turnId);
+    const lastAssistant = [...msgs].reverse().find((m): m is Extract<Msg, { role: "assistant" }> => m.role === "assistant");
+    if (lastAssistant && lastAssistant.toolCalls.length === 0) return { status: "completed", text: lastAssistant.text };
+    return { status: "failed", error: { message: `no terminal result for turn ${turnId}` } };
+  }
+
+  // Sugar: run a turn and await its final text. Explicitly the NON-INTERACTIVE convenience
+  // (CLI, tests, simple cases) — it throws if the turn fails; use start()+observe()+result()
+  // for liveness/interaction.
+  turn(input: TurnInput): Promise<string> {
+    return this.running.get(this.start(input).turnId)!;
+  }
+
+  // Subscribe to this session's TurnEvent stream. Scope to one turn with `turnId`; with
+  // `replay`, first emit the structural events foldable from the durable log (message.completed,
+  // action.requested/completed, and turn.completed if finished) so a late/reconnecting subscriber
+  // catches up, THEN live events. `turn.started`'s trigger + `turn.failed` are live-only (not
+  // persisted), so they aren't part of the folded prefix.
+  observe(cb: (e: TurnEvent) => void, opts?: { turnId?: string; replay?: boolean }): () => void {
+    if (opts?.replay && opts.turnId) for (const e of this.foldEvents(opts.turnId)) cb(e);
+    const { turnId } = opts ?? {};
+    return this.sink.subscribe(turnId ? (e) => { if (e.turnId === turnId) cb(e); } : cb);
+  }
+
+  // Reconstruct the structural TurnEvents for one turn from the message log (the durable
+  // counterpart of the live stream). Tool inputs are recovered from the assistant message's
+  // tool calls so action.completed carries the full call.
+  private foldEvents(turnId: string): TurnEvent[] {
+    const msgs = this.store.messages().filter((m) => m.turnId === turnId);
+    const inputs = new Map<string, ToolCall>();
+    const out: TurnEvent[] = [];
+    for (const m of msgs) {
+      if (m.role === "assistant") {
+        if (m.text.trim()) out.push({ type: "message.completed", turnId, text: m.text });
+        for (const call of m.toolCalls) { inputs.set(call.id, call); out.push({ type: "action.requested", turnId, call }); }
+      } else if (m.role === "tool") {
+        out.push({ type: "action.completed", turnId, call: inputs.get(m.toolCallId) ?? { id: m.toolCallId, name: m.name, input: undefined }, result: m.result });
+      }
+    }
+    const lastAssistant = [...msgs].reverse().find((m): m is Extract<Msg, { role: "assistant" }> => m.role === "assistant");
+    if (lastAssistant && lastAssistant.toolCalls.length === 0 && lastAssistant.text.trim())
+      out.push({ type: "turn.completed", turnId, text: lastAssistant.text });
+    return out;
+  }
+
   transcript(): Turn[] { return foldTranscript(this.store.messages()); }
   snapshot() { return { transcript: this.transcript(), status: this.store.getStatus() }; }
 }
