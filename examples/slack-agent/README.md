@@ -61,8 +61,30 @@ A reaction turn carries the emoji + target message on `event.reaction`; the agen
 answer, or react back with `slack_add_reaction`. `botUserId` stops the bot's own
 reactions from looping into a turn.
 
+## Observe / shadow mode (mirror without replying)
+
+Both channels take three extension hooks so you can sit on the built-in instead of
+forking its webhook — inheriting the signature / replay / malformed-body / blank-input
+hardening for free:
+
+```ts
+crispChannel({
+  signingSecret, identifier, key,
+  mode: "observe",                                   // shadow: never run a turn or reply
+  accept: (raw) => raw?.data?.website_id === MINE,    // gate before any work (allowlist)
+  onEvent: ({ raw, event }) => mirrorToStore(raw),    // fires for EVERY verified event
+})                                                    // (visitor + operator + non-text)
+```
+
+- `onEvent` — mirror hook, runs in the background for every signature-verified event
+  (before the turn's loop guard, so operator/non-text events are visible too). Ideal for
+  ingesting a conversation into a RAG source of truth.
+- `mode: "observe"` — pure ingestion: no turn, no reply, zero LLM cost.
+- `accept` — reject an event (returns `false` → ACK 200, ignore).
+
+`mode: "respond"` (default) keeps the reply behavior AND still fires `onEvent` if set —
+so you can mirror and answer at the same time.
+
 ## What's next (not in this example yet)
 
 - **Block Kit / rich output** and updating a posted message.
-- **Crisp parity** — `crispChannel` has the symmetric envelope +
-  `crisp_read_conversation`; a Crisp example could mirror this one.

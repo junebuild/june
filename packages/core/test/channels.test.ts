@@ -123,6 +123,24 @@ describe("slackChannel", () => {
     expect(calls).toHaveLength(0);
   });
 
+  test("observe mode: mirrors the event, runs no turn and posts nothing", async () => {
+    captureFetch();
+    const seen: { raw: unknown; event?: unknown }[] = [];
+    let ran = false;
+    const shadow = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", mode: "observe", onEvent: (e) => { seen.push(e); } });
+    const body = JSON.stringify({ type: "event_callback", event: { type: "message", text: "hello", channel: "C1", ts: "9.9", user: "U1" } });
+    async function signedFor(b: string) {
+      const ts = String(Math.floor(Date.now() / 1000));
+      return new Request("http://x/channels/slack", { method: "POST", headers: { "x-slack-request-timestamp": ts, "x-slack-signature": "v0=" + (await hmacHex(secret, `v0:${ts}:${b}`)) }, body: b });
+    }
+    await shadow.webhook!(await signedFor(body), ctxWith(async () => { ran = true; return "x"; }));
+    await flush();
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.event).toMatchObject({ kind: "message", text: "hello", source: "slack" });
+    expect(ran).toBe(false);
+    expect(calls).toHaveLength(0);
+  });
+
   test("an app_mention runs a turn (kind app_mention) and replies in-thread", async () => {
     captureFetch();
     let seen: InboundEvent | undefined;
@@ -359,6 +377,50 @@ describe("crispChannel", () => {
     expect(res.status).toBe(200);
     await flush();
     expect(calls).toHaveLength(0);
+  });
+
+  test("observe mode: onEvent mirrors visitor AND operator events; no turn, no reply", async () => {
+    captureFetch();
+    const seen: { raw: unknown; event?: unknown }[] = [];
+    let ran = false;
+    const shadow = crispChannel({ signingSecret: secret, identifier: "id", key: "key", apiUrl: "https://crisp.test", mode: "observe", onEvent: (e) => { seen.push(e); } });
+    const visitor = JSON.stringify({ event: "message:send", data: { from: "user", type: "text", content: "hi", website_id: "w1", session_id: "s1" } });
+    const operator = JSON.stringify({ event: "message:send", data: { from: "operator", type: "text", content: "our reply", website_id: "w1", session_id: "s1" } });
+    const ctx = ctxWith(async () => { ran = true; return "nope"; });
+    await shadow.webhook!(await signed(visitor), ctx);
+    await shadow.webhook!(await signed(operator), ctx);
+    await flush();
+    expect(seen).toHaveLength(2);                                    // BOTH mirrored (operator too — turn path drops it)
+    expect(seen[0]!.event).toMatchObject({ kind: "message", text: "hi", source: "crisp" });
+    expect(seen[1]!.event).toBeUndefined();                          // operator: raw only, no normalized envelope
+    expect(seen[1]!.raw).toBeDefined();
+    expect(ran).toBe(false);                                        // never ran a turn
+    expect(calls).toHaveLength(0);                                  // never replied
+  });
+
+  test("accept gate: a rejected event ACKs 200 with no onEvent, no turn", async () => {
+    captureFetch();
+    const seen: unknown[] = [];
+    let ran = false;
+    const gated = crispChannel({ signingSecret: secret, identifier: "id", key: "key", apiUrl: "https://crisp.test", accept: (raw) => (raw as { data?: { website_id?: string } }).data?.website_id === "allowed", onEvent: (e) => { seen.push(e); } });
+    const body = JSON.stringify({ event: "message:send", data: { from: "user", type: "text", content: "hi", website_id: "blocked", session_id: "s1" } });
+    const res = await gated.webhook!(await signed(body), ctxWith(async () => { ran = true; return "x"; }));
+    expect(res.status).toBe(200);
+    await flush();
+    expect(seen).toHaveLength(0);
+    expect(ran).toBe(false);
+  });
+
+  test("respond mode with onEvent: mirrors AND runs the turn + reply (two background paths)", async () => {
+    captureFetch();
+    const seen: unknown[] = [];
+    const both = crispChannel({ signingSecret: secret, identifier: "id", key: "key", apiUrl: "https://crisp.test", onEvent: (e) => { seen.push(e); } });
+    const body = JSON.stringify({ event: "message:send", data: { from: "user", type: "text", content: "q", website_id: "w1", session_id: "s1" } });
+    await both.webhook!(await signed(body), ctxWith(async (m) => `ans: ${m}`));
+    await flush();
+    expect(seen).toHaveLength(1);                                   // mirrored
+    expect(calls).toHaveLength(1);                                  // AND replied
+    expect(calls[0]!.body).toMatchObject({ content: "ans: q" });
   });
 
   test("ignores an operator message (our own reply — no loop)", async () => {

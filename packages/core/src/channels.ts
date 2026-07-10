@@ -81,6 +81,32 @@ function timestampFresh(ts: string, toleranceSec = 300): boolean {
   return Math.abs(Date.now() / 1000 - tsSec) <= toleranceSec;
 }
 
+// ── channel extension seams (shared by slack + crisp) ─────────────────────────
+// An observe/mirror hook: called for EVERY signature-verified inbound webhook event —
+// before the turn's loop guard, so it also sees operator/bot/non-text events the turn
+// path drops. Runs in the background with the same fast-ACK discipline as the turn
+// (its own error swallowed via onError; never blocks the 200). `raw` is the untouched
+// platform payload; `event` is the normalized envelope when the event maps to one. This
+// is the seam an app uses to mirror a conversation into its own store (a RAG source of
+// truth) WITHOUT forking the channel — it inherits all the signature/replay/parse
+// hardening for free.
+export type ChannelObserver = (e: { raw: unknown; event?: InboundEvent }, ctx: ChannelContext) => Promise<void> | void;
+
+// How the channel treats the agent turn. "respond" (default) = the built-in behavior:
+// an eligible user message runs a turn and the reply is posted back. "observe" = shadow
+// mode: NEVER run a turn or post a reply — only `onEvent` fires. Pure ingestion, zero
+// LLM cost, the channel never talks back to the platform.
+export type ChannelMode = "respond" | "observe";
+
+// The extension opts both channel factories accept, so an app can sit on the built-in
+// instead of forking its webhook. `accept` gates a verified event before any work (an
+// allowlist lives here) — returning false ACKs 200 and ignores it.
+type ChannelExtensions = {
+  mode?: ChannelMode;
+  accept?: (raw: unknown) => boolean;
+  onEvent?: ChannelObserver;
+};
+
 // ── http — a generic Web channel: POST /message runs a turn; optionally serve
 // /mcp (pass your app's mcpHandler) so the same directory is also an MCP server.
 export function httpChannel(opts: { path?: string; mcp?: (req: Request) => Promise<Response> } = {}): Channel {
@@ -131,7 +157,7 @@ export function slackChannel(opts: {
   events?: SlackEventKind[];
   botUserId?: string;
   onError?: (err: unknown) => void;
-}): Channel {
+} & ChannelExtensions): Channel {
   const api = opts.apiUrl ?? "https://slack.com/api";
   const events = opts.events ?? ["message", "app_mention"];
   async function postMessage(channel: string, text: string, thread_ts?: string) {
@@ -181,8 +207,12 @@ export function slackChannel(opts: {
       if (payload.type === "url_verification") return Response.json({ challenge: payload.challenge });
 
       if (payload.type === "event_callback") {
+        if (opts.accept && !opts.accept(payload)) return new Response("", { status: 200 }); // gated out
         const norm = normalizeSlackEvent(payload.event ?? {}, events, opts.botUserId);
-        if (norm) {
+        // observe: mirror EVERY verified event_callback (raw always; normalized when available)
+        if (opts.onEvent) runBackground(ctx, async () => opts.onEvent!({ raw: payload, event: norm?.event }, ctx), opts.onError);
+        // respond: an eligible message runs a turn + reply — unless we're in observe (shadow) mode
+        if (opts.mode !== "observe" && norm) {
           const { event, session, userText } = norm;
           runBackground(ctx, async () => {
             const reply = await ctx.run(userText, { session, event });
@@ -379,7 +409,7 @@ export function crispChannel(opts: {
   path?: string;
   apiUrl?: string;
   onError?: (err: unknown) => void;
-}): Channel {
+} & ChannelExtensions): Channel {
   const api = opts.apiUrl ?? "https://api.crisp.chat/v1";
   const auth = () => `Basic ${btoa(`${opts.identifier}:${opts.key}`)}`;
   async function sendMessage(websiteId: string, sessionId: string, content: string) {
@@ -416,28 +446,33 @@ export function crispChannel(opts: {
         data?: { from?: string; type?: string; content?: unknown; website_id?: string; session_id?: string; fingerprint?: number; user?: { user_id?: string; nickname?: string } };
       }>(body);
       if (!payload) return new Response("", { status: 200 }); // signed but unparseable → ACK, don't retry
+      if (opts.accept && !opts.accept(payload)) return new Response("", { status: 200 }); // gated out (e.g. website allowlist)
+
       const d = payload.data ?? {};
-      // only a VISITOR text message; operator messages are our own reply (loop guard).
-      // require non-blank content — a whitespace-only message shouldn't burn a turn.
-      if (payload.event === "message:send" && d.from === "user" && d.type === "text" && typeof d.content === "string" && d.content.trim() && d.website_id && d.session_id) {
+      // A VISITOR text message is the only turn-eligible event (operator messages are our
+      // own reply → loop guard; require non-blank content so a whitespace message doesn't
+      // burn a turn). Its normalized envelope: channelId = website, threadId = conversation
+      // session (NOT ts — Crisp keys a conversation by website/session; ts is just the
+      // message fingerprint, "" when Crisp omits it).
+      const isVisitorText = payload.event === "message:send" && d.from === "user" && d.type === "text" && typeof d.content === "string" && !!d.content.trim() && !!d.website_id && !!d.session_id;
+      const event: InboundEvent | undefined = isVisitorText
+        ? {
+            source: "crisp", kind: "message", channelId: d.website_id!, threadId: d.session_id!,
+            ts: String(d.fingerprint ?? ""), user: d.user?.user_id ? { id: d.user.user_id, name: d.user.nickname } : undefined,
+            text: String(d.content), raw: payload,
+          }
+        : undefined;
+
+      // observe: mirror EVERY verified event (visitor + operator + non-text) — this is how
+      // an app records the whole conversation without forking the channel.
+      if (opts.onEvent) runBackground(ctx, async () => opts.onEvent!({ raw: payload, event }, ctx), opts.onError);
+
+      // respond: a visitor text message runs a turn + reply — unless we're in observe (shadow) mode.
+      if (opts.mode !== "observe" && event) {
         const session = `crisp:${d.website_id}:${d.session_id}`; // one conversation = one session
-        // channelId = website, threadId = conversation session → crisp_read_conversation
-        // defaults its target from these (NOT ts — Crisp keys a conversation by
-        // website/session; ts is just the message fingerprint, "" when Crisp omits it).
-        const event: InboundEvent = {
-          source: "crisp",
-          kind: "message",
-          channelId: d.website_id,
-          threadId: d.session_id,
-          ts: String(d.fingerprint ?? ""),
-          user: d.user?.user_id ? { id: d.user.user_id, name: d.user.nickname } : undefined,
-          text: String(d.content),
-          raw: payload,
-        };
         runBackground(ctx, async () => {
           const reply = await ctx.run(String(d.content), { session, event });
-          // don't post an empty operator message when the agent acted via a tool (mirror slack)
-          if (reply && reply.trim()) await sendMessage(d.website_id!, d.session_id!, reply);
+          if (reply && reply.trim()) await sendMessage(d.website_id!, d.session_id!, reply); // skip empty (tool-only turn)
         }, opts.onError);
       }
       return new Response("", { status: 200 }); // fast ACK

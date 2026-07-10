@@ -17,6 +17,7 @@
   },
   "changesets": [
     "channel-capabilities",
-    "channel-hardening"
+    "channel-hardening",
+    "channel-observe"
   ]
 }

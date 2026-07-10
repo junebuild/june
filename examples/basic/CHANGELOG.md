@@ -1,5 +1,12 @@
 # @june-examples/basic
 
+## 0.0.5-dev.2
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @junejs/core@0.1.1-dev.2
+
 ## 0.0.5-dev.1
 
 ### Patch Changes
