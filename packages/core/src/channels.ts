@@ -18,7 +18,12 @@ const enc = new TextEncoder();
 // on its own. Either way `.catch` routes failures to onError so nothing rejects
 // unhandled.
 function runBackground(ctx: ChannelContext, work: () => Promise<unknown>, onError?: (err: unknown) => void): void {
-  const p = work().catch((err) => onError?.(err));
+  const p = work().catch((err) => {
+    // A broken app-supplied onError must NOT destabilize the ACK path: if it throws,
+    // an edge waitUntil task would fail and a native floating promise would become an
+    // unhandled rejection. Swallow it so this promise can truly never reject.
+    try { onError?.(err); } catch { /* error reporting failed — nothing more to do */ }
+  });
   ctx.waitUntil?.(p);
 }
 

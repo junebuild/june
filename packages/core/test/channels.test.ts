@@ -132,6 +132,23 @@ describe("fast-ACK background work uses ctx.waitUntil when present (edge)", () =
     expect(calls[0]!.url).toBe("https://crisp.test/website/w1/conversation/s1/message");
     expect(calls[0]!.body).toMatchObject({ content: "answer: hi" });
   });
+
+  test("a throwing onError can't make the background promise reject (edge waitUntil safety)", async () => {
+    const secret = "sk";
+    const ch = crispChannel({ signingSecret: secret, identifier: "id", key: "key", apiUrl: "https://crisp.test", onError: () => { throw new Error("handler is broken"); } });
+    const held: Promise<unknown>[] = [];
+    // the turn itself fails → onError fires → and onError throws
+    const ctx: ChannelContext = { ...ctxWith(async () => { throw new Error("turn failed"); }), waitUntil: (p) => { held.push(p); } };
+
+    const body = JSON.stringify({ event: "message:send", data: { from: "user", type: "text", content: "hi", website_id: "w1", session_id: "s1" } });
+    const ts = String(Math.floor(Date.now() / 1000));
+    const sig = await hmacHex(secret, `[${ts};${body}]`);
+    const req = new Request("http://x/channels/crisp", { method: "POST", headers: { "x-crisp-request-timestamp": ts, "x-crisp-signature": sig }, body });
+
+    expect((await ch.webhook!(req, ctx)).status).toBe(200);
+    expect(held).toHaveLength(1);
+    await expect(Promise.all(held)).resolves.toBeDefined(); // settled, did NOT reject despite a throwing onError
+  });
 });
 
 describe("crispChannel", () => {
