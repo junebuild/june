@@ -38,6 +38,7 @@ import { findMiddlewareFile } from "./router";
 import { resolveBoundary } from "./segment";
 import type { ExtraHandler, LayoutComponent, LoadingComponent, ResourceHandler } from "./pipeline";
 import { findClientEntry, bundleClientToFile, CLIENT_SCRIPT_URL } from "./client-bundle";
+import { RESERVED_PREFIX } from "./static-files";
 import { jsxTransform } from "./tsconfig-jsx";
 import { generateIslandRegistry } from "./island-registry";
 import { buildRsc, findRscRoutes } from "./rsc-build";
@@ -816,8 +817,8 @@ ${adapterEntry.wrap("pipeline")}
   }
   if (publicIsDir) {
     for (const rel of await collectFiles(publicDir)) {
-      if (rel.split("/")[0] === "_june") {
-        console.warn(`[june] public/${rel} ignored — _june/ is reserved for framework assets`);
+      if (rel.split("/")[0] === RESERVED_PREFIX) {
+        console.warn(`[june] public/${rel} ignored — ${RESERVED_PREFIX}/ is reserved for framework assets`);
         continue;
       }
       const dest = join(assetsDir, rel);
