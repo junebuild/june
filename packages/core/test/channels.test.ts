@@ -155,7 +155,7 @@ describe("slackChannel read tools (capability surface)", () => {
   const tools = ch.tools!();
   const tool = (name: string) => tools.find((t) => t.spec.name === name)!;
   // the current turn's event — tools default their target from it
-  const event: InboundEvent = { kind: "message", channelId: "C1", threadId: "111.1", ts: "111.1", user: { id: "U1" }, raw: {} };
+  const event: InboundEvent = { source: "slack", kind: "message", channelId: "C1", threadId: "111.1", ts: "111.1", user: { id: "U1" }, raw: {} };
   const ctx = { event } as unknown as ToolContext;
 
   // fetch stub keyed by Slack method → canned envelope; also records the query
@@ -235,6 +235,18 @@ describe("slackChannel read tools (capability surface)", () => {
   test("slack_add_reaction treats already_reacted as success (idempotent)", async () => {
     globalThis.fetch = (async () => new Response(JSON.stringify({ ok: false, error: "already_reacted" }), { status: 200 })) as unknown as typeof fetch;
     expect(await tool("slack_add_reaction").run({ name: "tada" }, ctx)).toEqual({ ok: true });
+  });
+
+  test("does NOT default from a non-Slack event (cross-channel safety)", async () => {
+    // a Crisp event carried into a Slack tool (multi-channel agent) must not be read as
+    // Slack ids — the tool requires explicit args instead of firing a garbage call.
+    let fetched = false;
+    globalThis.fetch = (async () => { fetched = true; return new Response("{}"); }) as unknown as typeof fetch;
+    const crispCtx = { event: { source: "crisp", kind: "message", channelId: "w1", threadId: "s1", ts: "1", raw: {} } } as unknown as ToolContext;
+    expect(await tool("slack_read_thread").run({}, crispCtx)).toMatchObject({ error: expect.stringContaining("no thread in context") });
+    expect(await tool("slack_list_reactions").run({}, crispCtx)).toMatchObject({ error: expect.stringContaining("no message in context") });
+    expect(await tool("slack_resolve_user").run({}, crispCtx)).toMatchObject({ error: expect.stringContaining("no user in context") });
+    expect(fetched).toBe(false);
   });
 });
 
@@ -346,7 +358,7 @@ describe("crispChannel", () => {
         { from: "operator", type: "text", content: "hello" },
       ] }), { status: 200 });
     }) as typeof fetch;
-    const ctx = { event: { kind: "message", channelId: "w1", threadId: "s1", ts: "1", raw: {} } } as unknown as ToolContext;
+    const ctx = { event: { source: "crisp", kind: "message", channelId: "w1", threadId: "s1", ts: "1", raw: {} } } as unknown as ToolContext;
     const out = await readConvo.run({}, ctx);
     expect(seenUrl).toBe("https://crisp.test/website/w1/conversation/s1/messages");
     expect(out).toEqual({ messages: [

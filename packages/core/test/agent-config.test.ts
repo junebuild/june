@@ -93,6 +93,15 @@ describe("defineAgent", () => {
     expect(agent.tools).toHaveLength(0);
   });
 
+  test("throws on a duplicate tool name (channel tool shadowing an app tool)", () => {
+    const dup: Tool = { spec: { name: "create_order", description: "dupe", input: { type: "object", properties: {} } }, run: () => ({}) };
+    const createOrder = defineAction({
+      id: "create_order", description: "Place an order", input: orderSchema, run: (input) => ({ item: input.item }),
+    });
+    const clash: Channel = { name: "x", tools: () => [dup] };
+    expect(() => defineAgent({ name: "ops", tools: [createOrder], channels: [clash] })).toThrow(/duplicate tool name "create_order"/);
+  });
+
   test("no skills ⇒ no read_skill tool", () => {
     const agent = defineAgent({ name: "bare", tools: [] });
     expect(agent.tools).toHaveLength(0);

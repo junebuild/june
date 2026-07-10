@@ -35,6 +35,7 @@ export type ToolSpec = { name: string; description: string; input: unknown };
 // is present for message/app_mention, `reaction` for the emoji events. `raw` is the
 // untouched platform payload: an escape hatch for anything not yet normalized.
 export type InboundEvent = {
+  source: string;                               // the channel that produced it ("slack" / "crisp")
   kind: "message" | "app_mention" | "reaction_added" | "reaction_removed" | "message_changed";
   channelId: string;                            // slack channel id / crisp website:session
   threadId?: string;                            // thread root (slack thread_ts / crisp session)

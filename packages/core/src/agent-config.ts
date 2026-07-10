@@ -164,6 +164,17 @@ export function defineAgent(config: {
   // skill tool stays last (cosmetic, matches the prior ordering contract in tests).
   for (const c of channels) if (c.tools) tools.push(...c.tools());
   if (skills.length) tools.push(readSkillTool(skills));
+  // Fail fast on a duplicate tool name. The engine dispatches by name (tools.find), so a
+  // collision — two channels/connections exposing the same id, or a channel tool shadowing
+  // an app tool — would silently bind to the first and make behavior order-dependent. As
+  // agents accrue more channels this gets likelier; surface it at assembly, not at runtime.
+  const seen = new Set<string>();
+  for (const t of tools) {
+    if (seen.has(t.spec.name)) {
+      throw new Error(`defineAgent(${config.name}): duplicate tool name "${t.spec.name}" — two tools (or channel capabilities) share an id; rename one so dispatch is unambiguous.`);
+    }
+    seen.add(t.spec.name);
+  }
   return {
     name: config.name,
     model: config.model,

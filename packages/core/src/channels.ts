@@ -210,7 +210,7 @@ function normalizeSlackEvent(
   if ((e.type === "message" || e.type === "app_mention") && events.includes(e.type) && !e.bot_id && !e.subtype && e.text && e.channel && e.ts) {
     const thread = e.thread_ts ?? e.ts; // reply in-thread; one session per thread
     return {
-      event: { kind: e.type, channelId: e.channel, threadId: thread, ts: e.ts, user: e.user ? { id: e.user } : undefined, text: e.text, raw: e },
+      event: { source: "slack", kind: e.type, channelId: e.channel, threadId: thread, ts: e.ts, user: e.user ? { id: e.user } : undefined, text: e.text, raw: e },
       session: `slack:${e.channel}:${thread}`,
       userText: e.text,
     };
@@ -223,7 +223,7 @@ function normalizeSlackEvent(
     const channel = e.item.channel, itemTs = e.item.ts;
     const verb = e.type === "reaction_added" ? "added" : "removed";
     return {
-      event: { kind: e.type, channelId: channel, threadId: itemTs, ts: itemTs, user: e.user ? { id: e.user } : undefined, reaction: { name: e.reaction, itemTs }, raw: e },
+      event: { source: "slack", kind: e.type, channelId: channel, threadId: itemTs, ts: itemTs, user: e.user ? { id: e.user } : undefined, reaction: { name: e.reaction, itemTs }, raw: e },
       session: `slack:${channel}:${itemTs}`,
       userText: `[reaction] <@${e.user ?? "someone"}> ${verb} :${e.reaction}: on a message in this thread`,
     };
@@ -233,11 +233,19 @@ function normalizeSlackEvent(
 
 // The Slack capability toolset. Split out so slackChannel stays readable and the
 // tools are unit-testable against fake `get`/`post`. Each tool resolves its target
-// from the explicit input first, then falls back to the current turn's event
-// (ctx.event) — so the model can omit the ids for "this thread" / "this message".
+// from the explicit input first, then falls back to the current turn's event — so the
+// model can omit the ids for "this thread" / "this message".
+//
+// The fallback is gated on `event.source === "slack"`: tools are merged GLOBALLY into
+// an agent (defineAgent), so a multi-channel agent has slack_* tools available during a
+// Crisp turn too. Without the gate, a Slack tool called mid-Crisp-turn would read the
+// Crisp event's channelId/threadId and fire a garbage Slack call. Gating on the event's
+// source (not sessionId — which is "self" inside a Durable Object) is reliable on native
+// AND edge: a non-Slack turn simply requires explicit ids.
 type SlackGet = (method: string, params: Record<string, string>) => Promise<SlackResponse>;
 function slackTools(get: SlackGet, post: SlackGet): Tool[] {
   const noTarget = (what: string) => ({ error: `no ${what} in context — pass it explicitly (this turn has no Slack event)` });
+  const slackEv = (ctx: ToolContext) => (ctx.event?.source === "slack" ? ctx.event : undefined);
   return [
     {
       spec: {
@@ -252,8 +260,9 @@ function slackTools(get: SlackGet, post: SlackGet): Tool[] {
         },
       },
       run: async (input: { channelId?: string; threadId?: string }, ctx: ToolContext) => {
-        const channel = input.channelId ?? ctx.event?.channelId;
-        const ts = input.threadId ?? ctx.event?.threadId ?? ctx.event?.ts;
+        const ev = slackEv(ctx);
+        const channel = input.channelId ?? ev?.channelId;
+        const ts = input.threadId ?? ev?.threadId ?? ev?.ts;
         if (!channel || !ts) return noTarget("thread");
         const r = await get("conversations.replies", { channel, ts });
         if (!r.ok) return { error: r.error ?? "slack error" };
@@ -273,8 +282,9 @@ function slackTools(get: SlackGet, post: SlackGet): Tool[] {
         },
       },
       run: async (input: { channelId?: string; ts?: string }, ctx: ToolContext) => {
-        const channel = input.channelId ?? ctx.event?.channelId;
-        const ts = input.ts ?? ctx.event?.reaction?.itemTs ?? ctx.event?.ts;
+        const ev = slackEv(ctx);
+        const channel = input.channelId ?? ev?.channelId;
+        const ts = input.ts ?? ev?.reaction?.itemTs ?? ev?.ts;
         if (!channel || !ts) return noTarget("message");
         const r = await get("reactions.get", { channel, timestamp: ts });
         if (!r.ok) return { error: r.error ?? "slack error" };
@@ -291,7 +301,7 @@ function slackTools(get: SlackGet, post: SlackGet): Tool[] {
         },
       },
       run: async (input: { userId?: string }, ctx: ToolContext) => {
-        const user = input.userId ?? ctx.event?.user?.id;
+        const user = input.userId ?? slackEv(ctx)?.user?.id;
         if (!user) return noTarget("user");
         const r = await get("users.info", { user });
         if (!r.ok) return { error: r.error ?? "slack error" };
@@ -314,8 +324,9 @@ function slackTools(get: SlackGet, post: SlackGet): Tool[] {
         },
       },
       run: async (input: { name: string; channelId?: string; ts?: string }, ctx: ToolContext) => {
-        const channel = input.channelId ?? ctx.event?.channelId;
-        const ts = input.ts ?? ctx.event?.reaction?.itemTs ?? ctx.event?.ts;
+        const ev = slackEv(ctx);
+        const channel = input.channelId ?? ev?.channelId;
+        const ts = input.ts ?? ev?.reaction?.itemTs ?? ev?.ts;
         if (!channel || !ts) return noTarget("message");
         const r = await post("reactions.add", { channel, timestamp: ts, name: input.name });
         // already_reacted isn't a failure for an agent — treat it as success (idempotent).
@@ -381,8 +392,10 @@ export function crispChannel(opts: {
       if (payload.event === "message:send" && d.from === "user" && d.type === "text" && d.content && d.website_id && d.session_id) {
         const session = `crisp:${d.website_id}:${d.session_id}`; // one conversation = one session
         // channelId = website, threadId = conversation session → crisp_read_conversation
-        // defaults its target from here.
+        // defaults its target from these (NOT ts — Crisp keys a conversation by
+        // website/session; ts is just the message fingerprint, "" when Crisp omits it).
         const event: InboundEvent = {
+          source: "crisp",
           kind: "message",
           channelId: d.website_id,
           threadId: d.session_id,
@@ -424,8 +437,11 @@ function crispTools(get: (path: string) => Promise<CrispResponse>): Tool[] {
         },
       },
       run: async (input: { websiteId?: string; sessionId?: string }, ctx: ToolContext) => {
-        const website = input.websiteId ?? ctx.event?.channelId;
-        const session = input.sessionId ?? ctx.event?.threadId;
+        // gate on source: in a multi-channel agent this tool is available during a Slack
+        // turn too; only default from a genuine Crisp event (see slackTools for the why).
+        const ev = ctx.event?.source === "crisp" ? ctx.event : undefined;
+        const website = input.websiteId ?? ev?.channelId;
+        const session = input.sessionId ?? ev?.threadId;
         if (!website || !session) return { error: "no conversation in context — pass websiteId and sessionId (this turn has no Crisp event)" };
         const r = await get(`/website/${website}/conversation/${session}/messages`);
         if (r.error) return { error: r.reason ?? "crisp error" };
