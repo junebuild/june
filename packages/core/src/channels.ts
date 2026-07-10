@@ -18,12 +18,18 @@ const enc = new TextEncoder();
 // on its own. Either way `.catch` routes failures to onError so nothing rejects
 // unhandled.
 function runBackground(ctx: ChannelContext, work: () => Promise<unknown>, onError?: (err: unknown) => void): void {
-  const p = work().catch((err) => {
-    // A broken app-supplied onError must NOT destabilize the ACK path: if it throws,
-    // an edge waitUntil task would fail and a native floating promise would become an
-    // unhandled rejection. Swallow it so this promise can truly never reject.
-    try { onError?.(err); } catch { /* error reporting failed — nothing more to do */ }
-  });
+  // Promise.resolve().then(work) so even a SYNCHRONOUS throw from work (a non-async
+  // work fn) turns into a rejection the .catch below handles — the fast-ACK path must
+  // never see an exception escape. (Both built-in callers are async today, so this is
+  // defensive completeness for any future work shape, not a live bug.)
+  const p = Promise.resolve()
+    .then(work)
+    .catch((err) => {
+      // A broken app-supplied onError must NOT destabilize the ACK path either: if it
+      // throws, an edge waitUntil task would fail and a native floating promise would
+      // become an unhandled rejection. Swallow it so this promise can truly never reject.
+      try { onError?.(err); } catch { /* error reporting failed — nothing more to do */ }
+    });
   ctx.waitUntil?.(p);
 }
 
