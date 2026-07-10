@@ -9,7 +9,8 @@
 // all change observable output (test/config-output.test.ts) — the PoC shipped a
 // dev server that silently ignored june.config.ts for days.
 
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ComponentType } from "react";
@@ -41,6 +42,7 @@ import {
 import { generateIslandRegistry } from "./island-registry";
 import { findGlobalCss, globalCssUsesTailwind, processCssCached, STYLES_URL } from "./css";
 import { buildModuleCss, registerCssModules, MODULE_STYLES_URL, type ModuleMaps } from "./css-modules";
+import { contentTypeFor, RESERVED_PREFIX, safeRelativePath } from "./static-files";
 
 export type CreateAppOptions = {
   appDir: string;
@@ -117,6 +119,9 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
   // app/ stays the priority/escape-hatch; this is the framework slot, consulted as a fallback.
   const juneRoutesDir = join(dirname(appDir), ".june", "routes");
   const hasJuneRoutes = existsSync(juneRoutesDir);
+  // App-root public/ (sibling of app/): verbatim static files served in dev the
+  // same way the platform serves them in prod. Copied into dist/assets at build.
+  const publicDir = join(dirname(appDir), "public");
   const agent = resolveAgent(config.agent);
   const speculation = config.speculation;
   // app/_client.* present → the dev document loads /client.js and we serve it
@@ -319,6 +324,30 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
             });
             },
           );
+        }
+      }
+      // Static files under app-root public/, served verbatim. Mirrors the prod
+      // asset layer (Cloudflare ASSETS / Vercel filesystem / Deno withDenoAssets
+      // all answer before the pipeline), so a public/ file shadows a same-path
+      // route in dev exactly as it does when deployed. Passthrough — no hashing
+      // or optimization. GET/HEAD only; a miss falls through to the render core.
+      if (request.method === "GET" || request.method === "HEAD") {
+        const rel = safeRelativePath(new URL(request.url).pathname);
+        if (rel !== null && rel.split("/")[0] !== RESERVED_PREFIX) {
+          const file = join(publicDir, ...rel.split("/"));
+          if (existsSync(file) && statSync(file).isFile()) {
+            const isHead = request.method === "HEAD";
+            return readFile(file).then(
+              (buf) =>
+                new Response(isHead ? null : new Uint8Array(buf), {
+                  headers: {
+                    "content-type": contentTypeFor(rel),
+                    // Not content-hashed → must revalidate, never immutable.
+                    "cache-control": "public, max-age=0, must-revalidate",
+                  },
+                }),
+            );
+          }
         }
       }
       return runWithTrace(newTrace(), async () => (await getPipeline()).fetch(request));

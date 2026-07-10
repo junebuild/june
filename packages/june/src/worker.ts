@@ -19,6 +19,7 @@ import type { Resources } from "@junejs/core/resources";
 
 import { createPipeline, type ExtraHandler, type LayoutComponent, type LoadingComponent, type Resolved, type ResolvedResource, type ResourceHandler } from "./pipeline";
 import { durableAgentSurface, type DurableObjectNamespace } from "./agent-durable";
+import { contentTypeFor, safeRelativePath } from "./static-files";
 
 export type WorkerManifest = {
   // Static paths → route definitions ("/", "/users", ...).
@@ -299,37 +300,34 @@ declare const Deno: {
   readFile(path: string | URL): Promise<Uint8Array>;
 };
 
-const ASSET_CONTENT_TYPES: Record<string, string> = {
-  css: "text/css; charset=utf-8",
-  js: "text/javascript; charset=utf-8",
-  json: "application/json; charset=utf-8",
-  map: "application/json; charset=utf-8",
-  svg: "image/svg+xml",
-  png: "image/png",
-  jpg: "image/jpeg",
-  jpeg: "image/jpeg",
-  webp: "image/webp",
-  avif: "image/avif",
-  ico: "image/x-icon",
-  woff2: "font/woff2",
-  woff: "font/woff",
-};
-
 export function withDenoAssets(pipeline: FetchPipeline): (request: Request) => Promise<Response> {
   return async (request) => {
-    const url = new URL(request.url);
-    if (request.method === "GET" && url.pathname.startsWith("/_june/")) {
-      try {
-        const file = await Deno.readFile(new URL(`./assets${url.pathname}`, import.meta.url));
-        const ext = url.pathname.split(".").pop()?.toLowerCase() ?? "";
-        return new Response(file as BodyInit, {
-          headers: {
-            "content-type": ASSET_CONTENT_TYPES[ext] ?? "application/octet-stream",
-            "cache-control": "public, max-age=31536000, immutable",
-          },
-        });
-      } catch {
-        /* not on disk → fall through (the pipeline 404s) */
+    const method = request.method;
+    if (method === "GET" || method === "HEAD") {
+      const url = new URL(request.url);
+      // Any request for a FILE (has an extension) → try the co-located assets/
+      // dir: /_june/* (hashed framework assets) plus public/ files copied there at
+      // build. Page paths (no extension) go straight to the pipeline. The reserved
+      // /_june/ prefix is served here too — safeRelativePath is traversal-only.
+      if (/\.[a-z0-9]+$/i.test(url.pathname)) {
+        const rel = safeRelativePath(url.pathname);
+        if (rel !== null) {
+          try {
+            const file = await Deno.readFile(new URL(`./assets/${rel}`, import.meta.url));
+            // Hashed framework assets are immutable; verbatim public files are not.
+            const immutable = url.pathname.startsWith("/_june/");
+            return new Response(method === "HEAD" ? null : (file as BodyInit), {
+              headers: {
+                "content-type": contentTypeFor(url.pathname),
+                "cache-control": immutable
+                  ? "public, max-age=31536000, immutable"
+                  : "public, max-age=0, must-revalidate",
+              },
+            });
+          } catch {
+            /* not on disk → fall through (the pipeline 404s) */
+          }
+        }
       }
     }
     // No env arg: Deno has no platform bindings (unlike D1/KV on workers); env-
