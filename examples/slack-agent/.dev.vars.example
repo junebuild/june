@@ -1,0 +1,13 @@
+# Copy to `.dev.vars` (git-ignored) for `wrangler dev`, or set as secrets for deploy:
+#   wrangler secret put SLACK_BOT_TOKEN
+#
+# Bot User OAuth Token (starts with "xoxb-") from Slack → your app → OAuth & Permissions.
+# Needs bot scopes: channels:history, groups:history, reactions:read, reactions:write,
+# users:read, chat:write, app_mentions:read.
+SLACK_BOT_TOKEN=<your-bot-user-oauth-token>
+
+# Signing Secret from Slack → your app → Basic Information → App Credentials.
+SLACK_SIGNING_SECRET=<your-signing-secret>
+
+# Real Claude (omit to run the deterministic offline model).
+ANTHROPIC_API_KEY=<your-anthropic-api-key>

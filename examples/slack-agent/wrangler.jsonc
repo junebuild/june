@@ -1,0 +1,10 @@
+{
+  "name": "june-slack-agent",
+  "main": "worker.ts",
+  "compatibility_date": "2025-04-01",
+  // One SQLite-backed Durable Object class = one Slack thread's AgentSession.
+  "durable_objects": {
+    "bindings": [{ "name": "AGENT", "class_name": "JuneSlackDO" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["JuneSlackDO"] }]
+}
