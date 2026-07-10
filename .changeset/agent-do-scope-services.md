@@ -1,6 +1,6 @@
 ---
-"@junejs/db": minor
-"@junejs/server": minor
+"@junejs/db": patch
+"@junejs/server": patch
 ---
 
 Make the Durable Object a first-class scope root, so tools reach ambient `db` and
