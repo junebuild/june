@@ -1,0 +1,9 @@
+{
+  "name": "june-slack-feedback-agent",
+  "main": "worker.ts",
+  "compatibility_date": "2025-04-01",
+  "durable_objects": {
+    "bindings": [{ "name": "AGENT", "class_name": "JuneSlackDO" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["JuneSlackDO"] }]
+}

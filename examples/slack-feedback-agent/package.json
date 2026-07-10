@@ -1,0 +1,13 @@
+{
+  "name": "@junejs-examples/slack-feedback-agent",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bunx wrangler dev",
+    "deploy": "bunx wrangler deploy"
+  },
+  "dependencies": {
+    "@junejs/core": "workspace:*",
+    "@junejs/server": "workspace:*"
+  }
+}

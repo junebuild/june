@@ -1,0 +1,9 @@
+# Copy to `.dev.vars` (git-ignored) for `wrangler dev`, or set as deploy secrets.
+# Bot User OAuth Token (starts with "xoxb-"): OAuth & Permissions.
+# Scopes: channels:history, groups:history, reactions:read, users:read, chat:write, app_mentions:read.
+SLACK_BOT_TOKEN=<your-bot-user-oauth-token>
+SLACK_SIGNING_SECRET=<your-signing-secret>
+# The bot's own user id (U…) — its own reactions won't be recorded (loop guard).
+SLACK_BOT_USER_ID=<your-bot-user-id>
+# Real Claude for the @mention Q&A turn (omit to run the offline scripted model).
+ANTHROPIC_API_KEY=<your-anthropic-api-key>
