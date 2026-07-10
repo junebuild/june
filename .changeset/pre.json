@@ -24,12 +24,14 @@
     "agent-edge-routing",
     "agent-instructions-seam",
     "agent-models",
+    "ci-smoke-fixes",
     "define-agent-discovery",
     "durable-agent-runtime",
     "edge-channel-routing",
     "erasable-syntax",
     "packaging-dual-export-rollout",
     "packaging-dual-export",
-    "public-static-files"
+    "public-static-files",
+    "worker-scope-services"
   ]
 }
