@@ -195,7 +195,7 @@ export async function createAgentRuntime(
 export function mountAgent(
   agent: AgentDefinition,
   runtime: Runtime,
-  opts: { chatPath?: string; channels?: boolean } = {},
+  opts: { chatPath?: string; channels?: boolean; services?: unknown } = {},
 ): {
   surface: (req: Request) => Promise<Response | null>;
   fetch: (req: Request) => Promise<Response | null>;
@@ -206,6 +206,7 @@ export function mountAgent(
   const channelsOn = opts.channels ?? true;
   const ctx: ChannelContext = {
     agent,
+    services: opts.services, // same DI bag reachable from channel hooks (parity with durableChannelSurface)
     run: (message, o) =>
       runtime.session(agent.name, o?.session ?? "default").turn({ turnId: o?.turnId, userText: message, event: o?.event }),
   };

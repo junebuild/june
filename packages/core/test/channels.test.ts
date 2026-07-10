@@ -145,6 +145,45 @@ describe("slackChannel", () => {
     expect(kinds).toEqual(["reaction_added", "app_mention"]); // BOTH were observed
   });
 
+  test("on[kind]: a typed per-kind observer fires with a non-optional event; onEvent sees all (E), events derived (G)", async () => {
+    captureFetch();
+    const reactions: InboundEvent[] = [];
+    const all: (string | undefined)[] = [];
+    const ch2 = slackChannel({
+      signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", botUserId: "UBOT",
+      respondTo: ["app_mention"],                                  // no `events` line → derived (G)
+      on: { reaction_added: (e) => { reactions.push(e); } },        // auto-subscribes reaction_added
+      onEvent: (e) => { all.push((e.event as { kind?: string } | undefined)?.kind ?? "raw"); },
+    });
+    async function s(b: string) {
+      const ts = String(Math.floor(Date.now() / 1000));
+      return new Request("http://x/channels/slack", { method: "POST", headers: { "x-slack-request-timestamp": ts, "x-slack-signature": "v0=" + (await hmacHex(secret, `v0:${ts}:${b}`)) }, body: b });
+    }
+    const ctx = ctxWith(async (m) => `re: ${m}`);
+    await ch2.webhook!(await s(JSON.stringify({ type: "event_callback", event: { type: "reaction_added", user: "U2", reaction: "tada", item: { type: "message", channel: "C1", ts: "1.1" } } })), ctx);
+    await ch2.webhook!(await s(JSON.stringify({ type: "event_callback", event: { type: "app_mention", text: "hi", channel: "C1", ts: "2.2", user: "U2" } })), ctx);
+    await flush();
+    expect(reactions).toHaveLength(1);                               // on.reaction_added fired once
+    expect(reactions[0]).toMatchObject({ kind: "reaction_added", reaction: { name: "tada" } }); // event non-optional
+    expect(all).toEqual(["reaction_added", "app_mention"]);          // onEvent still saw both (both normalized ⇒ subscribed)
+    expect(calls).toHaveLength(1);                                   // the mention still replied
+  });
+
+  test("G: with respondTo given and events omitted, an unlisted kind is not subscribed (no normalized event, no turn)", async () => {
+    captureFetch();
+    let ran = false;
+    const seen: (string | undefined)[] = [];
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", respondTo: ["app_mention"], onEvent: (e) => { seen.push((e.event as { kind?: string } | undefined)?.kind ?? "raw"); } });
+    async function s(b: string) {
+      const ts = String(Math.floor(Date.now() / 1000));
+      return new Request("http://x/channels/slack", { method: "POST", headers: { "x-slack-request-timestamp": ts, "x-slack-signature": "v0=" + (await hmacHex(secret, `v0:${ts}:${b}`)) }, body: b });
+    }
+    await ch2.webhook!(await s(JSON.stringify({ type: "event_callback", event: { type: "message", text: "hi", channel: "C1", ts: "3.3", user: "U2" } })), ctxWith(async () => { ran = true; return "x"; }));
+    await flush();
+    expect(ran).toBe(false);         // "message" not in derived events (only app_mention) → no turn
+    expect(seen).toEqual(["raw"]);   // onEvent still fires, but the event wasn't normalized
+  });
+
   test("observe mode: mirrors the event, runs no turn and posts nothing", async () => {
     captureFetch();
     const seen: { raw: unknown; event?: unknown }[] = [];

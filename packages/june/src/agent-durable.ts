@@ -299,6 +299,11 @@ export function durableChannelSurface(
     agentName: string;
     channels: (Channel | ChannelFactory)[];
     env: unknown;
+    // The app's services factory — the SAME one AgentDurableObject uses — resolved HERE
+    // (worker isolate) and exposed to channel hooks as ctx.services. Channel hooks run at
+    // the edge, outside the DO, so they can't read the DO's ambient currentServices(); this
+    // gives them the same DI bag. Resolved once per surface construction.
+    services?: (env: unknown) => unknown;
     waitUntil?: (p: Promise<unknown>) => void;
   },
 ): (req: Request) => Promise<Response | null> {
@@ -307,6 +312,7 @@ export function durableChannelSurface(
     // A minimal but complete AgentDefinition — channels only read ctx.agent.name; the
     // full def isn't present in the worker (tools/model live in the DO).
     agent: { name: opts.agentName, instructions: "", tools: [], skills: [], channels: [], connections: [] } satisfies AgentDefinition,
+    services: opts.services?.(opts.env),
     waitUntil: opts.waitUntil,
     run: async (message, o) => {
       const namespace = getNamespace();
