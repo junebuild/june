@@ -20,7 +20,7 @@
     },
     "apps/june.build": {
       "name": "june.build",
-      "version": "0.0.4",
+      "version": "0.0.5-dev.4",
       "dependencies": {
         "@junejs/core": "workspace:*",
         "react": "catalog:",
@@ -45,7 +45,7 @@
     },
     "examples/basic": {
       "name": "@june-examples/basic",
-      "version": "0.0.4",
+      "version": "0.0.5-dev.4",
       "dependencies": {
         "@junejs/core": "workspace:*",
       },
@@ -55,7 +55,7 @@
     },
     "examples/i18n": {
       "name": "@june-examples/i18n",
-      "version": "0.0.4",
+      "version": "0.0.5-dev.4",
       "dependencies": {
         "@junejs/core": "workspace:*",
         "@junejs/i18n": "workspace:*",
@@ -66,7 +66,7 @@
     },
     "examples/juno-crud": {
       "name": "@june-examples/juno-crud",
-      "version": "0.0.4",
+      "version": "0.0.5-dev.4",
       "dependencies": {
         "@junejs/core": "workspace:*",
         "@junejs/db": "workspace:*",
@@ -83,9 +83,16 @@
         "@junejs/server": "workspace:*",
       },
     },
+    "examples/slack-feedback-agent": {
+      "name": "@junejs-examples/slack-feedback-agent",
+      "dependencies": {
+        "@junejs/core": "workspace:*",
+        "@junejs/server": "workspace:*",
+      },
+    },
     "packages/cli": {
       "name": "@junejs/cli",
-      "version": "0.0.51",
+      "version": "0.0.52-dev.0",
       "bin": {
         "june": "./bin.mjs",
       },
@@ -96,7 +103,7 @@
     },
     "packages/core": {
       "name": "@junejs/core",
-      "version": "0.1.0",
+      "version": "0.1.1-dev.4",
       "peerDependencies": {
         "@anthropic-ai/sdk": ">=0.60.0",
         "react": "catalog:",
@@ -116,14 +123,14 @@
     },
     "packages/db": {
       "name": "@junejs/db",
-      "version": "0.0.33",
+      "version": "0.0.34-dev.0",
       "dependencies": {
-        "@junejs/core": ">=0.1.0",
+        "@junejs/core": ">=0.1.1-dev.0",
       },
     },
     "packages/i18n": {
       "name": "@junejs/i18n",
-      "version": "0.0.29",
+      "version": "0.0.30-dev.0",
       "dependencies": {
         "@formatjs/icu-messageformat-parser": "^2.7.0",
         "@junejs/db": ">=0.0.31 <0.1.0",
@@ -134,10 +141,10 @@
     },
     "packages/june": {
       "name": "@junejs/server",
-      "version": "0.1.1",
+      "version": "0.1.2-dev.2",
       "dependencies": {
-        "@junejs/core": ">=0.1.0",
-        "@junejs/db": ">=0.0.33",
+        "@junejs/core": ">=0.1.1-dev.4",
+        "@junejs/db": ">=0.0.34-dev.0",
         "@momiji-rs/sparkdown": "^0.0.4",
         "lightningcss": "^1.27.0",
         "oxc-parser": "^0.137.0",
@@ -167,7 +174,7 @@
     },
     "packages/juno": {
       "name": "@junejs/juno",
-      "version": "0.0.30",
+      "version": "0.0.31-dev.0",
       "dependencies": {
         "@junejs/core": ">=0.0.46 <0.1.0",
         "@junejs/db": ">=0.0.31 <0.1.0",
@@ -385,6 +392,8 @@
     "@junejs-examples/agent-edge": ["@junejs-examples/agent-edge@workspace:examples/agent-edge"],
 
     "@junejs-examples/slack-agent": ["@junejs-examples/slack-agent@workspace:examples/slack-agent"],
+
+    "@junejs-examples/slack-feedback-agent": ["@junejs-examples/slack-feedback-agent@workspace:examples/slack-feedback-agent"],
 
     "@junejs/cli": ["@junejs/cli@workspace:packages/cli"],
 
