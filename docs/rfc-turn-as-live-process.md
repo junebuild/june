@@ -55,9 +55,10 @@ Underneath, the engine is **already event-driven and resumable** — we just don
 - **Step-checkpoint + log-replay** (`getStep`/`putStep` + `messages` log) already means "a step
   with no persisted result runs; a step with one is skipped." That is *exactly* the primitive
   suspend/resume needs: suspend = "no result yet, park"; resume = "append the result, continue."
-- **The anthropic adapter already streams** — `client.messages.stream(...)` — and then throws the
-  stream away with `.finalMessage()` (`agent-models.ts:92`). The tokens are right there.
-- **SSE / live transport already ships** for live-RSC and HMR (`client-live.ts`, `adapter.ts`).
+- **The anthropic adapter already streams** — `client.messages.stream(...)` (`agent-models.ts:92`) —
+  and then throws the stream away with `.finalMessage()` (`agent-models.ts:100`). The tokens are right there.
+- **SSE / live transport already ships** for the dev live-reload (`packages/june/src/dev-reload.ts` —
+  the one `text/event-stream` + `EventSource` implementation).
 
 So the work is: **promote the spine to typed events, stop discarding the model stream, and add a
 resume entry point.** Not a new engine.
@@ -250,14 +251,14 @@ slackChannel({
   render: {
     onTurnStarted:   (e, ch) => ch.thread.typing("Thinking…"),
     onMessageDelta:  (e, ch) => ch.thread.editStreaming(e.text),   // progressively edit one message
-    onActionRequested:(e, ch) => ch.thread.status(`Running ${e.call.name}…`),
-    onInputRequested:(e, ch) => ch.thread.prompt(e.request),       // Block Kit buttons
+    onActionRequested: (e, ch) => ch.thread.status(`Running ${e.call.name}…`),
+    onInputRequested: (e, ch) => ch.thread.prompt(e.request),      // Block Kit buttons
     onCompleted:     (e, ch) => ch.thread.finalize(e.text),
   },
 });
 ```
 
-Built-in default renderers (a `indicators: true`-style preset) give the eve-like "Thinking…/
+Built-in default renderers (an `indicators: true`-style preset) give the eve-like "Thinking…/
 Working…/final" UX for free; power users override per event. The observe/onEvent/on[kind] hooks
 from dev.2–dev.4 stay for *side-channel* observation; `render` is for *reply UX* driven by the
 turn's own lifecycle.
