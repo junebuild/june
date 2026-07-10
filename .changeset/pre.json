@@ -25,6 +25,8 @@
     "agent-models",
     "define-agent-discovery",
     "durable-agent-runtime",
-    "erasable-syntax"
+    "erasable-syntax",
+    "packaging-dual-export-rollout",
+    "packaging-dual-export"
   ]
 }
