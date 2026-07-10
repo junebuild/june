@@ -3,7 +3,7 @@
 // Vercel adapter places it on the static tier. examples/basic ships a public/
 // (logo.svg + images/pixel.png) that doubles as the fixture here.
 import { afterAll, describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, symlinkSync, unlinkSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -36,11 +36,29 @@ describe("dev: app.ts serves public/ verbatim, before the pipeline", () => {
     expect((await res.arrayBuffer()).byteLength).toBeGreaterThan(0);
   });
 
-  test("HEAD returns the headers but no body", async () => {
+  test("HEAD returns headers (incl. content-length) but no body, without reading the file", async () => {
     const res = await app.fetch(new Request("http://x/logo.svg", { method: "HEAD" }));
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toBe("image/svg+xml");
+    // content-length comes from the stat size (no body read for HEAD).
+    expect(Number(res.headers.get("content-length"))).toBeGreaterThan(0);
     expect(await res.text()).toBe("");
+  });
+
+  test("a symlink under public/ is NOT followed (no escape, dev/prod parity)", async () => {
+    // A symlink pointing outside public/ must not serve its target in dev — the
+    // build (collectFiles → Dirent.isFile()) drops symlinks, so dev matches it,
+    // and a hostile template can't exfiltrate a file via `june dev`.
+    const link = join(BASIC, "public", "escape.json");
+    symlinkSync(join(BASIC, "package.json"), link); // target lives outside public/
+    try {
+      const res = await app.fetch(new Request("http://x/escape.json"));
+      expect(res.status).toBe(404); // fell through — symlink ignored
+      const body = await res.text();
+      expect(body).not.toContain("@june-examples/basic"); // did NOT leak package.json
+    } finally {
+      unlinkSync(link);
+    }
   });
 
   test("a missing public file falls through to the render pipeline (not a public 200)", async () => {
@@ -91,6 +109,9 @@ describe("deno: withDenoAssets serves public files (non-immutable) via the co-lo
         if (s.endsWith("/assets/_june/app.abc12345.js")) return new TextEncoder().encode("x");
         // An extensionless public file (Apple universal-links manifest).
         if (s.endsWith("/assets/.well-known/apple-app-site-association")) return new TextEncoder().encode("{}");
+        // A filename containing a reserved char must arrive percent-encoded per
+        // segment (else `?` would start a query and read the wrong file).
+        if (s.endsWith("/assets/a%3Fb.txt")) return new TextEncoder().encode("q");
         throw new Error("ENOENT");
       },
     };
@@ -106,6 +127,18 @@ describe("deno: withDenoAssets serves public files (non-immutable) via the co-lo
 
       const fw = await handler(new Request("http://x/_june/app.abc12345.js"));
       expect(fw.headers.get("cache-control")).toContain("immutable");
+
+      // A percent-encoded separator decodes to the SAME hashed asset — immutable
+      // is derived from the canonical rel, so it must still be immutable.
+      const enc = await handler(new Request("http://x/_june%2Fapp.abc12345.js"));
+      expect(enc.status).toBe(200);
+      expect(enc.headers.get("cache-control")).toContain("immutable");
+
+      // A `?` in a filename (arrives as %3F) is served — segments are re-encoded
+      // when building the asset URL, so `?` doesn't start a query.
+      const q = await handler(new Request("http://x/a%3Fb.txt"));
+      expect(q.status).toBe(200);
+      expect(await q.text()).toBe("q");
 
       // Extensionless public file → served on Deno too (cross-target verbatim
       // contract), NOT 404'd for lacking an extension.

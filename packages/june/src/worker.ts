@@ -19,7 +19,7 @@ import type { Resources } from "@junejs/core/resources";
 
 import { createPipeline, type ExtraHandler, type LayoutComponent, type LoadingComponent, type Resolved, type ResolvedResource, type ResourceHandler } from "./pipeline";
 import { durableAgentSurface, type DurableObjectNamespace } from "./agent-durable";
-import { contentTypeFor, safeRelativePath } from "./static-files";
+import { contentTypeFor, RESERVED_PREFIX, safeRelativePath } from "./static-files";
 
 export type WorkerManifest = {
   // Static paths → route definitions ("/", "/users", ...).
@@ -316,12 +316,21 @@ export function withDenoAssets(pipeline: FetchPipeline): (request: Request) => P
         const rel = safeRelativePath(url.pathname);
         if (rel !== null) {
           try {
-            const file = await Deno.readFile(new URL(`./assets/${rel}`, import.meta.url));
-            // Hashed framework assets are immutable; verbatim public files are not.
-            const immutable = url.pathname.startsWith("/_june/");
+            // Build the file URL from rel by encoding EACH segment — interpolating
+            // the raw (decoded) rel would let a literal `?`/`#` in a filename start
+            // a query/fragment and read the wrong file.
+            const assetUrl = new URL(
+              `./assets/${rel.split("/").map(encodeURIComponent).join("/")}`,
+              import.meta.url,
+            );
+            const file = await Deno.readFile(assetUrl);
+            // Derive both from the CANONICAL rel, not the raw url.pathname: a
+            // percent-encoded separator (e.g. /_june%2Fapp.js) decodes to the same
+            // asset but would miss a startsWith("/_june/") test on the raw path.
+            const immutable = rel.startsWith(`${RESERVED_PREFIX}/`); // hashed → immutable
             return new Response(method === "HEAD" ? null : (file as BodyInit), {
               headers: {
-                "content-type": contentTypeFor(url.pathname),
+                "content-type": contentTypeFor(rel),
                 "cache-control": immutable
                   ? "public, max-age=31536000, immutable"
                   : "public, max-age=0, must-revalidate",

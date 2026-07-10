@@ -9,7 +9,7 @@
 // all change observable output (test/config-output.test.ts) — the PoC shipped a
 // dev server that silently ignored june.config.ts for days.
 
-import { existsSync, statSync } from "node:fs";
+import { existsSync, lstatSync, type Stats } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -336,28 +336,35 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
         const rel = safeRelativePath(new URL(request.url).pathname);
         if (rel !== null && rel.split("/")[0] !== RESERVED_PREFIX) {
           const file = join(publicDir, ...rel.split("/"));
-          // statSync (not existsSync + statSync) resolves existence AND type in
-          // one syscall; ENOENT / EACCES / a broken symlink throw → treat as a miss.
-          let isFile = false;
+          // lstatSync (NOT statSync) resolves existence AND type in one syscall
+          // WITHOUT following symlinks: a symlink under public/ could otherwise
+          // escape the app root in dev, and the build's collectFiles drops
+          // symlinks (Dirent.isFile() === false), so ignoring them here keeps
+          // dev/prod parity. ENOENT / EACCES → treat as a miss.
+          let stat: Stats | undefined;
           try {
-            isFile = statSync(file).isFile();
+            stat = lstatSync(file);
           } catch {
             /* not a readable file → fall through */
           }
-          if (isFile) {
-            const isHead = request.method === "HEAD";
+          if (stat?.isFile()) {
+            const headers = {
+              "content-type": contentTypeFor(rel),
+              // Not content-hashed → must revalidate, never immutable.
+              "cache-control": "public, max-age=0, must-revalidate",
+            };
+            // HEAD: existence + size already proven — answer without reading the
+            // body (a large asset would otherwise be read and discarded).
+            if (request.method === "HEAD") {
+              return Promise.resolve(
+                new Response(null, { headers: { ...headers, "content-length": String(stat.size) } }),
+              );
+            }
             // A file deleted/locked between stat and read (dev editors do atomic
             // save = write-temp + rename) must not crash the request — fall
             // through to the pipeline on a read error, same as any other miss.
             return readFile(file).then(
-              (buf) =>
-                new Response(isHead ? null : new Uint8Array(buf), {
-                  headers: {
-                    "content-type": contentTypeFor(rel),
-                    // Not content-hashed → must revalidate, never immutable.
-                    "cache-control": "public, max-age=0, must-revalidate",
-                  },
-                }),
+              (buf) => new Response(new Uint8Array(buf), { headers }),
               () => toPipeline(),
             );
           }
