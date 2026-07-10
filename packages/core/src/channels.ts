@@ -242,8 +242,10 @@ function normalizeSlackEvent(
 // Crisp event's channelId/threadId and fire a garbage Slack call. Gating on the event's
 // source (not sessionId — which is "self" inside a Durable Object) is reliable on native
 // AND edge: a non-Slack turn simply requires explicit ids.
-type SlackGet = (method: string, params: Record<string, string>) => Promise<SlackResponse>;
-function slackTools(get: SlackGet, post: SlackGet): Tool[] {
+// A Slack Web API call (GET read or POST write) — same signature, so one type serves
+// both the `get` (query) and `post` (JSON body) helpers passed in.
+type SlackCall = (method: string, params: Record<string, string>) => Promise<SlackResponse>;
+function slackTools(get: SlackCall, post: SlackCall): Tool[] {
   const noTarget = (what: string) => ({ error: `no ${what} in context — pass it explicitly (this turn has no Slack event)` });
   const slackEv = (ctx: ToolContext) => (ctx.event?.source === "slack" ? ctx.event : undefined);
   return [

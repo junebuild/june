@@ -37,8 +37,8 @@ export type ToolSpec = { name: string; description: string; input: unknown };
 export type InboundEvent = {
   source: string;                               // the channel that produced it ("slack" / "crisp")
   kind: "message" | "app_mention" | "reaction_added" | "reaction_removed" | "message_changed";
-  channelId: string;                            // slack channel id / crisp website:session
-  threadId?: string;                            // thread root (slack thread_ts / crisp session)
+  channelId: string;                            // the conversation container: slack channel id / crisp website id
+  threadId?: string;                            // thread within it: slack thread_ts / crisp conversation session id
   ts: string;                                   // this event's message ts
   user?: { id: string; name?: string };         // WHO
   text?: string;                                // message / app_mention carry text; reactions don't
