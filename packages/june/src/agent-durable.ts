@@ -257,8 +257,9 @@ export function durableAgentSurface(
 //   }
 //
 // Note: if the DO namespace is unbound, a matched webhook still ACKs but the turn
-// fails in the background (surfaced via the channel's onError) — the app is expected
-// to bind env.AGENT when it mounts channels. Returns null for unclaimed requests.
+// fails in the background — surfaced via the channel's onError IF one is configured,
+// otherwise swallowed (runBackground never rejects). The app is expected to bind
+// env.AGENT when it mounts channels. Returns null for unclaimed requests.
 export function durableChannelSurface(
   getNamespace: () => DurableObjectNamespace | undefined,
   opts: {

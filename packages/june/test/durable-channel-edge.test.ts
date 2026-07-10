@@ -9,7 +9,6 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { crispChannel } from "@junejs/core/channels";
-import type { ChannelFactory } from "@junejs/core/agent-config";
 import { durableChannelSurface, type DurableObjectNamespace } from "../src/agent-durable";
 
 const enc = new TextEncoder();
@@ -49,11 +48,14 @@ function captureFetch() {
 afterEach(() => { globalThis.fetch = realFetch; });
 
 // Shape B: the channel module default-exports a factory of env — the form workerd
-// needs (secrets live only in env). Reads its signing secret + REST creds from env.
-const crispFactory: ChannelFactory = (env) => {
-  const e = env as { CRISP_SIGNATURE_SECRET: string; CRISP_ID: string; CRISP_KEY: string };
-  return crispChannel({ signingSecret: e.CRISP_SIGNATURE_SECRET, identifier: e.CRISP_ID, key: e.CRISP_KEY, apiUrl: "https://crisp.test" });
-};
+// needs (secrets live only in env). Typed with the app's own env shape (NOT annotated
+// `: ChannelFactory`) and passed straight into `channels: (Channel | ChannelFactory)[]`
+// below — so this file typechecking is the regression guard that a precisely-typed
+// `(env: Env) => Channel` stays assignable (it wouldn't if ChannelFactory's param were
+// `unknown` instead of `any` — strictFunctionTypes contravariance).
+type CrispEnv = { CRISP_SIGNATURE_SECRET: string; CRISP_ID: string; CRISP_KEY: string };
+const crispFactory = (env: CrispEnv) =>
+  crispChannel({ signingSecret: env.CRISP_SIGNATURE_SECRET, identifier: env.CRISP_ID, key: env.CRISP_KEY, apiUrl: "https://crisp.test" });
 
 const AGENT = "crisp-support";
 function envWith(ns: DurableObjectNamespace) {

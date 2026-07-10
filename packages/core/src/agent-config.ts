@@ -51,7 +51,15 @@ export function defineChannel(channel: Channel): Channel {
 // env.CRISP_SIGNATURE_SECRET, ... })` defers construction to request time. On native,
 // env is `process.env` (available at load), so the plain form still works — this is
 // purely additive. The host resolves it once per isolate (env is stable per isolate).
-export type ChannelFactory = (env: unknown) => Channel;
+//
+// `env` is `any`, not `unknown`, on purpose: the app owns the env shape (its worker
+// bindings), so a factory is written `(env: MyEnv) => …` and reads `env.MY_SECRET`
+// directly. `unknown` would force a cast on every access AND — because function
+// params are contravariant under strictFunctionTypes — make a typed `(env: MyEnv) =>
+// Channel` un-assignable to this type. `any` in this one contravariant position lets
+// apps supply a precisely-typed factory; the only untyped surface is the env bag,
+// which is inherently untyped platform data the host just passes through.
+export type ChannelFactory = (env: any) => Channel;
 
 // Resolve a discovered channel to a concrete Channel, calling the factory with env.
 export function resolveChannel(channel: Channel | ChannelFactory, env: unknown): Channel {
