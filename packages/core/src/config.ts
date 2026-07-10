@@ -74,6 +74,36 @@ export interface DataLayer {
   emitTypes?(db: JuneDb): Promise<string>;
 }
 
+// App-defined services — the DI seam for resources June doesn't model (Vectorize,
+// Workers AI, an app ledger/retriever, a signing secret). A generic seam like
+// DataLayer: core names only this shape; the app supplies the factory and its type.
+//
+// `make(env)` builds the services bag from the ISOLATE's env — the host calls it at
+// each isolate entry and seeds it into the request scope, so `currentServices()`
+// resolves in loaders, views, and actions, MATCHING what a Durable Object already does
+// for its tools (agent-durable seeds services in its constructor). env only exists
+// inside an invocation on workerd, so the factory must run there — `module` (the same
+// pattern as DataLayer.module) lets `june build` import it (as the named `services`
+// export) into the generated worker rather than importing the whole config. The dev
+// host calls `make(process.env)` directly.
+//
+// env is `any`, not `unknown`: the app owns its env shape and writes `(env: MyEnv) =>
+// …` reading `env.MY_SECRET` without a cast (same reasoning as ChannelFactory).
+export interface ServicesConfig {
+  make(env: any): unknown;
+  readonly module: string;
+}
+
+// Sugar for declaring `services` in june.config.ts. `module` must be the path whose
+// named `services` export IS `make` — the build imports it from there.
+//   // app/services.ts
+//   export const services = (env: Env) => ({ retriever: makeRetriever(env) });
+//   // june.config.ts
+//   services: defineServices(services, { module: "./app/services.ts" }),
+export function defineServices(make: (env: any) => unknown, opts: { module: string }): ServicesConfig {
+  return { make, module: opts.module };
+}
+
 // An extra content source: a directory OUTSIDE the default `content/` scan whose markdown merges
 // into a named collection. The docs-as-code seam — a repo's existing `docs/` (or `schema/`,
 // `examples/`) feeds a June content collection directly, no copy/move into `content/` required.
@@ -101,6 +131,11 @@ export type JuneConfig = {
   // runs at boot. Omit it and the ambient `db` stays raw (Tier 1/2). Explicit, so
   // there is no import-time global side-effect deciding behavior.
   dataLayer?: DataLayer;
+  // App-defined services, resolved from env at each isolate entry and reachable via
+  // `currentServices()` in loaders, views, and actions — the Worker-side twin of the
+  // services a Durable Object seeds for its tools. Omit it and `currentServices()` is
+  // undefined. See ServicesConfig / defineServices.
+  services?: ServicesConfig;
   speculation?: SpeculationConfig | false; // false = no speculation rules at all
   // Cross-document View Transitions (@view-transition CSS): MPA navigations
   // animate with ZERO JS; browsers without support (or users with

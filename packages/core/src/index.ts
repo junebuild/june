@@ -28,11 +28,13 @@ export {
 // Config schema + pure resolvers
 export {
   defineJune,
+  defineServices,
   resolveAgent,
   resolveSpeculationRules,
   type AgentConfig,
   type SpeculationConfig,
   type JuneConfig,
+  type ServicesConfig,
 } from "./config";
 
 // The data resource contract (the seam the framework depends on, not an ORM)

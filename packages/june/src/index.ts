@@ -31,6 +31,9 @@ export { db, kv, blob } from "@junejs/db";
 // read the isolate's app-defined bag from any tool or loader. The app builds it from
 // env at the isolate entry and types it here — `currentServices<AppServices>()`.
 export { currentServices } from "@junejs/db";
+// Declare that bag for the Worker side in june.config.ts (`services: defineServices(...)`)
+// — the twin of the DO's constructor injection, seeded into loaders/views/actions.
+export { defineServices, type ServicesConfig } from "@junejs/core/config";
 export { loadJuneConfig } from "./config-loader";
 export {
   migrate,

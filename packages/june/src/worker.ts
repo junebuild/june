@@ -59,6 +59,11 @@ export type WorkerManifest = {
   // bindings come from env, so the generated entry passes an ENV-AWARE provider
   // (bindWorkerResources) — the worker threads its env through on each fetch.
   resources?: (env?: unknown) => Promise<Resources> | Resources;
+  // App-defined services (config `services`), built from the worker's env. The build
+  // imports the app's `(env) => services` factory into the entry and sets it here; the
+  // worker threads its env through and createWorker memoizes it per isolate. Seeded
+  // into the request scope so `currentServices()` resolves in loaders/views/actions.
+  services?: (env?: unknown) => unknown;
 };
 
 type Compiled = { regex: RegExp; names: string[]; def: BrandedRoute; pattern: string };
@@ -133,6 +138,12 @@ export function createWorker(
   let currentEnv: unknown;
   const provider = manifest.resources;
 
+  // App services: the build sets a raw `(env) => services` factory here; memoize it per
+  // isolate (env is stable per isolate, like the resources provider). The `{ v }` box
+  // caches even a null/undefined result. Absent → currentServices() stays undefined.
+  const servicesProvider = manifest.services;
+  let servicesCache: { v: unknown } | undefined;
+
   // Durable agent (edge): route the chat endpoint to the per-session DO bound at
   // env.AGENT. Built only when the app has an agent (manifest.agentName) and the
   // runtime is enabled; the surface is inert (null → fall through) until env.AGENT
@@ -159,6 +170,7 @@ export function createWorker(
     notFoundComponent: manifest.notFound,
     extra: manifest.extra,
     resources: provider ? () => provider(currentEnv) : undefined,
+    services: servicesProvider ? () => (servicesCache ??= { v: servicesProvider(currentEnv) }).v : undefined,
     resolve: async (pathname): Promise<Resolved | ResolvedResource | null> => {
       const staticDef = manifest.routes[pathname];
       if (staticDef) {
