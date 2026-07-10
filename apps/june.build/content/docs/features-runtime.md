@@ -34,7 +34,7 @@ CI runs the full dev server under Node against real HTTP on every push
 assumed.
 
 ```bash
-node --import tsx scripts/smoke-node.ts
+node --conditions=source --import tsx scripts/smoke-node.ts
 # june dev → http://localhost:4399  (host: node)
 # node-host smoke: OK (serve, routes, discovery, mcp)
 ```

@@ -52,13 +52,17 @@ node "$work/scaffold/package/bin.mjs" "$work/app" >/dev/null
 
 echo "→ pointing the app at the packed tarballs (overrides cover transitives)"
 python3 - "$work" <<'EOF'
-import glob, json, sys
+import glob, json, subprocess, sys
 work = sys.argv[1]
 tgz = {}
 for f in glob.glob(f"{work}/*.tgz"):
-    name = f.rsplit("/", 1)[1]
-    if name.startswith("junejs-"):
-        tgz["@junejs/" + name[len("junejs-"):].rsplit("-", 1)[0]] = f"file:{f}"
+    # Read the package name from the tarball itself — deriving it from the filename
+    # by stripping "-<version>" breaks on prerelease versions (junejs-core-0.1.0-dev.4
+    # → "@junejs/core-0.1.0"), which silently drops the override and lets npm install
+    # the STALE published package instead of this tree's tarball.
+    meta = subprocess.run(["tar", "-xzOf", f, "package/package.json"],
+                          capture_output=True, text=True, check=True).stdout
+    tgz[json.loads(meta)["name"]] = f"file:{f}"
 p = f"{work}/app/package.json"
 d = json.load(open(p))
 for section in ("dependencies", "devDependencies"):

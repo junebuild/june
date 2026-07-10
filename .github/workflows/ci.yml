@@ -70,4 +70,8 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Node host smoke
-        run: node --import tsx scripts/smoke-node.ts
+        # --conditions=source resolves @junejs/* to their src/*.ts entries (which
+        # tsx compiles) instead of the dual-export `default` → dist/*.js, which is
+        # unbuilt in this from-source run. Without it, @junejs/core/cache → the
+        # missing dist/cache.js and the smoke dies before it starts.
+        run: node --conditions=source --import tsx scripts/smoke-node.ts

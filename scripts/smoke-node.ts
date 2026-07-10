@@ -1,7 +1,10 @@
 // Proves the Node host end-to-end: the SAME startDevServer the Bun host runs,
 // served by node:http (host detection: no global Bun), exercised over real
 // HTTP. CI runs this under Node so "Bun-first, Node-supported" stays a tested
-// claim, not a code comment. Run: node --import tsx scripts/smoke-node.ts
+// claim, not a code comment.
+// Run: node --conditions=source --import tsx scripts/smoke-node.ts
+// (--conditions=source resolves @junejs/* to src/*.ts — tsx compiles it — not the
+// dual-export `default` → dist/*.js, which is unbuilt in this from-source run.)
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 
