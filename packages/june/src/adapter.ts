@@ -80,7 +80,7 @@ export function workers(opts?: { name?: string; domain?: string }): JuneAdapter 
   return {
     name: "workers",
     capabilities: { runtime: "edge", persistentConnections: true, assets: "platform" },
-    conditions: ["workerd", "edge", "import", "default"],
+    conditions: ["source", "workerd", "edge", "import", "default"],
     // workers-og is a workerd-native WASM package: rolldown cannot bundle its
     // .wasm assets (wrangler's own bundler applies the CompiledWasm rule). Mark
     // it external here so user apps never need `build: { external: ["workers-og"] }`.
@@ -183,7 +183,7 @@ export function vercel(opts?: { runtime?: "node" | "edge"; regions?: string[] })
     // listed BEFORE "edge-light", so requesting "worker" pulls the wrong renderer.
     // "edge-light" → server.edge.js, which uses Web Streams (renderToReadableStream)
     // and runs on workerd AND Node alike. Mirrors workers()'s shape.
-    conditions: ["edge-light", "edge", "import", "default"],
+    conditions: ["source", "edge-light", "edge", "import", "default"],
 
     validate({ config }) {
       // turso() is libsql over HTTPS — it runs on Vercel (the build bundles the web
@@ -293,7 +293,7 @@ export function deno(opts?: { org?: string; app?: string }): JuneAdapter {
     capabilities: { runtime: "edge", persistentConnections: true, assets: "server" },
     // "deno" first (a dep may ship a Deno-specific build); else edge-light →
     // server.edge.js (Web Streams + fetch, which Deno has).
-    conditions: ["deno", "edge-light", "edge", "import", "default"],
+    conditions: ["source", "deno", "edge-light", "edge", "import", "default"],
 
     validate({ config }) {
       const kind = config.resources?.db?.kind;
@@ -365,7 +365,7 @@ export function staticSite(): JuneAdapter {
     capabilities: { runtime: "static", persistentConnections: false, assets: "none" },
     // edge-light → react-dom resolves to server.edge.js (Web Streams), which the
     // build host (Bun/Node) runs during prerender — the same choice as vercel()/deno().
-    conditions: ["edge-light", "edge", "import", "default"],
+    conditions: ["source", "edge-light", "edge", "import", "default"],
     // Defensive: if an OG/image route ever slips into a static build, keep the WASM
     // renderer external so the bundle still builds (Kura drops the OG route on static).
     buildExternal: ["workers-og"],

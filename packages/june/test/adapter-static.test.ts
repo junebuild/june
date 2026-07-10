@@ -17,7 +17,8 @@ describe("staticSite() adapter — units", () => {
     const a = staticSite();
     expect(a.name).toBe("static");
     expect(a.capabilities).toEqual({ runtime: "static", persistentConnections: false, assets: "none" });
-    expect(a.conditions[0]).toBe("edge-light"); // react-dom server.edge.js, runs in the build host
+    expect(a.conditions[0]).toBe("source"); // June's own src/*.ts wins when bundling the app
+    expect(a.conditions[1]).toBe("edge-light"); // react-dom server.edge.js, runs in the build host
     expect(a.conditions).not.toContain("workerd");
     expect(a.buildExternal).toContain("workers-og"); // defensive: never breaks the bundle
   });

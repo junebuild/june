@@ -18,7 +18,8 @@ describe("deno() adapter — units", () => {
     const a = deno();
     expect(a.name).toBe("deno");
     expect(a.capabilities).toEqual({ runtime: "edge", persistentConnections: true, assets: "server" });
-    expect(a.conditions[0]).toBe("deno"); // a deno-specific build wins if present
+    expect(a.conditions[0]).toBe("source"); // June's own src/*.ts wins when bundling the app
+    expect(a.conditions[1]).toBe("deno"); // then a deno-specific build wins if present
     expect(a.conditions).toContain("edge-light"); // else react-dom server.edge.js
     expect(a.conditions).not.toContain("worker"); // never the browser SSR build
   });

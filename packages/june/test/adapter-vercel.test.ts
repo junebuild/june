@@ -18,7 +18,8 @@ describe("vercel() adapter — units", () => {
     // The bundle conditions are unchanged regardless of runtime. NOT
     // "worker"/"browser": react-dom maps "worker" → its browser SSR build, which
     // crashes — must reach "edge-light" → server.edge.js, which runs on Node too.
-    expect(a.conditions[0]).toBe("edge-light");
+    expect(a.conditions[0]).toBe("source"); // June's own src/*.ts wins when bundling the app
+    expect(a.conditions[1]).toBe("edge-light");
     expect(a.conditions).not.toContain("workerd");
     expect(a.conditions).not.toContain("worker");
     expect(a.conditions).not.toContain("browser");

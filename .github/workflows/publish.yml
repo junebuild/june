@@ -77,6 +77,11 @@ jobs:
             case "$v" in
               *-*) tag="--tag $(printf '%s' "$v" | sed -E 's/^[0-9]+\.[0-9]+\.[0-9]+-([0-9A-Za-z]+).*/\1/')";;
             esac
+            # Dual-export packages build dist (JS + .d.ts) so plain Node can consume
+            # them (Node won't type-strip node_modules .ts). No config → src-only, no build.
+            if [ -f "packages/$p/tsdown.config.ts" ]; then
+              (cd "packages/$p" && bun run build) || { echo "build failed for $name"; exit 1; }
+            fi
             out=$(cd "packages/$p" && bun pm pack && npm publish ./*.tgz --access public $tag 2>&1) && echo "ok $name@$v${tag:+ ($tag)}" || {
               echo "$out" | grep -q "cannot publish over the previously published versions" \
                 && echo "skip $name@$v (already published, different provenance)" \

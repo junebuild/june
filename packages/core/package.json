@@ -1,46 +1,188 @@
 {
   "name": "@junejs/core",
   "version": "0.1.0-dev.3",
-  "description": "June — the agent-native React framework. Contract layer (pure, host-free).",
+  "description": "June \u2014 the agent-native React framework. Contract layer (pure, host-free).",
   "type": "module",
   "license": "MIT",
   "homepage": "https://june.build",
   "exports": {
-    ".": "./src/index.ts",
-    "./route": "./src/route.ts",
-    "./config": "./src/config.ts",
-    "./i18n": "./src/i18n.ts",
-    "./resources": "./src/resources.ts",
-    "./context": "./src/context.ts",
-    "./document": "./src/document.tsx",
-    "./islands": "./src/islands.tsx",
-    "./store": "./src/store.ts",
-    "./jsx-runtime": "./src/jsx-runtime.ts",
-    "./jsx-dev-runtime": "./src/jsx-dev-runtime.ts",
-    "./outlet": "./src/outlet.tsx",
-    "./islands-client": "./src/islands-client.ts",
-    "./client-router": "./src/client-router.ts",
-    "./client-router-flight": "./src/client-router-flight.ts",
-    "./client-live": "./src/client-live.ts",
-    "./nav-protocol": "./src/nav-protocol.ts",
-    "./morph": "./src/morph.ts",
-    "./agent": "./src/agent.ts",
-    "./agent-runtime": "./src/agent-runtime.ts",
-    "./agent-config": "./src/agent-config.ts",
-    "./agent-models": "./src/agent-models.ts",
-    "./channels": "./src/channels.ts",
-    "./connections": "./src/connections.ts",
-    "./mcp": "./src/mcp.ts",
-    "./discovery": "./src/discovery.ts",
-    "./cache": "./src/cache.ts",
-    "./instrumentation": "./src/instrumentation.ts"
+    ".": {
+      "source": "./src/index.ts",
+      "bun": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./route": {
+      "source": "./src/route.ts",
+      "bun": "./src/route.ts",
+      "types": "./dist/route.d.ts",
+      "default": "./dist/route.js"
+    },
+    "./config": {
+      "source": "./src/config.ts",
+      "bun": "./src/config.ts",
+      "types": "./dist/config.d.ts",
+      "default": "./dist/config.js"
+    },
+    "./i18n": {
+      "source": "./src/i18n.ts",
+      "bun": "./src/i18n.ts",
+      "types": "./dist/i18n.d.ts",
+      "default": "./dist/i18n.js"
+    },
+    "./resources": {
+      "source": "./src/resources.ts",
+      "bun": "./src/resources.ts",
+      "types": "./dist/resources.d.ts",
+      "default": "./dist/resources.js"
+    },
+    "./context": {
+      "source": "./src/context.ts",
+      "bun": "./src/context.ts",
+      "types": "./dist/context.d.ts",
+      "default": "./dist/context.js"
+    },
+    "./document": {
+      "source": "./src/document.tsx",
+      "bun": "./src/document.tsx",
+      "types": "./dist/document.d.ts",
+      "default": "./dist/document.js"
+    },
+    "./islands": {
+      "source": "./src/islands.tsx",
+      "bun": "./src/islands.tsx",
+      "types": "./dist/islands.d.ts",
+      "default": "./dist/islands.js"
+    },
+    "./store": {
+      "source": "./src/store.ts",
+      "bun": "./src/store.ts",
+      "types": "./dist/store.d.ts",
+      "default": "./dist/store.js"
+    },
+    "./jsx-runtime": {
+      "source": "./src/jsx-runtime.ts",
+      "bun": "./src/jsx-runtime.ts",
+      "types": "./dist/jsx-runtime.d.ts",
+      "default": "./dist/jsx-runtime.js"
+    },
+    "./jsx-dev-runtime": {
+      "source": "./src/jsx-dev-runtime.ts",
+      "bun": "./src/jsx-dev-runtime.ts",
+      "types": "./dist/jsx-dev-runtime.d.ts",
+      "default": "./dist/jsx-dev-runtime.js"
+    },
+    "./outlet": {
+      "source": "./src/outlet.tsx",
+      "bun": "./src/outlet.tsx",
+      "types": "./dist/outlet.d.ts",
+      "default": "./dist/outlet.js"
+    },
+    "./islands-client": {
+      "source": "./src/islands-client.ts",
+      "bun": "./src/islands-client.ts",
+      "types": "./dist/islands-client.d.ts",
+      "default": "./dist/islands-client.js"
+    },
+    "./client-router": {
+      "source": "./src/client-router.ts",
+      "bun": "./src/client-router.ts",
+      "types": "./dist/client-router.d.ts",
+      "default": "./dist/client-router.js"
+    },
+    "./client-router-flight": {
+      "source": "./src/client-router-flight.ts",
+      "bun": "./src/client-router-flight.ts",
+      "types": "./dist/client-router-flight.d.ts",
+      "default": "./dist/client-router-flight.js"
+    },
+    "./client-live": {
+      "source": "./src/client-live.ts",
+      "bun": "./src/client-live.ts",
+      "types": "./dist/client-live.d.ts",
+      "default": "./dist/client-live.js"
+    },
+    "./nav-protocol": {
+      "source": "./src/nav-protocol.ts",
+      "bun": "./src/nav-protocol.ts",
+      "types": "./dist/nav-protocol.d.ts",
+      "default": "./dist/nav-protocol.js"
+    },
+    "./morph": {
+      "source": "./src/morph.ts",
+      "bun": "./src/morph.ts",
+      "types": "./dist/morph.d.ts",
+      "default": "./dist/morph.js"
+    },
+    "./agent": {
+      "source": "./src/agent.ts",
+      "bun": "./src/agent.ts",
+      "types": "./dist/agent.d.ts",
+      "default": "./dist/agent.js"
+    },
+    "./agent-runtime": {
+      "source": "./src/agent-runtime.ts",
+      "bun": "./src/agent-runtime.ts",
+      "types": "./dist/agent-runtime.d.ts",
+      "default": "./dist/agent-runtime.js"
+    },
+    "./agent-config": {
+      "source": "./src/agent-config.ts",
+      "bun": "./src/agent-config.ts",
+      "types": "./dist/agent-config.d.ts",
+      "default": "./dist/agent-config.js"
+    },
+    "./agent-models": {
+      "source": "./src/agent-models.ts",
+      "bun": "./src/agent-models.ts",
+      "types": "./dist/agent-models.d.ts",
+      "default": "./dist/agent-models.js"
+    },
+    "./channels": {
+      "source": "./src/channels.ts",
+      "bun": "./src/channels.ts",
+      "types": "./dist/channels.d.ts",
+      "default": "./dist/channels.js"
+    },
+    "./connections": {
+      "source": "./src/connections.ts",
+      "bun": "./src/connections.ts",
+      "types": "./dist/connections.d.ts",
+      "default": "./dist/connections.js"
+    },
+    "./mcp": {
+      "source": "./src/mcp.ts",
+      "bun": "./src/mcp.ts",
+      "types": "./dist/mcp.d.ts",
+      "default": "./dist/mcp.js"
+    },
+    "./discovery": {
+      "source": "./src/discovery.ts",
+      "bun": "./src/discovery.ts",
+      "types": "./dist/discovery.d.ts",
+      "default": "./dist/discovery.js"
+    },
+    "./cache": {
+      "source": "./src/cache.ts",
+      "bun": "./src/cache.ts",
+      "types": "./dist/cache.d.ts",
+      "default": "./dist/cache.js"
+    },
+    "./instrumentation": {
+      "source": "./src/instrumentation.ts",
+      "bun": "./src/instrumentation.ts",
+      "types": "./dist/instrumentation.d.ts",
+      "default": "./dist/instrumentation.js"
+    }
   },
   "files": [
-    "src"
+    "src",
+    "dist"
   ],
   "scripts": {
     "test": "bun test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build": "tsdown"
   },
   "peerDependencies": {
     "react": "catalog:",
