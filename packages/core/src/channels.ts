@@ -198,6 +198,11 @@ export function slackChannel(opts: {
   // firehose). A kind present here is auto-subscribed (see the `events` derivation).
   on?: Partial<Record<SlackEventKind, KindObserver>>;
   botUserId?: string;
+  // Render the turn LIVE: post a "Thinking…" message, then edit it in place as the turn's
+  // events arrive (tool status, then the final answer) instead of posting once at the end.
+  // Requires the host to supply ctx.runStream (the edge Durable Object does); falls back to
+  // post-once when it's absent.
+  stream?: boolean;
   onError?: (err: unknown) => void;
 } & ChannelExtensions): Channel {
   const api = opts.apiUrl ?? "https://slack.com/api";
@@ -208,12 +213,37 @@ export function slackChannel(opts: {
   const events: SlackEventKind[] =
     opts.events ?? (opts.respondTo || opts.on ? [...new Set([...(opts.respondTo ?? []), ...onKinds])] : ["message", "app_mention"]);
   const respondTo: string[] = opts.mode === "observe" ? [] : (opts.respondTo ?? events);
-  async function postMessage(channel: string, text: string, thread_ts?: string) {
-    await fetch(`${api}/chat.postMessage`, {
-      method: "POST",
-      headers: { "content-type": "application/json; charset=utf-8", authorization: `Bearer ${opts.botToken}` },
-      body: JSON.stringify({ channel, text, thread_ts }),
-    });
+  const authHeaders = { "content-type": "application/json; charset=utf-8", authorization: `Bearer ${opts.botToken}` };
+  // returns the posted message's ts (so a streaming render can chat.update it in place)
+  async function postMessage(channel: string, text: string, thread_ts?: string): Promise<string | undefined> {
+    const r = (await (await fetch(`${api}/chat.postMessage`, { method: "POST", headers: authHeaders, body: JSON.stringify({ channel, text, thread_ts }) })).json().catch(() => ({}))) as { ts?: string };
+    return r.ts;
+  }
+  async function updateMessage(channel: string, ts: string, text: string) {
+    await fetch(`${api}/chat.update`, { method: "POST", headers: authHeaders, body: JSON.stringify({ channel, ts, text }) });
+  }
+  // Render a turn LIVE into one Slack message: "Thinking…" → "Running <tool>…" per action
+  // → the final answer. Falls back to a single post when the host can't stream (no runStream)
+  // or when we couldn't obtain the message ts to edit.
+  async function renderStream(ctx: ChannelContext, event: InboundEvent, userText: string, session: string) {
+    const ts = await postMessage(event.channelId, "_Thinking…_", event.threadId);
+    // never leave the placeholder stuck on failure — update it (best-effort) on a turn.failed
+    // event OR an iterator exception (network / SSE parse error).
+    const fail = async () => { if (ts) await updateMessage(event.channelId, ts, "_(the turn failed)_").catch(() => {}); };
+    try {
+      let finalText = "";
+      for await (const e of ctx.runStream!(userText, { session, event })) {
+        if (e.type === "action.requested" && ts) await updateMessage(event.channelId, ts, `_Running ${e.call.name}…_`);
+        else if (e.type === "turn.completed") finalText = e.text;
+        else if (e.type === "turn.failed") { await fail(); return; }
+      }
+      const out = finalText.trim();
+      if (ts) await updateMessage(event.channelId, ts, out || "_(no reply)_");
+      else if (out) await postMessage(event.channelId, out, event.threadId);
+    } catch (err) {
+      await fail(); // the stream threw mid-iteration — surface it in the message…
+      throw err;    // …and still let runBackground → onError record it
+    }
   }
   // Slack Web API read helper: GET with query params + bearer token. Read methods
   // (conversations.replies, reactions.get, users.info) all accept this shape. Returns
@@ -264,6 +294,7 @@ export function slackChannel(opts: {
         if (norm && respondTo.includes(norm.event.kind)) {
           const { event, session, userText } = norm;
           runBackground(ctx, async () => {
+            if (opts.stream && ctx.runStream) return renderStream(ctx, event, userText, session); // live: edit in place
             const reply = await ctx.run(userText, { session, event });
             // A reaction turn (or any turn) may resolve to no text — the agent acted via a
             // tool (e.g. slack_add_reaction) instead of posting. Only post real content.

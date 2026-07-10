@@ -40,6 +40,10 @@ const makeSlack = (env: Env) =>
   slackChannel({
     signingSecret: env.SLACK_SIGNING_SECRET ?? "",
     botToken: env.SLACK_BOT_TOKEN ?? "",
+    // Render the turn LIVE: post "Thinking…", then edit that message in place as the turn's
+    // events arrive (tool status → final answer). The edge DO streams TurnEvents as SSE and
+    // durableChannelSurface exposes them as ctx.runStream, which this consumes.
+    stream: true,
   });
 
 const INSTRUCTIONS = [

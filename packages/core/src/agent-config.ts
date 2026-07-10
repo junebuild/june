@@ -7,7 +7,7 @@
 // this module is the pure config layer it produces.
 
 import type { AnyAction } from "./agent";
-import type { InboundEvent, Tool, ToolSpec } from "./agent-runtime";
+import type { InboundEvent, Tool, ToolSpec, TurnEvent } from "./agent-runtime";
 import type { ConnectionReport } from "./connections";
 
 // InboundEvent's canonical definition lives in agent-runtime (ToolContext carries it);
@@ -31,6 +31,12 @@ export type ChannelContext = {
   // actor/kind/reaction. Batch 1 defines the seam; the Slack/Crisp adapters and the
   // durable /turn edge start populating it in the following batches.
   run: (message: string, opts?: { session?: string; turnId?: string; event?: InboundEvent }) => Promise<string>;
+  // The LIVE variant: run a turn and get its TurnEvent stream, so a channel can render the
+  // turn as it happens (typing indicator, progressive edits, tool status) instead of only
+  // posting the final text. Optional — a host that can't stream (or a channel that doesn't
+  // render) uses `run`. The host provides it on targets that support streaming (the edge
+  // Durable Object over SSE); a channel checks for it and falls back to `run`.
+  runStream?: (message: string, opts?: { session?: string; turnId?: string; event?: InboundEvent }) => AsyncIterable<TurnEvent>;
   // Extend the invocation past the fast-ACK response so a webhook's background work
   // (run the turn, post the reply out-of-band) reliably completes. On the edge the
   // host passes workerd's `ctx.waitUntil` — without it, a promise left floating after
