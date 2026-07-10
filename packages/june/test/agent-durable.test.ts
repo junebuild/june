@@ -184,6 +184,10 @@ describe("AgentDurableObject", () => {
     expect(events.at(-1)).toMatchObject({ type: "turn.completed", text: "Done — order placed." });
   });
 
+  test("sseTurnFinalText throws a clear error on a non-SSE / error response", async () => {
+    await expect(sseTurnFinalText(Response.json({ error: "boom" }, { status: 500 }))).rejects.toThrow(/expected an SSE response.*status 500/);
+  });
+
   test("POST /turn runs a durable turn; GET /transcript reads the log", async () => {
     const s = await storage();
     const agent = new AgentDurableObject({ storage: s }, { name: "ops", model: scriptedModel(ORDER_SCRIPT), tools: [createOrderTool()] });

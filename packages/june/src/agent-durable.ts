@@ -242,29 +242,44 @@ export class AgentDurableObject {
 // ── SSE transport for the turn event stream (crosses the worker→DO isolate) ───
 // The DO streams a turn's TurnEvents as text/event-stream; the worker either pipes
 // that straight to a browser (live chat) or collapses it to the final text (channels).
-const SSE_HEADERS = { "content-type": "text/event-stream", "cache-control": "no-cache" };
+// no-store (not no-cache): an intermediary must NOT store chat/user content at all, and it
+// matches the repo's other SSE surface (dev-reload).
+const SSE_HEADERS = { "content-type": "text/event-stream", "cache-control": "no-store" };
 
 // A ReadableStream of SSE frames from a session's live event stream, scoped to one turn
-// and closed on its terminal event. Subscribes synchronously (no replay needed — we
-// start the turn then subscribe before any event can emit).
+// and closed on its terminal event. Subscribes synchronously (no replay needed — we start
+// the turn then subscribe before any event can emit). A `:hb` comment heartbeat keeps the
+// connection alive across long model/tool gaps (a silent SSE stream gets culled by idle
+// timeouts on hosts/proxies) — cleared on terminal close and on cancel.
 function sseTurnStream(session: AgentSession, turnId: string): ReadableStream<Uint8Array> {
   const enc = new TextEncoder();
   let unsub: (() => void) | undefined;
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
+  const stop = () => { unsub?.(); clearInterval(heartbeat); };
   return new ReadableStream<Uint8Array>({
     start(controller) {
+      heartbeat = setInterval(() => {
+        try { controller.enqueue(enc.encode(":hb\n\n")); } catch { clearInterval(heartbeat); }
+      }, 20_000);
       unsub = session.observe((e) => {
         controller.enqueue(enc.encode(`data: ${JSON.stringify(e)}\n\n`));
-        if (e.type === "turn.completed" || e.type === "turn.failed") { unsub?.(); controller.close(); }
+        if (e.type === "turn.completed" || e.type === "turn.failed") { stop(); controller.close(); }
       }, { turnId });
     },
-    cancel() { unsub?.(); },
+    cancel() { stop(); },
   });
 }
 
 // Consume an SSE turn stream to its terminal state: the final text, or throw on failure.
-// The non-streaming path (channels, a JSON chat response) uses this.
+// The non-streaming path (channels, a JSON chat response) uses this. Guards a non-SSE /
+// body-less upstream response (a misroute or an error) into a clear error, not a TypeError.
 export async function sseTurnFinalText(res: Response): Promise<string> {
-  const reader = res.body!.getReader();
+  const ct = res.headers.get("content-type") ?? "";
+  if (!res.body || !ct.includes("text/event-stream")) {
+    const detail = res.body ? (await res.text()).slice(0, 200) : "no body";
+    throw new Error(`turn stream: expected an SSE response, got ${ct || "no content-type"} (status ${res.status}): ${detail}`);
+  }
+  const reader = res.body.getReader();
   const dec = new TextDecoder();
   let buf = "";
   for (;;) {
