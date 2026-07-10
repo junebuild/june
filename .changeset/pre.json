@@ -20,6 +20,7 @@
     "channel-hardening",
     "channel-hooks-round2",
     "channel-observe",
-    "channel-turn-control"
+    "channel-turn-control",
+    "turn-as-live-process-p1"
   ]
 }
