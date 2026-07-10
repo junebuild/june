@@ -49,6 +49,14 @@ describe("dev: app.ts serves public/ verbatim, before the pipeline", () => {
     expect(res.status).toBe(404);
     expect(res.headers.get("content-type")).toContain("text/html");
   });
+
+  test("a public subdirectory path is not served as a file (falls through)", async () => {
+    // /images is a directory → statSync().isFile() is false → the pipeline, not a
+    // 200 of directory bytes. Also exercises the fs-error-tolerant stat path.
+    const res = await app.fetch(new Request("http://x/images"));
+    expect(res.status).toBe(404);
+    expect(res.headers.get("content-type")).toContain("text/html");
+  });
 });
 
 describe("build: public/ is copied into dist/assets (reserved _june/ skipped)", () => {
@@ -78,8 +86,11 @@ describe("deno: withDenoAssets serves public files (non-immutable) via the co-lo
   test("a public file is served with must-revalidate; _june stays immutable", async () => {
     (globalThis as Record<string, unknown>).Deno = {
       readFile: async (p: URL) => {
-        if (p.toString().endsWith("/assets/logo.svg")) return new TextEncoder().encode("<svg/>");
-        if (p.toString().endsWith("/assets/_june/app.abc12345.js")) return new TextEncoder().encode("x");
+        const s = p.toString();
+        if (s.endsWith("/assets/logo.svg")) return new TextEncoder().encode("<svg/>");
+        if (s.endsWith("/assets/_june/app.abc12345.js")) return new TextEncoder().encode("x");
+        // An extensionless public file (Apple universal-links manifest).
+        if (s.endsWith("/assets/.well-known/apple-app-site-association")) return new TextEncoder().encode("{}");
         throw new Error("ENOENT");
       },
     };
@@ -96,7 +107,13 @@ describe("deno: withDenoAssets serves public files (non-immutable) via the co-lo
       const fw = await handler(new Request("http://x/_june/app.abc12345.js"));
       expect(fw.headers.get("cache-control")).toContain("immutable");
 
-      // extensionless page path → pipeline, no disk probe
+      // Extensionless public file → served on Deno too (cross-target verbatim
+      // contract), NOT 404'd for lacking an extension.
+      const aasa = await handler(new Request("http://x/.well-known/apple-app-site-association"));
+      expect(aasa.status).toBe(200);
+      expect(await aasa.text()).toBe("{}");
+
+      // An extensionless path with no matching file → falls through to the pipeline.
       expect(await (await handler(new Request("http://x/about"))).text()).toBe("rendered");
     } finally {
       (globalThis as Record<string, unknown>).Deno = realDeno;

@@ -331,12 +331,24 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
       // all answer before the pipeline), so a public/ file shadows a same-path
       // route in dev exactly as it does when deployed. Passthrough — no hashing
       // or optimization. GET/HEAD only; a miss falls through to the render core.
+      const toPipeline = () => runWithTrace(newTrace(), async () => (await getPipeline()).fetch(request));
       if (request.method === "GET" || request.method === "HEAD") {
         const rel = safeRelativePath(new URL(request.url).pathname);
         if (rel !== null && rel.split("/")[0] !== RESERVED_PREFIX) {
           const file = join(publicDir, ...rel.split("/"));
-          if (existsSync(file) && statSync(file).isFile()) {
+          // statSync (not existsSync + statSync) resolves existence AND type in
+          // one syscall; ENOENT / EACCES / a broken symlink throw → treat as a miss.
+          let isFile = false;
+          try {
+            isFile = statSync(file).isFile();
+          } catch {
+            /* not a readable file → fall through */
+          }
+          if (isFile) {
             const isHead = request.method === "HEAD";
+            // A file deleted/locked between stat and read (dev editors do atomic
+            // save = write-temp + rename) must not crash the request — fall
+            // through to the pipeline on a read error, same as any other miss.
             return readFile(file).then(
               (buf) =>
                 new Response(isHead ? null : new Uint8Array(buf), {
@@ -346,11 +358,12 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
                     "cache-control": "public, max-age=0, must-revalidate",
                   },
                 }),
+              () => toPipeline(),
             );
           }
         }
       }
-      return runWithTrace(newTrace(), async () => (await getPipeline()).fetch(request));
+      return toPipeline();
     },
     async warmup() {
       const files = await routeFiles(appDir, { pageConvention: true });

@@ -305,11 +305,14 @@ export function withDenoAssets(pipeline: FetchPipeline): (request: Request) => P
     const method = request.method;
     if (method === "GET" || method === "HEAD") {
       const url = new URL(request.url);
-      // Any request for a FILE (has an extension) → try the co-located assets/
-      // dir: /_june/* (hashed framework assets) plus public/ files copied there at
-      // build. Page paths (no extension) go straight to the pipeline. The reserved
-      // /_june/ prefix is served here too — safeRelativePath is traversal-only.
-      if (/\.[a-z0-9]+$/i.test(url.pathname)) {
+      // Probe the co-located assets/ dir for ANY non-root path (safeRelativePath
+      // rejects "/"): /_june/* (hashed framework assets) plus public/ files copied
+      // there at build — INCLUDING extensionless ones (e.g. .well-known/
+      // apple-app-site-association), so "public/ served verbatim" holds on Deno
+      // like every other target. A miss (ENOENT) falls through to the pipeline.
+      // The reserved /_june/ prefix is served here too — safeRelativePath is
+      // traversal-only. (An extra ENOENT syscall per page nav is dwarfed by SSR.)
+      {
         const rel = safeRelativePath(url.pathname);
         if (rel !== null) {
           try {
