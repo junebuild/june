@@ -19,8 +19,9 @@ import { rscClientReferencesPlugin } from "./rsc-manifest";
 export type RscGraph = "server" | "ssr";
 
 // edge-first conditions shared by both graphs; the server graph prepends
-// "react-server" so React resolves to the server build.
-const EDGE_CONDITIONS = ["workerd", "edge-light", "import", "default"];
+// "react-server" so React resolves to the server build. "source" leads so
+// @junejs/* resolves to its src/*.ts (never a pre-built dist).
+const EDGE_CONDITIONS = ["source", "workerd", "edge-light", "import", "default"];
 
 // Generic-entry virtuals the build resolves to real app modules (so one runtime
 // entry serves any app): "june:app" (the app root), "june:rsc-client" (the

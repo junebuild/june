@@ -68,7 +68,9 @@ async function bundleClient(entryFile: string, cwd: string, mode: BundleMode, ma
       // CONFIGURATION_FIELD_CONFLICT, value-independent). See tsconfig-jsx.ts.
       jsx: await jsxTransform(cwd),
     },
-    resolve: { conditionNames: ["browser", "import", "default"] },
+    // "source" first so @junejs/* resolves to its src/*.ts (never a pre-built
+    // dist) — the client graph bundles June's own runtime (e.g. islands-client).
+    resolve: { conditionNames: ["source", "browser", "import", "default"] },
     onLog(level, log, handler) {
       if (isExpectedClientLog(log)) return;
       handler(level, log);
