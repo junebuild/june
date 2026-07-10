@@ -300,16 +300,38 @@ P1+P2 are foundational; P3 is the deep, high-value one; P4 is smaller and rides 
   exported primitives, verify/normalize, channel.tools-in-DO) is **orthogonal and preserved** —
   `render` sits alongside it.
 
-## 14. Open questions
+## 14. Resolved decisions (v0)
 
-1. **Event taxonomy granularity** — is `message.delta` per-token or per-chunk? Do we surface
-   `tool_call.delta` (streaming args) or only finalized `action.requested`?
-2. **Suspend concurrency** — one pending `requestInput` per turn (MVP) vs several in flight.
-3. **Authorization on resume** — bind the answerer to the trigger user id; how strict?
-4. **Delta persistence for reconnect** — strictly live-only (proposed), or a short ring buffer so a
-   reconnect within N seconds re-streams recent deltas?
-5. **`turn(): Promise<string>` sugar** — keep as a convenience, or force everyone onto
-   `start`+`result` to avoid a two-API split?
-6. **Proactive seed shape** — a new `trigger`-role Msg vs a synthetic user message.
-7. **Cross-DO / subagent events** — do child (subagent) turn events surface on the parent stream?
+These were the open questions; resolved as follows and now binding **design commitments** —
+realized across the P1–P4 phases below, **not** all implemented in the P1a event-bus slice. Each
+note marks the phase that lands it.
+
+1. **Event granularity** — the engine forwards **provider-native deltas** as they arrive (no
+   re-chunking); a consumer coalesces for its transport (e.g. the Slack renderer debounces edits to
+   ~1/s). Tool calls surface only as finalized `action.requested` in v0; `tool_call.delta` (streaming
+   args) is deferred (purely additive later). *Rationale*: keep the core dumb/cheap; `done.reply` is
+   the authoritative source, so partial-arg streaming has low value now.
+2. **Suspend concurrency** — **one pending `requestInput` at a time** (a turn may suspend/resume many
+   times, sequentially). This falls out of the sequential tool loop (`for (call of toolCalls) await
+   toolStep`); concurrent suspends would require parallel tool execution — a separate, larger change.
+3. **Resume authorization** — **default binds the answerer to the trigger user id**; `requestInput`
+   may pass a `canAnswer(user)` predicate to widen (e.g. a manager approves, not the requester). The
+   framework feeds the *verified* resumer identity (from the channel's signed event) to the predicate;
+   the app may consult `ctx.services` for roles.
+4. **Delta persistence** — **live-only, no durable delta storage**. A subscriber reconnecting to a
+   still-live turn receives one *current-draft snapshot* from the engine's in-memory accumulation, then
+   live deltas; a non-live (evicted) turn re-runs and streams fresh. A ring buffer is deferred.
+5. **`turn(): Promise<string>` sugar** — **kept as an explicitly non-interactive convenience** (throws
+   if the turn suspends), documented for CLI/tests/simple cases. The primary interface is
+   `start` + `observe` + `result(turnId): Promise<TurnResult>`; anyone building a channel uses those, so
+   the sugar can't hide streaming.
+6. **Proactive seed** — **a distinct `trigger`-role Msg in the durable log** (honest transcript /
+   attribution), **mapped to a user/system message at the model adapter** (providers needn't support a
+   new role) — reusing the system-overlay pattern. Lighter alternative (an optional `trigger` field on
+   a user Msg) rejected for weaker semantic separation. **Lands in P4** — P1a does not add a `trigger`
+   role to the `Msg` union; `turn.started`'s trigger is derived live from the inbound event and is not
+   persisted.
+7. **Subagent events** — **reference, not flatten**. A subagent is a tool, so the parent stream carries
+   its `action.requested`/`action.completed` with the child `turnId`; drilling in = subscribing to the
+   child's own stream. Automatic cross-DO forwarding is deferred (opt-in later).
 ```

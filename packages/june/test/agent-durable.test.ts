@@ -8,7 +8,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   AgentSession,
-  type Broadcaster,
+  type EventSink,
   type Model,
   type ModelReply,
   type Runtime,
@@ -61,8 +61,8 @@ async function storage() {
 }
 afterEach(() => { while (open.length) open.pop()!.close(); });
 
-class TestBroadcaster implements Broadcaster {
-  publish() {}
+class TestBroadcaster implements EventSink {
+  emit() {}
   subscribe() { return () => {}; }
 }
 const noRuntime: Runtime = { session() { throw new Error("no subagents"); } };

@@ -18,7 +18,8 @@
 import {
   AgentSession,
   withSystem,
-  type Broadcaster,
+  type EventSink,
+  type TurnEvent,
   type Model,
   type Msg,
   type Runtime,
@@ -119,10 +120,10 @@ export class DoSessionStore implements SessionStore {
   }
 }
 
-class InProcBroadcaster implements Broadcaster {
-  private subs = new Set<(t: string) => void>();
-  publish(turnId: string) { this.subs.forEach((cb) => { try { cb(turnId); } catch { /* a bad subscriber must not break publish */ } }); }
-  subscribe(cb: (t: string) => void): () => void { this.subs.add(cb); return () => this.subs.delete(cb); }
+class InProcEventSink implements EventSink {
+  private subs = new Set<(e: TurnEvent) => void>();
+  emit(e: TurnEvent) { this.subs.forEach((cb) => { try { cb(e); } catch { /* a bad subscriber must not break emit */ } }); }
+  subscribe(cb: (e: TurnEvent) => void): () => void { this.subs.add(cb); return () => this.subs.delete(cb); }
 }
 
 // A DO can't run in-process subagents; a subagent there is a sibling DO (cross-DO
@@ -203,7 +204,7 @@ export class AgentDurableObject {
       seen.add(t.spec.name);
       tools.push(t);
     }
-    this.session = new AgentSession(def.name ?? "agent", "self", store, new InProcBroadcaster(), model, tools, crossDoUnsupported, def.channelInstructions);
+    this.session = new AgentSession(def.name ?? "agent", "self", store, new InProcEventSink(), model, tools, crossDoUnsupported, def.channelInstructions);
   }
   // Run the whole turn inside a request scope seeded from this DO's env, so ambient
   // `db`/`kv`/`blob` and `currentServices()` resolve inside a tool exactly as in a

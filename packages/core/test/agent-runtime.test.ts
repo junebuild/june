@@ -7,7 +7,8 @@ import { describe, expect, test } from "bun:test";
 import {
   AgentSession,
   withSystem,
-  type Broadcaster,
+  type EventSink,
+  type TurnEvent,
   type InboundEvent,
   type Model,
   type ModelReply,
@@ -40,10 +41,10 @@ function memStore() {
   return { store, app };
 }
 
-class MemBroadcaster implements Broadcaster {
-  private subs = new Set<(t: string) => void>();
-  publish(t: string) { this.subs.forEach((cb) => { try { cb(t); } catch { /* a bad subscriber must not break publish */ } }); }
-  subscribe(cb: (t: string) => void) { this.subs.add(cb); return () => this.subs.delete(cb); }
+class MemBroadcaster implements EventSink {
+  private subs = new Set<(e: TurnEvent) => void>();
+  emit(e: TurnEvent) { this.subs.forEach((cb) => { try { cb(e); } catch { /* a bad subscriber must not break emit */ } }); }
+  subscribe(cb: (e: TurnEvent) => void) { this.subs.add(cb); return () => this.subs.delete(cb); }
 }
 
 type AgentDef = { model: Model; tools: Tool[] };
@@ -216,6 +217,44 @@ describe("agent-runtime engine", () => {
     const childTranscript = rt.session("researcher", "s1:sub:c1").transcript();
     expect(childTranscript).toHaveLength(1);
     expect(childTranscript[0]!.text).toBe("widgets are trending; buy 3");
+  });
+});
+
+describe("TurnEvent stream (P1)", () => {
+  test("a turn emits a structured event stream (started → message/action → completed)", async () => {
+    const rt = new MemRuntime({ ops: { model: scriptedModel(ORDER_SCRIPT), tools: [createOrderTool()] } });
+    const s = rt.session("ops", "s1");
+    const events: TurnEvent[] = [];
+    s.observe((e) => events.push(e));
+
+    await s.turn({ turnId: "t1", userText: "Order 3 widgets" });
+
+    expect(events.map((e) => e.type)).toEqual([
+      "turn.started", "message.completed", "action.requested", "action.completed", "message.completed", "turn.completed",
+    ]);
+    expect(events[0]).toMatchObject({ type: "turn.started", turnId: "t1", trigger: { kind: "proactive", by: "system" } });
+    expect(events[2]).toMatchObject({ type: "action.requested", call: { name: "create_order" } });
+    expect(events[3]).toMatchObject({ type: "action.completed", call: { name: "create_order" }, result: { orderId: 1 } });
+    expect(events.at(-1)).toEqual({ type: "turn.completed", turnId: "t1", text: "Done — order placed." });
+  });
+
+  test("an inbound event becomes the turn.started trigger", async () => {
+    const rt = new MemRuntime({ ops: { model: scriptedModel([{ text: "hi", toolCalls: [] }]), tools: [] } });
+    const s = rt.session("ops", "s1");
+    const events: TurnEvent[] = [];
+    s.observe((e) => events.push(e));
+    const event: InboundEvent = { source: "slack", kind: "app_mention", channelId: "C1", ts: "1.1", raw: {} };
+    await s.turn({ turnId: "t1", userText: "hey", event });
+    expect(events[0]).toMatchObject({ type: "turn.started", trigger: { kind: "inbound", event: { source: "slack" } } });
+  });
+
+  test("a throwing turn emits turn.failed (and rethrows)", async () => {
+    const badModel: Model = async () => ({ text: "", toolCalls: [{ id: "c1", name: "nope", input: {} }] });
+    const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), badModel, [], noRuntime);
+    const events: TurnEvent[] = [];
+    s.observe((e) => events.push(e));
+    await expect(s.turn({ turnId: "t1", userText: "go" })).rejects.toThrow(/unknown tool nope/);
+    expect(events.at(-1)).toMatchObject({ type: "turn.failed", turnId: "t1", error: { message: expect.stringContaining("unknown tool") } });
   });
 });
 

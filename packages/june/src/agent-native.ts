@@ -10,7 +10,8 @@
 import {
   AgentSession,
   withSystem,
-  type Broadcaster,
+  type EventSink,
+  type TurnEvent,
   type Model,
   type Msg,
   type Runtime,
@@ -77,10 +78,10 @@ class SqliteSessionStore implements SessionStore {
   unwrap<H = unknown>(): H { return this.db as unknown as H; }
 }
 
-class InProcBroadcaster implements Broadcaster {
-  private subs = new Set<(t: string) => void>();
-  publish(turnId: string) { this.subs.forEach((cb) => { try { cb(turnId); } catch { /* a bad subscriber must not break publish */ } }); }
-  subscribe(cb: (t: string) => void): () => void { this.subs.add(cb); return () => this.subs.delete(cb); }
+class InProcEventSink implements EventSink {
+  private subs = new Set<(e: TurnEvent) => void>();
+  emit(e: TurnEvent) { this.subs.forEach((cb) => { try { cb(e); } catch { /* a bad subscriber must not break emit */ } }); }
+  subscribe(cb: (e: TurnEvent) => void): () => void { this.subs.add(cb); return () => this.subs.delete(cb); }
 }
 
 // `instructions` (the agent's system prompt) is injected into the model per turn
@@ -107,7 +108,7 @@ export class NativeRuntime implements Runtime {
       const def = this.agents[agent];
       if (!def) throw new Error(`unknown agent: ${agent}`);
       const model = def.instructions ? withSystem(def.model, def.instructions) : def.model;
-      a = new AgentSession(agent, id, new SqliteSessionStore(this.db, key), new InProcBroadcaster(), model, def.tools, this, def.channelInstructions);
+      a = new AgentSession(agent, id, new SqliteSessionStore(this.db, key), new InProcEventSink(), model, def.tools, this, def.channelInstructions);
       this.actors.set(key, a);
     }
     return a;
@@ -159,7 +160,7 @@ export class MemoryRuntime implements Runtime {
       if (!def) throw new Error(`unknown agent: ${agent}`);
       const store = new MemorySessionStore();
       this.stores.set(key, store);
-      a = new AgentSession(agent, id, store, new InProcBroadcaster(), def.model, def.tools, this);
+      a = new AgentSession(agent, id, store, new InProcEventSink(), def.model, def.tools, this);
       this.actors.set(key, a);
     }
     return a;
