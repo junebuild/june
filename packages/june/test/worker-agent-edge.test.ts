@@ -29,7 +29,9 @@ function fakeAgentNS() {
       return {
         async fetch(req: Request) {
           forwarded = await req.json();
-          return Response.json({ text: "DO replied" });
+          // the DO streams SSE now; a non-streaming /message collapses it to { text }
+          const frame = `data: ${JSON.stringify({ type: "turn.completed", turnId: "t1", text: "DO replied" })}\n\n`;
+          return new Response(frame, { headers: { "content-type": "text/event-stream" } });
         },
       };
     },
@@ -47,9 +49,20 @@ describe("durable agent surface on the worker (edge)", () => {
     const { ns, addressed, forwarded } = fakeAgentNS();
 
     const res = await worker.fetch(chat({ message: "hi", session: "s1" }), { AGENT: ns });
-    expect(await res.json()).toEqual({ text: "DO replied" });
+    expect(await res.json()).toEqual({ text: "DO replied" }); // SSE collapsed to JSON (default)
     expect(addressed()).toBe("ops:s1"); // the right per-session DO instance
     expect(forwarded()).toEqual({ userText: "hi" }); // forwarded on the DO's /turn contract
+  });
+
+  test("POST /message with Accept: text/event-stream pipes the DO's SSE through (live chat)", async () => {
+    const manifest = await buildManifest(FIXTURE_ROOT);
+    manifest.agentName = "ops";
+    const worker = createWorker(manifest);
+    const { ns } = fakeAgentNS();
+    const req = new Request(ORIGIN + "/message", { method: "POST", headers: { accept: "text/event-stream" }, body: JSON.stringify({ message: "hi", session: "s1" }) });
+    const res = await worker.fetch(req, { AGENT: ns });
+    expect(res.headers.get("content-type")).toBe("text/event-stream"); // streamed, not collapsed
+    expect(await res.text()).toContain('"type":"turn.completed"');
   });
 
   test("no env.AGENT binding → surface is inert, request falls through", async () => {
