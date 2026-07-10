@@ -121,6 +121,11 @@ export type PipelineConfig = {
   // Opened data resources (db/kv/blob) injected onto ctx before load(). A
   // provider so opening is lazy/memoized; absent → no resources on ctx.
   resources?: () => Promise<Resources> | Resources;
+  // The app-defined services bag, built from the isolate's env (config `services`).
+  // A provider like `resources` (lazy/memoized); seeded into the request scope so
+  // `currentServices()` resolves in loaders/views/actions. Absent → currentServices()
+  // is undefined. This is the Worker-side twin of a Durable Object seeding services.
+  services?: () => Promise<unknown> | unknown;
   earlyHints?: string[];
   htmlCacheControl?: string;
   notFoundComponent?: React.ComponentType<{ pathname: string }>;
@@ -578,7 +583,8 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
       // async-context provider on first request (no static node:* import).
       await ensureScope();
       const resources = cfg.resources ? await cfg.resources() : {};
-      return runInScope({ resources }, () => handleRequest(request));
+      const services = cfg.services ? await cfg.services() : undefined;
+      return runInScope({ resources, services }, () => handleRequest(request));
     },
   };
 }

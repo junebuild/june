@@ -182,6 +182,15 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
 
   const resources = memoizeResources(config.resources);
 
+  // Build the app-services bag once from process.env (dev's env; stable across the
+  // process) and hand the pipeline a memoized provider — the dev twin of the worker
+  // binding services from its per-isolate env. The `{ v }` box memoizes even a
+  // null/undefined result. Absent config → no provider → currentServices() undefined.
+  let servicesCache: { v: unknown } | undefined;
+  const services = config.services
+    ? () => (servicesCache ??= { v: config.services!.make(process.env) }).v
+    : undefined;
+
   // Boot the opt-in Tier-3 data layer (e.g. `dataLayer: junoDataLayer()`) once:
   // its install() wires the ambient `db` (Juno registers its SQL tagger). Explicit
   // and config-declared — no import-time side-effect, and the framework still never
@@ -245,6 +254,7 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
       routeList: routePaths,
       earlyHints: config.earlyHints,
       resources,
+      services,
       notFoundComponent,
       resolve: async (pathname) => {
         const match =
