@@ -21,7 +21,7 @@ import { basename, extname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import type { AnyAction } from "@junejs/core/agent";
-import { defineAgent, type AgentConfigFile, type AgentDefinition, type Channel, type Skill } from "@junejs/core/agent-config";
+import { defineAgent, resolveChannel, type AgentConfigFile, type AgentDefinition, type Channel, type ChannelFactory, type Skill } from "@junejs/core/agent-config";
 import { connectAll, type Connection } from "@junejs/core/connections";
 
 async function scan(dir: string, ext: string): Promise<string[]> {
@@ -79,10 +79,13 @@ export async function discoverAgent(dir: string): Promise<AgentDefinition> {
     skills.push(parseSkill(basename(f, ".md"), await readFile(f, "utf8")));
   }
 
+  // A channel module default-exports a Channel OR a `(env) => Channel` factory (the
+  // form workerd needs — secrets live in env, not at module scope). On native, env is
+  // process.env (present at load), so resolve here; the plain form stays supported.
   const channels: Channel[] = [];
   for (const f of await scan(join(dir, "channels"), ".ts")) {
     const mod = await import(pathToFileURL(f).href);
-    if (mod.default) channels.push(mod.default as Channel);
+    if (mod.default) channels.push(resolveChannel(mod.default as Channel | ChannelFactory, process.env));
   }
 
   // connections/*.ts — outbound: wire external MCP/OpenAPI servers, turning their

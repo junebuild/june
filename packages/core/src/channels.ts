@@ -7,9 +7,31 @@
 // itself portable. An app's agent/channels/slack.ts is then a one-liner:
 //   export default slackChannel({ signingSecret: process.env.SLACK_SIGNING_SECRET! , botToken: ... })
 
-import { type Channel } from "./agent-config";
+import { type Channel, type ChannelContext } from "./agent-config";
 
 const enc = new TextEncoder();
+
+// A webhook ACKs fast (within the platform's timeout) and does the real work — run
+// the turn, post the reply back — AFTER responding. That trailing promise must
+// survive the response: on the edge the host supplies `ctx.waitUntil` (keeps the
+// isolate alive); on native there is none and a floating promise runs to completion
+// on its own. Either way `.catch` routes failures to onError so nothing rejects
+// unhandled.
+function runBackground(ctx: ChannelContext, work: () => Promise<unknown>, onError?: (err: unknown) => void): void {
+  // Promise.resolve().then(work) so even a SYNCHRONOUS throw from work (a non-async
+  // work fn) turns into a rejection the .catch below handles — the fast-ACK path must
+  // never see an exception escape. (Both built-in callers are async today, so this is
+  // defensive completeness for any future work shape, not a live bug.)
+  const p = Promise.resolve()
+    .then(work)
+    .catch((err) => {
+      // A broken app-supplied onError must NOT destabilize the ACK path either: if it
+      // throws, an edge waitUntil task would fail and a native floating promise would
+      // become an unhandled rejection. Swallow it so this promise can truly never reject.
+      try { onError?.(err); } catch { /* error reporting failed — nothing more to do */ }
+    });
+  ctx.waitUntil?.(p);
+}
 
 function hex(buf: ArrayBuffer): string {
   return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -98,13 +120,7 @@ export function slackChannel(opts: {
         if (e.type === "message" && !e.bot_id && !e.subtype && e.text && e.channel) {
           const thread = e.thread_ts ?? e.ts; // reply in-thread; one session per thread
           const session = `slack:${e.channel}:${thread}`;
-          void (async () => {
-            try {
-              await postMessage(e.channel!, await ctx.run(e.text!, { session }), thread);
-            } catch (err) {
-              opts.onError?.(err);
-            }
-          })();
+          runBackground(ctx, async () => postMessage(e.channel!, await ctx.run(e.text!, { session }), thread), opts.onError);
         }
       }
       return new Response("", { status: 200 }); // fast ACK
@@ -156,13 +172,7 @@ export function crispChannel(opts: {
       // only a VISITOR text message; operator messages are our own reply (loop guard)
       if (payload.event === "message:send" && d.from === "user" && d.type === "text" && d.content && d.website_id && d.session_id) {
         const session = `crisp:${d.website_id}:${d.session_id}`; // one conversation = one session
-        void (async () => {
-          try {
-            await sendMessage(d.website_id!, d.session_id!, await ctx.run(String(d.content), { session }));
-          } catch (err) {
-            opts.onError?.(err);
-          }
-        })();
+        runBackground(ctx, async () => sendMessage(d.website_id!, d.session_id!, await ctx.run(String(d.content), { session })), opts.onError);
       }
       return new Response("", { status: 200 }); // fast ACK
     },

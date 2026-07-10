@@ -1,7 +1,7 @@
 // A deployable Cloudflare Worker: a durable agent on the edge, one Durable Object
 // per session. Uses the real @junejs packages — the same AgentDurableObject +
-// durableAgentSurface that June's build will eventually generate for you. Until
-// that codegen lands, this hand-written entry is the pattern.
+// durableAgentSurface + durableChannelSurface that June's build will eventually
+// generate for you. Until that codegen lands, this hand-written entry is the pattern.
 //
 //   wrangler dev     → http://localhost:8787   (offline: scripted model, no key)
 //   wrangler deploy  → live                     (set ANTHROPIC_API_KEY for real Claude)
@@ -10,13 +10,22 @@
 //   curl -sX POST localhost:8787/message -d '{"message":"order 3 widgets","session":"s1"}'
 
 import { DurableObject } from "cloudflare:workers";
-import { AgentDurableObject, durableAgentSurface, type DurableObjectNamespace } from "@junejs/server/agent-durable";
+import { AgentDurableObject, durableAgentSurface, durableChannelSurface, type DurableObjectNamespace } from "@junejs/server/agent-durable";
 import { anthropic } from "@junejs/core/agent-models";
+import { crispChannel } from "@junejs/core/channels";
 import { defineAction } from "@junejs/core/agent";
 import { actionToTool } from "@junejs/core/agent-config";
 import type { Model, ModelReply, Msg } from "@junejs/core/agent-runtime";
 
-type Env = { AGENT: DurableObjectNamespace; ANTHROPIC_API_KEY?: string };
+type Env = {
+  AGENT: DurableObjectNamespace;
+  ANTHROPIC_API_KEY?: string;
+  // Crisp secrets — present only in the worker env (never at module scope on
+  // workerd), which is why the channel below is a `(env) => Channel` factory.
+  CRISP_SIGNATURE_SECRET?: string;
+  CRISP_IDENTIFIER?: string;
+  CRISP_KEY?: string;
+};
 
 // A tool IS a defineAction. On the edge, tools are STATICALLY imported (fs
 // discovery is a dev/build-time thing) — here inline for a self-contained example.
@@ -57,11 +66,33 @@ export class JuneAgentDO extends DurableObject<Env> {
   }
 }
 
-// The Worker routes POST /message to the session's DO (durableAgentSurface — the
-// same helper createWorker uses). Everything else 404s in this minimal example.
+// A Shape-B channel: the module default-exports a `(env) => Channel` factory, so the
+// signing secret resolves from the worker env at request time (it doesn't exist at
+// module scope on workerd). In a real app this is `agent/channels/crisp.ts`.
+const crispCh = (env: Env) =>
+  crispChannel({
+    signingSecret: env.CRISP_SIGNATURE_SECRET ?? "",
+    identifier: env.CRISP_IDENTIFIER ?? "",
+    key: env.CRISP_KEY ?? "",
+  });
+
+// The Worker routes two inbound edges to the per-session DO, both via June helpers —
+// no hand-rolled webhook, no module-global signing-secret setter:
+//   • POST /message            → durableAgentSurface (the chat endpoint)
+//   • POST /channels/crisp     → durableChannelSurface (verify sig with env secret,
+//                                derive the session, run the turn, reply back to Crisp
+//                                on ctx.waitUntil). Everything else 404s.
 export default {
-  fetch(req: Request, env: Env): Promise<Response> {
-    const surface = durableAgentSurface(() => env.AGENT, { agentName: "ops", chatPath: "/message" });
-    return surface(req).then((r) => r ?? new Response("POST /message {\"message\",\"session?\"}", { status: 404 }));
+  fetch(req: Request, env: Env, ctx: { waitUntil(p: Promise<unknown>): void }): Promise<Response> {
+    const chat = durableAgentSurface(() => env.AGENT, { agentName: "ops", chatPath: "/message" });
+    const channels = durableChannelSurface(() => env.AGENT, {
+      agentName: "ops",
+      channels: [crispCh],
+      env,
+      waitUntil: ctx.waitUntil.bind(ctx),
+    });
+    return chat(req)
+      .then((r) => r ?? channels(req))
+      .then((r) => r ?? new Response("POST /message {\"message\",\"session?\"}", { status: 404 }));
   },
 };

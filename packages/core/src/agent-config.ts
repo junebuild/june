@@ -22,6 +22,12 @@ export type Skill = { name: string; description: string; body: string };
 export type ChannelContext = {
   agent: AgentDefinition;
   run: (message: string, opts?: { session?: string; turnId?: string }) => Promise<string>;
+  // Extend the invocation past the fast-ACK response so a webhook's background work
+  // (run the turn, post the reply out-of-band) reliably completes. On the edge the
+  // host passes workerd's `ctx.waitUntil` — without it, a promise left floating after
+  // the 200 ACK can be killed when the isolate is reclaimed. Absent on native (Node
+  // keeps floating promises alive), so a channel must treat it as optional.
+  waitUntil?: (p: Promise<unknown>) => void;
 };
 export type Channel = {
   name: string;
@@ -36,6 +42,28 @@ export type Channel = {
 };
 export function defineChannel(channel: Channel): Channel {
   return channel;
+}
+
+// A channel module may default-export the Channel directly OR a factory of it. The
+// factory form exists for workerd: platform secrets/bindings live only in `env`
+// inside an invocation, never at module top-level, so a channel needing a signing
+// secret can't be fully built where it's declared. `(env) => crispChannel({ signingSecret:
+// env.CRISP_SIGNATURE_SECRET, ... })` defers construction to request time. On native,
+// env is `process.env` (available at load), so the plain form still works — this is
+// purely additive. The host resolves it once per isolate (env is stable per isolate).
+//
+// `env` is `any`, not `unknown`, on purpose: the app owns the env shape (its worker
+// bindings), so a factory is written `(env: MyEnv) => …` and reads `env.MY_SECRET`
+// directly. `unknown` would force a cast on every access AND — because function
+// params are contravariant under strictFunctionTypes — make a typed `(env: MyEnv) =>
+// Channel` un-assignable to this type. `any` in this one contravariant position lets
+// apps supply a precisely-typed factory; the only untyped surface is the env bag,
+// which is inherently untyped platform data the host just passes through.
+export type ChannelFactory = (env: any) => Channel;
+
+// Resolve a discovered channel to a concrete Channel, calling the factory with env.
+export function resolveChannel(channel: Channel | ChannelFactory, env: unknown): Channel {
+  return typeof channel === "function" ? channel(env) : channel;
 }
 
 // What `agent.ts` default-exports in the directory convention (the rest —
@@ -132,8 +160,16 @@ export function defineAgent(config: {
 // 404). Pure — the caller supplies `ctx.run` (the bridge to a runtime), so this
 // works identically on native and edge.
 export function channelFetch(agent: AgentDefinition, ctx: ChannelContext): (req: Request) => Promise<Response | null> {
-  const webhooks = agent.channels.filter((c) => c.path && c.webhook);
-  const fetchers = agent.channels.filter((c) => c.fetch).map((c) => c.fetch!(ctx));
+  return channelDispatch(agent.channels, ctx);
+}
+
+// The channel-dispatch core, over a plain channel list (not an AgentDefinition) so
+// the edge surface can drive it with channels resolved from env — no need to fake a
+// whole agent. A webhook channel matches by exact `path`; then `fetch` channels get
+// first-non-404 wins; `null` when nothing claims the request (fall through).
+export function channelDispatch(channels: Channel[], ctx: ChannelContext): (req: Request) => Promise<Response | null> {
+  const webhooks = channels.filter((c) => c.path && c.webhook);
+  const fetchers = channels.filter((c) => c.fetch).map((c) => c.fetch!(ctx));
   return async (req: Request): Promise<Response | null> => {
     const url = new URL(req.url);
     for (const c of webhooks) if (url.pathname === c.path) return c.webhook!(req, ctx);

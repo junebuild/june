@@ -4,7 +4,7 @@
 // captured global fetch. Loop guards (self-messages) must NOT trigger a reply.
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { channelFetch, defineChannel, type AgentDefinition, type Channel, type ChannelContext } from "@junejs/core/agent-config";
+import { channelFetch, defineChannel, resolveChannel, type AgentDefinition, type Channel, type ChannelContext } from "@junejs/core/agent-config";
 import { crispChannel, httpChannel, slackChannel } from "@junejs/core/channels";
 
 const enc = new TextEncoder();
@@ -95,6 +95,59 @@ describe("slackChannel", () => {
     await ch.webhook!(await signed(body), ctxWith(async () => "should not run"));
     await flush();
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe("resolveChannel (edge factory form)", () => {
+  test("passes a plain Channel through; calls a factory with env", () => {
+    const plain = defineChannel({ name: "plain" });
+    expect(resolveChannel(plain, { X: 1 })).toBe(plain);
+
+    const made = defineChannel({ name: "made" });
+    let seen: unknown;
+    const factory = (env: unknown) => { seen = env; return made; };
+    expect(resolveChannel(factory, { CRISP_SIGNATURE_SECRET: "s" })).toBe(made);
+    expect(seen).toEqual({ CRISP_SIGNATURE_SECRET: "s" }); // secrets resolved from env at request time
+  });
+});
+
+describe("fast-ACK background work uses ctx.waitUntil when present (edge)", () => {
+  test("crisp hands the reply-out promise to waitUntil, and awaiting it completes the reply", async () => {
+    captureFetch();
+    const secret = "sk";
+    const ch = crispChannel({ signingSecret: secret, identifier: "id", key: "key", apiUrl: "https://crisp.test" });
+    const held: Promise<unknown>[] = [];
+    const ctx: ChannelContext = { ...ctxWith(async (m) => `answer: ${m}`), waitUntil: (p) => { held.push(p); } };
+
+    const body = JSON.stringify({ event: "message:send", data: { from: "user", type: "text", content: "hi", website_id: "w1", session_id: "s1" } });
+    const ts = String(Math.floor(Date.now() / 1000));
+    const sig = await hmacHex(secret, `[${ts};${body}]`);
+    const req = new Request("http://x/channels/crisp", { method: "POST", headers: { "x-crisp-request-timestamp": ts, "x-crisp-signature": sig }, body });
+
+    const res = await ch.webhook!(req, ctx);
+    expect(res.status).toBe(200);          // fast ACK
+    expect(held).toHaveLength(1);          // handed to waitUntil, NOT left floating (would die on the edge)
+    await Promise.all(held);               // deterministic settle — no timer
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe("https://crisp.test/website/w1/conversation/s1/message");
+    expect(calls[0]!.body).toMatchObject({ content: "answer: hi" });
+  });
+
+  test("a throwing onError can't make the background promise reject (edge waitUntil safety)", async () => {
+    const secret = "sk";
+    const ch = crispChannel({ signingSecret: secret, identifier: "id", key: "key", apiUrl: "https://crisp.test", onError: () => { throw new Error("handler is broken"); } });
+    const held: Promise<unknown>[] = [];
+    // the turn itself fails → onError fires → and onError throws
+    const ctx: ChannelContext = { ...ctxWith(async () => { throw new Error("turn failed"); }), waitUntil: (p) => { held.push(p); } };
+
+    const body = JSON.stringify({ event: "message:send", data: { from: "user", type: "text", content: "hi", website_id: "w1", session_id: "s1" } });
+    const ts = String(Math.floor(Date.now() / 1000));
+    const sig = await hmacHex(secret, `[${ts};${body}]`);
+    const req = new Request("http://x/channels/crisp", { method: "POST", headers: { "x-crisp-request-timestamp": ts, "x-crisp-signature": sig }, body });
+
+    expect((await ch.webhook!(req, ctx)).status).toBe(200);
+    expect(held).toHaveLength(1);
+    await expect(Promise.all(held)).resolves.toBeDefined(); // settled, did NOT reject despite a throwing onError
   });
 });
 
