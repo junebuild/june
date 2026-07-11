@@ -6,6 +6,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   AgentSession,
+  replyStream,
   withSystem,
   type EventSink,
   type TurnEvent,
@@ -77,10 +78,10 @@ class MemRuntime implements Runtime {
 // messages already exist; it counts its own invocations so a test can assert a
 // memoized step is NOT re-asked.
 function scriptedModel(script: ModelReply[], calls?: { n: number }): Model {
-  return async (msgs) => {
+  return (msgs) => {
     if (calls) calls.n++;
     const i = msgs.filter((m) => m.role === "assistant").length;
-    return script[Math.min(i, script.length - 1)]!;
+    return replyStream(script[Math.min(i, script.length - 1)]!);
   };
 }
 
@@ -238,6 +239,24 @@ describe("TurnEvent stream (P1)", () => {
     expect(events.at(-1)).toEqual({ type: "turn.completed", turnId: "t1", text: "Done — order placed." });
   });
 
+  test("a streaming model emits reasoning.delta + message.delta live, then the terminal reply (P2)", async () => {
+    const streamModel: Model = async function* () {
+      yield { type: "reasoning", text: "hmm" };
+      yield { type: "text", text: "Hel" };
+      yield { type: "text", text: "lo" };
+      yield { type: "done", reply: { text: "Hello", toolCalls: [] } };
+    };
+    const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), streamModel, [], noRuntime);
+    const events: TurnEvent[] = [];
+    s.observe((e) => events.push(e));
+    expect(await s.turn({ turnId: "t1", userText: "hi" })).toBe("Hello"); // done.reply is authoritative
+    expect(events.map((e) => e.type)).toEqual([
+      "turn.started", "reasoning.delta", "message.delta", "message.delta", "message.completed", "turn.completed",
+    ]);
+    expect(events.filter((e): e is Extract<TurnEvent, { type: "message.delta" }> => e.type === "message.delta").map((e) => e.text)).toEqual(["Hel", "lo"]);
+    expect((events.find((e) => e.type === "reasoning.delta") as Extract<TurnEvent, { type: "reasoning.delta" }>).text).toBe("hmm");
+  });
+
   test("an inbound event becomes the turn.started trigger", async () => {
     const rt = new MemRuntime({ ops: { model: scriptedModel([{ text: "hi", toolCalls: [] }]), tools: [] } });
     const s = rt.session("ops", "s1");
@@ -249,7 +268,7 @@ describe("TurnEvent stream (P1)", () => {
   });
 
   test("a throwing turn emits turn.failed (and rethrows)", async () => {
-    const badModel: Model = async () => ({ text: "", toolCalls: [{ id: "c1", name: "nope", input: {} }] });
+    const badModel: Model = () => replyStream({ text: "", toolCalls: [{ id: "c1", name: "nope", input: {} }] });
     const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), badModel, [], noRuntime);
     const events: TurnEvent[] = [];
     s.observe((e) => events.push(e));
@@ -266,7 +285,7 @@ describe("TurnEvent stream (P1)", () => {
   });
 
   test("result() reports a failed turn instead of throwing", async () => {
-    const badModel: Model = async () => ({ text: "", toolCalls: [{ id: "c1", name: "nope", input: {} }] });
+    const badModel: Model = () => replyStream({ text: "", toolCalls: [{ id: "c1", name: "nope", input: {} }] });
     const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), badModel, [], noRuntime);
     s.start({ turnId: "t1", userText: "go" });
     const r = await s.result("t1");
@@ -310,7 +329,7 @@ describe("TurnEvent stream (P1)", () => {
 describe("withSystem", () => {
   test("injects the system prompt into every model call (def-authoritative)", async () => {
     let seen: string | undefined;
-    const capture: Model = async (_m, _t, opts) => { seen = opts?.system; return { text: "ok", toolCalls: [] }; };
+    const capture: Model = (_m, _t, opts) => { seen = opts?.system; return replyStream({ text: "ok", toolCalls: [] }); };
     const wrapped = withSystem(capture, "You are Ops.");
     await wrapped([{ role: "user", turnId: "t1", text: "hi" }], []);
     expect(seen).toBe("You are Ops.");
@@ -318,7 +337,7 @@ describe("withSystem", () => {
 
   test("APPENDS a per-turn overlay (opts.system) to the base, or uses base alone", async () => {
     let seen: string | undefined;
-    const capture: Model = async (_m, _t, opts) => { seen = opts?.system; return { text: "ok", toolCalls: [] }; };
+    const capture: Model = (_m, _t, opts) => { seen = opts?.system; return replyStream({ text: "ok", toolCalls: [] }); };
     const wrapped = withSystem(capture, "BASE");
     await wrapped([], [], { system: "OVERLAY" });
     expect(seen).toBe("BASE\n\nOVERLAY");
@@ -330,7 +349,7 @@ describe("withSystem", () => {
 describe("channelInstructions overlay (C — real source into the prompt)", () => {
   const capturingSession = (channelInstructions?: Record<string, string>) => {
     const seen: (string | undefined)[] = [];
-    const capture: Model = async (_m, _t, opts) => { seen.push(opts?.system); return { text: "ok", toolCalls: [] }; };
+    const capture: Model = (_m, _t, opts) => { seen.push(opts?.system); return replyStream({ text: "ok", toolCalls: [] }); };
     const { store } = memStore();
     const session = new AgentSession("ops", "s1", store, new MemBroadcaster(), withSystem(capture, "BASE"), [], noRuntime, channelInstructions);
     return { session, seen };

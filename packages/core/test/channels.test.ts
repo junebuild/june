@@ -115,59 +115,73 @@ describe("slackChannel", () => {
     expect(calls).toHaveLength(0);
   });
 
-  test("stream render: posts Thinking…, edits to Running <tool>…, then the final answer", async () => {
-    // a fetch stub that returns a ts for chat.postMessage so renderStream can chat.update it
+  // a fetch stub returning a stream ts for chat.startStream so renderStream can append/stop
+  function streamStub() {
     calls = [];
     globalThis.fetch = (async (url: unknown, init?: { body?: string }) => {
       calls.push({ url: String(url), body: init?.body ? JSON.parse(init.body) : undefined });
-      const isPost = String(url).endsWith("/chat.postMessage");
-      return new Response(JSON.stringify(isPost ? { ok: true, ts: "111.9" } : { ok: true }), { status: 200 });
+      const start = String(url).endsWith("/chat.startStream");
+      return new Response(JSON.stringify(start ? { ok: true, ts: "111.9" } : { ok: true }), { status: 200 });
     }) as typeof fetch;
+  }
+  const method = (c: { url: string }) => c.url.split("/").pop();
 
+  test("stream render: startStream → appendStream each token delta → stopStream", async () => {
+    streamStub();
     const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true });
     const stream: TurnEvent[] = [
-      { type: "turn.started", turnId: "t1", trigger: { kind: "inbound", event: { source: "slack", kind: "message", channelId: "C1", ts: "1.1", raw: {} } } },
-      { type: "action.requested", turnId: "t1", call: { id: "c1", name: "create_order", input: {} } },
-      { type: "action.completed", turnId: "t1", call: { id: "c1", name: "create_order", input: {} }, result: {} },
-      { type: "message.completed", turnId: "t1", text: "Done." },
-      { type: "turn.completed", turnId: "t1", text: "Done." },
+      { type: "turn.started", turnId: "t1", trigger: { kind: "proactive", by: "x" } },
+      { type: "message.delta", turnId: "t1", text: "Hel" },
+      { type: "message.delta", turnId: "t1", text: "lo" },
+      { type: "message.completed", turnId: "t1", text: "Hello" },
+      { type: "turn.completed", turnId: "t1", text: "Hello" },
     ];
     const ctx = ctxWith(async () => "run() should not be used when streaming");
     ctx.runStream = async function* () { for (const e of stream) yield e; };
 
-    const body = JSON.stringify({ type: "event_callback", event: { type: "message", text: "order", channel: "C1", ts: "1.1", user: "U1" } });
+    const body = JSON.stringify({ type: "event_callback", event: { type: "message", text: "hi", channel: "C1", ts: "1.1", user: "U1" } });
     await ch2.webhook!(await signed(body), ctx);
     await flush();
 
-    expect(calls.map((c) => [c.url.split("/").pop(), (c.body as { text?: string }).text])).toEqual([
-      ["chat.postMessage", "_Thinking…_"],            // initial placeholder
-      ["chat.update", "_Running create_order…_"],       // tool status (edited in place)
-      ["chat.update", "Done."],                         // final answer (same message)
+    expect(calls.map((c) => [method(c), (c.body as { markdown_text?: string }).markdown_text])).toEqual([
+      ["chat.startStream", undefined],       // opens the streamed message
+      ["chat.appendStream", "Hel"],           // token deltas, natively (not chat.update)
+      ["chat.appendStream", "lo"],
+      ["chat.stopStream", undefined],         // finalize
     ]);
-    expect((calls[1]!.body as { ts?: string }).ts).toBe("111.9"); // edits target the posted message
+    expect((calls[1]!.body as { ts?: string }).ts).toBe("111.9"); // appends target the stream ts
   });
 
-  test("stream render: an iterator exception updates the placeholder (not stuck at Thinking…)", async () => {
-    calls = [];
-    globalThis.fetch = (async (url: unknown, init?: { body?: string }) => {
-      calls.push({ url: String(url), body: init?.body ? JSON.parse(init.body) : undefined });
-      const isPost = String(url).endsWith("/chat.postMessage");
-      return new Response(JSON.stringify(isPost ? { ok: true, ts: "111.9" } : { ok: true }), { status: 200 });
-    }) as typeof fetch;
+  test("stream render: a one-shot (no-delta) turn appends the final text once, then stops", async () => {
+    streamStub();
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true });
+    const ctx = ctxWith(async () => "unused");
+    ctx.runStream = async function* () {
+      yield { type: "turn.started", turnId: "t1", trigger: { kind: "proactive", by: "x" } } as TurnEvent;
+      yield { type: "turn.completed", turnId: "t1", text: "Answer." } as TurnEvent;
+    };
+    await ch2.webhook!(await signed(JSON.stringify({ type: "event_callback", event: { type: "message", text: "hi", channel: "C1", ts: "1.1", user: "U1" } })), ctx);
+    await flush();
+    expect(calls.map((c) => [method(c), (c.body as { markdown_text?: string }).markdown_text])).toEqual([
+      ["chat.startStream", undefined],
+      ["chat.appendStream", "Answer."], // no deltas → append the whole reply once
+      ["chat.stopStream", undefined],
+    ]);
+  });
 
+  test("stream render: an iterator exception finalizes the stream and reports via onError", async () => {
+    streamStub();
     let reported: unknown;
     const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true, onError: (e) => { reported = e; } });
     const ctx = ctxWith(async () => "unused");
-    ctx.runStream = async function* () { yield { type: "turn.started", turnId: "t1", trigger: { kind: "proactive", by: "x" } } as TurnEvent; throw new Error("SSE dropped"); };
+    ctx.runStream = async function* () { yield { type: "message.delta", turnId: "t1", text: "Hi" } as TurnEvent; throw new Error("SSE dropped"); };
 
     const body = JSON.stringify({ type: "event_callback", event: { type: "message", text: "order", channel: "C1", ts: "1.1", user: "U1" } });
     await ch2.webhook!(await signed(body), ctx);
     await flush();
 
-    expect(calls.map((c) => [c.url.split("/").pop(), (c.body as { text?: string }).text])).toEqual([
-      ["chat.postMessage", "_Thinking…_"],
-      ["chat.update", "_(the turn failed)_"], // not left stuck at Thinking…
-    ]);
+    // startStream, the delta, then a failure note + stopStream — never left open
+    expect(calls.map(method)).toEqual(["chat.startStream", "chat.appendStream", "chat.appendStream", "chat.stopStream"]);
     expect((reported as Error).message).toBe("SSE dropped"); // onError still records it
   });
 

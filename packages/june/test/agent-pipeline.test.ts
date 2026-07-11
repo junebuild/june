@@ -11,6 +11,7 @@ import { resolveAgent } from "@junejs/core/config";
 import { route } from "@junejs/core/route";
 import type { DocumentConfig } from "@junejs/core/document";
 import type { Model, ModelReply } from "@junejs/core/agent-runtime";
+import { replyStream } from "@junejs/core/agent-runtime";
 
 import { createPipeline, type MiddlewareHandler, type RouteResolver } from "../src/pipeline";
 import { discoverAgent } from "../src/agent-discover";
@@ -24,7 +25,7 @@ beforeEach(() => { pre = new Map(ACTION_REGISTRY); ACTION_REGISTRY.clear(); });
 afterEach(() => { ACTION_REGISTRY.clear(); for (const [k, v] of pre) ACTION_REGISTRY.set(k, v); });
 
 function scriptedModel(script: ModelReply[]): Model {
-  return async (msgs) => script[Math.min(msgs.filter((m) => m.role === "assistant").length, script.length - 1)]!;
+  return (msgs) => replyStream(script[Math.min(msgs.filter((m) => m.role === "assistant").length, script.length - 1)]!);
 }
 
 // A pipeline with the agent surface mounted from the fixture agent + a scripted

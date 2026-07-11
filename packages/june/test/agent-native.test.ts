@@ -10,11 +10,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { Model, ModelReply, Tool } from "@junejs/core/agent-runtime";
+import { replyStream } from "@junejs/core/agent-runtime";
 import { createNativeRuntime, type AgentDef } from "../src/agent-native";
 import { openLocalSqliteSync, type SyncSqlite } from "../src/sqlite-driver";
 
 function scriptedModel(script: ModelReply[]): Model {
-  return async (msgs) => script[Math.min(msgs.filter((m) => m.role === "assistant").length, script.length - 1)]!;
+  return (msgs) => replyStream(script[Math.min(msgs.filter((m) => m.role === "assistant").length, script.length - 1)]!);
 }
 
 const ORDER_SCRIPT: ModelReply[] = [
@@ -102,9 +103,9 @@ describe("agent-native (native SessionStore seam)", () => {
 
   test("instructions on the AgentDef reach the model as the system prompt (per turn)", async () => {
     let seenSystem: string | undefined;
-    const captureModel: Model = async (_msgs, _tools, opts) => {
+    const captureModel: Model = (_msgs, _tools, opts) => {
       seenSystem = opts?.system;
-      return { text: "ok", toolCalls: [] };
+      return replyStream({ text: "ok", toolCalls: [] });
     };
     const def: AgentDef = { model: captureModel, tools: [], instructions: "You are the ops assistant." };
     const rt = await createNativeRuntime({ ops: def });
