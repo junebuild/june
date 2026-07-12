@@ -169,6 +169,37 @@ describe("slackChannel", () => {
     ]);
   });
 
+  test("stream render: a tool-only / empty turn posts nothing (no empty streamed message)", async () => {
+    streamStub();
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true });
+    const ctx = ctxWith(async () => "unused");
+    ctx.runStream = async function* () {
+      yield { type: "turn.started", turnId: "t1", trigger: { kind: "proactive", by: "x" } } as TurnEvent;
+      yield { type: "action.requested", turnId: "t1", call: { id: "c1", name: "add_reaction", input: {} } } as TurnEvent;
+      yield { type: "action.completed", turnId: "t1", call: { id: "c1", name: "add_reaction", input: {} }, result: {} } as TurnEvent;
+      yield { type: "turn.completed", turnId: "t1", text: "" } as TurnEvent; // acted via a tool, no text
+    };
+    await ch2.webhook!(await signed(JSON.stringify({ type: "event_callback", event: { type: "message", text: "react", channel: "C1", ts: "1.1", user: "U1" } })), ctx);
+    await flush();
+    expect(calls).toHaveLength(0); // startStream was never opened → no empty message
+  });
+
+  test("stream render: startStream unavailable → a failure still reports via chat.postMessage", async () => {
+    calls = [];
+    globalThis.fetch = (async (url: unknown, init?: { body?: string }) => {
+      calls.push({ url: String(url), body: init?.body ? JSON.parse(init.body) : undefined });
+      return new Response(JSON.stringify({ ok: false, error: "unknown_method" }), { status: 200 }); // startStream returns no ts
+    }) as typeof fetch;
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true, onError: () => {} });
+    const ctx = ctxWith(async () => "unused");
+    ctx.runStream = async function* () { yield { type: "turn.failed", turnId: "t1", error: { message: "boom" } } as TurnEvent; };
+    await ch2.webhook!(await signed(JSON.stringify({ type: "event_callback", event: { type: "message", text: "x", channel: "C1", ts: "1.1", user: "U1" } })), ctx);
+    await flush();
+    // tried startStream (no ts), then posted the failure note once
+    expect(calls.map(method)).toEqual(["chat.startStream", "chat.postMessage"]);
+    expect((calls[1]!.body as { text?: string }).text).toContain("the turn failed");
+  });
+
   test("stream render: an iterator exception finalizes the stream and reports via onError", async () => {
     streamStub();
     let reported: unknown;

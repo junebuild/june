@@ -232,29 +232,37 @@ export function slackChannel(opts: {
     await fetch(`${api}/chat.stopStream`, { method: "POST", headers: authHeaders, body: JSON.stringify({ channel, ts }) });
   }
   // Render a turn LIVE via Slack's streaming API: startStream → appendStream each answer-token
-  // delta → stopStream on completion. A one-shot (non-streaming) model produces no deltas, so
-  // the final text is appended once. Falls back to a single postMessage when startStream is
-  // unavailable (older app) so it still works everywhere.
+  // delta → stopStream. The Slack stream is started LAZILY — only on the first piece of content
+  // (a delta, the final one-shot reply, or a failure note) — so a tool-only / empty / no-output
+  // turn posts NOTHING (no empty streamed message). When startStream is unavailable (older app),
+  // content accumulates and is posted once via chat.postMessage — including a failure note.
   async function renderStream(ctx: ChannelContext, event: InboundEvent, userText: string, session: string) {
-    const streamTs = await startStream(event.channelId, event.threadId);
-    let streamed = false;
-    let finalText = "";
-    const append = async (t: string) => { if (streamTs && t) { await appendStream(event.channelId, streamTs, t); streamed = true; } };
+    let streamTs: string | undefined;
+    let started = false; // startStream attempted (regardless of success)
+    let buf = ""; // accumulator for the postMessage fallback when startStream is unavailable
+    const append = async (t: string) => {
+      if (!t) return;
+      if (!started) { started = true; streamTs = await startStream(event.channelId, event.threadId); }
+      if (streamTs) await appendStream(event.channelId, streamTs, t);
+      else buf += t;
+    };
+    const finish = async () => {
+      if (streamTs) await stopStream(event.channelId, streamTs);
+      else if (buf.trim()) await postMessage(event.channelId, buf, event.threadId);
+    };
     try {
+      let streamed = false;
+      let finalText = "";
       for await (const e of ctx.runStream!(userText, { session, event })) {
-        if (e.type === "message.delta") await append(e.text);
+        if (e.type === "message.delta") { await append(e.text); streamed = true; }
         else if (e.type === "turn.completed") finalText = e.text;
-        else if (e.type === "turn.failed") { await append("\n_(the turn failed)_"); break; }
+        else if (e.type === "turn.failed") { await append("\n_(the turn failed)_"); await finish(); return; }
       }
-      const out = finalText.trim();
-      if (streamTs) {
-        if (!streamed && out) await appendStream(event.channelId, streamTs, out); // one-shot: append the whole reply
-        await stopStream(event.channelId, streamTs);
-      } else if (out) {
-        await postMessage(event.channelId, out, event.threadId); // startStream unavailable → post once
-      }
+      if (!streamed && finalText.trim()) await append(finalText); // one-shot: the whole reply once
+      if (started) await finish(); // nothing appended (tool-only/empty) ⇒ never started ⇒ post nothing
     } catch (err) {
-      if (streamTs) { await appendStream(event.channelId, streamTs, "\n_(the turn failed)_").catch(() => {}); await stopStream(event.channelId, streamTs).catch(() => {}); }
+      await append("\n_(the turn failed)_").catch(() => {}); // starts the stream/buffer if not yet
+      await finish().catch(() => {});
       throw err; // let runBackground → onError record it
     }
   }
