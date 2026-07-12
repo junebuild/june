@@ -221,8 +221,10 @@ export function slackChannel(opts: {
   // Slack's native streaming API (chat.startStream/appendStream/stopStream) — purpose-built
   // for token streaming into ONE message: appendStream handles bursts (unlike chat.update's
   // ~1/s whole-message replace). startStream returns the message ts to append/stop against.
-  async function startStream(channel: string, thread_ts?: string): Promise<string | undefined> {
-    const r = (await (await fetch(`${api}/chat.startStream`, { method: "POST", headers: authHeaders, body: JSON.stringify({ channel, thread_ts }) })).json().catch(() => ({}))) as { ts?: string };
+  // seed the stream with the first token (markdown_text) — Slack's streaming API expects
+  // content, and seeding saves the extra appendStream for that token.
+  async function startStream(channel: string, thread_ts: string | undefined, markdown_text: string): Promise<string | undefined> {
+    const r = (await (await fetch(`${api}/chat.startStream`, { method: "POST", headers: authHeaders, body: JSON.stringify({ channel, thread_ts, markdown_text }) })).json().catch(() => ({}))) as { ts?: string };
     return r.ts;
   }
   async function appendStream(channel: string, ts: string, markdown_text: string) {
@@ -242,7 +244,12 @@ export function slackChannel(opts: {
     let buf = ""; // accumulator for the postMessage fallback when startStream is unavailable
     const append = async (t: string) => {
       if (!t) return;
-      if (!started) { started = true; streamTs = await startStream(event.channelId, event.threadId); }
+      if (!started) {
+        started = true;
+        streamTs = await startStream(event.channelId, event.threadId, t); // seed with the first token
+        if (!streamTs) buf += t; // startStream unavailable → keep the seed for the postMessage fallback
+        return;
+      }
       if (streamTs) await appendStream(event.channelId, streamTs, t);
       else buf += t;
     };

@@ -144,9 +144,8 @@ describe("slackChannel", () => {
     await flush();
 
     expect(calls.map((c) => [method(c), (c.body as { markdown_text?: string }).markdown_text])).toEqual([
-      ["chat.startStream", undefined],       // opens the streamed message
-      ["chat.appendStream", "Hel"],           // token deltas, natively (not chat.update)
-      ["chat.appendStream", "lo"],
+      ["chat.startStream", "Hel"],            // seeded with the first token
+      ["chat.appendStream", "lo"],            // subsequent tokens append natively (not chat.update)
       ["chat.stopStream", undefined],         // finalize
     ]);
     expect((calls[1]!.body as { ts?: string }).ts).toBe("111.9"); // appends target the stream ts
@@ -163,8 +162,7 @@ describe("slackChannel", () => {
     await ch2.webhook!(await signed(JSON.stringify({ type: "event_callback", event: { type: "message", text: "hi", channel: "C1", ts: "1.1", user: "U1" } })), ctx);
     await flush();
     expect(calls.map((c) => [method(c), (c.body as { markdown_text?: string }).markdown_text])).toEqual([
-      ["chat.startStream", undefined],
-      ["chat.appendStream", "Answer."], // no deltas → append the whole reply once
+      ["chat.startStream", "Answer."], // no deltas → the whole reply seeds the stream
       ["chat.stopStream", undefined],
     ]);
   });
@@ -211,8 +209,8 @@ describe("slackChannel", () => {
     await ch2.webhook!(await signed(body), ctx);
     await flush();
 
-    // startStream, the delta, then a failure note + stopStream — never left open
-    expect(calls.map(method)).toEqual(["chat.startStream", "chat.appendStream", "chat.appendStream", "chat.stopStream"]);
+    // first token seeds startStream, then the failure note appends, then stopStream — never left open
+    expect(calls.map(method)).toEqual(["chat.startStream", "chat.appendStream", "chat.stopStream"]);
     expect((reported as Error).message).toBe("SSE dropped"); // onError still records it
   });
 

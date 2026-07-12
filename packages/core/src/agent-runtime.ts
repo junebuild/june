@@ -231,7 +231,8 @@ async function modelStep(
   for await (const d of model(msgs, specs, systemOverlay ? { system: systemOverlay } : undefined)) {
     if (d.type === "reasoning") sink.emit({ type: "reasoning.delta", turnId: opts.turnId, text: d.text });
     else if (d.type === "text") sink.emit({ type: "message.delta", turnId: opts.turnId, text: d.text });
-    else reply = d.reply;
+    else { reply = d.reply; break; } // `done` is terminal: `break` cancels the iterator (return()) so
+    // extra deltas / a throw AFTER the authoritative reply can't turn a completed turn into a failure
   }
   if (!reply) throw new Error("model stream ended without a `done` event");
   assertCrash(opts.crash, "before-model-commit", stepId); // nothing persisted → replay re-asks the model

@@ -257,6 +257,20 @@ describe("TurnEvent stream (P1)", () => {
     expect((events.find((e) => e.type === "reasoning.delta") as Extract<TurnEvent, { type: "reasoning.delta" }>).text).toBe("hmm");
   });
 
+  test("`done` is terminal — a throw AFTER done does not fail an already-completed turn", async () => {
+    const model: Model = async function* () {
+      yield { type: "text", text: "Hi" };
+      yield { type: "done", reply: { text: "Hi", toolCalls: [] } };
+      throw new Error("misbehaving model kept going after done"); // must be ignored (iterator cancelled)
+    };
+    const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), model, [], noRuntime);
+    const events: TurnEvent[] = [];
+    s.observe((e) => events.push(e));
+    expect(await s.turn({ turnId: "t1", userText: "hi" })).toBe("Hi"); // completed, not failed
+    expect(events.some((e) => e.type === "turn.failed")).toBe(false);
+    expect(events.at(-1)).toMatchObject({ type: "turn.completed", text: "Hi" });
+  });
+
   test("an inbound event becomes the turn.started trigger", async () => {
     const rt = new MemRuntime({ ops: { model: scriptedModel([{ text: "hi", toolCalls: [] }]), tools: [] } });
     const s = rt.session("ops", "s1");
