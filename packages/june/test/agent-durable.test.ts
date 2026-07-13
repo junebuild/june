@@ -8,6 +8,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   AgentSession,
+  replyStream,
   type EventSink,
   type Model,
   type ModelReply,
@@ -71,7 +72,7 @@ class TestBroadcaster implements EventSink {
 const noRuntime: Runtime = { session() { throw new Error("no subagents"); } };
 
 function scriptedModel(script: ModelReply[]): Model {
-  return async (msgs) => script[Math.min(msgs.filter((m) => m.role === "assistant").length, script.length - 1)]!;
+  return (msgs) => replyStream(script[Math.min(msgs.filter((m) => m.role === "assistant").length, script.length - 1)]!);
 }
 const ORDER_SCRIPT: ModelReply[] = [
   { text: "Placing your order.", toolCalls: [{ id: "c1", name: "create_order", input: { item: "widget", qty: 3 } }] },
@@ -258,11 +259,11 @@ function probeTool(seen: Probe[], nextLocalId: () => number): Tool {
 // A model that emits ONE probe call per turn with a turn-unique id (so a later turn's
 // step can't be skipped by the DO's step cache), then finishes the turn.
 function probeModel(): Model {
-  return async (msgs): Promise<ModelReply> => {
+  return (msgs) => {
     const last = msgs[msgs.length - 1]!;
-    if (last.role === "tool") return { text: "done", toolCalls: [] };
+    if (last.role === "tool") return replyStream({ text: "done", toolCalls: [] });
     const turnId = last.role === "user" ? last.turnId : "t?";
-    return { text: "probing", toolCalls: [{ id: `probe-${turnId}`, name: "probe", input: {} }] };
+    return replyStream({ text: "probing", toolCalls: [{ id: `probe-${turnId}`, name: "probe", input: {} }] });
   };
 }
 

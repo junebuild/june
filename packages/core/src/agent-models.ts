@@ -9,7 +9,7 @@
 // native AND edge (a Durable Object) — pass `apiKey` explicitly on edge, where
 // there is no process.env.
 
-import type { Model, ModelReply, Msg, ToolSpec } from "./agent-runtime";
+import type { Model, ModelDelta, ModelReply, Msg, ToolSpec } from "./agent-runtime";
 
 // Structural subset of the Anthropic Messages shapes we emit/read — no
 // `@anthropic-ai/sdk` type import, so core typechecks without the optional dep.
@@ -52,9 +52,12 @@ export function fromAnthropicContent(content: AnthropicBlock[]): ModelReply {
   return { text, toolCalls };
 }
 
-// Structural view of just the SDK surface we call (no dependency on its types).
+// Structural view of just the SDK surface we call (no dependency on its types). The
+// message stream is async-iterable over raw stream events AND exposes finalMessage().
+type AnthropicStreamEvent = { type: string; delta?: { type?: string; text?: string; thinking?: string } };
+type AnthropicStream = AsyncIterable<AnthropicStreamEvent> & { finalMessage(): Promise<{ content: AnthropicBlock[] }> };
 type AnthropicClient = {
-  messages: { stream(body: unknown): { finalMessage(): Promise<{ content: AnthropicBlock[] }> } };
+  messages: { stream(body: unknown): AnthropicStream };
 };
 type AnthropicCtor = new (opts?: { apiKey?: string }) => AnthropicClient;
 
@@ -69,35 +72,41 @@ export type AnthropicOptions = {
 export function anthropic(opts: AnthropicOptions = {}): Model {
   const model = opts.model ?? "claude-opus-4-8";
   const maxTokens = opts.maxTokens ?? 16000;
-  return async (msgs: Msg[], tools: ToolSpec[], callOpts?: { system?: string }): Promise<ModelReply> => {
-    // Per-call system (the runtime injects the agent's instructions) wins over a
-    // construction-time default.
-    const system = callOpts?.system ?? opts.system;
-    // Non-literal specifier (typed `string`) so tsc/bundlers don't require the
-    // optional dep and it stays lazy.
-    const specifier: string = "@anthropic-ai/sdk";
-    let Anthropic: AnthropicCtor;
-    try {
-      Anthropic = ((await import(specifier)) as { default: AnthropicCtor }).default;
-    } catch {
-      throw new Error("anthropic(): install @anthropic-ai/sdk to use the Anthropic model adapter");
-    }
-    const client = new Anthropic(opts.apiKey ? { apiKey: opts.apiKey } : undefined);
+  return (msgs: Msg[], tools: ToolSpec[], callOpts?: { system?: string }): AsyncIterable<ModelDelta> =>
+    (async function* () {
+      // Per-call system (the runtime injects the agent's instructions) wins over a
+      // construction-time default.
+      const system = callOpts?.system ?? opts.system;
+      // Non-literal specifier (typed `string`) so tsc/bundlers don't require the
+      // optional dep and it stays lazy.
+      const specifier: string = "@anthropic-ai/sdk";
+      let Anthropic: AnthropicCtor;
+      try {
+        Anthropic = ((await import(specifier)) as { default: AnthropicCtor }).default;
+      } catch {
+        throw new Error("anthropic(): install @anthropic-ai/sdk to use the Anthropic model adapter");
+      }
+      const client = new Anthropic(opts.apiKey ? { apiKey: opts.apiKey } : undefined);
 
-    // Stream + finalMessage() (the SDK's recommended path — avoids request
-    // timeouts on long turns; we still return the whole reply). Thinking is OFF
-    // by default: the durable transcript (Msg) doesn't yet persist thinking
-    // blocks, and replaying an assistant tool-use turn under adaptive thinking
-    // requires echoing them back verbatim — opt in once block persistence lands.
-    const stream = client.messages.stream({
-      model,
-      max_tokens: maxTokens,
-      thinking: opts.thinking ? { type: "adaptive" } : { type: "disabled" },
-      ...(system ? { system } : {}),
-      tools: tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.input })),
-      messages: toAnthropicMessages(msgs),
-    });
-    const message = await stream.finalMessage();
-    return fromAnthropicContent(message.content);
-  };
+      // Stream the SDK's raw events → yield reasoning/answer token deltas as they arrive,
+      // then finalMessage() → the authoritative assembled reply as `done`. Thinking is OFF
+      // by default: the durable transcript (Msg) doesn't yet persist thinking blocks, and
+      // replaying an assistant tool-use turn under adaptive thinking requires echoing them
+      // back verbatim — opt in once block persistence lands.
+      const stream = client.messages.stream({
+        model,
+        max_tokens: maxTokens,
+        thinking: opts.thinking ? { type: "adaptive" } : { type: "disabled" },
+        ...(system ? { system } : {}),
+        tools: tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.input })),
+        messages: toAnthropicMessages(msgs),
+      });
+      for await (const ev of stream) {
+        if (ev.type !== "content_block_delta" || !ev.delta) continue;
+        if (ev.delta.type === "text_delta" && ev.delta.text) yield { type: "text", text: ev.delta.text };
+        else if (ev.delta.type === "thinking_delta" && ev.delta.thinking) yield { type: "reasoning", text: ev.delta.thinking };
+      }
+      const message = await stream.finalMessage();
+      yield { type: "done", reply: fromAnthropicContent(message.content) };
+    })();
 }

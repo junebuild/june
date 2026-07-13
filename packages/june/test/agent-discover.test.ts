@@ -8,6 +8,7 @@ import { dirname, join } from "node:path";
 
 import { ACTION_REGISTRY } from "@junejs/core/agent";
 import type { Model, ModelReply } from "@junejs/core/agent-runtime";
+import { replyStream } from "@junejs/core/agent-runtime";
 import { discoverAgent } from "../src/agent-discover";
 import { createNativeRuntime, mountAgent } from "../src/agent-native";
 
@@ -26,7 +27,7 @@ beforeEach(() => { preexisting = new Map(ACTION_REGISTRY); ACTION_REGISTRY.clear
 afterEach(() => { ACTION_REGISTRY.clear(); for (const [id, a] of preexisting) ACTION_REGISTRY.set(id, a); });
 
 function scriptedModel(script: ModelReply[]): Model {
-  return async (msgs) => script[Math.min(msgs.filter((m) => m.role === "assistant").length, script.length - 1)]!;
+  return (msgs) => replyStream(script[Math.min(msgs.filter((m) => m.role === "assistant").length, script.length - 1)]!);
 }
 
 describe("discoverAgent", () => {

@@ -214,35 +214,63 @@ export function slackChannel(opts: {
     opts.events ?? (opts.respondTo || opts.on ? [...new Set([...(opts.respondTo ?? []), ...onKinds])] : ["message", "app_mention"]);
   const respondTo: string[] = opts.mode === "observe" ? [] : (opts.respondTo ?? events);
   const authHeaders = { "content-type": "application/json; charset=utf-8", authorization: `Bearer ${opts.botToken}` };
-  // returns the posted message's ts (so a streaming render can chat.update it in place)
   async function postMessage(channel: string, text: string, thread_ts?: string): Promise<string | undefined> {
     const r = (await (await fetch(`${api}/chat.postMessage`, { method: "POST", headers: authHeaders, body: JSON.stringify({ channel, text, thread_ts }) })).json().catch(() => ({}))) as { ts?: string };
     return r.ts;
   }
-  async function updateMessage(channel: string, ts: string, text: string) {
-    await fetch(`${api}/chat.update`, { method: "POST", headers: authHeaders, body: JSON.stringify({ channel, ts, text }) });
+  // Slack's native streaming API (chat.startStream/appendStream/stopStream) — purpose-built
+  // for token streaming into ONE message: appendStream handles bursts (unlike chat.update's
+  // ~1/s whole-message replace). startStream returns the message ts to append/stop against.
+  // seed the stream with the first token (markdown_text) — Slack's streaming API expects
+  // content, and seeding saves the extra appendStream for that token.
+  async function startStream(channel: string, thread_ts: string | undefined, markdown_text: string): Promise<string | undefined> {
+    const r = (await (await fetch(`${api}/chat.startStream`, { method: "POST", headers: authHeaders, body: JSON.stringify({ channel, thread_ts, markdown_text }) })).json().catch(() => ({}))) as { ts?: string };
+    return r.ts;
   }
-  // Render a turn LIVE into one Slack message: "Thinking…" → "Running <tool>…" per action
-  // → the final answer. Falls back to a single post when the host can't stream (no runStream)
-  // or when we couldn't obtain the message ts to edit.
+  async function appendStream(channel: string, ts: string, markdown_text: string) {
+    await fetch(`${api}/chat.appendStream`, { method: "POST", headers: authHeaders, body: JSON.stringify({ channel, ts, markdown_text }) });
+  }
+  async function stopStream(channel: string, ts: string) {
+    await fetch(`${api}/chat.stopStream`, { method: "POST", headers: authHeaders, body: JSON.stringify({ channel, ts }) });
+  }
+  // Render a turn LIVE via Slack's streaming API: startStream → appendStream each answer-token
+  // delta → stopStream. The Slack stream is started LAZILY — only on the first piece of content
+  // (a delta, the final one-shot reply, or a failure note) — so a tool-only / empty / no-output
+  // turn posts NOTHING (no empty streamed message). When startStream is unavailable (older app),
+  // content accumulates and is posted once via chat.postMessage — including a failure note.
   async function renderStream(ctx: ChannelContext, event: InboundEvent, userText: string, session: string) {
-    const ts = await postMessage(event.channelId, "_Thinking…_", event.threadId);
-    // never leave the placeholder stuck on failure — update it (best-effort) on a turn.failed
-    // event OR an iterator exception (network / SSE parse error).
-    const fail = async () => { if (ts) await updateMessage(event.channelId, ts, "_(the turn failed)_").catch(() => {}); };
+    let streamTs: string | undefined;
+    let started = false; // startStream attempted (regardless of success)
+    let buf = ""; // accumulator for the postMessage fallback when startStream is unavailable
+    const append = async (t: string) => {
+      if (!t) return;
+      if (!started) {
+        started = true;
+        streamTs = await startStream(event.channelId, event.threadId, t); // seed with the first token
+        if (!streamTs) buf += t; // startStream unavailable → keep the seed for the postMessage fallback
+        return;
+      }
+      if (streamTs) await appendStream(event.channelId, streamTs, t);
+      else buf += t;
+    };
+    const finish = async () => {
+      if (streamTs) await stopStream(event.channelId, streamTs);
+      else if (buf.trim()) await postMessage(event.channelId, buf, event.threadId);
+    };
     try {
+      let streamed = false;
       let finalText = "";
       for await (const e of ctx.runStream!(userText, { session, event })) {
-        if (e.type === "action.requested" && ts) await updateMessage(event.channelId, ts, `_Running ${e.call.name}…_`);
+        if (e.type === "message.delta") { await append(e.text); streamed = true; }
         else if (e.type === "turn.completed") finalText = e.text;
-        else if (e.type === "turn.failed") { await fail(); return; }
+        else if (e.type === "turn.failed") { await append("\n_(the turn failed)_"); await finish(); return; }
       }
-      const out = finalText.trim();
-      if (ts) await updateMessage(event.channelId, ts, out || "_(no reply)_");
-      else if (out) await postMessage(event.channelId, out, event.threadId);
+      if (!streamed && finalText.trim()) await append(finalText); // one-shot: the whole reply once
+      if (started) await finish(); // nothing appended (tool-only/empty) ⇒ never started ⇒ post nothing
     } catch (err) {
-      await fail(); // the stream threw mid-iteration — surface it in the message…
-      throw err;    // …and still let runBackground → onError record it
+      await append("\n_(the turn failed)_").catch(() => {}); // starts the stream/buffer if not yet
+      await finish().catch(() => {});
+      throw err; // let runBackground → onError record it
     }
   }
   // Slack Web API read helper: GET with query params + bearer token. Read methods

@@ -47,11 +47,23 @@ export type InboundEvent = {
                                                 // be dropped crossing the /turn RPC if unserializable
 };
 
-// The Model seam — provider-agnostic. `opts.system` is the per-turn system prompt
-// (an agent's instructions); optional so the engine can call `model(msgs, specs)`
-// and a scripted model can ignore it. The runtime injects it from the agent def
-// (see withSystem) so instructions are single-sourced and can't be dropped.
-export type Model = (msgs: Msg[], tools: ToolSpec[], opts?: { system?: string }) => Promise<ModelReply>;
+// The Model seam — provider-agnostic and STREAMING-FIRST. A model yields a stream of
+// deltas as it produces them; a non-streaming provider is the degenerate case (a stream
+// of length 1: just `done`). `reasoning`/`text` are live tokens the engine forwards as
+// TurnEvents; `done` carries the authoritative assembled ModelReply the engine checkpoints
+// (the adapter owns assembly, so the engine never re-derives tool calls from partial text).
+// `opts.system` is the per-turn system prompt, injected by the runtime (see withSystem).
+export type ModelDelta =
+  | { type: "reasoning"; text: string }   // thinking tokens (when the provider streams them)
+  | { type: "text"; text: string }        // answer tokens
+  | { type: "done"; reply: ModelReply };  // terminal: the full assembled reply
+export type Model = (msgs: Msg[], tools: ToolSpec[], opts?: { system?: string }) => AsyncIterable<ModelDelta>;
+
+// A one-shot model output: a single-element stream. The degenerate streaming case, for
+// scripted/test models and providers without token streaming.
+export function replyStream(reply: ModelReply): AsyncIterable<ModelDelta> {
+  return (async function* () { yield { type: "done", reply }; })();
+}
 
 // Wrap a Model so every call carries `system` (the agent's instructions). The
 // runtime applies this from the agent def, so a provider model needn't bake the
@@ -211,7 +223,18 @@ async function modelStep(
   systemOverlay?: string,
 ) {
   if (store.getStep(stepId) !== undefined) return; // cached: assistant already appended in the same tx
-  const reply = await model(msgs, specs, systemOverlay ? { system: systemOverlay } : undefined);
+  // Iterate the model stream: forward reasoning/answer tokens as LIVE TurnEvents (not
+  // persisted, not re-emitted on replay), and take the terminal `done.reply` as the value
+  // to checkpoint. The adapter's `done` is authoritative — the engine never assembles the
+  // reply from partial text/tool deltas.
+  let reply: ModelReply | undefined;
+  for await (const d of model(msgs, specs, systemOverlay ? { system: systemOverlay } : undefined)) {
+    if (d.type === "reasoning") sink.emit({ type: "reasoning.delta", turnId: opts.turnId, text: d.text });
+    else if (d.type === "text") sink.emit({ type: "message.delta", turnId: opts.turnId, text: d.text });
+    else { reply = d.reply; break; } // `done` is terminal: `break` cancels the iterator (return()) so
+    // extra deltas / a throw AFTER the authoritative reply can't turn a completed turn into a failure
+  }
+  if (!reply) throw new Error("model stream ended without a `done` event");
   assertCrash(opts.crash, "before-model-commit", stepId); // nothing persisted → replay re-asks the model
   store.tx(() => {
     store.putStep(stepId, reply);

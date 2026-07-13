@@ -70,6 +70,8 @@ describe("anthropic()", () => {
 
   test("calling it without the optional @anthropic-ai/sdk peer throws a helpful error", async () => {
     const model = anthropic();
-    await expect(model([{ role: "user", turnId: "t1", text: "hi" }], [])).rejects.toThrow(/install @anthropic-ai\/sdk/);
+    // the model is a stream now; the missing-dep error surfaces when it's iterated
+    const drain = async () => { for await (const _ of model([{ role: "user", turnId: "t1", text: "hi" }], [])) void _; };
+    await expect(drain()).rejects.toThrow(/install @anthropic-ai\/sdk/);
   });
 });

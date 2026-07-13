@@ -40,9 +40,10 @@ const makeSlack = (env: Env) =>
   slackChannel({
     signingSecret: env.SLACK_SIGNING_SECRET ?? "",
     botToken: env.SLACK_BOT_TOKEN ?? "",
-    // Render the turn LIVE: post "Thinking…", then edit that message in place as the turn's
-    // events arrive (tool status → final answer). The edge DO streams TurnEvents as SSE and
-    // durableChannelSurface exposes them as ctx.runStream, which this consumes.
+    // Render the turn LIVE: the answer tokens stream into ONE Slack message via the native
+    // chat.startStream → appendStream → stopStream API as the model produces them. The edge
+    // DO streams TurnEvents (incl. message.delta) as SSE; durableChannelSurface exposes them
+    // as ctx.runStream, which this consumes. Needs the chat:write scope.
     stream: true,
   });
 
