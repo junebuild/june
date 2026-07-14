@@ -461,6 +461,18 @@ export function durableChannelSurface(
       );
       yield* sseTurnEvents(res);
     },
+    // Resume a parked turn on its session's DO and stream the continuation.
+    resumeStream: async function* (o) {
+      const namespace = getNamespace();
+      if (!namespace) throw new Error("durableChannelSurface: no Durable Object namespace bound (env.AGENT)");
+      const res = await durableFetch(
+        namespace,
+        opts.agentName,
+        o.session ?? "default",
+        new Request("https://do/resume", { method: "POST", body: serializeResume(o) }),
+      );
+      yield* sseTurnEvents(res);
+    },
   };
   return channelDispatch(resolved, ctx);
 }
@@ -471,6 +483,18 @@ export function durableChannelSurface(
 // run the turn, so on a serialization failure we drop it rather than let an
 // unserializable payload take down turn forwarding entirely. (raw is optional on
 // InboundEvent precisely because it may not survive this boundary.)
+// Serialize a /resume RPC body. `input` is `unknown` — the human's answer — so a
+// (third-party) host could hand us something JSON.stringify chokes on (BigInt, circular).
+// Unlike serializeTurn's `raw`, `input` is essential: silently dropping it would resume the
+// turn with the wrong answer. So fail loudly with a clear message rather than corrupt the resume.
+function serializeResume(o: { turnId: string; inputId: string; input: unknown; by?: string }): string {
+  try {
+    return JSON.stringify({ turnId: o.turnId, inputId: o.inputId, input: o.input, by: o.by });
+  } catch (err) {
+    throw new Error(`resumeStream: input is not JSON-serializable (${(err as Error).message}) — a resume answer must round-trip to the DO`);
+  }
+}
+
 function serializeTurn(userText: string, o?: { turnId?: string; event?: InboundEvent }): string {
   const payload = { userText, turnId: o?.turnId, event: o?.event };
   try {

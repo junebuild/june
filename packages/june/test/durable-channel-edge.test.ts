@@ -125,6 +125,25 @@ describe("durableChannelSurface (edge channel routing)", () => {
     expect(body.event.raw).toBeUndefined(); // the unserializable raw was dropped
   });
 
+  test("resumeStream fails loudly on non-serializable input (a resume answer must round-trip, never silently drop)", async () => {
+    const { ns } = fakeAgentNS();
+    let caught: unknown;
+    // Unlike event.raw (droppable), `input` IS the human's answer — corrupting it would resume
+    // the turn with the wrong decision, so a non-serializable input must throw, not be stripped.
+    const ch = defineChannel({
+      name: "x", path: "/channels/x",
+      async webhook(_req, ctx) {
+        try {
+          for await (const _ of ctx.resumeStream!({ session: "x:c:t", turnId: "t1", inputId: "i1", input: { bad: 1n } })) { /* drain to trigger the body build */ }
+        } catch (e) { caught = e; }
+        return new Response("", { status: 200 });
+      },
+    });
+    const surface = durableChannelSurface(() => ns, { agentName: AGENT, channels: [ch], env: envWith(ns) });
+    await surface(new Request("http://edge/channels/x", { method: "POST", body: "{}" }));
+    expect((caught as Error).message).toContain("not JSON-serializable"); // clear, not a raw TypeError from stringify
+  });
+
   test("the services factory is resolved and exposed to channel hooks as ctx.services (F)", async () => {
     const { ns } = fakeAgentNS();
     let sawServices: unknown;

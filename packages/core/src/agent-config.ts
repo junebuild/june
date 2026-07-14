@@ -37,6 +37,12 @@ export type ChannelContext = {
   // render) uses `run`. The host provides it on targets that support streaming (the edge
   // Durable Object over SSE); a channel checks for it and falls back to `run`.
   runStream?: (message: string, opts?: { session?: string; turnId?: string; event?: InboundEvent }) => AsyncIterable<TurnEvent>;
+  // Resume a turn that was parked by ctx.requestInput (HITL): provide the answer and get the
+  // continuation's TurnEvent stream, so a channel can render the resumed turn to completion.
+  // `by` is the VERIFIED resumer identity (e.g. the user id from a signature-checked Slack
+  // interaction) — the engine enforces it against the request's answererId. Optional, like
+  // runStream: provided on streaming targets (the edge Durable Object).
+  resumeStream?: (opts: { session?: string; turnId: string; inputId: string; input: unknown; by?: string }) => AsyncIterable<TurnEvent>;
   // Extend the invocation past the fast-ACK response so a webhook's background work
   // (run the turn, post the reply out-of-band) reliably completes. On the edge the
   // host passes workerd's `ctx.waitUntil` — without it, a promise left floating after

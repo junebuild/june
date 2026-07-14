@@ -8,7 +8,7 @@
 //   export default slackChannel({ signingSecret: process.env.SLACK_SIGNING_SECRET! , botToken: ... })
 
 import { type Channel, type ChannelContext } from "./agent-config";
-import type { InboundEvent, Tool, ToolContext } from "./agent-runtime";
+import type { InboundEvent, InputRequest, Tool, ToolContext, TurnEvent } from "./agent-runtime";
 
 // Re-export the normalized inbound envelope from where channel authors live, so an
 // adapter can `import { type InboundEvent } from "@junejs/core/channels"` alongside
@@ -233,6 +233,28 @@ export function slackChannel(opts: {
   async function stopStream(channel: string, ts: string) {
     await fetch(`${api}/chat.stopStream`, { method: "POST", headers: authHeaders, body: JSON.stringify({ channel, ts }) });
   }
+  async function updateMessage(channel: string, ts: string, text: string) {
+    await fetch(`${api}/chat.update`, { method: "POST", headers: authHeaders, body: JSON.stringify({ channel, ts, text, blocks: [] }) });
+  }
+  // Post the HITL prompt as a message with Approve / Deny buttons. Each button's value carries
+  // the {turnId, inputId, input} the interaction handler needs to route session.resume; the
+  // action_id prefix `june_input` is how we recognize our own buttons.
+  async function postApproval(channel: string, thread_ts: string | undefined, turnId: string, request: InputRequest): Promise<string | undefined> {
+    const btn = (text: string, input: boolean, style: "primary" | "danger") => ({
+      type: "button", text: { type: "plain_text", text }, style,
+      action_id: `june_input:${input ? "yes" : "no"}`,
+      value: JSON.stringify({ turnId, inputId: request.id, input }),
+    });
+    const blocks = [
+      { type: "section", text: { type: "mrkdwn", text: request.prompt } },
+      { type: "actions", elements: [btn("Approve", true, "primary"), btn("Deny", false, "danger")] },
+    ];
+    const r = (await (await fetch(`${api}/chat.postMessage`, { method: "POST", headers: authHeaders, body: JSON.stringify({ channel, thread_ts, text: request.prompt, blocks }) })).json().catch(() => ({}))) as { ok?: boolean; ts?: string };
+    // The turn is parked either way — if the prompt didn't post, nobody has buttons to resume
+    // it, and that must be loud (onError), not a silently bricked approval.
+    if (!r.ok) opts.onError?.(new Error(`slack: failed to post the HITL prompt for input "${request.id}" (turn ${turnId})`));
+    return r.ts;
+  }
   // Render a turn LIVE via Slack's streaming API: startStream → appendStream each answer-token
   // delta → stopStream. The Slack stream is started LAZILY — only on the first piece of content
   // (a delta, the final one-shot reply, or a failure note) — so a tool-only / empty / no-output
@@ -264,6 +286,13 @@ export function slackChannel(opts: {
         if (e.type === "message.delta") { await append(e.text); streamed = true; }
         else if (e.type === "turn.completed") finalText = e.text;
         else if (e.type === "turn.failed") { await append("\n_(the turn failed)_"); await finish(); return; }
+        else if (e.type === "input.requested") {
+          // the turn parked awaiting a human: finalize any streamed text, then post the prompt
+          // with Approve/Deny buttons. The interaction handler (below) routes the click to resume.
+          if (started) await finish();
+          await postApproval(event.channelId, event.threadId, e.turnId, e.request);
+          return; // the stream closed on suspend; the turn continues on the button click
+        }
       }
       if (!streamed && finalText.trim()) await append(finalText); // one-shot: the whole reply once
       if (started) await finish(); // nothing appended (tool-only/empty) ⇒ never started ⇒ post nothing
@@ -272,6 +301,78 @@ export function slackChannel(opts: {
       await finish().catch(() => {});
       throw err; // let runBackground → onError record it
     }
+  }
+  // Post-once render that still understands HITL. The plain ctx.run path collapses the turn
+  // to its final text — but a parked turn (input.requested) HAS no final text, so the collapse
+  // errors and the Approve/Deny prompt would never post. When the host provides the event
+  // stream, consume it non-live instead: post the final text once, post the approval prompt
+  // when the turn parks. Failure semantics match ctx.run (throw → runBackground → onError).
+  async function renderOnce(ctx: ChannelContext, event: InboundEvent, userText: string, session: string) {
+    let finalText = "";
+    for await (const e of ctx.runStream!(userText, { session, event })) {
+      if (e.type === "turn.completed") finalText = e.text;
+      else if (e.type === "turn.failed") throw new Error(e.error.message);
+      else if (e.type === "input.requested") { await postApproval(event.channelId, event.threadId, e.turnId, e.request); return; }
+    }
+    if (finalText.trim()) await postMessage(event.channelId, finalText, event.threadId);
+  }
+  // Route an Approve/Deny click to session.resume and render the continuation into the button
+  // message. The clicker's id is the VERIFIED resumer (`by`) — the signature was checked above,
+  // and Slack's payload.user.id is trustworthy; the engine enforces it against answererId.
+  function handleInteraction(payload: SlackInteraction, ctx: ChannelContext) {
+    if (payload.type !== "block_actions") return;
+    const action = payload.actions?.[0];
+    if (!action?.action_id?.startsWith("june_input:") || !action.value) return; // not our button (action_ids are june_input:yes|no)
+    // From here the click IS ours — a dead end must be loud (onError), never a silent no-op.
+    const parsed = tryParseJson<{ turnId: string; inputId: string; input: unknown }>(action.value);
+    const channel = payload.channel?.id, msgTs = payload.message?.ts;
+    const thread = payload.message?.thread_ts ?? msgTs;
+    if (!ctx.resumeStream || !parsed || !channel || !thread || !msgTs) {
+      opts.onError?.(new Error(ctx.resumeStream
+        ? "slack: HITL click with an unusable payload (value/channel/message missing)"
+        : "slack: HITL click but the host provides no resumeStream"));
+      return;
+    }
+    const session = `slack:${channel}:${thread}`;
+    runBackground(ctx, async () => {
+      // Pull the FIRST event before touching the message: the engine rejects an unauthorized
+      // clicker (403) or a stale/double click (409) on that first pull, and a rejection must
+      // leave the Approve/Deny buttons intact for the rightful answerer.
+      const it = ctx.resumeStream!({ session, turnId: parsed.turnId, inputId: parsed.inputId, input: parsed.input, by: payload.user?.id })[Symbol.asyncIterator]();
+      let first: IteratorResult<TurnEvent>;
+      try {
+        first = await it.next();
+      } catch (err) {
+        // tell only the clicker why nothing happened (response_url posts ephemerally)
+        if (payload.response_url) {
+          await fetch(payload.response_url, {
+            method: "POST", headers: { "content-type": "application/json" },
+            body: JSON.stringify({ response_type: "ephemeral", replace_original: false, text: "This request can't be resumed by you — it may already be answered, or you're not the designated approver." }),
+          }).catch(() => {});
+        }
+        throw err; // still record via onError
+      }
+      try {
+        await updateMessage(channel, msgTs, "_Working…_"); // resume accepted: drop the buttons; show progress
+        let final = "";
+        for (let r = first; !r.done; r = await it.next()) {
+          const ev = r.value;
+          if (ev.type === "turn.completed") final = ev.text;
+          else if (ev.type === "turn.failed") { await updateMessage(channel, msgTs, "_(the turn failed)_"); return; }
+          else if (ev.type === "input.requested") { await postApproval(channel, thread, ev.turnId, ev.request); await updateMessage(channel, msgTs, "_(awaiting more input…)_"); return; }
+        }
+        await updateMessage(channel, msgTs, final.trim() || "_(done)_");
+      } catch (err) {
+        // the continuation stream dropped mid-flight (the resume itself was accepted)
+        await updateMessage(channel, msgTs, "_(the turn failed)_").catch(() => {});
+        throw err;
+      } finally {
+        // Close the manual iterator on every exit (early return on failed/input.requested,
+        // normal completion, or a mid-flight throw) so an SSE-backed resumeStream isn't left
+        // open — a manual `for` over it.next() won't auto-call return() the way for-await would.
+        await it.return?.();
+      }
+    }, opts.onError);
   }
   // Slack Web API read helper: GET with query params + bearer token. Read methods
   // (conversations.replies, reactions.get, users.info) all accept this shape. Returns
@@ -304,6 +405,14 @@ export function slackChannel(opts: {
       );
       if (!ok) return new Response("bad signature", { status: 401 });
 
+      // Slack interactivity (a block_actions click on our Approve/Deny buttons) arrives
+      // form-encoded as `payload=<json>` — not an Events API JSON body. Route it to resume.
+      if (body.startsWith("payload=")) {
+        const interaction = tryParseJson<SlackInteraction>(new URLSearchParams(body).get("payload") ?? "");
+        if (interaction) handleInteraction(interaction, ctx);
+        return new Response("", { status: 200 }); // fast ACK
+      }
+
       const payload = tryParseJson<{ type?: string; challenge?: string; event?: SlackEvent }>(body);
       if (!payload) return new Response("", { status: 200 }); // signed but unparseable → ACK, don't retry
       if (payload.type === "url_verification") return Response.json({ challenge: payload.challenge });
@@ -323,6 +432,7 @@ export function slackChannel(opts: {
           const { event, session, userText } = norm;
           runBackground(ctx, async () => {
             if (opts.stream && ctx.runStream) return renderStream(ctx, event, userText, session); // live: edit in place
+            if (ctx.runStream) return renderOnce(ctx, event, userText, session); // post-once, HITL-aware
             const reply = await ctx.run(userText, { session, event });
             // A reaction turn (or any turn) may resolve to no text — the agent acted via a
             // tool (e.g. slack_add_reaction) instead of posting. Only post real content.
@@ -358,6 +468,18 @@ type SlackEvent = {
   user?: string;
   reaction?: string;
   item?: { type?: string; channel?: string; ts?: string };
+};
+
+// The subset of a Slack block_actions interaction payload we read (a button click).
+// `response_url` lets us answer the CLICKER ephemerally (e.g. a rejected resume) without
+// touching the message the buttons live on.
+type SlackInteraction = {
+  type?: string;
+  user?: { id?: string };
+  channel?: { id?: string };
+  message?: { ts?: string; thread_ts?: string };
+  actions?: { action_id?: string; value?: string }[];
+  response_url?: string;
 };
 
 // Map a raw Slack event to June's normalized envelope + the turn's session and text.
