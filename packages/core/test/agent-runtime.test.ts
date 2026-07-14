@@ -373,6 +373,9 @@ describe("suspend / resume (P3 — HITL)", () => {
     s.resume(turnId, "approve-1", true, { by: "U1" });
     expect(await s.result(turnId)).toEqual({ status: "completed", text: "Approved — refund sent." });
     expect(modelCalls.n).toBe(asked + 1); // the pre-suspend model step was cached, not re-asked
+    // the continuation announces itself as a resume (of the parking tool call), not a fresh inbound turn
+    expect(events.find((e) => e.type === "turn.started" && e.trigger.kind === "resume"))
+      .toMatchObject({ trigger: { kind: "resume", callId: "c1" } });
   });
 
   test("resume enforces the answererId (defaults to the trigger user; absent `by` is denied)", async () => {

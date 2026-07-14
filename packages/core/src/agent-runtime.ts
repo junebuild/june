@@ -212,13 +212,15 @@ export async function runTurn(
   model: Model,
   tools: Tool[],
   opts: { turnId: string; userText: string; crash?: Crash },
-  env: { runtime: Runtime; agent: string; sessionId: string; event?: InboundEvent; systemOverlay?: string },
+  env: { runtime: Runtime; agent: string; sessionId: string; event?: InboundEvent; systemOverlay?: string; trigger?: TurnTrigger },
 ): Promise<string> {
   if (!store.hasUserTurn(opts.turnId)) {
     store.tx(() => store.appendMessage({ role: "user", turnId: opts.turnId, text: opts.userText }));
   }
   store.setStatus("running");
-  const trigger: TurnTrigger = env.event ? { kind: "inbound", event: env.event } : { kind: "proactive", by: "system" };
+  // env.trigger overrides the derivation: a resume continuation announces { kind: "resume" }
+  // even though it replays with the original inbound event.
+  const trigger: TurnTrigger = env.trigger ?? (env.event ? { kind: "inbound", event: env.event } : { kind: "proactive", by: "system" });
   sink.emit({ type: "turn.started", turnId: opts.turnId, trigger });
 
   const specs = tools.map((t) => t.spec);
@@ -492,7 +494,7 @@ export class AgentSession {
         this.model,
         this.tools,
         { turnId, userText: suspended.userText },
-        { runtime: this.runtime, agent: this.agent, sessionId: this.id, event: suspended.event, systemOverlay: suspended.systemOverlay },
+        { runtime: this.runtime, agent: this.agent, sessionId: this.id, event: suspended.event, systemOverlay: suspended.systemOverlay, trigger: { kind: "resume", callId: suspended.callId } },
       );
     const p = this.chain.then(run);
     this.chain = p.catch(() => {});
