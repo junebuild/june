@@ -140,6 +140,36 @@ HITL works in both render modes: with `stream: true` the prompt follows the live
 without it the channel still consumes the event stream (post-once) so a parked turn posts its
 prompt instead of erroring.
 
+## Proactive / agent-initiated turns
+
+Every turn so far has been a *reply* — someone posted, the agent answered. A turn can also start
+with **no inbound message**: a schedule fires, another channel hands off, or a tool decides to
+nudge. `receive(channel, ctx, …)` starts such a turn and delivers it to a target thread with the
+**same renderer** as an inbound reply (progressive edits, HITL prompts, final text):
+
+```ts
+import { receive } from "@junejs/core/channels";
+
+// e.g. from a Cloudflare cron trigger (scheduled handler):
+await receive(slack, ctx, {
+  seed: "Summarize today's open threads and post the highlights.",
+  target: { channelId: "C-ops" },                 // where the reply lands (threadId optional)
+  trigger: { kind: "proactive", by: "cron:daily" }, // who initiated it — attributed in the log
+  session: "slack:C-ops:daily",                     // the durable session this turn belongs to
+});
+```
+
+The seed is written to the durable transcript as a distinct **`trigger`-role message** attributed
+to `by` — an honest record that no human sent it (the model adapter maps it to a normal user
+message, so providers need no new role). `receive` needs a streaming host (`ctx.runStream`, the
+edge Durable Object) and a channel that renders outbound (`channel.deliver`, which `slackChannel`
+provides); if either is missing it throws rather than silently dropping a scheduled nudge.
+
+`deliver` is also the hand-off primitive: on resolve, one channel can render a turn's stream into
+another's thread — the outbound dual of the inbound webhook.
+
 ## What's next (not in this example yet)
 
 - **Block Kit / rich output** beyond the built-in Approve/Deny prompt.
+- **A cron wiring** — this example exports `receive`-ready pieces, but the scheduled handler that
+  calls it (and cross-channel hand-off) is left to the app.

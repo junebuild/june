@@ -26,6 +26,7 @@ import {
   type Runtime,
   type InboundEvent,
   type SessionStore,
+  type ProactiveTrigger,
   type Tool,
 } from "@junejs/core/agent-runtime";
 import type { Resources } from "@junejs/core/resources";
@@ -96,8 +97,8 @@ export class DoSessionStore implements SessionStore {
   messages(): Msg[] {
     return this.sql.exec<{ body: string }>("SELECT body FROM agent_messages ORDER BY seq").toArray().map((r) => JSON.parse(r.body));
   }
-  hasUserTurn(turnId: string): boolean {
-    return this.messages().some((m) => m.role === "user" && m.turnId === turnId);
+  hasOpeningMessage(turnId: string): boolean {
+    return this.messages().some((m) => (m.role === "user" || m.role === "trigger") && m.turnId === turnId);
   }
   getStep(id: string): unknown | undefined {
     const rows = this.sql.exec<{ output: string }>("SELECT output FROM agent_steps WHERE id = ?", id).toArray();
@@ -217,7 +218,7 @@ export class AgentDurableObject {
   // Juno's batch-loader registry) can't leak across turns on a long-lived DO.
   // ensureScope() lazily wires node:async_hooks (workerd via nodejs_compat), as the
   // pipeline does; without it runInScope is a pass-through and ambient reads throw.
-  async turn(input: { turnId?: string; userText: string; event?: InboundEvent }): Promise<string> {
+  async turn(input: { turnId?: string; userText: string; event?: InboundEvent; trigger?: ProactiveTrigger }): Promise<string> {
     await ensureScope();
     return runInScope({ resources: this.resources, services: this.services }, () => this.session.turn(input));
   }
@@ -230,14 +231,14 @@ export class AgentDurableObject {
   async fetch(req: Request): Promise<Response> {
     const url = new URL(req.url);
     if (req.method === "POST" && url.pathname.endsWith("/turn")) {
-      const { userText, turnId, event } = (await req.json()) as { userText: string; turnId?: string; event?: InboundEvent };
+      const { userText, turnId, event, trigger } = (await req.json()) as { userText: string; turnId?: string; event?: InboundEvent; trigger?: ProactiveTrigger };
       await ensureScope();
       // start() schedules the turn on the chain WITHIN the scope, so it runs with ambient
       // db/services (ALS propagates to the .then continuation registered here); subscribing
       // happens synchronously right after, before any event can emit.
       let started: { turnId: string };
       try {
-        started = runInScope({ resources: this.resources, services: this.services }, () => this.session.start({ userText, turnId, event }));
+        started = runInScope({ resources: this.resources, services: this.services }, () => this.session.start({ userText, turnId, event, trigger }));
       } catch (err) {
         // e.g. the session is suspended awaiting input — a client-resolvable conflict, not a crash
         return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 409 });
@@ -495,8 +496,10 @@ function serializeResume(o: { turnId: string; inputId: string; input: unknown; b
   }
 }
 
-function serializeTurn(userText: string, o?: { turnId?: string; event?: InboundEvent }): string {
-  const payload = { userText, turnId: o?.turnId, event: o?.event };
+// `trigger` is ProactiveTrigger — plain strings by construction — so only event.raw can make
+// the stringify throw; the fallback that strips it stays sufficient.
+function serializeTurn(userText: string, o?: { turnId?: string; event?: InboundEvent; trigger?: ProactiveTrigger }): string {
+  const payload = { userText, turnId: o?.turnId, event: o?.event, trigger: o?.trigger };
   try {
     return JSON.stringify(payload);
   } catch {

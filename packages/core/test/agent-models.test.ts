@@ -12,6 +12,11 @@ describe("toAnthropicMessages", () => {
     expect(toAnthropicMessages([{ role: "user", turnId: "t1", text: "hi" }])).toEqual([{ role: "user", content: "hi" }]);
   });
 
+  test("a `trigger` (proactive seed) maps to a plain user message — no new provider role (P4 §9)", () => {
+    const msgs: Msg[] = [{ role: "trigger", turnId: "t1", text: "Summarize today's open threads.", by: "cron:daily" }];
+    expect(toAnthropicMessages(msgs)).toEqual([{ role: "user", content: "Summarize today's open threads." }]);
+  });
+
   test("an assistant message becomes text + tool_use blocks", () => {
     const msgs: Msg[] = [{ role: "assistant", turnId: "t1", text: "Placing it.", toolCalls: [{ id: "c1", name: "create_order", input: { item: "widget" } }] }];
     expect(toAnthropicMessages(msgs)).toEqual([

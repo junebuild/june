@@ -18,6 +18,11 @@
 export type ToolCall = { id: string; name: string; input: unknown };
 export type Msg =
   | { role: "user"; turnId: string; text: string }
+  // A proactive turn's opening message (§9): a schedule / another channel / the agent itself
+  // seeded this turn (no inbound user). A DISTINCT role — not a user Msg — so the durable
+  // transcript honestly attributes who initiated it (`by`); the model adapter maps it to a
+  // user/system message (providers needn't support a new role). See RFC decision #6.
+  | { role: "trigger"; turnId: string; text: string; by: string }
   | { role: "assistant"; turnId: string; text: string; toolCalls: ToolCall[] }
   | { role: "tool"; turnId: string; toolCallId: string; name: string; result: unknown };
 export type ModelReply = { text: string; toolCalls: ToolCall[] };
@@ -113,7 +118,9 @@ export type Tool = {
 export interface SessionStore {
   appendMessage(m: Msg): void;
   messages(): Msg[];
-  hasUserTurn(turnId: string): boolean;
+  // Has this turn's OPENING message already been appended? (a user msg for an inbound turn,
+  // a trigger msg for a proactive one.) Guards against double-seeding on a crash-replay.
+  hasOpeningMessage(turnId: string): boolean;
   getStep(id: string): unknown | undefined;
   putStep(id: string, output: unknown): void;
   delStep(id: string): void; // remove a checkpoint (a consumed suspend park); no-op when absent
@@ -166,9 +173,15 @@ export class ResumeAuthorizationError extends Error {}
 // overlay/event). One per session — turns serialize, and start() rejects new turns while
 // one is parked, so a single fixed key cannot be clobbered.
 type SuspendedCheckpoint = { turnId: string; callId: string; request: InputRequest; userText: string; systemOverlay?: string; event?: InboundEvent };
+// The proactive variant stands alone: it's the only trigger a CALLER may pass explicitly
+// (TurnInput / ChannelContext.run / receive()) — inbound is derived from the event, resume is
+// engine-internal. Narrowing the public seams to this type makes misuse (passing an inbound or
+// resume trigger to the proactive entrypoint) unrepresentable, and keeps the /turn wire payload
+// trivially JSON-serializable (no embedded event.raw).
+export type ProactiveTrigger = { kind: "proactive"; by: string; note?: string }; // a schedule, another channel, the agent itself
 export type TurnTrigger =
   | { kind: "inbound"; event: InboundEvent }          // a channel event (message, mention, reaction)
-  | { kind: "proactive"; by: string; note?: string }   // a schedule, another channel, the agent itself
+  | ProactiveTrigger
   | { kind: "resume"; callId: string };                // continuation after an input.requested suspend
 export type TurnEvent =
   | { type: "turn.started"; turnId: string; trigger: TurnTrigger }
@@ -214,13 +227,21 @@ export async function runTurn(
   opts: { turnId: string; userText: string; crash?: Crash },
   env: { runtime: Runtime; agent: string; sessionId: string; event?: InboundEvent; systemOverlay?: string; trigger?: TurnTrigger },
 ): Promise<string> {
-  if (!store.hasUserTurn(opts.turnId)) {
-    store.tx(() => store.appendMessage({ role: "user", turnId: opts.turnId, text: opts.userText }));
-  }
-  store.setStatus("running");
   // env.trigger overrides the derivation: a resume continuation announces { kind: "resume" }
   // even though it replays with the original inbound event.
   const trigger: TurnTrigger = env.trigger ?? (env.event ? { kind: "inbound", event: env.event } : { kind: "proactive", by: "system" });
+  if (!store.hasOpeningMessage(opts.turnId)) {
+    // An EXPLICITLY proactive turn (receive() / a schedule / another channel passed
+    // env.trigger) opens with a `trigger` msg attributing who seeded it. A plain programmatic
+    // turn (no event, no explicit trigger — CLI/http) is derived proactive/system for the live
+    // turn.started event, but its opening stays a `user` msg: it's an API caller, not an
+    // attributed agent-initiated seed. So key the role off the EXPLICIT trigger. See RFC §9 / #6.
+    const opening: Msg = env.trigger?.kind === "proactive"
+      ? { role: "trigger", turnId: opts.turnId, text: opts.userText, by: env.trigger.by }
+      : { role: "user", turnId: opts.turnId, text: opts.userText };
+    store.tx(() => store.appendMessage(opening));
+  }
+  store.setStatus("running");
   sink.emit({ type: "turn.started", turnId: opts.turnId, trigger });
 
   const specs = tools.map((t) => t.spec);
@@ -352,6 +373,7 @@ async function toolStep(
 export type Turn = {
   turnId: string;
   user: string;
+  by?: string; // set when the turn was agent-initiated: who seeded it (the trigger msg's `by`)
   steps: { name: string; done: boolean; result?: unknown }[];
   text?: string;
 };
@@ -362,6 +384,7 @@ export function foldTranscript(msgs: Msg[]): Turn[] {
     let t = byId.get(m.turnId);
     if (!t) { t = { turnId: m.turnId, user: "", steps: [] }; byId.set(m.turnId, t); order.push(m.turnId); }
     if (m.role === "user") t.user = m.text;
+    else if (m.role === "trigger") { t.user = m.text; t.by = m.by; } // proactive seed shows as the turn's prompt, still attributed
     else if (m.role === "assistant") {
       for (const tc of m.toolCalls) t.steps.push({ name: tc.name, done: false });
       if (m.text) t.text = m.text;
@@ -374,7 +397,11 @@ export function foldTranscript(msgs: Msg[]): Turn[] {
 }
 
 // ── the outer seam: AgentSession actor (serializes turns via an inbox) ─────────
-export type TurnInput = { turnId?: string; userText: string; crash?: Crash; event?: InboundEvent };
+// `trigger` marks an agent-INITIATED turn (proactive): no inbound event, the turn opens with a
+// `trigger`-role seed attributed to `by` (a schedule, another channel, the agent). Omitted for a
+// normal inbound/programmatic turn. Proactive-only by type: inbound is derived from `event`,
+// resume is engine-internal. See §9 / receive().
+export type TurnInput = { turnId?: string; userText: string; crash?: Crash; event?: InboundEvent; trigger?: ProactiveTrigger };
 
 export class AgentSession {
   private chain: Promise<unknown> = Promise.resolve();
@@ -431,7 +458,7 @@ export class AgentSession {
         this.model,
         this.tools,
         { turnId, userText: input.userText, crash: input.crash },
-        { runtime: this.runtime, agent: this.agent, sessionId: this.id, event: input.event, systemOverlay },
+        { runtime: this.runtime, agent: this.agent, sessionId: this.id, event: input.event, systemOverlay, trigger: input.trigger },
       );
     this.track(turnId, this.chain.then(run));
     return { turnId };

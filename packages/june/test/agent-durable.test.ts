@@ -295,6 +295,22 @@ describe("AgentDurableObject", () => {
     const { transcript } = (await t.json()) as { transcript: { user: string }[] };
     expect(transcript[0]!.user).toBe("Order 3 widgets");
   });
+
+  test("POST /turn with a proactive trigger logs a `trigger`-role opening in the durable log (P4 §9)", async () => {
+    const s = await storage();
+    const agent = new AgentDurableObject({ storage: s }, { name: "ops", model: scriptedModel([{ text: "3 open threads today.", toolCalls: [] }]), tools: [] });
+
+    // the edge body carries `trigger` (serializeTurn forwards it); the DO seeds the turn with it.
+    const res = await agent.fetch(new Request("https://do/turn", {
+      method: "POST",
+      body: JSON.stringify({ userText: "Summarize today's open threads.", turnId: "t1", trigger: { kind: "proactive", by: "cron:daily" } }),
+    }));
+    expect(await sseTurnFinalText(res)).toBe("3 open threads today.");
+
+    // read the RAW messages (not the fold) to prove the opening is an attributed trigger, not a user msg
+    const opening = new DoSessionStore(s).messages()[0]!;
+    expect(opening).toEqual({ role: "trigger", turnId: "t1", text: "Summarize today's open threads.", by: "cron:daily" });
+  });
 });
 
 // ── the DI seam: ambient resources/services reach a tool INSIDE the DO ────────

@@ -276,17 +276,24 @@ turn's own lifecycle.
 
 ## 12. Phasing (shippable slices, even without back-compat)
 
-1. **P1 — TurnEvent bus + structural events + SSE.** Promote Broadcaster → `EventSink`; emit
-   structural events from existing step boundaries; `observe` upgraded; DO `/turn` streams;
-   channel `render` presets. Unlocks liveness UX with no model change.
-2. **P2 — Streaming Model.** `Model => AsyncIterable<ModelDelta>`; anthropic adapter yields deltas;
-   engine emits `reasoning.delta`/`message.delta`. Progressive message rendering lands.
-3. **P3 — Suspend / resume (HITL).** `ctx.requestInput` + `session.resume` + `input.requested`
-   rendering + Slack Block Kit interaction routing. The differentiator.
-4. **P4 — Proactive.** `session.start({trigger:proactive})` + `channel.deliver` + `receive`;
-   schedule/cross-channel initiation.
+1. **P1 — TurnEvent bus + structural events + SSE.** ✅ **Shipped.** Promote Broadcaster →
+   `EventSink`; emit structural events from existing step boundaries; `observe` upgraded; DO
+   `/turn` streams; channel `render` presets. Unlocks liveness UX with no model change.
+2. **P2 — Streaming Model.** ✅ **Shipped.** `Model => AsyncIterable<ModelDelta>`; anthropic
+   adapter yields deltas; engine emits `reasoning.delta`/`message.delta`. Progressive message
+   rendering lands.
+3. **P3 — Suspend / resume (HITL).** ✅ **Shipped** (P3 core + P3b Slack). `ctx.requestInput` +
+   `session.resume` + `input.requested` rendering + Slack Block Kit interaction routing. The
+   differentiator.
+4. **P4 — Proactive.** ✅ **Shipped.** A `trigger`-role opening Msg (attributed, mapped to a user
+   message at the adapter) seeds an agent-initiated turn via `start({trigger:proactive})`;
+   `channel.deliver(target, events)` renders a turn's stream to a target with no inbound event;
+   `receive(channel, ctx, {seed, target, trigger, session})` starts the proactive turn and wires
+   its stream to `deliver`. Schedule/cross-channel initiation. The trigger threads through the
+   edge (`serializeTurn` → DO `/turn` → `session.start`).
 
 P1+P2 are foundational; P3 is the deep, high-value one; P4 is smaller and rides on P1's renderer.
+All four phases are now shipped.
 
 ## 13. Migration impact (v0 — we change call sites, not preserve them)
 
