@@ -673,12 +673,27 @@ function slackTools(get: SlackCall, post: SlackCall): Tool[] {
 //     — that's the platform's ceiling for website hooks, not a choice this
 //     channel makes.
 //
-// Only visitor ("user") text triggers a turn; operator messages are our own replies.
+// Only visitor ("user") text triggers a turn by default; operator messages are our own
+// replies. `respondTo` widens that (a rating or a resolve can drive a follow-up turn).
 //
 // Symmetric with slack: the visitor message becomes a normalized InboundEvent
 // (channelId = website, threadId = conversation session, user = the visitor), and the
 // channel exposes crisp_read_conversation so the agent can pull earlier messages in the
 // same conversation — defaulting the target from the current turn's event.
+//
+// ⚠️ Which events ARRIVE at all is decided in Crisp's dashboard/Marketplace (the hook's
+// event checkboxes), not here — `events`/`respondTo`/`on` only filter what arrives. The
+// most common "why doesn't my observer fire" is the box not being ticked on the Crisp
+// side. Dashboard checkbox ↔ this channel:
+//   message:send          → kind "message"          (visitor text; the default turn driver)
+//   message:updated       → kind "message_changed"
+//   session:set_state     → kind "state_changed"    (resolved / unresolved / pending)
+//   session:sync:rating   → kind "rating"           (CSAT stars + comment)
+//   message:received, message:removed, session:removed, people:* → no normalized kind;
+//   they reach onEvent with a TYPED raw payload (see CrispEventPayloads / isCrispEvent).
+// Note: website hooks expose a SUBSET of Crisp's full catalog (no session:request:initiated,
+// no session:set_opened/closed, no message:compose:*) — design flows against session:set_state,
+// which both hook flavors deliver.
 export type CrispWebhookAuth =
   | { type: "signature"; secret: string }
   | { type: "urlKey"; key: string; param?: string };
@@ -709,17 +724,150 @@ type CrispAuthOpts =
   | { auth: CrispWebhookAuth; signingSecret?: never }
   | { auth?: never; signingSecret: string };
 
+// ── crisp typed payloads + normalization ──────────────────────────────────────
+// Curated `data` shapes for the dashboard-subscribable events an agent app actually
+// consumes — typed so an onEvent consumer gets autocomplete and typo-checking instead
+// of hand-rolling shapes from the Crisp docs. Deliberately NOT the full ~70-event
+// catalog: the long tail (campaign:*, bucket:*, email:*, …) stays `unknown` and is
+// still reachable through onEvent's raw. All fields optional — Crisp payloads are
+// external input; normalization (below) is where required fields are enforced.
+export type CrispMessageType = "text" | "file" | "animation" | "audio" | "picker" | "field" | "carousel" | "note" | "event";
+export type CrispUser = { user_id?: string; nickname?: string };
+type CrispMessageData = {
+  website_id?: string; session_id?: string; from?: "user" | "operator"; type?: CrispMessageType;
+  content?: unknown; fingerprint?: number; user?: CrispUser; timestamp?: number;
+};
+export type CrispEventPayloads = {
+  "message:send": CrispMessageData;     // a visitor message (the default turn driver)
+  "message:received": CrispMessageData; // an operator message (our own replies included — loop hazard, never a turn)
+  "message:updated": { website_id?: string; session_id?: string; fingerprint?: number; content?: unknown };
+  "message:removed": { website_id?: string; session_id?: string; fingerprint?: number };
+  "session:set_state": { website_id?: string; session_id?: string; state?: "pending" | "unresolved" | "resolved" };
+  "session:sync:rating": { website_id?: string; session_id?: string; rating?: { stars?: number; comment?: string } };
+  "session:removed": { website_id?: string; session_id?: string };
+};
+export type CrispEventName = keyof CrispEventPayloads;
+
+// Narrow an onEvent `raw` to a typed Crisp payload:
+//   if (isCrispEvent(raw, "session:sync:rating")) record(raw.data.rating?.stars)
+// Checks only the discriminant — the data shape is a trusted-typing convenience, the
+// same posture as every other webhook payload cast in this module.
+export function isCrispEvent<E extends CrispEventName>(
+  payload: unknown,
+  event: E,
+): payload is { event: E; data: CrispEventPayloads[E]; timestamp?: number } {
+  return typeof payload === "object" && payload !== null && (payload as { event?: unknown }).event === event;
+}
+
+// The normalized kinds crispChannel can produce (a subset of InboundEvent["kind"]).
+export type CrispEventKind = "message" | "message_changed" | "state_changed" | "rating";
+
+// Map a raw Crisp webhook payload to June's normalized envelope + the turn's session and
+// text — the crisp dual of normalizeSlackEvent, exported so a hand-rolled channel reuses
+// the normalization. Returns null when the event isn't one we route (not in `events`,
+// operator/self-authored, or missing required fields) so the webhook fast-ACKs and does
+// nothing. Kinds without natural text (state_changed / rating) synthesize a note as the
+// userText — same pattern as Slack reaction turns.
+export function normalizeCrispEvent(
+  payload: { event?: string; data?: unknown },
+  events: CrispEventKind[],
+): { event: InboundEvent; session: string; userText: string } | null {
+  const base = (d: { website_id?: string; session_id?: string }) =>
+    ({ source: "crisp", channelId: d.website_id!, threadId: d.session_id!, raw: payload }) as const;
+  const session = (d: { website_id?: string; session_id?: string }) => `crisp:${d.website_id}:${d.session_id}`; // one conversation = one session
+
+  // A VISITOR text message (operator messages — message:received, or a message:send that
+  // isn't from "user" — are our own reply path → loop guard; require non-blank content so
+  // a whitespace message doesn't burn a turn). channelId = website, threadId = conversation
+  // session (NOT ts — Crisp keys a conversation by website/session; ts is just the message
+  // fingerprint, "" when Crisp omits it).
+  if (isCrispEvent(payload, "message:send") && events.includes("message")) {
+    const d = payload.data ?? {};
+    if (d.from === "user" && d.type === "text" && typeof d.content === "string" && d.content.trim() && d.website_id && d.session_id) {
+      return {
+        event: { ...base(d), kind: "message", ts: String(d.fingerprint ?? ""), user: d.user?.user_id ? { id: d.user.user_id, name: d.user.nickname } : undefined, text: d.content },
+        session: session(d),
+        userText: d.content,
+      };
+    }
+    return null;
+  }
+  // A message edit. ⚠️ Crisp's payload carries NO `from` — visitor and operator edits are
+  // indistinguishable, so putting "message_changed" in respondTo can burn a turn on an
+  // operator's own edit. Fine for observers; opt into turns knowingly.
+  if (isCrispEvent(payload, "message:updated") && events.includes("message_changed")) {
+    const d = payload.data ?? {};
+    if (typeof d.content === "string" && d.content.trim() && d.website_id && d.session_id) {
+      return {
+        event: { ...base(d), kind: "message_changed", ts: String(d.fingerprint ?? ""), text: d.content },
+        session: session(d),
+        userText: `[edited] a message in this conversation was edited to: ${d.content}`,
+      };
+    }
+    return null;
+  }
+  // The conversation's state machine (resolved / unresolved / pending) — the hook both
+  // website and plugin hooks deliver for "the operator resolved it" (session:set_closed
+  // does NOT reach website hooks). The natural trigger for a resolve hand-off.
+  if (isCrispEvent(payload, "session:set_state") && events.includes("state_changed")) {
+    const d = payload.data ?? {};
+    if (d.state && d.website_id && d.session_id) {
+      return {
+        event: { ...base(d), kind: "state_changed", ts: "", state: d.state },
+        session: session(d),
+        userText: `[state] the conversation was marked ${d.state}`,
+      };
+    }
+    return null;
+  }
+  // The visitor's CSAT rating — stars (+ optional comment) ride on event.rating so a
+  // follow-up turn (respondTo: ["rating"]) can react to a bad score.
+  if (isCrispEvent(payload, "session:sync:rating") && events.includes("rating")) {
+    const d = payload.data ?? {};
+    if (typeof d.rating?.stars === "number" && d.website_id && d.session_id) {
+      return {
+        event: { ...base(d), kind: "rating", ts: "", rating: { stars: d.rating.stars, comment: d.rating.comment } },
+        session: session(d),
+        userText: `[rating] the visitor rated this conversation ${d.rating.stars}/5${d.rating.comment ? `: "${d.rating.comment}"` : ""}`,
+      };
+    }
+    return null;
+  }
+  return null;
+}
+
 export function crispChannel(opts: CrispAuthOpts & {
   identifier: string;
   key: string;
   path?: string;
   apiUrl?: string;
-  // Crisp normalizes a single kind (a visitor text message); `on.message` is the typed,
-  // event-non-optional observer for it (onEvent stays the raw firehose over all events).
-  on?: { message?: KindObserver };
+  // Which arriving events NORMALIZE (become an InboundEvent) — "message" (visitor text)
+  // by default. Same derivation as slack: expressing intent via respondTo/on derives the
+  // list; explicit `events` overrides. Remember the dashboard checkbox decides what
+  // arrives at all (see the header note) — this only filters.
+  events?: CrispEventKind[];
+  // Which normalized kinds drive a turn + reply; the rest only reach `on`/`onEvent`.
+  // Defaults to all of `events` (mode:"observe" forces this empty). e.g.
+  // events:["message","rating"], respondTo:["message"] runs a turn per visitor message
+  // but treats a CSAT rating as a deterministic observe (no LLM); respondTo:["message",
+  // "rating"] lets a bad score drive a follow-up turn (userText is a synthesized note,
+  // like Slack reaction turns).
+  respondTo?: CrispEventKind[];
+  // Per-kind observers: `on[kind]` fires (background) only for that kind, only when a
+  // normalized event exists (post loop guards) — no onEvent-style demux. A kind present
+  // here is auto-subscribed (see the `events` derivation). onEvent stays the raw
+  // firehose over ALL verified events, normalizable or not.
+  on?: Partial<Record<CrispEventKind, KindObserver>>;
   onError?: (err: unknown) => void;
 } & ChannelExtensions): Channel {
   const api = opts.apiUrl ?? "https://api.crisp.chat/v1";
+  // Derive the normalize list from intent (respondTo + on keys) so kinds aren't written
+  // twice and can't drift; explicit `events` overrides. No intent at all → the friendly
+  // default (visitor messages only — the prior behavior).
+  const onKinds = Object.keys(opts.on ?? {}) as CrispEventKind[];
+  const events: CrispEventKind[] =
+    opts.events ?? (opts.respondTo || opts.on ? [...new Set([...(opts.respondTo ?? []), ...onKinds])] : ["message"]);
+  const respondTo: string[] = opts.mode === "observe" ? [] : (opts.respondTo ?? events);
   const auth = () => `Basic ${btoa(`${opts.identifier}:${opts.key}`)}`;
   async function sendMessage(websiteId: string, sessionId: string, content: string) {
     await fetch(`${api}/website/${websiteId}/conversation/${sessionId}/message`, {
@@ -761,40 +909,28 @@ export function crispChannel(opts: CrispAuthOpts & {
         if (!ok) return new Response("bad signature", { status: 401 });
       }
 
-      const payload = tryParseJson<{
-        event?: string;
-        data?: { from?: string; type?: string; content?: unknown; website_id?: string; session_id?: string; fingerprint?: number; user?: { user_id?: string; nickname?: string } };
-      }>(body);
+      const payload = tryParseJson<{ event?: string; data?: unknown }>(body);
       if (!payload) return new Response("", { status: 200 }); // signed but unparseable → ACK, don't retry
       if (opts.accept && !opts.accept(payload)) return new Response("", { status: 200 }); // gated out (e.g. website allowlist)
 
-      const d = payload.data ?? {};
-      // A VISITOR text message is the only turn-eligible event (operator messages are our
-      // own reply → loop guard; require non-blank content so a whitespace message doesn't
-      // burn a turn). Its normalized envelope: channelId = website, threadId = conversation
-      // session (NOT ts — Crisp keys a conversation by website/session; ts is just the
-      // message fingerprint, "" when Crisp omits it).
-      const isVisitorText = payload.event === "message:send" && d.from === "user" && d.type === "text" && typeof d.content === "string" && !!d.content.trim() && !!d.website_id && !!d.session_id;
-      const event: InboundEvent | undefined = isVisitorText
-        ? {
-            source: "crisp", kind: "message", channelId: d.website_id!, threadId: d.session_id!,
-            ts: String(d.fingerprint ?? ""), user: d.user?.user_id ? { id: d.user.user_id, name: d.user.nickname } : undefined,
-            text: String(d.content), raw: payload,
-          }
-        : undefined;
+      const norm = normalizeCrispEvent(payload, events);
 
       // observe: mirror EVERY verified event (visitor + operator + non-text) — this is how
-      // an app records the whole conversation without forking the channel.
-      if (opts.onEvent) runBackground(ctx, async () => opts.onEvent!({ raw: payload, event }, ctx), opts.onError);
-      // typed per-kind observer (only the normalized visitor-text event)
-      if (event && opts.on?.message) runBackground(ctx, async () => opts.on!.message!(event, ctx), opts.onError);
+      // an app records the whole conversation without forking the channel. Narrow `raw`
+      // with isCrispEvent for typed access to the un-normalized kinds (message:received…).
+      if (opts.onEvent) runBackground(ctx, async () => opts.onEvent!({ raw: payload, event: norm?.event }, ctx), opts.onError);
+      // typed per-kind observer: fires only for its kind, with a non-optional event
+      if (norm) {
+        const handler = opts.on?.[norm.event.kind as CrispEventKind];
+        if (handler) runBackground(ctx, async () => handler(norm.event, ctx), opts.onError);
+      }
 
-      // respond: a visitor text message runs a turn + reply — unless we're in observe (shadow) mode.
-      if (opts.mode !== "observe" && event) {
-        const session = `crisp:${d.website_id}:${d.session_id}`; // one conversation = one session
+      // respond: only kinds in respondTo drive a turn + reply (a rating can stay observe-only).
+      if (norm && respondTo.includes(norm.event.kind)) {
+        const { event, session, userText } = norm;
         runBackground(ctx, async () => {
-          const reply = await ctx.run(String(d.content), { session, event });
-          if (reply && reply.trim()) await sendMessage(d.website_id!, d.session_id!, reply); // skip empty (tool-only turn)
+          const reply = await ctx.run(userText, { session, event });
+          if (reply && reply.trim()) await sendMessage(event.channelId, event.threadId!, reply); // skip empty (tool-only turn)
         }, opts.onError);
       }
       return new Response("", { status: 200 }); // fast ACK

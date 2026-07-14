@@ -6,7 +6,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { channelFetch, defineChannel, resolveChannel, type AgentDefinition, type Channel, type ChannelContext } from "@junejs/core/agent-config";
 import type { InboundEvent, ToolContext, TurnEvent } from "@junejs/core/agent-runtime";
-import { crispChannel, httpChannel, slackChannel, receive, verifySlackSignature, verifyCrispSignature, verifyCrispUrlKey, tryParseJson, timestampFresh, normalizeSlackEvent } from "@junejs/core/channels";
+import { crispChannel, httpChannel, slackChannel, receive, verifySlackSignature, verifyCrispSignature, verifyCrispUrlKey, tryParseJson, timestampFresh, normalizeSlackEvent, normalizeCrispEvent, isCrispEvent } from "@junejs/core/channels";
 
 const enc = new TextEncoder();
 async function hmacHex(secret: string, message: string): Promise<string> {
@@ -860,6 +860,68 @@ describe("crispChannel", () => {
     await ch.webhook!(await signed(body), ctxWith(run));
     await flush();
     expect(seen).toMatchObject({ kind: "message", channelId: "w1", threadId: "s1", ts: "12345", user: { id: "v9", name: "Ada" }, text: "help" });
+  });
+
+  test("normalizeCrispEvent: curated kinds map to typed envelopes; operator/unknown/unlisted → null", () => {
+    const all: Parameters<typeof normalizeCrispEvent>[1] = ["message", "message_changed", "state_changed", "rating"];
+    // visitor text → message (turn text = the content, verbatim)
+    expect(normalizeCrispEvent({ event: "message:send", data: { from: "user", type: "text", content: "hi", website_id: "w1", session_id: "s1", fingerprint: 7 } }, all))
+      .toMatchObject({ event: { kind: "message", channelId: "w1", threadId: "s1", ts: "7", text: "hi" }, session: "crisp:w1:s1", userText: "hi" });
+    // an edit → message_changed with a synthesized note (crisp sends no `from` here)
+    expect(normalizeCrispEvent({ event: "message:updated", data: { content: "hi (edited)", website_id: "w1", session_id: "s1", fingerprint: 7 } }, all))
+      .toMatchObject({ event: { kind: "message_changed", text: "hi (edited)" }, userText: "[edited] a message in this conversation was edited to: hi (edited)" });
+    // the state machine → state_changed carrying the new state
+    expect(normalizeCrispEvent({ event: "session:set_state", data: { state: "resolved", website_id: "w1", session_id: "s1" } }, all))
+      .toMatchObject({ event: { kind: "state_changed", state: "resolved" }, session: "crisp:w1:s1", userText: "[state] the conversation was marked resolved" });
+    // CSAT → rating riding on event.rating, comment folded into the note
+    expect(normalizeCrispEvent({ event: "session:sync:rating", data: { rating: { stars: 2, comment: "slow" }, website_id: "w1", session_id: "s1" } }, all))
+      .toMatchObject({ event: { kind: "rating", rating: { stars: 2, comment: "slow" } }, userText: '[rating] the visitor rated this conversation 2/5: "slow"' });
+    // loop guard: operator-authored message:send never normalizes
+    expect(normalizeCrispEvent({ event: "message:send", data: { from: "operator", type: "text", content: "our reply", website_id: "w1", session_id: "s1" } }, all)).toBeNull();
+    // a kind not in `events` doesn't normalize; the long tail never does
+    expect(normalizeCrispEvent({ event: "session:sync:rating", data: { rating: { stars: 5 }, website_id: "w1", session_id: "s1" } }, ["message"])).toBeNull();
+    expect(normalizeCrispEvent({ event: "campaign:progress", data: {} }, all)).toBeNull();
+  });
+
+  test("isCrispEvent narrows an onEvent raw to a typed payload", () => {
+    const raw: unknown = { event: "session:sync:rating", data: { rating: { stars: 4 }, website_id: "w1", session_id: "s1" } };
+    expect(isCrispEvent(raw, "session:sync:rating") && raw.data.rating?.stars).toBe(4); // typed access, no cast
+    expect(isCrispEvent(raw, "message:send")).toBe(false);
+    expect(isCrispEvent(null, "message:send")).toBe(false);
+  });
+
+  test("respondTo rating: a CSAT score drives a follow-up turn in the SAME conversation session", async () => {
+    captureFetch();
+    let turn: { userText: string; session?: string; event?: InboundEvent } | undefined;
+    const ch2 = crispChannel({
+      signingSecret: secret, identifier: "id", key: "key", apiUrl: "https://crisp.test",
+      respondTo: ["message", "rating"],
+    });
+    const run = (async (m: string, o?: { session?: string; event?: InboundEvent }) => { turn = { userText: m, session: o?.session, event: o?.event }; return "Sorry about that — I've flagged this."; }) as ChannelContext["run"];
+    const body = JSON.stringify({ event: "session:sync:rating", data: { rating: { stars: 1, comment: "unhelpful" }, website_id: "w1", session_id: "s1" } });
+    await ch2.webhook!(await signed(body), ctxWith(run));
+    await flush();
+    expect(turn!.userText).toBe('[rating] the visitor rated this conversation 1/5: "unhelpful"');
+    expect(turn!.session).toBe("crisp:w1:s1"); // same session as the conversation's message turns
+    expect(turn!.event).toMatchObject({ kind: "rating", rating: { stars: 1 } });
+    expect(calls[0]!.url).toBe("https://crisp.test/website/w1/conversation/s1/message"); // reply lands in-conversation
+  });
+
+  test("on.rating without respondTo rating: typed observer fires, NO turn (deterministic observe)", async () => {
+    captureFetch();
+    const seen: InboundEvent[] = [];
+    let ran = false;
+    const ch2 = crispChannel({
+      signingSecret: secret, identifier: "id", key: "key", apiUrl: "https://crisp.test",
+      respondTo: ["message"], on: { rating: (e) => { seen.push(e); } },
+    });
+    const body = JSON.stringify({ event: "session:sync:rating", data: { rating: { stars: 5 }, website_id: "w1", session_id: "s1" } });
+    await ch2.webhook!(await signed(body), ctxWith(async () => { ran = true; return "nope"; }));
+    await flush();
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ kind: "rating", rating: { stars: 5 } });
+    expect(ran).toBe(false);  // no LLM burn on a score
+    expect(calls).toHaveLength(0); // nothing posted back
   });
 
   test("crisp_read_conversation defaults website/session from the event and normalizes", async () => {
