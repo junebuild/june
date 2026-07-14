@@ -198,6 +198,103 @@ describe("slackChannel", () => {
     expect((calls[1]!.body as { text?: string }).text).toContain("the turn failed");
   });
 
+  // streamStub with a programmable response per Slack method — for the failure paths
+  function stubSlack(respond: (m: string) => { json?: unknown; headers?: Record<string, string> } | undefined) {
+    calls = [];
+    globalThis.fetch = (async (url: unknown, init?: { body?: string }) => {
+      calls.push({ url: String(url), body: init?.body ? JSON.parse(init.body) : undefined });
+      const m = String(url).split("/").pop()!;
+      const r = respond(m) ?? { json: m === "chat.startStream" ? { ok: true, ts: "111.9" } : { ok: true } };
+      return new Response(JSON.stringify(r.json ?? { ok: true }), { status: 200, headers: r.headers });
+    }) as typeof fetch;
+  }
+  const delta = (text: string) => ({ type: "message.delta", turnId: "t1", text }) as TurnEvent;
+  const completed = (text: string) => ({ type: "turn.completed", turnId: "t1", text }) as TurnEvent;
+  async function driveStream(ch2: Channel, events: TurnEvent[]) {
+    const ctx = ctxWith(async () => "unused");
+    ctx.runStream = async function* () { for (const e of events) yield e; };
+    await ch2.webhook!(await signed(JSON.stringify({ type: "event_callback", event: { type: "message", text: "hi", channel: "C1", ts: "1.1", user: "U1" } })), ctx);
+    await flush();
+  }
+  const mdOf = (c: { body: unknown }) => (c.body as { markdown_text?: string }).markdown_text;
+
+  test("stream render: a burst of deltas coalesces into one append (Tier-4 friendly)", async () => {
+    streamStub();
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true });
+    await driveStream(ch2, [delta("Hel"), delta("lo "), delta("wor"), delta("ld."), completed("Hello world.")]);
+    expect(calls.map((c) => [method(c), mdOf(c)])).toEqual([
+      ["chat.startStream", "Hel"], // the first token still seeds IMMEDIATELY
+      ["chat.appendStream", "lo world."], // the burst arrived inside one flush window → ONE append
+      ["chat.stopStream", undefined],
+    ]);
+  });
+
+  test("stream render: stopped_by_user ends rendering — no more appends, no stopStream, no salvage", async () => {
+    stubSlack((m) => (m === "chat.appendStream" ? { json: { ok: false, error: "stopped_by_user" } } : undefined));
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true });
+    // the oversized delta forces a mid-turn flush, which Slack refuses: the human hit Stop
+    await driveStream(ch2, [delta("a"), delta("x".repeat(12000)), delta("never rendered"), completed("…")]);
+    expect(calls.map(method)).toEqual(["chat.startStream", "chat.appendStream"]); // ceased, silently (their choice)
+  });
+
+  test("stream render: a hard append failure surfaces via onError and posts the tail (no silent truncation)", async () => {
+    stubSlack((m) => (m === "chat.appendStream" ? { json: { ok: false, error: "message_not_in_streaming_state" } } : undefined));
+    const errs: unknown[] = [];
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true, onError: (e) => errs.push(e) });
+    await driveStream(ch2, [delta("a"), delta("tail"), completed("a tail")]);
+    expect(calls.map(method)).toEqual(["chat.startStream", "chat.appendStream", "chat.postMessage"]);
+    expect((calls[2]!.body as { text?: string }).text).toBe("tail"); // the unsent tail still lands
+    expect(String(errs[0])).toContain("message_not_in_streaming_state"); // and the failure is LOUD
+  });
+
+  test("stream render: a ratelimited append retries once (honoring Retry-After) with the same slice", async () => {
+    let appends = 0;
+    stubSlack((m) => (m === "chat.appendStream" && appends++ === 0 ? { json: { ok: false, error: "ratelimited" }, headers: { "retry-after": "0" } } : undefined));
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true });
+    await driveStream(ch2, [delta("a"), delta("b"), completed("ab")]);
+    expect(calls.map(method)).toEqual(["chat.startStream", "chat.appendStream", "chat.appendStream", "chat.stopStream"]);
+    expect(mdOf(calls[2]!)).toBe("b"); // the retry re-sends the SAME slice — nothing dropped
+  });
+
+  test("stream render: content over Slack's 12k markdown cap is sliced across appends", async () => {
+    streamStub();
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true });
+    await driveStream(ch2, [completed("x".repeat(25000))]); // one-shot reply far over the cap
+    expect(calls.map((c) => [method(c), mdOf(c)?.length])).toEqual([
+      ["chat.startStream", 12000],
+      ["chat.appendStream", 12000],
+      ["chat.appendStream", 1000],
+      ["chat.stopStream", undefined],
+    ]);
+  });
+
+  test("proactive: a top-level channel stream carries recipient ids (startStream requires them without thread_ts)", async () => {
+    streamStub();
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test" });
+    async function* stream() { yield delta("Heads up."); yield completed("Heads up."); }
+    await ch2.deliver!({ channelId: "C-ops", recipientUserId: "U7", recipientTeamId: "T7" }, stream());
+    expect(calls[0]!.body).toMatchObject({ channel: "C-ops", recipient_user_id: "U7", recipient_team_id: "T7" });
+    expect((calls[0]!.body as { thread_ts?: string }).thread_ts).toBeUndefined();
+  });
+
+  test("status: the 'is thinking…' line is set when the turn starts, and the streamed reply auto-clears it", async () => {
+    streamStub();
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true, status: "is thinking…" });
+    await driveStream(ch2, [delta("Hi."), completed("Hi.")]);
+    expect(calls.map(method)).toEqual(["assistant.threads.setStatus", "chat.startStream", "chat.stopStream"]); // no explicit clear: posting clears it
+    expect(calls[0]!.body).toMatchObject({ channel_id: "C1", thread_ts: "1.1", status: "is thinking…" });
+  });
+
+  test("status: a tool-only turn posts nothing, so the status is cleared explicitly", async () => {
+    streamStub();
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true, status: "is thinking…" });
+    await driveStream(ch2, [completed("")]); // acted via a tool; no text, no message
+    expect(calls.map((c) => [method(c), (c.body as { status?: string }).status])).toEqual([
+      ["assistant.threads.setStatus", "is thinking…"],
+      ["assistant.threads.setStatus", ""], // cleared now, not after Slack's 2-minute timeout
+    ]);
+  });
+
   test("proactive: channel.deliver renders a turn's stream to a target thread (P4 §9)", async () => {
     streamStub();
     const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test" });

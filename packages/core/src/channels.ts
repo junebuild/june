@@ -206,6 +206,12 @@ export function slackChannel(opts: {
   // Requires the host to supply ctx.runStream (the edge Durable Object does); falls back to
   // post-once when it's absent.
   stream?: boolean;
+  // The agent-era "typing indicator": while a turn runs, show this presence line (e.g.
+  // "is thinking…") under the composer via assistant.threads.setStatus. Slack clears it
+  // itself the moment the reply posts/streams (with a 2-minute timeout as backstop); a
+  // tool-only turn that posts nothing clears it explicitly. Needs the app's Agents & AI
+  // Apps feature — elsewhere the call fails harmlessly (best-effort), so it is always safe.
+  status?: string;
   onError?: (err: unknown) => void;
 } & ChannelExtensions): Channel {
   const api = opts.apiUrl ?? "https://slack.com/api";
@@ -225,16 +231,39 @@ export function slackChannel(opts: {
   // for token streaming into ONE message: appendStream handles bursts (unlike chat.update's
   // ~1/s whole-message replace). startStream returns the message ts to append/stop against.
   // seed the stream with the first token (markdown_text) — Slack's streaming API expects
-  // content, and seeding saves the extra appendStream for that token.
-  async function startStream(channel: string, thread_ts: string | undefined, markdown_text: string): Promise<string | undefined> {
-    const r = (await (await fetch(`${api}/chat.startStream`, { method: "POST", headers: authHeaders, body: JSON.stringify({ channel, thread_ts, markdown_text }) })).json().catch(() => ({}))) as { ts?: string };
+  // content, and seeding saves the extra appendStream for that token. Slack also requires an
+  // anchor: thread_ts (reply in a thread), or — for a TOP-LEVEL channel message — the
+  // recipient's user+team ids (DeliveryTarget.recipientUserId/recipientTeamId).
+  async function startStream(channel: string, thread_ts: string | undefined, markdown_text: string, recipient?: { user?: string; team?: string }): Promise<string | undefined> {
+    const body = { channel, thread_ts, markdown_text, recipient_user_id: recipient?.user, recipient_team_id: recipient?.team };
+    const r = (await (await fetch(`${api}/chat.startStream`, { method: "POST", headers: authHeaders, body: JSON.stringify(body) })).json().catch(() => ({}))) as { ts?: string };
     return r.ts;
   }
-  async function appendStream(channel: string, ts: string, markdown_text: string) {
-    await fetch(`${api}/chat.appendStream`, { method: "POST", headers: authHeaders, body: JSON.stringify({ channel, ts, markdown_text }) });
+  // One append, with a single honored-Retry-After retry on `ratelimited` (Tier 4 allows
+  // bursts; two 429s in a row means back off for real — report, don't spin). The error goes
+  // back to the renderer: `stopped_by_user` (the human hit Stop) must end rendering, and any
+  // other failure must be LOUD — an ignored append silently truncates the message.
+  async function appendStream(channel: string, ts: string, markdown_text: string): Promise<{ ok: boolean; error?: string }> {
+    for (let attempt = 0; ; attempt++) {
+      const res = await fetch(`${api}/chat.appendStream`, { method: "POST", headers: authHeaders, body: JSON.stringify({ channel, ts, markdown_text }) });
+      const body = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+      if (body.ok) return { ok: true };
+      if (body.error === "ratelimited" && attempt === 0) {
+        await new Promise((r) => setTimeout(r, Math.min(Number(res.headers.get("retry-after") ?? 1) || 0, 10) * 1000));
+        continue;
+      }
+      return { ok: false, error: body.error };
+    }
   }
   async function stopStream(channel: string, ts: string) {
     await fetch(`${api}/chat.stopStream`, { method: "POST", headers: authHeaders, body: JSON.stringify({ channel, ts }) });
+  }
+  // The "is thinking…" presence line under the composer (assistant.threads.setStatus). Slack
+  // clears it itself when the app posts/streams into the thread (2-minute timeout otherwise);
+  // an empty status clears it explicitly. Best-effort: outside an AI-app assistant thread the
+  // call just fails, and that must never break the turn.
+  async function setStatus(channel_id: string, thread_ts: string, status: string) {
+    await fetch(`${api}/assistant.threads.setStatus`, { method: "POST", headers: authHeaders, body: JSON.stringify({ channel_id, thread_ts, status }) }).catch(() => {});
   }
   async function updateMessage(channel: string, ts: string, text: string) {
     await fetch(`${api}/chat.update`, { method: "POST", headers: authHeaders, body: JSON.stringify({ channel, ts, text, blocks: [] }) });
@@ -260,6 +289,12 @@ export function slackChannel(opts: {
     if (!r.ok) opts.onError?.(new Error(`slack: failed to post the HITL prompt for input "${request.id}" (turn ${turnId})`));
     return r.ts;
   }
+  // Slack caps one markdown_text at 12k chars; longer content is sliced across appends.
+  const MD_MAX = 12000;
+  // Coalesce token deltas: appendStream is Tier 4 (~100/min + bursts) but a model emits many
+  // deltas per second — buffer and flush at most ~2/s (or when a slice fills), so a long turn
+  // can't spend the tier while the first token still seeds the stream IMMEDIATELY.
+  const FLUSH_MS = 500;
   // Render a turn LIVE via Slack's streaming API: startStream → appendStream each answer-token
   // delta → stopStream. The Slack stream is started LAZILY — only on the first piece of content
   // (a delta, the final one-shot reply, or a failure note) — so a tool-only / empty / no-output
@@ -269,29 +304,51 @@ export function slackChannel(opts: {
     const { channelId, threadId } = surface;
     let streamTs: string | undefined;
     let started = false; // startStream attempted (regardless of success)
-    let buf = ""; // accumulator for the postMessage fallback when startStream is unavailable
-    const append = async (t: string) => {
-      if (!t) return;
+    let stoppedByUser = false; // the human hit Slack's Stop — the message is final, cease rendering
+    let broken = false; // an append failed hard — keep the tail for a postMessage salvage at finish
+    let pending = ""; // deltas awaiting a flush (doubles as the postMessage-fallback accumulator)
+    let lastFlush = 0;
+    if (opts.status && threadId) await setStatus(channelId, threadId, opts.status);
+    const flush = async () => {
+      if (!pending || stoppedByUser || broken) return;
       if (!started) {
         started = true;
-        streamTs = await startStream(channelId, threadId, t); // seed with the first token
-        if (!streamTs) buf += t; // startStream unavailable → keep the seed for the postMessage fallback
-        return;
+        lastFlush = Date.now();
+        const seed = pending.slice(0, MD_MAX); // seed with the first token(s) — the API expects content
+        streamTs = await startStream(channelId, threadId, seed, { user: surface.recipientUserId, team: surface.recipientTeamId });
+        if (!streamTs) return; // unavailable → pending rides whole into the postMessage fallback
+        pending = pending.slice(seed.length);
       }
-      if (streamTs) await appendStream(channelId, streamTs, t);
-      else buf += t;
+      if (!streamTs) return;
+      while (pending && !stoppedByUser && !broken) {
+        const slice = pending.slice(0, MD_MAX);
+        const r = await appendStream(channelId, streamTs, slice);
+        if (r.ok) { pending = pending.slice(slice.length); continue; }
+        if (r.error === "stopped_by_user") { stoppedByUser = true; pending = ""; return; } // discard: the human ended it
+        broken = true; // `pending` keeps the unsent tail — finish() posts it, nothing silently truncates
+        opts.onError?.(new Error(`slack: chat.appendStream failed (${r.error ?? "no response"}) — posting the tail via chat.postMessage`));
+      }
+      lastFlush = Date.now();
+    };
+    const push = async (t: string) => {
+      if (!t || stoppedByUser) return;
+      pending += t;
+      if (!started || pending.length >= MD_MAX || Date.now() - lastFlush >= FLUSH_MS) await flush();
     };
     const finish = async () => {
-      if (streamTs) await stopStream(channelId, streamTs);
-      else if (buf.trim()) await postMessage(channelId, buf, threadId);
+      await flush();
+      if (stoppedByUser) return; // Slack already closed the stream; appends/stops are refused
+      if (streamTs && !broken) await stopStream(channelId, streamTs);
+      if (pending.trim() && (!streamTs || broken)) await postMessage(channelId, pending, threadId);
     };
     try {
       let streamed = false;
       let finalText = "";
       for await (const e of events) {
-        if (e.type === "message.delta") { await append(e.text); streamed = true; }
+        if (stoppedByUser) return; // stop rendering; the turn itself runs on host-side
+        if (e.type === "message.delta") { await push(e.text); streamed = true; }
         else if (e.type === "turn.completed") finalText = e.text;
-        else if (e.type === "turn.failed") { await append("\n_(the turn failed)_"); await finish(); return; }
+        else if (e.type === "turn.failed") { await push("\n_(the turn failed)_"); await finish(); return; }
         else if (e.type === "input.requested") {
           // the turn parked awaiting a human: finalize any streamed text, then post the prompt
           // with Approve/Deny buttons. The interaction handler (below) routes the click to resume.
@@ -300,10 +357,13 @@ export function slackChannel(opts: {
           return; // the stream closed on suspend; the turn continues on the button click
         }
       }
-      if (!streamed && finalText.trim()) await append(finalText); // one-shot: the whole reply once
-      if (started) await finish(); // nothing appended (tool-only/empty) ⇒ never started ⇒ post nothing
+      if (!streamed && finalText.trim()) await push(finalText); // one-shot: the whole reply once
+      if (started) await finish(); // nothing pushed (tool-only/empty) ⇒ never started ⇒ post nothing…
+      // …but a status was set and nothing will ever post to auto-clear it — clear it now
+      // instead of leaving "is thinking…" to Slack's 2-minute timeout.
+      else if (opts.status && threadId) await setStatus(channelId, threadId, "");
     } catch (err) {
-      await append("\n_(the turn failed)_").catch(() => {}); // starts the stream/buffer if not yet
+      await push("\n_(the turn failed)_").catch(() => {}); // starts the stream/buffer if not yet
       await finish().catch(() => {});
       throw err; // let runBackground → onError record it
     }
@@ -318,6 +378,7 @@ export function slackChannel(opts: {
   // stream, consume it non-live instead: post the final text once, post the approval prompt
   // when the turn parks. Failure semantics match ctx.run (throw → runBackground → onError).
   async function renderOnce(ctx: ChannelContext, event: InboundEvent, userText: string, session: string) {
+    if (opts.status && event.threadId) await setStatus(event.channelId, event.threadId, opts.status);
     let finalText = "";
     for await (const e of ctx.runStream!(userText, { session, event })) {
       if (e.type === "turn.completed") finalText = e.text;
@@ -325,6 +386,7 @@ export function slackChannel(opts: {
       else if (e.type === "input.requested") { await postApproval(event.channelId, event.threadId, e.turnId, e.request, session); return; }
     }
     if (finalText.trim()) await postMessage(event.channelId, finalText, event.threadId);
+    else if (opts.status && event.threadId) await setStatus(event.channelId, event.threadId, ""); // tool-only: nothing posts to auto-clear
   }
   // Route an Approve/Deny click to session.resume and render the continuation into the button
   // message. The clicker's id is the VERIFIED resumer (`by`) — the signature was checked above,
@@ -449,10 +511,12 @@ export function slackChannel(opts: {
           runBackground(ctx, async () => {
             if (opts.stream && ctx.runStream) return renderStream(ctx, event, userText, session); // live: edit in place
             if (ctx.runStream) return renderOnce(ctx, event, userText, session); // post-once, HITL-aware
+            if (opts.status && event.threadId) await setStatus(event.channelId, event.threadId, opts.status);
             const reply = await ctx.run(userText, { session, event });
             // A reaction turn (or any turn) may resolve to no text — the agent acted via a
             // tool (e.g. slack_add_reaction) instead of posting. Only post real content.
             if (reply && reply.trim()) await postMessage(event.channelId, reply, event.threadId);
+            else if (opts.status && event.threadId) await setStatus(event.channelId, event.threadId, ""); // tool-only: nothing posts to auto-clear
           }, opts.onError);
         }
       }
