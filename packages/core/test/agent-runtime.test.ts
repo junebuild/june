@@ -31,7 +31,7 @@ function memStore() {
   const store: SessionStore = {
     appendMessage(m) { msgs.push(m); },
     messages() { return msgs.slice(); },
-    hasUserTurn(t) { return msgs.some((m) => m.role === "user" && m.turnId === t); },
+    hasOpeningMessage(t) { return msgs.some((m) => (m.role === "user" || m.role === "trigger") && m.turnId === t); },
     getStep(id) { return steps.has(id) ? steps.get(id) : undefined; },
     putStep(id, o) { steps.set(id, o); },
     delStep(id) { steps.delete(id); },
@@ -289,6 +289,28 @@ describe("TurnEvent stream (P1)", () => {
     s.observe((e) => events.push(e));
     await expect(s.turn({ turnId: "t1", userText: "go" })).rejects.toThrow(/unknown tool nope/);
     expect(events.at(-1)).toMatchObject({ type: "turn.failed", turnId: "t1", error: { message: expect.stringContaining("unknown tool") } });
+  });
+
+  test("a proactive turn opens with a `trigger`-role seed (attributed), not a user msg (P4 §9)", async () => {
+    const store = memStore().store;
+    const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), scriptedModel([{ text: "Daily summary: 3 open threads.", toolCalls: [] }]), [], noRuntime);
+    const events: TurnEvent[] = [];
+    s.observe((e) => events.push(e));
+    await s.turn({ turnId: "t1", userText: "Summarize today's open threads.", trigger: { kind: "proactive", by: "cron:daily" } });
+    // durable transcript: the opening is a trigger msg attributed to `by`, NOT a user msg —
+    // an honest record that no human sent this.
+    const opening = store.messages()[0]!;
+    expect(opening).toEqual({ role: "trigger", turnId: "t1", text: "Summarize today's open threads.", by: "cron:daily" });
+    // turn.started carries the proactive trigger; the fold surfaces the seed as the turn's prompt.
+    expect(events[0]).toMatchObject({ type: "turn.started", trigger: { kind: "proactive", by: "cron:daily" } });
+    expect(s.transcript()[0]).toMatchObject({ user: "Summarize today's open threads.", text: "Daily summary: 3 open threads." });
+  });
+
+  test("a plain programmatic turn (no explicit trigger) still opens with a user msg", async () => {
+    const store = memStore().store;
+    const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), scriptedModel([{ text: "ok", toolCalls: [] }]), [], noRuntime);
+    await s.turn({ turnId: "t1", userText: "hi" }); // no event, no trigger — an API caller, not an agent-initiated seed
+    expect(store.messages()[0]).toEqual({ role: "user", turnId: "t1", text: "hi" });
   });
 
   test("start() + result() — kick off then await the terminal state", async () => {

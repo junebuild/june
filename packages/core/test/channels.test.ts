@@ -6,7 +6,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { channelFetch, defineChannel, resolveChannel, type AgentDefinition, type Channel, type ChannelContext } from "@junejs/core/agent-config";
 import type { InboundEvent, ToolContext, TurnEvent } from "@junejs/core/agent-runtime";
-import { crispChannel, httpChannel, slackChannel, verifySlackSignature, verifyCrispSignature, verifyCrispUrlKey, tryParseJson, timestampFresh, normalizeSlackEvent } from "@junejs/core/channels";
+import { crispChannel, httpChannel, slackChannel, receive, verifySlackSignature, verifyCrispSignature, verifyCrispUrlKey, tryParseJson, timestampFresh, normalizeSlackEvent } from "@junejs/core/channels";
 
 const enc = new TextEncoder();
 async function hmacHex(secret: string, message: string): Promise<string> {
@@ -196,6 +196,61 @@ describe("slackChannel", () => {
     // tried startStream (no ts), then posted the failure note once
     expect(calls.map(method)).toEqual(["chat.startStream", "chat.postMessage"]);
     expect((calls[1]!.body as { text?: string }).text).toContain("the turn failed");
+  });
+
+  test("proactive: channel.deliver renders a turn's stream to a target thread (P4 §9)", async () => {
+    streamStub();
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test" });
+    async function* stream() {
+      yield { type: "turn.started", turnId: "t1", trigger: { kind: "proactive", by: "cron:daily" } } as TurnEvent;
+      yield { type: "message.delta", turnId: "t1", text: "Good " } as TurnEvent;
+      yield { type: "message.delta", turnId: "t1", text: "morning." } as TurnEvent;
+      yield { type: "turn.completed", turnId: "t1", text: "Good morning." } as TurnEvent;
+    }
+    await ch2.deliver!({ channelId: "C-ops", threadId: "9.9" }, stream());
+    // same renderer as the inbound path — startStream seeds, deltas append, stopStream finalizes,
+    // all addressed to the DELIVERY target (not an inbound event's thread).
+    expect(calls.map((c) => [method(c), (c.body as { markdown_text?: string }).markdown_text])).toEqual([
+      ["chat.startStream", "Good "],
+      ["chat.appendStream", "morning."],
+      ["chat.stopStream", undefined],
+    ]);
+    expect((calls[0]!.body as { channel?: string; thread_ts?: string })).toMatchObject({ channel: "C-ops", thread_ts: "9.9" });
+  });
+
+  test("proactive: receive() starts an agent-initiated turn (proactive trigger) and delivers it", async () => {
+    streamStub();
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test" });
+    let runArgs: { message: string; opts: unknown } | undefined;
+    const ctx = ctxWith(async () => { throw new Error("run() must not be used — receive streams"); });
+    ctx.runStream = ((message: string, opts: unknown) => {
+      runArgs = { message, opts };
+      return (async function* () {
+        yield { type: "turn.completed", turnId: "t1", text: "Daily summary posted." } as TurnEvent;
+      })();
+    }) as typeof ctx.runStream;
+
+    await receive(ch2, ctx, {
+      seed: "Summarize today's open threads.",
+      target: { channelId: "C-ops" },
+      trigger: { kind: "proactive", by: "cron:daily" },
+      session: "slack:C-ops:daily",
+    });
+    // the turn was started FROM the seed, carrying the proactive trigger + the caller's session…
+    expect(runArgs!.message).toBe("Summarize today's open threads.");
+    expect(runArgs!.opts).toMatchObject({ session: "slack:C-ops:daily", trigger: { kind: "proactive", by: "cron:daily" } });
+    // …and its (one-shot) output was delivered to the target.
+    expect(calls.map((c) => [method(c), (c.body as { markdown_text?: string }).markdown_text])).toEqual([
+      ["chat.startStream", "Daily summary posted."],
+      ["chat.stopStream", undefined],
+    ]);
+  });
+
+  test("proactive: receive() throws clearly when the host can't stream (no silent dropped nudge)", async () => {
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test" });
+    const ctx = ctxWith(async () => "unused"); // no runStream
+    await expect(receive(ch2, ctx, { seed: "x", target: { channelId: "C" }, trigger: { kind: "proactive", by: "cron" }, session: "s" }))
+      .rejects.toThrow(/runStream/);
   });
 
   test("HITL: input.requested posts an Approve/Deny message carrying the resume routing value", async () => {

@@ -7,7 +7,7 @@
 // this module is the pure config layer it produces.
 
 import type { AnyAction } from "./agent";
-import type { InboundEvent, Tool, ToolSpec, TurnEvent } from "./agent-runtime";
+import type { InboundEvent, Tool, ToolSpec, TurnEvent, TurnTrigger } from "./agent-runtime";
 import type { ConnectionReport } from "./connections";
 
 // InboundEvent's canonical definition lives in agent-runtime (ToolContext carries it);
@@ -30,13 +30,15 @@ export type ChannelContext = {
   // normalized envelope threads it through so the turn (and its tools) can see the
   // actor/kind/reaction. Batch 1 defines the seam; the Slack/Crisp adapters and the
   // durable /turn edge start populating it in the following batches.
-  run: (message: string, opts?: { session?: string; turnId?: string; event?: InboundEvent }) => Promise<string>;
+  run: (message: string, opts?: { session?: string; turnId?: string; event?: InboundEvent; trigger?: TurnTrigger }) => Promise<string>;
   // The LIVE variant: run a turn and get its TurnEvent stream, so a channel can render the
   // turn as it happens (typing indicator, progressive edits, tool status) instead of only
   // posting the final text. Optional — a host that can't stream (or a channel that doesn't
   // render) uses `run`. The host provides it on targets that support streaming (the edge
   // Durable Object over SSE); a channel checks for it and falls back to `run`.
-  runStream?: (message: string, opts?: { session?: string; turnId?: string; event?: InboundEvent }) => AsyncIterable<TurnEvent>;
+  // `trigger` marks an agent-INITIATED (proactive) turn — no inbound event; the turn opens with a
+  // `trigger`-role seed attributed to `by`. Passed by receive() (§9); omitted for inbound turns.
+  runStream?: (message: string, opts?: { session?: string; turnId?: string; event?: InboundEvent; trigger?: TurnTrigger }) => AsyncIterable<TurnEvent>;
   // Resume a turn that was parked by ctx.requestInput (HITL): provide the answer and get the
   // continuation's TurnEvent stream, so a channel can render the resumed turn to completion.
   // `by` is the VERIFIED resumer identity (e.g. the user id from a signature-checked Slack
@@ -57,10 +59,21 @@ export type ChannelContext = {
   // Opaque here (the app types it at the read), like RequestScope.services.
   services?: unknown;
 };
+// Where a proactive turn's output is posted when there's NO inbound webhook to reply to
+// (§9). Platform-agnostic: `channelId` is the destination (a Slack channel, a Crisp
+// conversation's website), `threadId` optionally threads it. deliver() renders a turn's
+// event stream to this target with the SAME renderer the inbound path uses.
+export type DeliveryTarget = { channelId: string; threadId?: string };
+
 export type Channel = {
   name: string;
   // one-shot input source (e.g. cli): run once at startup
   start?: (ctx: ChannelContext) => Promise<void> | void;
+  // OUTBOUND, agent-initiated delivery (§9): render a proactive turn's event stream to a
+  // target with no inbound event to reply to (a scheduled nudge, a cross-channel hand-off).
+  // Same renderer as the inbound path — progressive edits, HITL prompts, final text. Paired
+  // with the top-level receive() which starts the proactive turn and feeds its stream here.
+  deliver?: (target: DeliveryTarget, events: AsyncIterable<TurnEvent>) => Promise<void>;
   // a general fetch handler (e.g. http: POST /message + /mcp)
   fetch?: (ctx: ChannelContext) => (req: Request) => Promise<Response>;
   // a webhook mounted at `path` (e.g. Slack/Crisp): verify signature, ACK fast,

@@ -24,7 +24,9 @@ export type AnthropicMessage = { role: "user" | "assistant"; content: string | A
 export function toAnthropicMessages(msgs: Msg[]): AnthropicMessage[] {
   const out: AnthropicMessage[] = [];
   for (const m of msgs) {
-    if (m.role === "user") {
+    if (m.role === "user" || m.role === "trigger") {
+      // A `trigger` (proactive seed) maps to a plain user message: providers needn't support a
+      // new role, and the model just acts on the seed text as its opening instruction (§9 / #6).
       out.push({ role: "user", content: m.text });
     } else if (m.role === "assistant") {
       const content: AnthropicBlock[] = [];

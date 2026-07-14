@@ -46,8 +46,8 @@ class SqliteSessionStore implements SessionStore {
     return (this.db.query("SELECT body FROM agent_messages WHERE session_id = ? ORDER BY seq").all(this.sid) as { body: string }[])
       .map((r) => JSON.parse(r.body));
   }
-  hasUserTurn(turnId: string): boolean {
-    return this.messages().some((m) => m.role === "user" && m.turnId === turnId);
+  hasOpeningMessage(turnId: string): boolean {
+    return this.messages().some((m) => (m.role === "user" || m.role === "trigger") && m.turnId === turnId);
   }
   getStep(id: string): unknown | undefined {
     const r = this.db.query("SELECT output FROM agent_steps WHERE session_id = ? AND id = ?").get(this.sid, id) as { output: string } | undefined;
@@ -139,7 +139,7 @@ class MemorySessionStore implements SessionStore {
   private status = "new";
   appendMessage(m: Msg) { this.msgs.push(m); }
   messages(): Msg[] { return this.msgs.slice(); }
-  hasUserTurn(turnId: string): boolean { return this.msgs.some((m) => m.role === "user" && m.turnId === turnId); }
+  hasOpeningMessage(turnId: string): boolean { return this.msgs.some((m) => (m.role === "user" || m.role === "trigger") && m.turnId === turnId); }
   getStep(id: string): unknown | undefined { return this.steps.has(id) ? this.steps.get(id) : undefined; }
   putStep(id: string, output: unknown) { this.steps.set(id, output); }
   delStep(id: string) { this.steps.delete(id); }
@@ -213,7 +213,7 @@ export function mountAgent(
     agent,
     services: opts.services, // same DI bag reachable from channel hooks (parity with durableChannelSurface)
     run: (message, o) =>
-      runtime.session(agent.name, o?.session ?? "default").turn({ turnId: o?.turnId, userText: message, event: o?.event }),
+      runtime.session(agent.name, o?.session ?? "default").turn({ turnId: o?.turnId, userText: message, event: o?.event, trigger: o?.trigger }),
   };
   const channels = channelFetch(agent, ctx);
   const surface = async (req: Request): Promise<Response | null> => {
