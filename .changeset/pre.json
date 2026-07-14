@@ -23,6 +23,7 @@
     "channel-turn-control",
     "crisp-website-hooks-auth",
     "streaming-model-p2",
-    "turn-as-live-process-p1"
+    "turn-as-live-process-p1",
+    "turn-suspend-resume-proactive"
   ]
 }

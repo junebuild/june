@@ -1,6 +1,6 @@
 {
   "name": "@june-examples/i18n",
-  "version": "0.0.5-dev.7",
+  "version": "0.0.5-dev.8",
   "private": true,
   "type": "module",
   "dependencies": {
