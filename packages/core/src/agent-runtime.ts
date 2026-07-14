@@ -41,13 +41,15 @@ export type ToolSpec = { name: string; description: string; input: unknown };
 // untouched platform payload: an escape hatch for anything not yet normalized.
 export type InboundEvent = {
   source: string;                               // the channel that produced it ("slack" / "crisp")
-  kind: "message" | "app_mention" | "reaction_added" | "reaction_removed" | "message_changed";
+  kind: "message" | "app_mention" | "reaction_added" | "reaction_removed" | "message_changed" | "rating" | "state_changed";
   channelId: string;                            // the conversation container: slack channel id / crisp website id
   threadId?: string;                            // thread within it: slack thread_ts / crisp conversation session id
   ts: string;                                   // this event's message ts
   user?: { id: string; name?: string };         // WHO
   text?: string;                                // message / app_mention carry text; reactions don't
   reaction?: { name: string; itemTs: string };  // WHICH emoji, on WHICH message
+  rating?: { stars: number; comment?: string }; // rating events: the score the visitor left (CSAT)
+  state?: string;                               // state_changed events: the new conversation state (e.g. "resolved")
   raw?: unknown;                                // untouched platform payload (escape hatch); may
                                                 // be dropped crossing the /turn RPC if unserializable
 };
