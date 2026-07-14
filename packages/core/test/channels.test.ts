@@ -285,6 +285,28 @@ describe("slackChannel", () => {
     expect(calls[0]!.body).toMatchObject({ channel_id: "C1", thread_ts: "1.1", status: "is thinking…" });
   });
 
+  test("status: a failed turn clears the status instead of leaving it to Slack's timeout (post-once path)", async () => {
+    streamStub();
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", status: "is thinking…", onError: () => {} });
+    await driveStream(ch2, [{ type: "turn.failed", turnId: "t1", error: { message: "boom" } } as TurnEvent]);
+    expect(calls.map((c) => [method(c), (c.body as { status?: string }).status])).toEqual([
+      ["assistant.threads.setStatus", "is thinking…"],
+      ["assistant.threads.setStatus", ""], // the failure posted nothing — nothing auto-clears
+    ]);
+  });
+
+  test("status: a throwing ctx.run clears the status too (plain run path)", async () => {
+    streamStub();
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", status: "is thinking…", onError: () => {} });
+    const ctx = ctxWith(async () => { throw new Error("boom"); }); // no runStream → plain run path
+    await ch2.webhook!(await signed(JSON.stringify({ type: "event_callback", event: { type: "message", text: "hi", channel: "C1", ts: "1.1", user: "U1" } })), ctx);
+    await flush();
+    expect(calls.map((c) => [method(c), (c.body as { status?: string }).status])).toEqual([
+      ["assistant.threads.setStatus", "is thinking…"],
+      ["assistant.threads.setStatus", ""],
+    ]);
+  });
+
   test("status: a tool-only turn posts nothing, so the status is cleared explicitly", async () => {
     streamStub();
     const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true, status: "is thinking…" });

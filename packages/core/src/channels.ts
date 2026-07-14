@@ -333,6 +333,7 @@ export function slackChannel(opts: {
     const push = async (t: string) => {
       if (!t || stoppedByUser) return;
       pending += t;
+      if (started && (!streamTs || broken)) return; // fallback/salvage mode: accumulate only, finish() posts it
       if (!started || pending.length >= MD_MAX || Date.now() - lastFlush >= FLUSH_MS) await flush();
     };
     const finish = async () => {
@@ -365,6 +366,9 @@ export function slackChannel(opts: {
     } catch (err) {
       await push("\n_(the turn failed)_").catch(() => {}); // starts the stream/buffer if not yet
       await finish().catch(() => {});
+      // the failure note normally auto-clears the status — but if even the salvage failed,
+      // don't leave "is thinking…" stuck until Slack's 2-minute timeout
+      if (opts.status && threadId) await setStatus(channelId, threadId, "").catch(() => {});
       throw err; // let runBackground → onError record it
     }
   }
@@ -379,14 +383,21 @@ export function slackChannel(opts: {
   // when the turn parks. Failure semantics match ctx.run (throw → runBackground → onError).
   async function renderOnce(ctx: ChannelContext, event: InboundEvent, userText: string, session: string) {
     if (opts.status && event.threadId) await setStatus(event.channelId, event.threadId, opts.status);
-    let finalText = "";
-    for await (const e of ctx.runStream!(userText, { session, event })) {
-      if (e.type === "turn.completed") finalText = e.text;
-      else if (e.type === "turn.failed") throw new Error(e.error.message);
-      else if (e.type === "input.requested") { await postApproval(event.channelId, event.threadId, e.turnId, e.request, session); return; }
+    try {
+      let finalText = "";
+      for await (const e of ctx.runStream!(userText, { session, event })) {
+        if (e.type === "turn.completed") finalText = e.text;
+        else if (e.type === "turn.failed") throw new Error(e.error.message);
+        else if (e.type === "input.requested") { await postApproval(event.channelId, event.threadId, e.turnId, e.request, session); return; }
+      }
+      if (finalText.trim()) await postMessage(event.channelId, finalText, event.threadId);
+      else if (opts.status && event.threadId) await setStatus(event.channelId, event.threadId, ""); // tool-only: nothing posts to auto-clear
+    } catch (err) {
+      // a failed turn posts nothing — clear the status instead of leaving "is thinking…"
+      // stuck until Slack's 2-minute timeout
+      if (opts.status && event.threadId) await setStatus(event.channelId, event.threadId, "").catch(() => {});
+      throw err;
     }
-    if (finalText.trim()) await postMessage(event.channelId, finalText, event.threadId);
-    else if (opts.status && event.threadId) await setStatus(event.channelId, event.threadId, ""); // tool-only: nothing posts to auto-clear
   }
   // Route an Approve/Deny click to session.resume and render the continuation into the button
   // message. The clicker's id is the VERIFIED resumer (`by`) — the signature was checked above,
@@ -512,11 +523,17 @@ export function slackChannel(opts: {
             if (opts.stream && ctx.runStream) return renderStream(ctx, event, userText, session); // live: edit in place
             if (ctx.runStream) return renderOnce(ctx, event, userText, session); // post-once, HITL-aware
             if (opts.status && event.threadId) await setStatus(event.channelId, event.threadId, opts.status);
-            const reply = await ctx.run(userText, { session, event });
-            // A reaction turn (or any turn) may resolve to no text — the agent acted via a
-            // tool (e.g. slack_add_reaction) instead of posting. Only post real content.
-            if (reply && reply.trim()) await postMessage(event.channelId, reply, event.threadId);
-            else if (opts.status && event.threadId) await setStatus(event.channelId, event.threadId, ""); // tool-only: nothing posts to auto-clear
+            try {
+              const reply = await ctx.run(userText, { session, event });
+              // A reaction turn (or any turn) may resolve to no text — the agent acted via a
+              // tool (e.g. slack_add_reaction) instead of posting. Only post real content.
+              if (reply && reply.trim()) await postMessage(event.channelId, reply, event.threadId);
+              else if (opts.status && event.threadId) await setStatus(event.channelId, event.threadId, ""); // tool-only: nothing posts to auto-clear
+            } catch (err) {
+              // a failed turn posts nothing to auto-clear the status — clear it before reporting
+              if (opts.status && event.threadId) await setStatus(event.channelId, event.threadId, "").catch(() => {});
+              throw err;
+            }
           }, opts.onError);
         }
       }
