@@ -340,6 +340,66 @@ describe("TurnEvent stream (P1)", () => {
   });
 });
 
+describe("suspend / resume (P3 — HITL)", () => {
+  // an async tool that asks for external input, then returns the human's answer
+  function approveTool(runs?: { n: number }): Tool {
+    return {
+      spec: { name: "approve", description: "ask a human to approve", input: { type: "object" } },
+      run: async (_input, ctx) => {
+        if (runs) runs.n++;
+        const decision = await ctx.requestInput({ id: "approve-1", prompt: "Approve the refund?" });
+        return { approved: decision };
+      },
+    };
+  }
+  const APPROVE_SCRIPT: ModelReply[] = [
+    { text: "Let me check.", toolCalls: [{ id: "c1", name: "approve", input: {} }] },
+    { text: "Approved — refund sent.", toolCalls: [] },
+  ];
+  const slackEvent = { source: "slack", kind: "message" as const, channelId: "C1", ts: "1.1", user: { id: "U1" }, raw: {} };
+
+  test("a tool suspends the turn for input, then resume() runs it to completion", async () => {
+    const modelCalls = { n: 0 };
+    const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), scriptedModel(APPROVE_SCRIPT, modelCalls), [approveTool()], noRuntime);
+    const events: TurnEvent[] = [];
+    s.observe((e) => events.push(e));
+
+    const { turnId } = s.start({ turnId: "t1", userText: "refund please", event: slackEvent });
+    expect(await s.result(turnId)).toEqual({ status: "suspended", request: { id: "approve-1", prompt: "Approve the refund?", answererId: "U1" } });
+    expect(events.at(-1)).toMatchObject({ type: "input.requested", request: { id: "approve-1" } });
+    const asked = modelCalls.n; // the model was asked once (the tool-call step)
+
+    s.resume(turnId, "approve-1", true);
+    expect(await s.result(turnId)).toEqual({ status: "completed", text: "Approved — refund sent." });
+    expect(modelCalls.n).toBe(asked + 1); // the pre-suspend model step was cached, not re-asked
+  });
+
+  test("resume enforces the answererId (defaults to the trigger user)", async () => {
+    const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), scriptedModel(APPROVE_SCRIPT), [approveTool()], noRuntime);
+    const { turnId } = s.start({ turnId: "t1", userText: "refund please", event: slackEvent });
+    await s.result(turnId); // suspended, answererId = U1
+
+    expect(() => s.resume(turnId, "approve-1", true, { by: "U2" })).toThrow(/not authorized/);
+    s.resume(turnId, "approve-1", true, { by: "U1" }); // the trigger user may answer
+    expect(await s.result(turnId)).toMatchObject({ status: "completed" });
+  });
+
+  test("the tool receives the resumed input (exactly-once: not re-run before the answer)", async () => {
+    const runs = { n: 0 };
+    const { store } = memStore();
+    const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), scriptedModel(APPROVE_SCRIPT), [approveTool(runs)], noRuntime);
+    const { turnId } = s.start({ turnId: "t1", userText: "refund please", event: slackEvent });
+    await s.result(turnId);
+    expect(runs.n).toBe(1); // ran once (up to the suspend)
+
+    s.resume(turnId, "approve-1", { approvedBy: "U1" });
+    await s.result(turnId);
+    // the tool re-ran on resume (it hadn't committed), got the input, and its result carries it
+    const toolMsg = store.messages().find((m): m is Extract<Msg, { role: "tool" }> => m.role === "tool" && m.name === "approve");
+    expect(toolMsg!.result).toEqual({ approved: { approvedBy: "U1" } });
+  });
+});
+
 describe("withSystem", () => {
   test("injects the system prompt into every model call (def-authoritative)", async () => {
     let seen: string | undefined;

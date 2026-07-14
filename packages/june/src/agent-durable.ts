@@ -234,8 +234,15 @@ export class AgentDurableObject {
       const started = runInScope({ resources: this.resources, services: this.services }, () => this.session.start({ userText, turnId, event }));
       return new Response(sseTurnStream(this.session, started.turnId), { headers: SSE_HEADERS });
     }
+    // Provide the input a suspended turn is waiting on and stream its continuation as SSE.
+    if (req.method === "POST" && url.pathname.endsWith("/resume")) {
+      const { turnId, inputId, input, by } = (await req.json()) as { turnId: string; inputId: string; input: unknown; by?: string };
+      await ensureScope();
+      runInScope({ resources: this.resources, services: this.services }, () => this.session.resume(turnId, inputId, input, { by }));
+      return new Response(sseTurnStream(this.session, turnId), { headers: SSE_HEADERS });
+    }
     if (url.pathname.endsWith("/transcript")) return Response.json({ transcript: this.transcript() });
-    return new Response("agent DO — POST /turn or GET /transcript", { status: 404 });
+    return new Response("agent DO — POST /turn, POST /resume, or GET /transcript", { status: 404 });
   }
 }
 
@@ -263,7 +270,9 @@ function sseTurnStream(session: AgentSession, turnId: string): ReadableStream<Ui
       }, 20_000);
       unsub = session.observe((e) => {
         controller.enqueue(enc.encode(`data: ${JSON.stringify(e)}\n\n`));
-        if (e.type === "turn.completed" || e.type === "turn.failed") { stop(); controller.close(); }
+        // terminal for the STREAM: completed, failed, OR suspended (input.requested → the turn
+        // parked; the stream ends and a later /resume opens a fresh continuation stream).
+        if (e.type === "turn.completed" || e.type === "turn.failed" || e.type === "input.requested") { stop(); controller.close(); }
       }, { turnId });
     },
     cancel() { stop(); },

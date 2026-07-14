@@ -186,6 +186,27 @@ describe("AgentDurableObject", () => {
     expect(events.at(-1)).toMatchObject({ type: "turn.completed", text: "Done — order placed." });
   });
 
+  test("POST /turn suspends on requestInput; POST /resume streams the continuation (P3)", async () => {
+    const s = await storage();
+    const approve: Tool = {
+      spec: { name: "approve", description: "ask a human", input: { type: "object" } },
+      run: async (_i, ctx) => ({ approved: await ctx.requestInput({ id: "a1", prompt: "Approve?" }) }),
+    };
+    const model = scriptedModel([
+      { text: "checking", toolCalls: [{ id: "c1", name: "approve", input: {} }] },
+      { text: "done", toolCalls: [] },
+    ]);
+    const agent = new AgentDurableObject({ storage: s }, { name: "ops", model, tools: [approve] });
+    const collect = async (res: Response) => { const out: TurnEvent[] = []; for await (const e of sseTurnEvents(res)) out.push(e); return out; };
+
+    const t = await collect(await agent.fetch(new Request("https://do/turn", { method: "POST", body: JSON.stringify({ userText: "please", turnId: "t1" }) })));
+    expect(t.at(-1)).toMatchObject({ type: "input.requested", request: { id: "a1" } }); // parked, stream closed
+    expect(t.some((e) => e.type === "turn.completed")).toBe(false);
+
+    const r = await collect(await agent.fetch(new Request("https://do/resume", { method: "POST", body: JSON.stringify({ turnId: "t1", inputId: "a1", input: true }) })));
+    expect(r.at(-1)).toMatchObject({ type: "turn.completed", text: "done" }); // resumed to completion
+  });
+
   test("sseTurnEvents parses the SSE stream into TurnEvents (skipping :hb heartbeats)", async () => {
     const frames =
       ":hb\n\n" +
