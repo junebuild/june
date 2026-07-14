@@ -23,6 +23,7 @@
     "channel-turn-control",
     "crisp-event-normalization",
     "crisp-website-hooks-auth",
+    "slack-stream-hardening",
     "streaming-model-p2",
     "turn-as-live-process-p1",
     "turn-suspend-resume-proactive"
