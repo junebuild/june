@@ -156,6 +156,10 @@ export class SuspendSignal extends Error {
   }
 }
 
+// Thrown by AgentSession.resume when the resumer may not answer the pending request.
+// A distinct class so a transport (the DO's /resume) can map it to 403 vs 409.
+export class ResumeAuthorizationError extends Error {}
+
 // What the engine persists under the `suspended` step when a turn parks: enough to
 // validate a later resume (turnId, the pending request) and replay the turn (userText/
 // overlay/event). One per session — turns serialize, and start() rejects new turns while
@@ -445,15 +449,21 @@ export class AgentSession {
   }
 
   // Provide the input a suspended turn is waiting on and continue it. Stores the answer as the
-  // `input:{inputId}` checkpoint, then replays the turn: cached steps skip, ctx.requestInput now
-  // finds its answer and returns, and the turn runs on (may complete, or suspend again). `opts.by`
-  // is the verified resumer — enforced against the request's answererId when set (default: the
-  // trigger user). Returns { turnId } like start(); await result(turnId) for the new terminal state.
+  // `input:{turnId}:{inputId}` checkpoint, then replays the turn: cached steps skip,
+  // ctx.requestInput now finds its answer and returns, and the turn runs on (may complete, or
+  // suspend again). `opts.by` is the resumer's VERIFIED identity — the caller must authenticate
+  // it (e.g. the user id from a signed Slack interaction payload), never trust a client-supplied
+  // value. When the request names an answererId, resume is DEFAULT-DENY: an absent `by` is an
+  // unauthenticated resume and cannot answer. Returns { turnId } like start(); await
+  // result(turnId) for the new terminal state.
   resume(turnId: string, inputId: string, input: unknown, opts?: { by?: string }): { turnId: string } {
     const suspended = this.store.getStep("suspended") as SuspendedCheckpoint | undefined;
-    if (!suspended) throw new Error(`turn ${turnId} is not suspended`);
-    if (suspended.request.answererId && opts?.by !== undefined && opts.by !== suspended.request.answererId) {
-      throw new Error(`resume: ${opts.by} is not authorized to answer input "${inputId}"`);
+    if (!suspended || suspended.turnId !== turnId) throw new Error(`turn ${turnId} is not suspended`);
+    if (inputId !== suspended.request.id) {
+      throw new Error(`turn ${turnId} is awaiting input "${suspended.request.id}", not "${inputId}"`);
+    }
+    if (suspended.request.answererId && opts?.by !== suspended.request.answererId) {
+      throw new ResumeAuthorizationError(`resume: ${opts?.by ?? "<unidentified>"} is not authorized to answer input "${inputId}"`);
     }
     this.store.tx(() => {
       this.store.putStep(`input:${turnId}:${inputId}`, { input });

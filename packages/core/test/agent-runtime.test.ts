@@ -370,18 +370,30 @@ describe("suspend / resume (P3 — HITL)", () => {
     expect(events.at(-1)).toMatchObject({ type: "input.requested", request: { id: "approve-1" } });
     const asked = modelCalls.n; // the model was asked once (the tool-call step)
 
-    s.resume(turnId, "approve-1", true);
+    s.resume(turnId, "approve-1", true, { by: "U1" });
     expect(await s.result(turnId)).toEqual({ status: "completed", text: "Approved — refund sent." });
     expect(modelCalls.n).toBe(asked + 1); // the pre-suspend model step was cached, not re-asked
   });
 
-  test("resume enforces the answererId (defaults to the trigger user)", async () => {
+  test("resume enforces the answererId (defaults to the trigger user; absent `by` is denied)", async () => {
     const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), scriptedModel(APPROVE_SCRIPT), [approveTool()], noRuntime);
     const { turnId } = s.start({ turnId: "t1", userText: "refund please", event: slackEvent });
     await s.result(turnId); // suspended, answererId = U1
 
     expect(() => s.resume(turnId, "approve-1", true, { by: "U2" })).toThrow(/not authorized/);
+    expect(() => s.resume(turnId, "approve-1", true)).toThrow(/not authorized/); // default-deny: no verified resumer
     s.resume(turnId, "approve-1", true, { by: "U1" }); // the trigger user may answer
+    expect(await s.result(turnId)).toMatchObject({ status: "completed" });
+  });
+
+  test("resume validates the turnId and the inputId against the pending request", async () => {
+    const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), scriptedModel(APPROVE_SCRIPT), [approveTool()], noRuntime);
+    const { turnId } = s.start({ turnId: "t1", userText: "refund please" });
+    await s.result(turnId); // suspended (no event → no answererId)
+
+    expect(() => s.resume("t9", "approve-1", true)).toThrow(/t9 is not suspended/);
+    expect(() => s.resume(turnId, "wrong-id", true)).toThrow(/awaiting input "approve-1", not "wrong-id"/);
+    s.resume(turnId, "approve-1", true);
     expect(await s.result(turnId)).toMatchObject({ status: "completed" });
   });
 
@@ -393,7 +405,7 @@ describe("suspend / resume (P3 — HITL)", () => {
     await s.result(turnId);
     expect(runs.n).toBe(1); // ran once (up to the suspend)
 
-    s.resume(turnId, "approve-1", { approvedBy: "U1" });
+    s.resume(turnId, "approve-1", { approvedBy: "U1" }, { by: "U1" });
     await s.result(turnId);
     // the tool re-ran on resume (it hadn't committed), got the input, and its result carries it
     const toolMsg = store.messages().find((m): m is Extract<Msg, { role: "tool" }> => m.role === "tool" && m.name === "approve");
