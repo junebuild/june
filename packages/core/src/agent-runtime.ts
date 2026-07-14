@@ -433,14 +433,19 @@ export class AgentSession {
         { turnId, userText: input.userText, crash: input.crash },
         { runtime: this.runtime, agent: this.agent, sessionId: this.id, event: input.event, systemOverlay },
       );
-    const p = this.chain.then(run);
-    this.chain = p.catch(() => {}); // a failed turn must not break the inbox
-    this.running.set(turnId, p); // held so result() can await a start()ed turn
-    // prune on settle so `running` stays bounded (~in-flight; turns run serially) on a
-    // long-lived actor. Both branches run cleanup, so the rejection is handled here — no
-    // unhandled rejection (result() and the chain hold their own handlers on `p`).
-    p.then(() => this.running.delete(turnId), () => this.running.delete(turnId));
+    this.track(turnId, this.chain.then(run));
     return { turnId };
+  }
+
+  // Register the in-flight promise for result() and prune it on settle. The delete is tied to
+  // THIS promise's identity: a suspend→resume reuses the same turnId, so the parked promise's
+  // late cleanup must NOT clear the continuation's entry (delete by turnId alone would). Both
+  // branches run cleanup, so the rejection is handled here — no unhandled rejection.
+  private track(turnId: string, p: Promise<string>): void {
+    this.chain = p.catch(() => {}); // a failed turn must not break the inbox
+    this.running.set(turnId, p);
+    const clear = () => { if (this.running.get(turnId) === p) this.running.delete(turnId); };
+    p.then(clear, clear);
   }
 
   // Await a turn's terminal state (completed | suspended | failed). Reads the in-flight promise
@@ -496,10 +501,7 @@ export class AgentSession {
         { turnId, userText: suspended.userText },
         { runtime: this.runtime, agent: this.agent, sessionId: this.id, event: suspended.event, systemOverlay: suspended.systemOverlay, trigger: { kind: "resume", callId: suspended.callId } },
       );
-    const p = this.chain.then(run);
-    this.chain = p.catch(() => {});
-    this.running.set(turnId, p);
-    p.then(() => this.running.delete(turnId), () => this.running.delete(turnId));
+    this.track(turnId, this.chain.then(run));
     return { turnId };
   }
 

@@ -493,6 +493,17 @@ describe("suspend / resume (P3 — HITL)", () => {
     expect(r).toMatchObject({ status: "failed" });
     expect((r as Extract<typeof r, { status: "failed" }>).error.message).toMatch(/runs sync .* only an async tool can park/);
   });
+
+  test("resume synchronously from an input.requested observer keeps the continuation (running-map race)", async () => {
+    // resume() runs while the parked promise is still pending; its late cleanup must NOT clear
+    // the continuation's running[turnId] entry (delete is tied to the promise identity).
+    const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), scriptedModel(APPROVE_SCRIPT), [approveTool()], noRuntime);
+    let resumed = false;
+    s.observe((e) => { if (e.type === "input.requested" && !resumed) { resumed = true; s.resume("t1", "approve-1", true, { by: "U1" }); } });
+    s.start({ turnId: "t1", userText: "refund please", event: slackEvent });
+    await new Promise((r) => setTimeout(r, 20)); // let park→cleanup→resume→continuation settle
+    expect(await s.result("t1")).toEqual({ status: "completed", text: "Approved — refund sent." }); // not a spurious failure
+  });
 });
 
 describe("withSystem", () => {
