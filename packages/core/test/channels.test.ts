@@ -836,7 +836,11 @@ describe("crispChannel website-hooks auth (urlKey)", () => {
   });
 
   test("construction: both auth and signingSecret throws; neither throws", () => {
+    // The opts type forbids both/neither at compile time; the runtime throws are
+    // the backstop for plain-JS callers, so cast past the type to reach them.
+    // @ts-expect-error — both sources is a compile error by design
     expect(() => crispChannel({ auth: { type: "urlKey", key: "k" }, signingSecret: "s", identifier: "id", key: "key" })).toThrow(/not both/);
+    // @ts-expect-error — neither source is a compile error by design
     expect(() => crispChannel({ identifier: "id", key: "key" })).toThrow(/required/);
   });
 
@@ -845,5 +849,16 @@ describe("crispChannel website-hooks auth (urlKey)", () => {
     expect(verifyCrispUrlKey("k", "http://x/hook?key=K")).toBe(false);
     expect(verifyCrispUrlKey("", "http://x/hook?key=")).toBe(false);
     expect(verifyCrispUrlKey("k", "http://x/hook?token=k", "token")).toBe(true);
+  });
+
+  test("verifyCrispUrlKey fails closed on unparseable URLs and accepts path-relative ones", () => {
+    expect(verifyCrispUrlKey("k", "http://[not-a-url")).toBe(false); // never throws
+    expect(verifyCrispUrlKey("k", "/hook?key=k")).toBe(true); // path-only (hand-rolled channels)
+  });
+
+  test("urlKey mode rejects before reading the body (invalid key leaves the body unread)", async () => {
+    const req = post("http://x/channels/crisp?key=nope");
+    expect((await urlCh.webhook!(req, ctxWith(async () => ""))).status).toBe(401);
+    expect(req.bodyUsed).toBe(false);
   });
 });

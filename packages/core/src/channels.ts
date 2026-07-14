@@ -634,8 +634,10 @@ function slackTools(get: SlackCall, post: SlackCall): Tool[] {
 //   - WEBSITE hooks (dashboard-configured) are NOT signed. Crisp's documented
 //     pattern is a shared key in the endpoint URL ("?key=K"); the receiver
 //     compares it. Use auth: { type: "urlKey", key }. This is weaker by
-//     construction (no payload integrity, no replay guard) — that's the
-//     platform's ceiling for website hooks, not a choice this channel makes.
+//     construction (no payload integrity, no replay guard, and the key rides in
+//     the URL where access logs and proxies can see it — rotate it if logs leak)
+//     — that's the platform's ceiling for website hooks, not a choice this
+//     channel makes.
 //
 // Only visitor ("user") text triggers a turn; operator messages are our own replies.
 //
@@ -650,17 +652,30 @@ export type CrispWebhookAuth =
 // Website-hook verifier (exported for the same composability floor as
 // verifyCrispSignature): constant-time compare of the URL param (default
 // "key") against the configured key. An empty configured key always fails —
-// same closed-by-default posture as an empty signing secret.
+// same closed-by-default posture as an empty signing secret. Accepts absolute
+// or path-relative URLs; anything unparseable fails closed (return false, never
+// throw) — same contract as the signature verifiers on bad input.
 export function verifyCrispUrlKey(expectedKey: string, url: string, param = "key"): boolean {
   if (!expectedKey) return false;
-  return timingSafeEqual(new URL(url).searchParams.get(param) ?? "", expectedKey);
+  let params: URLSearchParams;
+  try {
+    params = new URL(url, "http://relative.invalid").searchParams;
+  } catch {
+    return false;
+  }
+  return timingSafeEqual(params.get(param) ?? "", expectedKey);
 }
 
-export function crispChannel(opts: {
-  // Exactly one of `auth` / `signingSecret` — signingSecret is the plugin-hook
-  // shorthand, kept for compatibility: it means { type: "signature", secret }.
-  auth?: CrispWebhookAuth;
-  signingSecret?: string;
+// Exactly one of `auth` / `signingSecret`, enforced at the type level so a
+// misconfigured channel is a compile error, not a runtime 401 — signingSecret is
+// the plugin-hook shorthand, kept for compatibility: it means
+// { type: "signature", secret }. (The constructor re-checks at runtime as a
+// backstop for plain-JS callers.)
+type CrispAuthOpts =
+  | { auth: CrispWebhookAuth; signingSecret?: never }
+  | { auth?: never; signingSecret: string };
+
+export function crispChannel(opts: CrispAuthOpts & {
   identifier: string;
   key: string;
   path?: string;
@@ -696,17 +711,21 @@ export function crispChannel(opts: {
     path: opts.path ?? "/channels/crisp",
     tools: () => crispTools(crispGet),
     async webhook(req, ctx) {
+      // urlKey authenticates from the URL alone — reject before reading the body,
+      // so an invalid-key request costs a URL parse and nothing else. Signature
+      // mode MACs the raw body, so it has to read first.
+      if (webhookAuth.type === "urlKey" && !verifyCrispUrlKey(webhookAuth.key, req.url, webhookAuth.param))
+        return new Response("bad key", { status: 401 });
       const body = await req.text();
-      const ok =
-        webhookAuth.type === "signature"
-          ? await verifyCrispSignature(
-              webhookAuth.secret,
-              req.headers.get("x-crisp-request-timestamp") ?? "",
-              body,
-              req.headers.get("x-crisp-signature") ?? "",
-            )
-          : verifyCrispUrlKey(webhookAuth.key, req.url, webhookAuth.param);
-      if (!ok) return new Response(webhookAuth.type === "signature" ? "bad signature" : "bad key", { status: 401 });
+      if (webhookAuth.type === "signature") {
+        const ok = await verifyCrispSignature(
+          webhookAuth.secret,
+          req.headers.get("x-crisp-request-timestamp") ?? "",
+          body,
+          req.headers.get("x-crisp-signature") ?? "",
+        );
+        if (!ok) return new Response("bad signature", { status: 401 });
+      }
 
       const payload = tryParseJson<{
         event?: string;
