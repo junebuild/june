@@ -461,6 +461,18 @@ export function durableChannelSurface(
       );
       yield* sseTurnEvents(res);
     },
+    // Resume a parked turn on its session's DO and stream the continuation.
+    resumeStream: async function* (o) {
+      const namespace = getNamespace();
+      if (!namespace) throw new Error("durableChannelSurface: no Durable Object namespace bound (env.AGENT)");
+      const res = await durableFetch(
+        namespace,
+        opts.agentName,
+        o.session ?? "default",
+        new Request("https://do/resume", { method: "POST", body: JSON.stringify({ turnId: o.turnId, inputId: o.inputId, input: o.input, by: o.by }) }),
+      );
+      yield* sseTurnEvents(res);
+    },
   };
   return channelDispatch(resolved, ctx);
 }

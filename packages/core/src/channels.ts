@@ -8,7 +8,7 @@
 //   export default slackChannel({ signingSecret: process.env.SLACK_SIGNING_SECRET! , botToken: ... })
 
 import { type Channel, type ChannelContext } from "./agent-config";
-import type { InboundEvent, Tool, ToolContext } from "./agent-runtime";
+import type { InboundEvent, InputRequest, Tool, ToolContext } from "./agent-runtime";
 
 // Re-export the normalized inbound envelope from where channel authors live, so an
 // adapter can `import { type InboundEvent } from "@junejs/core/channels"` alongside
@@ -233,6 +233,25 @@ export function slackChannel(opts: {
   async function stopStream(channel: string, ts: string) {
     await fetch(`${api}/chat.stopStream`, { method: "POST", headers: authHeaders, body: JSON.stringify({ channel, ts }) });
   }
+  async function updateMessage(channel: string, ts: string, text: string) {
+    await fetch(`${api}/chat.update`, { method: "POST", headers: authHeaders, body: JSON.stringify({ channel, ts, text, blocks: [] }) });
+  }
+  // Post the HITL prompt as a message with Approve / Deny buttons. Each button's value carries
+  // the {turnId, inputId, input} the interaction handler needs to route session.resume; the
+  // action_id prefix `june_input` is how we recognize our own buttons.
+  async function postApproval(channel: string, thread_ts: string | undefined, turnId: string, request: InputRequest): Promise<string | undefined> {
+    const btn = (text: string, input: boolean, style: "primary" | "danger") => ({
+      type: "button", text: { type: "plain_text", text }, style,
+      action_id: `june_input:${input ? "yes" : "no"}`,
+      value: JSON.stringify({ turnId, inputId: request.id, input }),
+    });
+    const blocks = [
+      { type: "section", text: { type: "mrkdwn", text: request.prompt } },
+      { type: "actions", elements: [btn("Approve", true, "primary"), btn("Deny", false, "danger")] },
+    ];
+    const r = (await (await fetch(`${api}/chat.postMessage`, { method: "POST", headers: authHeaders, body: JSON.stringify({ channel, thread_ts, text: request.prompt, blocks }) })).json().catch(() => ({}))) as { ts?: string };
+    return r.ts;
+  }
   // Render a turn LIVE via Slack's streaming API: startStream → appendStream each answer-token
   // delta → stopStream. The Slack stream is started LAZILY — only on the first piece of content
   // (a delta, the final one-shot reply, or a failure note) — so a tool-only / empty / no-output
@@ -264,6 +283,13 @@ export function slackChannel(opts: {
         if (e.type === "message.delta") { await append(e.text); streamed = true; }
         else if (e.type === "turn.completed") finalText = e.text;
         else if (e.type === "turn.failed") { await append("\n_(the turn failed)_"); await finish(); return; }
+        else if (e.type === "input.requested") {
+          // the turn parked awaiting a human: finalize any streamed text, then post the prompt
+          // with Approve/Deny buttons. The interaction handler (below) routes the click to resume.
+          if (started) await finish();
+          await postApproval(event.channelId, event.threadId, e.turnId, e.request);
+          return; // the stream closed on suspend; the turn continues on the button click
+        }
       }
       if (!streamed && finalText.trim()) await append(finalText); // one-shot: the whole reply once
       if (started) await finish(); // nothing appended (tool-only/empty) ⇒ never started ⇒ post nothing
@@ -272,6 +298,29 @@ export function slackChannel(opts: {
       await finish().catch(() => {});
       throw err; // let runBackground → onError record it
     }
+  }
+  // Route an Approve/Deny click to session.resume and render the continuation into the button
+  // message. The clicker's id is the VERIFIED resumer (`by`) — the signature was checked above,
+  // and Slack's payload.user.id is trustworthy; the engine enforces it against answererId.
+  function handleInteraction(payload: SlackInteraction, ctx: ChannelContext) {
+    if (payload.type !== "block_actions" || !ctx.resumeStream) return;
+    const action = payload.actions?.[0];
+    if (!action?.action_id?.startsWith("june_input") || !action.value) return;
+    const parsed = tryParseJson<{ turnId: string; inputId: string; input: unknown }>(action.value);
+    const channel = payload.channel?.id, msgTs = payload.message?.ts;
+    const thread = payload.message?.thread_ts ?? msgTs;
+    if (!parsed || !channel || !thread || !msgTs) return;
+    const session = `slack:${channel}:${thread}`;
+    runBackground(ctx, async () => {
+      await updateMessage(channel, msgTs, "_Working…_"); // drop the buttons; show progress
+      let final = "";
+      for await (const ev of ctx.resumeStream!({ session, turnId: parsed.turnId, inputId: parsed.inputId, input: parsed.input, by: payload.user?.id })) {
+        if (ev.type === "turn.completed") final = ev.text;
+        else if (ev.type === "turn.failed") { await updateMessage(channel, msgTs, "_(the turn failed)_"); return; }
+        else if (ev.type === "input.requested") { await postApproval(channel, thread, ev.turnId, ev.request); await updateMessage(channel, msgTs, "_(awaiting more input…)_"); return; }
+      }
+      await updateMessage(channel, msgTs, final.trim() || "_(done)_");
+    }, opts.onError);
   }
   // Slack Web API read helper: GET with query params + bearer token. Read methods
   // (conversations.replies, reactions.get, users.info) all accept this shape. Returns
@@ -303,6 +352,14 @@ export function slackChannel(opts: {
         req.headers.get("x-slack-signature") ?? "",
       );
       if (!ok) return new Response("bad signature", { status: 401 });
+
+      // Slack interactivity (a block_actions click on our Approve/Deny buttons) arrives
+      // form-encoded as `payload=<json>` — not an Events API JSON body. Route it to resume.
+      if (body.startsWith("payload=")) {
+        const interaction = tryParseJson<SlackInteraction>(new URLSearchParams(body).get("payload") ?? "");
+        if (interaction) handleInteraction(interaction, ctx);
+        return new Response("", { status: 200 }); // fast ACK
+      }
 
       const payload = tryParseJson<{ type?: string; challenge?: string; event?: SlackEvent }>(body);
       if (!payload) return new Response("", { status: 200 }); // signed but unparseable → ACK, don't retry
@@ -358,6 +415,15 @@ type SlackEvent = {
   user?: string;
   reaction?: string;
   item?: { type?: string; channel?: string; ts?: string };
+};
+
+// The subset of a Slack block_actions interaction payload we read (a button click).
+type SlackInteraction = {
+  type?: string;
+  user?: { id?: string };
+  channel?: { id?: string };
+  message?: { ts?: string; thread_ts?: string };
+  actions?: { action_id?: string; value?: string }[];
 };
 
 // Map a raw Slack event to June's normalized envelope + the turn's session and text.

@@ -198,6 +198,43 @@ describe("slackChannel", () => {
     expect((calls[1]!.body as { text?: string }).text).toContain("the turn failed");
   });
 
+  test("HITL: input.requested posts an Approve/Deny message carrying the resume routing value", async () => {
+    streamStub();
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true });
+    const ctx = ctxWith(async () => "unused");
+    ctx.runStream = async function* () {
+      yield { type: "turn.started", turnId: "t1", trigger: { kind: "proactive", by: "x" } } as TurnEvent;
+      yield { type: "input.requested", turnId: "t1", request: { id: "approve-1", prompt: "Approve refund?", answererId: "U1" } } as TurnEvent;
+    };
+    await ch2.webhook!(await signed(JSON.stringify({ type: "event_callback", event: { type: "message", text: "refund", channel: "C1", ts: "1.1", user: "U1" } })), ctx);
+    await flush();
+    const post = calls.find((c) => method(c) === "chat.postMessage")!.body as { blocks: { text?: { text: string }; elements?: { action_id: string; value: string }[] }[] };
+    expect(post.blocks[0]!.text!.text).toBe("Approve refund?");
+    const buttons = post.blocks[1]!.elements!;
+    expect(buttons.map((b) => b.action_id)).toEqual(["june_input:yes", "june_input:no"]);
+    expect(JSON.parse(buttons[0]!.value)).toEqual({ turnId: "t1", inputId: "approve-1", input: true });
+  });
+
+  test("HITL: a signed block_actions click routes to resumeStream and renders the continuation", async () => {
+    calls = [];
+    globalThis.fetch = (async (url: unknown, init?: { body?: string }) => {
+      calls.push({ url: String(url), body: init?.body ? JSON.parse(init.body) : undefined });
+      return new Response("{}", { status: 200 });
+    }) as typeof fetch;
+    let resumeArgs: unknown;
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test" });
+    const ctx = ctxWith(async () => "unused");
+    ctx.resumeStream = async function* (o) { resumeArgs = o; yield { type: "turn.completed", turnId: o.turnId, text: "Refund approved." } as TurnEvent; };
+
+    const interaction = { type: "block_actions", user: { id: "U1" }, channel: { id: "C1" }, message: { ts: "9.9", thread_ts: "5.5" }, actions: [{ action_id: "june_input:yes", value: JSON.stringify({ turnId: "t1", inputId: "approve-1", input: true }) }] };
+    const res = await ch2.webhook!(await signed(`payload=${encodeURIComponent(JSON.stringify(interaction))}`), ctx);
+    expect(res.status).toBe(200); // fast ACK
+    await flush();
+    expect(resumeArgs).toEqual({ session: "slack:C1:5.5", turnId: "t1", inputId: "approve-1", input: true, by: "U1" }); // by = the verified clicker
+    const updates = calls.filter((c) => method(c) === "chat.update");
+    expect(updates.at(-1)!.body).toMatchObject({ channel: "C1", ts: "9.9", text: "Refund approved." }); // rendered into the button message
+  });
+
   test("stream render: an iterator exception finalizes the stream and reports via onError", async () => {
     streamStub();
     let reported: unknown;
