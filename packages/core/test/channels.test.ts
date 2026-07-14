@@ -6,7 +6,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { channelFetch, defineChannel, resolveChannel, type AgentDefinition, type Channel, type ChannelContext } from "@junejs/core/agent-config";
 import type { InboundEvent, ToolContext, TurnEvent } from "@junejs/core/agent-runtime";
-import { crispChannel, httpChannel, slackChannel, verifySlackSignature, verifyCrispSignature, tryParseJson, timestampFresh, normalizeSlackEvent } from "@junejs/core/channels";
+import { crispChannel, httpChannel, slackChannel, verifySlackSignature, verifyCrispSignature, verifyCrispUrlKey, tryParseJson, timestampFresh, normalizeSlackEvent } from "@junejs/core/channels";
 
 const enc = new TextEncoder();
 async function hmacHex(secret: string, message: string): Promise<string> {
@@ -794,5 +794,71 @@ describe("crispChannel", () => {
       { from: "user", type: "text", content: "hi", nickname: "Ada" },
       { from: "operator", type: "text", content: "hello", nickname: undefined },
     ] });
+  });
+});
+
+describe("crispChannel website-hooks auth (urlKey)", () => {
+  // Website hooks are unsigned (Crisp docs: "Website Hooks are not signed, in
+  // contrary to Plugin Hooks"); the documented contract is a shared key in the
+  // endpoint URL. These tests pin that mode; plugin-hook (signature) tests above
+  // are the other half of the union.
+  const urlCh = crispChannel({ auth: { type: "urlKey", key: "k-123" }, identifier: "id", key: "key", apiUrl: "https://crisp.test" });
+  const visitor = JSON.stringify({ event: "message:send", data: { from: "user", type: "text", content: "hi", website_id: "w1", session_id: "s1" } });
+  const post = (url: string) => new Request(url, { method: "POST", body: visitor });
+
+  test("a correct ?key runs the turn and replies (no signature headers needed)", async () => {
+    captureFetch();
+    const res = await urlCh.webhook!(post("http://x/channels/crisp?key=k-123"), ctxWith(async (m) => `answer: ${m}`));
+    expect(res.status).toBe(200);
+    await flush();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.body).toMatchObject({ content: "answer: hi" });
+  });
+
+  test("wrong or missing key → 401, nothing runs", async () => {
+    captureFetch();
+    const ctx = ctxWith(async () => "should not run");
+    expect((await urlCh.webhook!(post("http://x/channels/crisp?key=nope"), ctx)).status).toBe(401);
+    expect((await urlCh.webhook!(post("http://x/channels/crisp"), ctx)).status).toBe(401);
+    await flush();
+    expect(calls).toHaveLength(0);
+  });
+
+  test("custom param name", async () => {
+    const ch = crispChannel({ auth: { type: "urlKey", key: "k", param: "token" }, identifier: "id", key: "key", apiUrl: "https://crisp.test" });
+    expect((await ch.webhook!(post("http://x/channels/crisp?token=k"), ctxWith(async () => ""))).status).toBe(200);
+    expect((await ch.webhook!(post("http://x/channels/crisp?key=k"), ctxWith(async () => ""))).status).toBe(401);
+  });
+
+  test("empty configured key always 401 (closed-by-default, parity with empty signingSecret)", async () => {
+    const ch = crispChannel({ auth: { type: "urlKey", key: "" }, identifier: "id", key: "key", apiUrl: "https://crisp.test" });
+    expect((await ch.webhook!(post("http://x/channels/crisp?key="), ctxWith(async () => ""))).status).toBe(401);
+  });
+
+  test("construction: both auth and signingSecret throws; neither throws", () => {
+    // The opts type forbids both/neither at compile time; the runtime throws are
+    // the backstop for plain-JS callers, so cast past the type to reach them.
+    // @ts-expect-error — both sources is a compile error by design
+    expect(() => crispChannel({ auth: { type: "urlKey", key: "k" }, signingSecret: "s", identifier: "id", key: "key" })).toThrow(/not both/);
+    // @ts-expect-error — neither source is a compile error by design
+    expect(() => crispChannel({ identifier: "id", key: "key" })).toThrow(/required/);
+  });
+
+  test("verifyCrispUrlKey is exported and constant-time-compares the param", () => {
+    expect(verifyCrispUrlKey("k", "http://x/hook?key=k")).toBe(true);
+    expect(verifyCrispUrlKey("k", "http://x/hook?key=K")).toBe(false);
+    expect(verifyCrispUrlKey("", "http://x/hook?key=")).toBe(false);
+    expect(verifyCrispUrlKey("k", "http://x/hook?token=k", "token")).toBe(true);
+  });
+
+  test("verifyCrispUrlKey fails closed on unparseable URLs and accepts path-relative ones", () => {
+    expect(verifyCrispUrlKey("k", "http://[not-a-url")).toBe(false); // never throws
+    expect(verifyCrispUrlKey("k", "/hook?key=k")).toBe(true); // path-only (hand-rolled channels)
+  });
+
+  test("urlKey mode rejects before reading the body (invalid key leaves the body unread)", async () => {
+    const req = post("http://x/channels/crisp?key=nope");
+    expect((await urlCh.webhook!(req, ctxWith(async () => ""))).status).toBe(401);
+    expect(req.bodyUsed).toBe(false);
   });
 });
