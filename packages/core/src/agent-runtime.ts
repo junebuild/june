@@ -406,6 +406,16 @@ export class AgentSession {
   // Durable Object this is blockConcurrencyWhile; here it's a promise chain.)
   start(input: TurnInput): { turnId: string } {
     const turnId = input.turnId ?? `t${++this.seq}`;
+    // While a turn is parked awaiting input, the transcript ends in its dangling tool call —
+    // running a NEW turn on it would corrupt both (the resumed replay would adopt the new
+    // turn's tail as its own result). Reject loudly; redelivering the SAME parked turn is
+    // allowed (it replays, re-parks, and re-announces input.requested).
+    if (this.store.getStatus() === "suspended") {
+      const s = this.store.getStep("suspended") as SuspendedCheckpoint | undefined;
+      if (s && s.turnId !== turnId) {
+        throw new Error(`session is suspended awaiting input "${s.request.id}" (turn ${s.turnId}); resume it before starting a new turn`);
+      }
+    }
     const systemOverlay = input.event ? this.channelInstructions?.[input.event.source] : undefined;
     const run = () =>
       runTurn(

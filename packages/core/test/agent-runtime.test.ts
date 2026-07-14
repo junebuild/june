@@ -458,6 +458,25 @@ describe("suspend / resume (P3 — HITL)", () => {
     const approvals = store.messages().filter((m): m is Extract<Msg, { role: "tool" }> => m.role === "tool" && m.name === "approve");
     expect(approvals.map((m) => m.result)).toEqual([{ approved: "yes-1" }, { approved: "yes-2" }]);
   });
+
+  test("a NEW turn is rejected while one is parked; redelivering the parked turn re-parks", async () => {
+    const events: TurnEvent[] = [];
+    const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), scriptedModel(APPROVE_SCRIPT), [approveTool()], noRuntime);
+    s.observe((e) => events.push(e));
+    const { turnId } = s.start({ turnId: "t1", userText: "refund please" });
+    await s.result(turnId); // parked — the transcript ends in the dangling approve call
+
+    // a new turn on the dangling transcript would corrupt both turns — loud rejection
+    expect(() => s.start({ turnId: "t2", userText: "unrelated" })).toThrow(/suspended awaiting input "approve-1"/);
+
+    // but a redelivery of the SAME parked turn replays and re-announces the request
+    s.start({ turnId: "t1", userText: "refund please" });
+    expect(await s.result(turnId)).toMatchObject({ status: "suspended", request: { id: "approve-1" } });
+    expect(events.filter((e) => e.type === "input.requested").length).toBe(2);
+
+    s.resume(turnId, "approve-1", true);
+    expect(await s.result(turnId)).toMatchObject({ status: "completed" });
+  });
 });
 
 describe("withSystem", () => {
