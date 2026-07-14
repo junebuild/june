@@ -1,5 +1,12 @@
 # june.build
 
+## 0.0.5-dev.8
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @junejs/core@0.1.1-dev.8
+
 ## 0.0.5-dev.7
 
 ### Patch Changes
