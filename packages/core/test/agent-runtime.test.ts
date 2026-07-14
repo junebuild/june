@@ -303,7 +303,8 @@ describe("TurnEvent stream (P1)", () => {
     expect(opening).toEqual({ role: "trigger", turnId: "t1", text: "Summarize today's open threads.", by: "cron:daily" });
     // turn.started carries the proactive trigger; the fold surfaces the seed as the turn's prompt.
     expect(events[0]).toMatchObject({ type: "turn.started", trigger: { kind: "proactive", by: "cron:daily" } });
-    expect(s.transcript()[0]).toMatchObject({ user: "Summarize today's open threads.", text: "Daily summary: 3 open threads." });
+    // the fold surfaces the seed as the turn's prompt AND keeps the attribution
+    expect(s.transcript()[0]).toMatchObject({ user: "Summarize today's open threads.", by: "cron:daily", text: "Daily summary: 3 open threads." });
   });
 
   test("a plain programmatic turn (no explicit trigger) still opens with a user msg", async () => {

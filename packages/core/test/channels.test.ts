@@ -253,6 +253,37 @@ describe("slackChannel", () => {
       .rejects.toThrow(/runStream/);
   });
 
+  test("proactive HITL: deliver carries the caller's session into the Approve/Deny value (resume routing)", async () => {
+    streamStub();
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test" });
+    async function* stream() {
+      yield { type: "turn.started", turnId: "t1", trigger: { kind: "proactive", by: "cron:daily" } } as TurnEvent;
+      yield { type: "input.requested", turnId: "t1", request: { id: "approve-1", prompt: "Post the summary?", answererId: "U1" } } as TurnEvent;
+    }
+    // a PROACTIVE session is caller-chosen — the click could never re-derive it from the thread
+    await ch2.deliver!({ channelId: "C-ops" }, stream(), { session: "slack:C-ops:daily" });
+    const post = calls.find((c) => method(c) === "chat.postMessage")!.body as { blocks: { elements?: { value: string }[] }[] };
+    expect(JSON.parse(post.blocks[1]!.elements![0]!.value)).toEqual({ turnId: "t1", inputId: "approve-1", input: true, session: "slack:C-ops:daily" });
+  });
+
+  test("proactive HITL: a click routes resume to the session NAMED in the value, not the derived thread session", async () => {
+    calls = [];
+    globalThis.fetch = (async (url: unknown, init?: { body?: string }) => {
+      calls.push({ url: String(url), body: init?.body ? JSON.parse(init.body) : undefined });
+      return new Response("{}", { status: 200 });
+    }) as typeof fetch;
+    let resumeArgs: { session?: string } | undefined;
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test" });
+    const ctx = ctxWith(async () => "unused");
+    ctx.resumeStream = async function* (o) { resumeArgs = o; yield { type: "turn.completed", turnId: o.turnId, text: "Posted." } as TurnEvent; };
+
+    const value = JSON.stringify({ turnId: "t1", inputId: "approve-1", input: true, session: "slack:C-ops:daily" });
+    const interaction = { type: "block_actions", user: { id: "U1" }, channel: { id: "C-ops" }, message: { ts: "9.9" }, actions: [{ action_id: "june_input:yes", value }] };
+    await ch2.webhook!(await signed(`payload=${encodeURIComponent(JSON.stringify(interaction))}`), ctx);
+    await flush();
+    expect(resumeArgs!.session).toBe("slack:C-ops:daily"); // NOT slack:C-ops:9.9
+  });
+
   test("HITL: input.requested posts an Approve/Deny message carrying the resume routing value", async () => {
     streamStub();
     const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true });
@@ -267,7 +298,8 @@ describe("slackChannel", () => {
     expect(post.blocks[0]!.text!.text).toBe("Approve refund?");
     const buttons = post.blocks[1]!.elements!;
     expect(buttons.map((b) => b.action_id)).toEqual(["june_input:yes", "june_input:no"]);
-    expect(JSON.parse(buttons[0]!.value)).toEqual({ turnId: "t1", inputId: "approve-1", input: true });
+    // the value names the parked turn's session — the click routes resume by IT, not by re-deriving
+    expect(JSON.parse(buttons[0]!.value)).toEqual({ turnId: "t1", inputId: "approve-1", input: true, session: "slack:C1:1.1" });
   });
 
   test("HITL: a signed block_actions click routes to resumeStream and renders the continuation", async () => {

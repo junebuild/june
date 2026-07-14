@@ -8,7 +8,7 @@
 //   export default slackChannel({ signingSecret: process.env.SLACK_SIGNING_SECRET! , botToken: ... })
 
 import { type Channel, type ChannelContext, type DeliveryTarget } from "./agent-config";
-import type { InboundEvent, InputRequest, Tool, ToolContext, TurnEvent, TurnTrigger } from "./agent-runtime";
+import type { InboundEvent, InputRequest, ProactiveTrigger, Tool, ToolContext, TurnEvent } from "./agent-runtime";
 
 // Re-export the normalized inbound envelope from where channel authors live, so an
 // adapter can `import { type InboundEvent } from "@junejs/core/channels"` alongside
@@ -240,13 +240,15 @@ export function slackChannel(opts: {
     await fetch(`${api}/chat.update`, { method: "POST", headers: authHeaders, body: JSON.stringify({ channel, ts, text, blocks: [] }) });
   }
   // Post the HITL prompt as a message with Approve / Deny buttons. Each button's value carries
-  // the {turnId, inputId, input} the interaction handler needs to route session.resume; the
-  // action_id prefix `june_input` is how we recognize our own buttons.
-  async function postApproval(channel: string, thread_ts: string | undefined, turnId: string, request: InputRequest): Promise<string | undefined> {
+  // the {turnId, inputId, input, session} the interaction handler needs to route session.resume;
+  // the action_id prefix `june_input` is how we recognize our own buttons. `session` matters for
+  // a PROACTIVE turn: its session is caller-chosen, not the inbound slack:<channel>:<thread>
+  // convention, so the click couldn't re-derive it from the message's location.
+  async function postApproval(channel: string, thread_ts: string | undefined, turnId: string, request: InputRequest, session?: string): Promise<string | undefined> {
     const btn = (text: string, input: boolean, style: "primary" | "danger") => ({
       type: "button", text: { type: "plain_text", text }, style,
       action_id: `june_input:${input ? "yes" : "no"}`,
-      value: JSON.stringify({ turnId, inputId: request.id, input }),
+      value: JSON.stringify({ turnId, inputId: request.id, input, session }),
     });
     const blocks = [
       { type: "section", text: { type: "mrkdwn", text: request.prompt } },
@@ -263,7 +265,7 @@ export function slackChannel(opts: {
   // (a delta, the final one-shot reply, or a failure note) — so a tool-only / empty / no-output
   // turn posts NOTHING (no empty streamed message). When startStream is unavailable (older app),
   // content accumulates and is posted once via chat.postMessage — including a failure note.
-  async function streamRender(surface: DeliveryTarget, events: AsyncIterable<TurnEvent>) {
+  async function streamRender(surface: DeliveryTarget, events: AsyncIterable<TurnEvent>, session?: string) {
     const { channelId, threadId } = surface;
     let streamTs: string | undefined;
     let started = false; // startStream attempted (regardless of success)
@@ -294,7 +296,7 @@ export function slackChannel(opts: {
           // the turn parked awaiting a human: finalize any streamed text, then post the prompt
           // with Approve/Deny buttons. The interaction handler (below) routes the click to resume.
           if (started) await finish();
-          await postApproval(channelId, threadId, e.turnId, e.request);
+          await postApproval(channelId, threadId, e.turnId, e.request, session);
           return; // the stream closed on suspend; the turn continues on the button click
         }
       }
@@ -308,7 +310,7 @@ export function slackChannel(opts: {
   }
   // The inbound reply path: render the turn started FROM an event, to that event's own thread.
   function renderStream(ctx: ChannelContext, event: InboundEvent, userText: string, session: string) {
-    return streamRender({ channelId: event.channelId, threadId: event.threadId }, ctx.runStream!(userText, { session, event }));
+    return streamRender({ channelId: event.channelId, threadId: event.threadId }, ctx.runStream!(userText, { session, event }), session);
   }
   // Post-once render that still understands HITL. The plain ctx.run path collapses the turn
   // to its final text — but a parked turn (input.requested) HAS no final text, so the collapse
@@ -320,7 +322,7 @@ export function slackChannel(opts: {
     for await (const e of ctx.runStream!(userText, { session, event })) {
       if (e.type === "turn.completed") finalText = e.text;
       else if (e.type === "turn.failed") throw new Error(e.error.message);
-      else if (e.type === "input.requested") { await postApproval(event.channelId, event.threadId, e.turnId, e.request); return; }
+      else if (e.type === "input.requested") { await postApproval(event.channelId, event.threadId, e.turnId, e.request, session); return; }
     }
     if (finalText.trim()) await postMessage(event.channelId, finalText, event.threadId);
   }
@@ -332,7 +334,7 @@ export function slackChannel(opts: {
     const action = payload.actions?.[0];
     if (!action?.action_id?.startsWith("june_input:") || !action.value) return; // not our button (action_ids are june_input:yes|no)
     // From here the click IS ours — a dead end must be loud (onError), never a silent no-op.
-    const parsed = tryParseJson<{ turnId: string; inputId: string; input: unknown }>(action.value);
+    const parsed = tryParseJson<{ turnId: string; inputId: string; input: unknown; session?: string }>(action.value);
     const channel = payload.channel?.id, msgTs = payload.message?.ts;
     const thread = payload.message?.thread_ts ?? msgTs;
     if (!ctx.resumeStream || !parsed || !channel || !thread || !msgTs) {
@@ -341,7 +343,9 @@ export function slackChannel(opts: {
         : "slack: HITL click but the host provides no resumeStream"));
       return;
     }
-    const session = `slack:${channel}:${thread}`;
+    // The button value names the parked turn's session (a PROACTIVE session is caller-chosen);
+    // fall back to the inbound convention for buttons posted before the value carried it.
+    const session = parsed.session ?? `slack:${channel}:${thread}`;
     runBackground(ctx, async () => {
       // Pull the FIRST event before touching the message: the engine rejects an unauthorized
       // clicker (403) or a stale/double click (409) on that first pull, and a rejection must
@@ -367,7 +371,7 @@ export function slackChannel(opts: {
           const ev = r.value;
           if (ev.type === "turn.completed") final = ev.text;
           else if (ev.type === "turn.failed") { await updateMessage(channel, msgTs, "_(the turn failed)_"); return; }
-          else if (ev.type === "input.requested") { await postApproval(channel, thread, ev.turnId, ev.request); await updateMessage(channel, msgTs, "_(awaiting more input…)_"); return; }
+          else if (ev.type === "input.requested") { await postApproval(channel, thread, ev.turnId, ev.request, session); await updateMessage(channel, msgTs, "_(awaiting more input…)_"); return; }
         }
         await updateMessage(channel, msgTs, final.trim() || "_(done)_");
       } catch (err) {
@@ -406,7 +410,8 @@ export function slackChannel(opts: {
     tools: () => slackTools(slackGet, slackPost),
     // Proactive delivery (§9): render an agent-initiated turn's stream to a target thread,
     // the same renderer as an inbound reply — progressive edits, HITL prompts, final text.
-    deliver: (target, events) => streamRender(target, events),
+    // `opts.session` routes an HITL prompt's resume back to the caller-chosen session.
+    deliver: (target, events, o) => streamRender(target, events, o?.session),
     async webhook(req, ctx) {
       const body = await req.text();
       const ok = await valid(
@@ -466,12 +471,12 @@ export function slackChannel(opts: {
 export async function receive(
   channel: Channel,
   ctx: ChannelContext,
-  opts: { seed: string; target: DeliveryTarget; trigger: TurnTrigger; session: string; turnId?: string },
+  opts: { seed: string; target: DeliveryTarget; trigger: ProactiveTrigger; session: string; turnId?: string },
 ): Promise<void> {
   if (!ctx.runStream) throw new Error("receive: the host provides no runStream — proactive delivery needs a streaming target (the edge Durable Object)");
   if (!channel.deliver) throw new Error(`receive: channel "${channel.name}" has no deliver() — it can't render an agent-initiated turn`);
   const events = ctx.runStream(opts.seed, { session: opts.session, turnId: opts.turnId, trigger: opts.trigger });
-  await channel.deliver(opts.target, events);
+  await channel.deliver(opts.target, events, { session: opts.session });
 }
 
 // Slack Web API envelope shape (only the fields the read tools touch). `[k: string]`

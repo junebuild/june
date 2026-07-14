@@ -173,9 +173,15 @@ export class ResumeAuthorizationError extends Error {}
 // overlay/event). One per session — turns serialize, and start() rejects new turns while
 // one is parked, so a single fixed key cannot be clobbered.
 type SuspendedCheckpoint = { turnId: string; callId: string; request: InputRequest; userText: string; systemOverlay?: string; event?: InboundEvent };
+// The proactive variant stands alone: it's the only trigger a CALLER may pass explicitly
+// (TurnInput / ChannelContext.run / receive()) — inbound is derived from the event, resume is
+// engine-internal. Narrowing the public seams to this type makes misuse (passing an inbound or
+// resume trigger to the proactive entrypoint) unrepresentable, and keeps the /turn wire payload
+// trivially JSON-serializable (no embedded event.raw).
+export type ProactiveTrigger = { kind: "proactive"; by: string; note?: string }; // a schedule, another channel, the agent itself
 export type TurnTrigger =
   | { kind: "inbound"; event: InboundEvent }          // a channel event (message, mention, reaction)
-  | { kind: "proactive"; by: string; note?: string }   // a schedule, another channel, the agent itself
+  | ProactiveTrigger
   | { kind: "resume"; callId: string };                // continuation after an input.requested suspend
 export type TurnEvent =
   | { type: "turn.started"; turnId: string; trigger: TurnTrigger }
@@ -367,6 +373,7 @@ async function toolStep(
 export type Turn = {
   turnId: string;
   user: string;
+  by?: string; // set when the turn was agent-initiated: who seeded it (the trigger msg's `by`)
   steps: { name: string; done: boolean; result?: unknown }[];
   text?: string;
 };
@@ -376,7 +383,8 @@ export function foldTranscript(msgs: Msg[]): Turn[] {
   for (const m of msgs) {
     let t = byId.get(m.turnId);
     if (!t) { t = { turnId: m.turnId, user: "", steps: [] }; byId.set(m.turnId, t); order.push(m.turnId); }
-    if (m.role === "user" || m.role === "trigger") t.user = m.text; // proactive seed shows as the turn's prompt
+    if (m.role === "user") t.user = m.text;
+    else if (m.role === "trigger") { t.user = m.text; t.by = m.by; } // proactive seed shows as the turn's prompt, still attributed
     else if (m.role === "assistant") {
       for (const tc of m.toolCalls) t.steps.push({ name: tc.name, done: false });
       if (m.text) t.text = m.text;
@@ -391,8 +399,9 @@ export function foldTranscript(msgs: Msg[]): Turn[] {
 // ── the outer seam: AgentSession actor (serializes turns via an inbox) ─────────
 // `trigger` marks an agent-INITIATED turn (proactive): no inbound event, the turn opens with a
 // `trigger`-role seed attributed to `by` (a schedule, another channel, the agent). Omitted for a
-// normal inbound/programmatic turn. See §9 / receive().
-export type TurnInput = { turnId?: string; userText: string; crash?: Crash; event?: InboundEvent; trigger?: TurnTrigger };
+// normal inbound/programmatic turn. Proactive-only by type: inbound is derived from `event`,
+// resume is engine-internal. See §9 / receive().
+export type TurnInput = { turnId?: string; userText: string; crash?: Crash; event?: InboundEvent; trigger?: ProactiveTrigger };
 
 export class AgentSession {
   private chain: Promise<unknown> = Promise.resolve();
