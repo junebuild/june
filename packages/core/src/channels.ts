@@ -777,7 +777,7 @@ export function normalizeCrispEvent(
   const session = (d: { website_id?: string; session_id?: string }) => `crisp:${d.website_id}:${d.session_id}`; // one conversation = one session
 
   // A VISITOR text message (operator messages — message:received, or a message:send that
-  // isn't from "user" — are our own reply path → loop guard; require non-blank content so
+  // isn't visitor-authored — are our own reply path → loop guard; require non-blank content so
   // a whitespace message doesn't burn a turn). channelId = website, threadId = conversation
   // session (NOT ts — Crisp keys a conversation by website/session; ts is just the message
   // fingerprint, "" when Crisp omits it).
