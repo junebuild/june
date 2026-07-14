@@ -132,7 +132,13 @@ verified id — the turn continues from where it parked.
 
 To enable it, turn on **Interactivity** in your Slack app and set the Request URL to
 `https://<your-worker>/channels/slack` (same endpoint as events). The clicker's id is enforced
-against the request's `answererId` (defaults to the user who triggered the turn).
+against the request's `answererId` (defaults to the user who triggered the turn). A rejected
+click — someone other than the answerer, or a stale/double click — leaves the buttons in place
+for the rightful answerer and tells the clicker ephemerally.
+
+HITL works in both render modes: with `stream: true` the prompt follows the live-streamed text;
+without it the channel still consumes the event stream (post-once) so a parked turn posts its
+prompt instead of erroring.
 
 ## What's next (not in this example yet)
 

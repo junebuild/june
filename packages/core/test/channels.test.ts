@@ -235,6 +235,63 @@ describe("slackChannel", () => {
     expect(updates.at(-1)!.body).toMatchObject({ channel: "C1", ts: "9.9", text: "Refund approved." }); // rendered into the button message
   });
 
+  test("HITL: post-once (non-stream) mode still posts the Approve/Deny prompt when the turn parks", async () => {
+    streamStub();
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test" }); // no stream: true
+    const ctx = ctxWith(async () => { throw new Error("run() must not be used when runStream is available"); });
+    ctx.runStream = async function* () {
+      yield { type: "turn.started", turnId: "t1", trigger: { kind: "proactive", by: "x" } } as TurnEvent;
+      yield { type: "input.requested", turnId: "t1", request: { id: "approve-1", prompt: "Approve refund?", answererId: "U1" } } as TurnEvent;
+    };
+    await ch2.webhook!(await signed(JSON.stringify({ type: "event_callback", event: { type: "message", text: "refund", channel: "C1", ts: "1.1", user: "U1" } })), ctx);
+    await flush();
+    const post = calls.find((c) => method(c) === "chat.postMessage")!.body as { blocks?: unknown[]; thread_ts?: string };
+    expect(post.blocks).toHaveLength(2); // prompt section + Approve/Deny actions
+    expect(post.thread_ts).toBe("1.1"); // threaded, so a click reconstructs the same session
+  });
+
+  test("HITL: post-once (non-stream) mode posts a completed turn's text once", async () => {
+    streamStub();
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test" });
+    const ctx = ctxWith(async () => { throw new Error("run() must not be used when runStream is available"); });
+    ctx.runStream = async function* () {
+      yield { type: "message.delta", turnId: "t1", text: "Hel" } as TurnEvent; // deltas are NOT live-rendered here
+      yield { type: "turn.completed", turnId: "t1", text: "Hello" } as TurnEvent;
+    };
+    await ch2.webhook!(await signed(JSON.stringify({ type: "event_callback", event: { type: "message", text: "hi", channel: "C1", ts: "1.1", user: "U1" } })), ctx);
+    await flush();
+    expect(calls.map(method)).toEqual(["chat.postMessage"]); // one post, no streaming calls
+    expect(calls[0]!.body).toMatchObject({ channel: "C1", text: "Hello", thread_ts: "1.1" });
+  });
+
+  test("HITL: a rejected click (403/409) leaves the buttons intact and tells only the clicker", async () => {
+    captureFetch();
+    let reported: unknown;
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", onError: (e) => { reported = e; } });
+    const ctx = ctxWith(async () => "unused");
+    // the DO's /resume answered 403/409 → sseTurnEvents throws before yielding anything
+    ctx.resumeStream = async function* () { throw new Error("turn stream: expected an SSE response, got application/json (status 403)"); };
+    const interaction = { type: "block_actions", user: { id: "U-other" }, channel: { id: "C1" }, message: { ts: "9.9", thread_ts: "5.5" }, response_url: "https://slack.test/hooks/eph", actions: [{ action_id: "june_input:yes", value: JSON.stringify({ turnId: "t1", inputId: "approve-1", input: true }) }] };
+    const res = await ch2.webhook!(await signed(`payload=${encodeURIComponent(JSON.stringify(interaction))}`), ctx);
+    expect(res.status).toBe(200);
+    await flush();
+    expect(calls.filter((c) => method(c) === "chat.update")).toHaveLength(0); // buttons untouched for the rightful answerer
+    const eph = calls.find((c) => c.url === "https://slack.test/hooks/eph")!;
+    expect(eph.body).toMatchObject({ response_type: "ephemeral", replace_original: false }); // only the clicker is told
+    expect((reported as Error).message).toContain("status 403"); // still recorded
+  });
+
+  test("HITL: a click on a host without resumeStream reports via onError (not a silent no-op)", async () => {
+    captureFetch();
+    let reported: unknown;
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", onError: (e) => { reported = e; } });
+    const interaction = { type: "block_actions", user: { id: "U1" }, channel: { id: "C1" }, message: { ts: "9.9" }, actions: [{ action_id: "june_input:yes", value: JSON.stringify({ turnId: "t1", inputId: "approve-1", input: true }) }] };
+    await ch2.webhook!(await signed(`payload=${encodeURIComponent(JSON.stringify(interaction))}`), ctxWith(async () => "unused"));
+    await flush();
+    expect(calls).toHaveLength(0);
+    expect((reported as Error).message).toContain("resumeStream");
+  });
+
   test("stream render: an iterator exception finalizes the stream and reports via onError", async () => {
     streamStub();
     let reported: unknown;

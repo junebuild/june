@@ -8,7 +8,7 @@
 //   export default slackChannel({ signingSecret: process.env.SLACK_SIGNING_SECRET! , botToken: ... })
 
 import { type Channel, type ChannelContext } from "./agent-config";
-import type { InboundEvent, InputRequest, Tool, ToolContext } from "./agent-runtime";
+import type { InboundEvent, InputRequest, Tool, ToolContext, TurnEvent } from "./agent-runtime";
 
 // Re-export the normalized inbound envelope from where channel authors live, so an
 // adapter can `import { type InboundEvent } from "@junejs/core/channels"` alongside
@@ -249,7 +249,10 @@ export function slackChannel(opts: {
       { type: "section", text: { type: "mrkdwn", text: request.prompt } },
       { type: "actions", elements: [btn("Approve", true, "primary"), btn("Deny", false, "danger")] },
     ];
-    const r = (await (await fetch(`${api}/chat.postMessage`, { method: "POST", headers: authHeaders, body: JSON.stringify({ channel, thread_ts, text: request.prompt, blocks }) })).json().catch(() => ({}))) as { ts?: string };
+    const r = (await (await fetch(`${api}/chat.postMessage`, { method: "POST", headers: authHeaders, body: JSON.stringify({ channel, thread_ts, text: request.prompt, blocks }) })).json().catch(() => ({}))) as { ok?: boolean; ts?: string };
+    // The turn is parked either way — if the prompt didn't post, nobody has buttons to resume
+    // it, and that must be loud (onError), not a silently bricked approval.
+    if (!r.ok) opts.onError?.(new Error(`slack: failed to post the HITL prompt for input "${request.id}" (turn ${turnId})`));
     return r.ts;
   }
   // Render a turn LIVE via Slack's streaming API: startStream → appendStream each answer-token
@@ -299,27 +302,71 @@ export function slackChannel(opts: {
       throw err; // let runBackground → onError record it
     }
   }
+  // Post-once render that still understands HITL. The plain ctx.run path collapses the turn
+  // to its final text — but a parked turn (input.requested) HAS no final text, so the collapse
+  // errors and the Approve/Deny prompt would never post. When the host provides the event
+  // stream, consume it non-live instead: post the final text once, post the approval prompt
+  // when the turn parks. Failure semantics match ctx.run (throw → runBackground → onError).
+  async function renderOnce(ctx: ChannelContext, event: InboundEvent, userText: string, session: string) {
+    let finalText = "";
+    for await (const e of ctx.runStream!(userText, { session, event })) {
+      if (e.type === "turn.completed") finalText = e.text;
+      else if (e.type === "turn.failed") throw new Error(e.error.message);
+      else if (e.type === "input.requested") { await postApproval(event.channelId, event.threadId, e.turnId, e.request); return; }
+    }
+    if (finalText.trim()) await postMessage(event.channelId, finalText, event.threadId);
+  }
   // Route an Approve/Deny click to session.resume and render the continuation into the button
   // message. The clicker's id is the VERIFIED resumer (`by`) — the signature was checked above,
   // and Slack's payload.user.id is trustworthy; the engine enforces it against answererId.
   function handleInteraction(payload: SlackInteraction, ctx: ChannelContext) {
-    if (payload.type !== "block_actions" || !ctx.resumeStream) return;
+    if (payload.type !== "block_actions") return;
     const action = payload.actions?.[0];
-    if (!action?.action_id?.startsWith("june_input") || !action.value) return;
+    if (!action?.action_id?.startsWith("june_input") || !action.value) return; // not our button
+    // From here the click IS ours — a dead end must be loud (onError), never a silent no-op.
     const parsed = tryParseJson<{ turnId: string; inputId: string; input: unknown }>(action.value);
     const channel = payload.channel?.id, msgTs = payload.message?.ts;
     const thread = payload.message?.thread_ts ?? msgTs;
-    if (!parsed || !channel || !thread || !msgTs) return;
+    if (!ctx.resumeStream || !parsed || !channel || !thread || !msgTs) {
+      opts.onError?.(new Error(ctx.resumeStream
+        ? "slack: HITL click with an unusable payload (value/channel/message missing)"
+        : "slack: HITL click but the host provides no resumeStream"));
+      return;
+    }
     const session = `slack:${channel}:${thread}`;
     runBackground(ctx, async () => {
-      await updateMessage(channel, msgTs, "_Working…_"); // drop the buttons; show progress
-      let final = "";
-      for await (const ev of ctx.resumeStream!({ session, turnId: parsed.turnId, inputId: parsed.inputId, input: parsed.input, by: payload.user?.id })) {
-        if (ev.type === "turn.completed") final = ev.text;
-        else if (ev.type === "turn.failed") { await updateMessage(channel, msgTs, "_(the turn failed)_"); return; }
-        else if (ev.type === "input.requested") { await postApproval(channel, thread, ev.turnId, ev.request); await updateMessage(channel, msgTs, "_(awaiting more input…)_"); return; }
+      // Pull the FIRST event before touching the message: the engine rejects an unauthorized
+      // clicker (403) or a stale/double click (409) on that first pull, and a rejection must
+      // leave the Approve/Deny buttons intact for the rightful answerer.
+      const it = ctx.resumeStream!({ session, turnId: parsed.turnId, inputId: parsed.inputId, input: parsed.input, by: payload.user?.id })[Symbol.asyncIterator]();
+      let first: IteratorResult<TurnEvent>;
+      try {
+        first = await it.next();
+      } catch (err) {
+        // tell only the clicker why nothing happened (response_url posts ephemerally)
+        if (payload.response_url) {
+          await fetch(payload.response_url, {
+            method: "POST", headers: { "content-type": "application/json" },
+            body: JSON.stringify({ response_type: "ephemeral", replace_original: false, text: "This request can't be resumed by you — it may already be answered, or you're not the designated approver." }),
+          }).catch(() => {});
+        }
+        throw err; // still record via onError
       }
-      await updateMessage(channel, msgTs, final.trim() || "_(done)_");
+      try {
+        await updateMessage(channel, msgTs, "_Working…_"); // resume accepted: drop the buttons; show progress
+        let final = "";
+        for (let r = first; !r.done; r = await it.next()) {
+          const ev = r.value;
+          if (ev.type === "turn.completed") final = ev.text;
+          else if (ev.type === "turn.failed") { await updateMessage(channel, msgTs, "_(the turn failed)_"); return; }
+          else if (ev.type === "input.requested") { await postApproval(channel, thread, ev.turnId, ev.request); await updateMessage(channel, msgTs, "_(awaiting more input…)_"); return; }
+        }
+        await updateMessage(channel, msgTs, final.trim() || "_(done)_");
+      } catch (err) {
+        // the continuation stream dropped mid-flight (the resume itself was accepted)
+        await updateMessage(channel, msgTs, "_(the turn failed)_").catch(() => {});
+        throw err;
+      }
     }, opts.onError);
   }
   // Slack Web API read helper: GET with query params + bearer token. Read methods
@@ -380,6 +427,7 @@ export function slackChannel(opts: {
           const { event, session, userText } = norm;
           runBackground(ctx, async () => {
             if (opts.stream && ctx.runStream) return renderStream(ctx, event, userText, session); // live: edit in place
+            if (ctx.runStream) return renderOnce(ctx, event, userText, session); // post-once, HITL-aware
             const reply = await ctx.run(userText, { session, event });
             // A reaction turn (or any turn) may resolve to no text — the agent acted via a
             // tool (e.g. slack_add_reaction) instead of posting. Only post real content.
@@ -418,12 +466,15 @@ type SlackEvent = {
 };
 
 // The subset of a Slack block_actions interaction payload we read (a button click).
+// `response_url` lets us answer the CLICKER ephemerally (e.g. a rejected resume) without
+// touching the message the buttons live on.
 type SlackInteraction = {
   type?: string;
   user?: { id?: string };
   channel?: { id?: string };
   message?: { ts?: string; thread_ts?: string };
   actions?: { action_id?: string; value?: string }[];
+  response_url?: string;
 };
 
 // Map a raw Slack event to June's normalized envelope + the turn's session and text.
