@@ -45,6 +45,10 @@ const makeSlack = (env: Env) =>
     // DO streams TurnEvents (incl. message.delta) as SSE; durableChannelSurface exposes them
     // as ctx.runStream, which this consumes. Needs the chat:write scope.
     stream: true,
+    // The agent-era typing indicator: an "is thinking…" line under the composer while the
+    // turn runs (assistant.threads.setStatus). Slack clears it when the reply streams in.
+    // Needs the app's Agents & AI Apps feature; without it the call fails harmlessly.
+    status: "is thinking…",
   });
 
 const INSTRUCTIONS = [
