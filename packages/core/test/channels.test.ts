@@ -307,6 +307,25 @@ describe("slackChannel", () => {
     ]);
   });
 
+  test("status: a failed HITL prompt post clears the status (streaming path)", async () => {
+    stubSlack((m) => (m === "chat.postMessage" ? { json: { ok: false, error: "channel_not_found" } } : undefined));
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true, status: "is thinking…", onError: () => {} });
+    await driveStream(ch2, [{ type: "input.requested", turnId: "t1", request: { id: "ok?", prompt: "Proceed?", answererId: "U1" } } as TurnEvent]);
+    expect(calls.map((c) => [method(c), (c.body as { status?: string }).status])).toEqual([
+      ["assistant.threads.setStatus", "is thinking…"],
+      ["chat.postMessage", undefined], // the prompt failed to post (reported via onError)…
+      ["assistant.threads.setStatus", ""], // …so nothing would ever auto-clear the status
+    ]);
+  });
+
+  test("status: a failed HITL prompt post clears the status (post-once path)", async () => {
+    stubSlack((m) => (m === "chat.postMessage" ? { json: { ok: false, error: "channel_not_found" } } : undefined));
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", status: "is thinking…", onError: () => {} });
+    await driveStream(ch2, [{ type: "input.requested", turnId: "t1", request: { id: "ok?", prompt: "Proceed?", answererId: "U1" } } as TurnEvent]);
+    expect(calls.map(method)).toEqual(["assistant.threads.setStatus", "chat.postMessage", "assistant.threads.setStatus"]);
+    expect((calls[2]!.body as { status?: string }).status).toBe("");
+  });
+
   test("status: a tool-only turn posts nothing, so the status is cleared explicitly", async () => {
     streamStub();
     const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true, status: "is thinking…" });

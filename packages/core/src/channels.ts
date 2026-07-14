@@ -354,7 +354,10 @@ export function slackChannel(opts: {
           // the turn parked awaiting a human: finalize any streamed text, then post the prompt
           // with Approve/Deny buttons. The interaction handler (below) routes the click to resume.
           if (started) await finish();
-          await postApproval(channelId, threadId, e.turnId, e.request, session);
+          const promptTs = await postApproval(channelId, threadId, e.turnId, e.request, session);
+          // the prompt normally auto-clears the status; if it failed to post (reported via
+          // onError, not thrown), clear explicitly — nothing else ever will
+          if (!promptTs && opts.status && threadId) await setStatus(channelId, threadId, "");
           return; // the stream closed on suspend; the turn continues on the button click
         }
       }
@@ -388,7 +391,12 @@ export function slackChannel(opts: {
       for await (const e of ctx.runStream!(userText, { session, event })) {
         if (e.type === "turn.completed") finalText = e.text;
         else if (e.type === "turn.failed") throw new Error(e.error.message);
-        else if (e.type === "input.requested") { await postApproval(event.channelId, event.threadId, e.turnId, e.request, session); return; }
+        else if (e.type === "input.requested") {
+          const promptTs = await postApproval(event.channelId, event.threadId, e.turnId, e.request, session);
+          // a failed prompt post (reported, not thrown) leaves nothing to auto-clear the status
+          if (!promptTs && opts.status && event.threadId) await setStatus(event.channelId, event.threadId, "");
+          return;
+        }
       }
       if (finalText.trim()) await postMessage(event.channelId, finalText, event.threadId);
       else if (opts.status && event.threadId) await setStatus(event.channelId, event.threadId, ""); // tool-only: nothing posts to auto-clear
