@@ -477,6 +477,19 @@ describe("suspend / resume (P3 — HITL)", () => {
     s.resume(turnId, "approve-1", true);
     expect(await s.result(turnId)).toMatchObject({ status: "completed" });
   });
+
+  test("requestInput from a SYNC tool fails the turn loudly (it cannot park)", async () => {
+    const syncMisuse: Tool = {
+      spec: { name: "bad", description: "sync tool misusing requestInput", input: { type: "object" } },
+      run: (_i, ctx) => ctx.requestInput({ id: "x", prompt: "?" }), // sync run — commits in the tool tx
+    };
+    const model = scriptedModel([{ text: "trying", toolCalls: [{ id: "c1", name: "bad", input: {} }] }]);
+    const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), model, [syncMisuse], noRuntime);
+    const { turnId } = s.start({ turnId: "t1", userText: "go" });
+    const r = await s.result(turnId);
+    expect(r).toMatchObject({ status: "failed" });
+    expect((r as Extract<typeof r, { status: "failed" }>).error.message).toMatch(/runs sync .* only an async tool can park/);
+  });
 });
 
 describe("withSystem", () => {

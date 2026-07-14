@@ -92,8 +92,9 @@ export interface ToolContext {
   event?: InboundEvent;
   // Ask for external (human) input and SUSPEND the turn until session.resume provides it.
   // First call throws SuspendSignal to park the turn (durably); on the replay after resume it
-  // returns the stored answer. Only usable from an ASYNC tool (it awaits). `answererId`
-  // defaults to the trigger user (ctx.event.user.id).
+  // returns the stored answer. Only usable from an ASYNC tool — a sync (local) tool commits in
+  // the same tx and cannot park, so calling it there throws a plain Error (the turn fails
+  // loudly). `answererId` defaults to the trigger user (ctx.event.user.id).
   requestInput(req: { id: string; prompt: string; schema?: unknown; answererId?: string }): Promise<unknown>;
 }
 export type Tool = {
@@ -311,11 +312,15 @@ async function toolStep(
   const ctx: ToolContext = {
     store, runtime: env.runtime, agent: env.agent, sessionId: env.sessionId, callId: call.id, event: env.event,
     // replay-aware: return the stored answer if resume already provided it, else park the turn.
-    // Answers are TURN-scoped (`input:{turnId}:{id}`): a later turn re-asking the same id must
+    // Answers are TURN-scoped (`input:${turnId}:${id}`): a later turn re-asking the same id must
     // park again — never silently reuse a prior turn's answer (an approval must not carry over).
-    requestInput: async (req) => {
+    // Deliberately NOT an async function: a sync (local) tool that misuses it must fail loudly
+    // and synchronously — an async requestInput would hand it a rejected Promise it can't await,
+    // which the local-tool tx would then commit as its checkpointed result.
+    requestInput: (req) => {
+      if (!remote) throw new Error(`requestInput: tool "${call.name}" runs sync (local) — only an async tool can park the turn awaiting input`);
       const answer = store.getStep(`input:${opts.turnId}:${req.id}`);
-      if (answer !== undefined) return (answer as { input: unknown }).input;
+      if (answer !== undefined) return Promise.resolve((answer as { input: unknown }).input);
       throw new SuspendSignal({ id: req.id, prompt: req.prompt, schema: req.schema, answererId: req.answererId ?? env.event?.user?.id }, call.id);
     },
   };
