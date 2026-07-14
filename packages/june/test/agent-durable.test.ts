@@ -207,6 +207,38 @@ describe("AgentDurableObject", () => {
     expect(r.at(-1)).toMatchObject({ type: "turn.completed", text: "done" }); // resumed to completion
   });
 
+  test("/resume and /turn map suspension conflicts to 4xx, not a crash (P3)", async () => {
+    const s = await storage();
+    const approve: Tool = {
+      spec: { name: "approve", description: "ask a human", input: { type: "object" } },
+      run: async (_i, ctx) => ({ approved: await ctx.requestInput({ id: "a1", prompt: "Approve?" }) }),
+    };
+    const model = scriptedModel([
+      { text: "checking", toolCalls: [{ id: "c1", name: "approve", input: {} }] },
+      { text: "done", toolCalls: [] },
+    ]);
+    const agent = new AgentDurableObject({ storage: s }, { name: "ops", model, tools: [approve] });
+    const post = (path: string, body: unknown) => agent.fetch(new Request(`https://do${path}`, { method: "POST", body: JSON.stringify(body) }));
+
+    // nothing suspended yet → 409
+    expect((await post("/resume", { turnId: "t1", inputId: "a1", input: true })).status).toBe(409);
+
+    // park t1 with an answererId (trigger user U1 from the inbound event)
+    const event = { source: "slack", kind: "message", channelId: "C1", ts: "1.1", user: { id: "U1" } };
+    const res = await post("/turn", { userText: "refund", turnId: "t1", event });
+    for await (const _ of sseTurnEvents(res)) { /* drain to the park */ }
+
+    expect((await post("/turn", { userText: "another", turnId: "t2" })).status).toBe(409);                    // parked session refuses a new turn
+    expect((await post("/resume", { turnId: "t1", inputId: "a1", input: true, by: "U2" })).status).toBe(403); // wrong answerer
+    expect((await post("/resume", { turnId: "t1", inputId: "a1", input: true })).status).toBe(403);           // unidentified resumer (default-deny)
+    expect((await post("/resume", { turnId: "t1", inputId: "nope", input: true, by: "U1" })).status).toBe(409); // wrong input id
+
+    const ok = await post("/resume", { turnId: "t1", inputId: "a1", input: true, by: "U1" });
+    const events: TurnEvent[] = [];
+    for await (const e of sseTurnEvents(ok)) events.push(e);
+    expect(events.at(-1)).toMatchObject({ type: "turn.completed", text: "done" });
+  });
+
   test("two parks in one session survive the INSERT-only steps table (P3)", async () => {
     // regression: `suspended` is a fixed step key and DoSessionStore.putStep is INSERT-only —
     // a second park must not hit the PK, and a turn-2 re-ask of the same input id must park

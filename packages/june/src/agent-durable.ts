@@ -17,6 +17,7 @@
 
 import {
   AgentSession,
+  ResumeAuthorizationError,
   withSystem,
   type EventSink,
   type TurnEvent,
@@ -234,14 +235,29 @@ export class AgentDurableObject {
       // start() schedules the turn on the chain WITHIN the scope, so it runs with ambient
       // db/services (ALS propagates to the .then continuation registered here); subscribing
       // happens synchronously right after, before any event can emit.
-      const started = runInScope({ resources: this.resources, services: this.services }, () => this.session.start({ userText, turnId, event }));
+      let started: { turnId: string };
+      try {
+        started = runInScope({ resources: this.resources, services: this.services }, () => this.session.start({ userText, turnId, event }));
+      } catch (err) {
+        // e.g. the session is suspended awaiting input — a client-resolvable conflict, not a crash
+        return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 409 });
+      }
       return new Response(sseTurnStream(this.session, started.turnId), { headers: SSE_HEADERS });
     }
     // Provide the input a suspended turn is waiting on and stream its continuation as SSE.
+    // NOTE: this default surface passes `by` straight from the body — the engine treats it as a
+    // VERIFIED identity, so the app must authenticate it upstream (e.g. take the user id from a
+    // signature-checked Slack interaction payload), never expose this endpoint raw to clients.
     if (req.method === "POST" && url.pathname.endsWith("/resume")) {
       const { turnId, inputId, input, by } = (await req.json()) as { turnId: string; inputId: string; input: unknown; by?: string };
       await ensureScope();
-      runInScope({ resources: this.resources, services: this.services }, () => this.session.resume(turnId, inputId, input, { by }));
+      try {
+        runInScope({ resources: this.resources, services: this.services }, () => this.session.resume(turnId, inputId, input, { by }));
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        // 403: the resumer may not answer; 409: not suspended / wrong turn / wrong input id
+        return Response.json({ error: message }, { status: err instanceof ResumeAuthorizationError ? 403 : 409 });
+      }
       return new Response(sseTurnStream(this.session, turnId), { headers: SSE_HEADERS });
     }
     if (url.pathname.endsWith("/transcript")) return Response.json({ transcript: this.transcript() });
