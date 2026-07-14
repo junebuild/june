@@ -292,6 +292,42 @@ describe("slackChannel", () => {
     expect((reported as Error).message).toContain("resumeStream");
   });
 
+  test("HITL: the continuation iterator is closed (return) on completion — no leaked SSE stream", async () => {
+    captureFetch();
+    let returned = false;
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test" });
+    const ctx = ctxWith(async () => "unused");
+    // a hand-rolled async iterable so we can observe whether the channel calls return() — a manual
+    // `for` over next() (not for-await) won't auto-close it, so the finally must do it explicitly.
+    ctx.resumeStream = ((o: { turnId: string }) => {
+      const events = [{ type: "turn.completed", turnId: o.turnId, text: "Approved." } as TurnEvent];
+      let i = 0;
+      return { [Symbol.asyncIterator]: () => ({
+        next: async () => (i < events.length ? { value: events[i++]!, done: false } : { value: undefined, done: true }),
+        return: async () => { returned = true; return { value: undefined, done: true }; },
+      }) };
+    }) as typeof ctx.resumeStream;
+    const interaction = { type: "block_actions", user: { id: "U1" }, channel: { id: "C1" }, message: { ts: "9.9", thread_ts: "5.5" }, actions: [{ action_id: "june_input:yes", value: JSON.stringify({ turnId: "t1", inputId: "approve-1", input: true }) }] };
+    await ch2.webhook!(await signed(`payload=${encodeURIComponent(JSON.stringify(interaction))}`), ctx);
+    await flush();
+    expect(returned).toBe(true); // the SSE-backed stream is torn down, not left dangling
+  });
+
+  test("HITL: an action_id that isn't our exact prefix (june_input:*) is ignored", async () => {
+    captureFetch();
+    let reported: unknown;
+    let resumed = false;
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", onError: (e) => { reported = e; } });
+    const ctx = ctxWith(async () => "unused");
+    ctx.resumeStream = async function* () { resumed = true; };
+    // "june_input_v2" starts with "june_input" but not "june_input:" — a foreign interactive element
+    const interaction = { type: "block_actions", user: { id: "U1" }, channel: { id: "C1" }, message: { ts: "9.9" }, actions: [{ action_id: "june_input_v2", value: JSON.stringify({ x: 1 }) }] };
+    await ch2.webhook!(await signed(`payload=${encodeURIComponent(JSON.stringify(interaction))}`), ctx);
+    await flush();
+    expect(resumed).toBe(false); // not routed to resume
+    expect(reported).toBeUndefined(); // and NOT treated as a broken june click
+  });
+
   test("stream render: an iterator exception finalizes the stream and reports via onError", async () => {
     streamStub();
     let reported: unknown;

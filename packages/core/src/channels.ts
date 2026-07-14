@@ -322,7 +322,7 @@ export function slackChannel(opts: {
   function handleInteraction(payload: SlackInteraction, ctx: ChannelContext) {
     if (payload.type !== "block_actions") return;
     const action = payload.actions?.[0];
-    if (!action?.action_id?.startsWith("june_input") || !action.value) return; // not our button
+    if (!action?.action_id?.startsWith("june_input:") || !action.value) return; // not our button (action_ids are june_input:yes|no)
     // From here the click IS ours — a dead end must be loud (onError), never a silent no-op.
     const parsed = tryParseJson<{ turnId: string; inputId: string; input: unknown }>(action.value);
     const channel = payload.channel?.id, msgTs = payload.message?.ts;
@@ -366,6 +366,11 @@ export function slackChannel(opts: {
         // the continuation stream dropped mid-flight (the resume itself was accepted)
         await updateMessage(channel, msgTs, "_(the turn failed)_").catch(() => {});
         throw err;
+      } finally {
+        // Close the manual iterator on every exit (early return on failed/input.requested,
+        // normal completion, or a mid-flight throw) so an SSE-backed resumeStream isn't left
+        // open — a manual `for` over it.next() won't auto-call return() the way for-await would.
+        await it.return?.();
       }
     }, opts.onError);
   }
