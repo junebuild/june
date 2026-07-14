@@ -51,6 +51,38 @@ describe.skipIf(!token || !channel)("slack live: the chat.startStream contract",
     expect(late.ok).toBe(false); // e.g. message_not_in_streaming_state — the state our renderer salvages on
   }, 30_000);
 
+  test("task_update chunks and feedback blocks are accepted (the agent-timeline contract)", async () => {
+    const root = await slack("chat.postMessage", { channel, text: "june live-check root (tasks)" });
+    expect(root.ok).toBe(true);
+    // a chunk can OPEN the stream (no markdown_text) — the renderer relies on this for tool-first turns
+    const start = await slack("chat.startStream", {
+      channel, thread_ts: root.ts, task_display_mode: "timeline",
+      chunks: [{ type: "task_update", id: "c1", title: "Searching the thread", status: "in_progress" }],
+    });
+    expect(start.ok).toBe(true);
+    const text = await slack("chat.appendStream", { channel, ts: start.ts, markdown_text: "Found it." });
+    expect(text.ok).toBe(true);
+    const done = await slack("chat.appendStream", {
+      channel, ts: start.ts,
+      chunks: [{ type: "task_update", id: "c1", title: "Searching the thread", status: "complete" }],
+    });
+    expect(done.ok).toBe(true);
+    // stopStream carries the feedback buttons (context_actions + feedback_buttons)
+    const stop = await slack("chat.stopStream", {
+      channel, ts: start.ts,
+      blocks: [{
+        type: "context_actions",
+        elements: [{
+          type: "feedback_buttons",
+          action_id: "june_feedback",
+          positive_button: { text: { type: "plain_text", text: "Good response" }, value: JSON.stringify({ rating: "positive" }) },
+          negative_button: { text: { type: "plain_text", text: "Bad response" }, value: JSON.stringify({ rating: "negative" }) },
+        }],
+      }],
+    });
+    expect(stop.ok).toBe(true);
+  }, 30_000);
+
   test("startStream without thread_ts or recipient ids is rejected (documents the anchor rule)", async () => {
     const r = await slack("chat.startStream", { channel, markdown_text: "top-level without a recipient" });
     expect(r.ok).toBe(false); // requires thread_ts, or recipient_user_id + recipient_team_id

@@ -277,6 +277,68 @@ describe("slackChannel", () => {
     expect((calls[0]!.body as { thread_ts?: string }).thread_ts).toBeUndefined();
   });
 
+  test("feedback: stopStream carries the 👍/👎 buttons, values tying back to {rating, turnId, session}", async () => {
+    streamStub();
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true, feedback: true });
+    await driveStream(ch2, [delta("Hi."), completed("Hi.")]);
+    const stop = calls.find((c) => method(c) === "chat.stopStream")!.body as { blocks?: { type: string; elements: { type: string; action_id: string; positive_button: { value: string }; negative_button: { value: string } }[] }[] };
+    expect(stop.blocks![0]!.type).toBe("context_actions");
+    const fb = stop.blocks![0]!.elements[0]!;
+    expect(fb.type).toBe("feedback_buttons");
+    expect(fb.action_id).toBe("june_feedback");
+    expect(JSON.parse(fb.positive_button.value)).toEqual({ rating: "positive", turnId: "t1", session: "slack:C1:1.1" });
+    expect(JSON.parse(fb.negative_button.value)).toEqual({ rating: "negative", turnId: "t1", session: "slack:C1:1.1" });
+  });
+
+  test("feedback: a button click is normalized into onFeedback (who, rating, turn, message)", async () => {
+    streamStub();
+    let seen: unknown;
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true, feedback: true, onFeedback: (fb) => { seen = fb; } });
+    const value = JSON.stringify({ rating: "negative", turnId: "t1", session: "slack:C1:1.1" });
+    const interaction = { type: "block_actions", user: { id: "U1" }, channel: { id: "C1" }, message: { ts: "9.9", thread_ts: "5.5" }, actions: [{ action_id: "june_feedback", value }] };
+    const res = await ch2.webhook!(await signed(`payload=${encodeURIComponent(JSON.stringify(interaction))}`), ctxWith(async () => "unused"));
+    expect(res.status).toBe(200);
+    await flush();
+    expect(seen).toEqual({
+      rating: "negative", turnId: "t1", session: "slack:C1:1.1",
+      user: { id: "U1" }, channelId: "C1", threadId: "5.5", messageTs: "9.9",
+    });
+  });
+
+  test("tasks: tool calls render as a native task timeline, in order with the text", async () => {
+    streamStub();
+    const ch2 = slackChannel({
+      signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true,
+      tasks: (call) => (call.name === "hidden" ? undefined : `Running ${call.name}`),
+    });
+    await driveStream(ch2, [
+      { type: "action.requested", turnId: "t1", call: { id: "c1", name: "search", input: {} } } as TurnEvent,
+      { type: "action.requested", turnId: "t1", call: { id: "c2", name: "hidden", input: {} } } as TurnEvent, // mapper hides this one
+      delta("Found it."),
+      { type: "action.completed", turnId: "t1", call: { id: "c1", name: "search", input: {} }, result: {} } as TurnEvent,
+      completed("Found it."),
+    ]);
+    const chunkOf = (c: { body: unknown }) => (c.body as { chunks?: { id: string; status: string }[] }).chunks?.[0];
+    expect(calls.map((c) => [method(c), chunkOf(c)?.status ?? mdOf(c)])).toEqual([
+      ["chat.startStream", "in_progress"], // the first tool call OPENS the stream (a chunk can seed it)
+      ["chat.appendStream", "Found it."], // buffered text flushes BEFORE the completion marker…
+      ["chat.appendStream", "complete"], // …so the timeline stays in order
+      ["chat.stopStream", undefined],
+    ]);
+    expect(chunkOf(calls[0]!)).toMatchObject({ type: "task_update", id: "c1", title: "Running search", status: "in_progress" });
+  });
+
+  test("tasks: a tool-only turn posts the timeline (the documented lazy-start departure)", async () => {
+    streamStub();
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true, tasks: (call) => call.name });
+    await driveStream(ch2, [
+      { type: "action.requested", turnId: "t1", call: { id: "c1", name: "add_reaction", input: {} } } as TurnEvent,
+      { type: "action.completed", turnId: "t1", call: { id: "c1", name: "add_reaction", input: {} }, result: {} } as TurnEvent,
+      completed(""), // acted via a tool, no text — but the timeline IS content
+    ]);
+    expect(calls.map(method)).toEqual(["chat.startStream", "chat.appendStream", "chat.stopStream"]);
+  });
+
   test("status: the 'is thinking…' line is set when the turn starts, and the streamed reply auto-clears it", async () => {
     streamStub();
     const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true, status: "is thinking…" });
