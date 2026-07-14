@@ -34,6 +34,7 @@ function memStore() {
     hasUserTurn(t) { return msgs.some((m) => m.role === "user" && m.turnId === t); },
     getStep(id) { return steps.has(id) ? steps.get(id) : undefined; },
     putStep(id, o) { steps.set(id, o); },
+    delStep(id) { steps.delete(id); },
     getStatus() { return status; },
     setStatus(s) { status = s; },
     tx(fn) { return fn(); },
@@ -397,6 +398,53 @@ describe("suspend / resume (P3 — HITL)", () => {
     // the tool re-ran on resume (it hadn't committed), got the input, and its result carries it
     const toolMsg = store.messages().find((m): m is Extract<Msg, { role: "tool" }> => m.role === "tool" && m.name === "approve");
     expect(toolMsg!.result).toEqual({ approved: { approvedBy: "U1" } });
+  });
+
+  test("a tool can ask for TWO inputs sequentially (park → resume → park → resume)", async () => {
+    const twoAsks: Tool = {
+      spec: { name: "ask2", description: "asks twice", input: { type: "object" } },
+      run: async (_i, ctx) => ({
+        first: await ctx.requestInput({ id: "q1", prompt: "first?" }),
+        second: await ctx.requestInput({ id: "q2", prompt: "second?" }),
+      }),
+    };
+    const model = scriptedModel([
+      { text: "asking", toolCalls: [{ id: "c1", name: "ask2", input: {} }] },
+      { text: "both answered", toolCalls: [] },
+    ]);
+    const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), model, [twoAsks], noRuntime);
+    const { turnId } = s.start({ turnId: "t1", userText: "go" });
+    expect(await s.result(turnId)).toMatchObject({ status: "suspended", request: { id: "q1" } });
+    s.resume(turnId, "q1", "A");
+    expect(await s.result(turnId)).toMatchObject({ status: "suspended", request: { id: "q2" } }); // parked again
+    s.resume(turnId, "q2", "B");
+    expect(await s.result(turnId)).toEqual({ status: "completed", text: "both answered" });
+  });
+
+  test("answers are turn-scoped: a later turn re-asking the same id parks again", async () => {
+    // same input id every turn — turn 2 must ask its own human, never reuse turn 1's answer
+    // (an approval must not carry over to the next refund).
+    const model: Model = (msgs) => {
+      const assistants = msgs.filter((m) => m.role === "assistant").length;
+      return replyStream(
+        assistants % 2 === 0
+          ? { text: "asking", toolCalls: [{ id: `c${assistants}`, name: "approve", input: {} }] }
+          : { text: "done", toolCalls: [] },
+      );
+    };
+    const { store } = memStore();
+    const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), model, [approveTool()], noRuntime);
+    const t1 = s.start({ turnId: "t1", userText: "one" }).turnId;
+    expect(await s.result(t1)).toMatchObject({ status: "suspended" });
+    s.resume(t1, "approve-1", "yes-1");
+    expect(await s.result(t1)).toMatchObject({ status: "completed" });
+
+    const t2 = s.start({ turnId: "t2", userText: "two" }).turnId;
+    expect(await s.result(t2)).toMatchObject({ status: "suspended", request: { id: "approve-1" } }); // asked AGAIN
+    s.resume(t2, "approve-1", "yes-2");
+    expect(await s.result(t2)).toMatchObject({ status: "completed" });
+    const approvals = store.messages().filter((m): m is Extract<Msg, { role: "tool" }> => m.role === "tool" && m.name === "approve");
+    expect(approvals.map((m) => m.result)).toEqual([{ approved: "yes-1" }, { approved: "yes-2" }]);
   });
 });
 

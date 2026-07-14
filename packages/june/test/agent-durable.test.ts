@@ -207,6 +207,34 @@ describe("AgentDurableObject", () => {
     expect(r.at(-1)).toMatchObject({ type: "turn.completed", text: "done" }); // resumed to completion
   });
 
+  test("two parks in one session survive the INSERT-only steps table (P3)", async () => {
+    // regression: `suspended` is a fixed step key and DoSessionStore.putStep is INSERT-only —
+    // a second park must not hit the PK, and a turn-2 re-ask of the same input id must park
+    // again (turn-scoped answers), never silently reuse turn 1's answer.
+    const ask: Tool = {
+      spec: { name: "ask", description: "ask a human", input: { type: "object" } },
+      run: async (_i, ctx) => ({ ok: await ctx.requestInput({ id: "a1", prompt: "ok?" }) }),
+    };
+    const model = scriptedModel([
+      { text: "asking", toolCalls: [{ id: "c1", name: "ask", input: {} }] },
+      { text: "one done", toolCalls: [] },
+      { text: "asking again", toolCalls: [{ id: "c2", name: "ask", input: {} }] },
+      { text: "two done", toolCalls: [] },
+    ]);
+    const store = new DoSessionStore(await storage());
+    const s = new AgentSession("ops", "s", store, new TestBroadcaster(), model, [ask], noRuntime);
+
+    const t1 = s.start({ turnId: "t1", userText: "one" }).turnId;
+    expect(await s.result(t1)).toMatchObject({ status: "suspended", request: { id: "a1" } });
+    s.resume(t1, "a1", "yes");
+    expect(await s.result(t1)).toEqual({ status: "completed", text: "one done" });
+
+    const t2 = s.start({ turnId: "t2", userText: "two" }).turnId;
+    expect(await s.result(t2)).toMatchObject({ status: "suspended", request: { id: "a1" } }); // asked again — no leak, no PK crash
+    s.resume(t2, "a1", "no");
+    expect(await s.result(t2)).toEqual({ status: "completed", text: "two done" });
+  });
+
   test("sseTurnEvents parses the SSE stream into TurnEvents (skipping :hb heartbeats)", async () => {
     const frames =
       ":hb\n\n" +

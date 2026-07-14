@@ -105,6 +105,9 @@ export class DoSessionStore implements SessionStore {
   putStep(id: string, output: unknown) {
     this.sql.exec("INSERT INTO agent_steps (id, output) VALUES (?, ?)", id, JSON.stringify(output));
   }
+  delStep(id: string) {
+    this.sql.exec("DELETE FROM agent_steps WHERE id = ?", id);
+  }
   getStatus(): string {
     const rows = this.sql.exec<{ v: string }>("SELECT v FROM agent_meta WHERE k = 'status'").toArray();
     return rows.length ? rows[0]!.v : "new";
