@@ -625,16 +625,42 @@ function slackTools(get: SlackCall, post: SlackCall): Tool[] {
   ];
 }
 
-// ── crisp — customer-chat: signed webhooks in, REST out. Crisp signs plugin
-// hooks HMAC-SHA256 over "[{ts};{rawBody}]" (brackets + semicolon included). Only
-// visitor ("user") text triggers a turn; operator messages are our own replies.
+// ── crisp — customer-chat: webhooks in, REST out. Crisp has TWO webhook
+// contracts and they authenticate differently:
+//
+//   - PLUGIN hooks (Marketplace) are signed: HMAC-SHA256 over "[{ts};{rawBody}]"
+//     (brackets + semicolon included) plus a timestamp replay guard. Use
+//     auth: { type: "signature", secret } — or the signingSecret shorthand.
+//   - WEBSITE hooks (dashboard-configured) are NOT signed. Crisp's documented
+//     pattern is a shared key in the endpoint URL ("?key=K"); the receiver
+//     compares it. Use auth: { type: "urlKey", key }. This is weaker by
+//     construction (no payload integrity, no replay guard) — that's the
+//     platform's ceiling for website hooks, not a choice this channel makes.
+//
+// Only visitor ("user") text triggers a turn; operator messages are our own replies.
 //
 // Symmetric with slack: the visitor message becomes a normalized InboundEvent
 // (channelId = website, threadId = conversation session, user = the visitor), and the
 // channel exposes crisp_read_conversation so the agent can pull earlier messages in the
 // same conversation — defaulting the target from the current turn's event.
+export type CrispWebhookAuth =
+  | { type: "signature"; secret: string }
+  | { type: "urlKey"; key: string; param?: string };
+
+// Website-hook verifier (exported for the same composability floor as
+// verifyCrispSignature): constant-time compare of the URL param (default
+// "key") against the configured key. An empty configured key always fails —
+// same closed-by-default posture as an empty signing secret.
+export function verifyCrispUrlKey(expectedKey: string, url: string, param = "key"): boolean {
+  if (!expectedKey) return false;
+  return timingSafeEqual(new URL(url).searchParams.get(param) ?? "", expectedKey);
+}
+
 export function crispChannel(opts: {
-  signingSecret: string;
+  // Exactly one of `auth` / `signingSecret` — signingSecret is the plugin-hook
+  // shorthand, kept for compatibility: it means { type: "signature", secret }.
+  auth?: CrispWebhookAuth;
+  signingSecret?: string;
   identifier: string;
   key: string;
   path?: string;
@@ -657,19 +683,30 @@ export function crispChannel(opts: {
     const res = await fetch(`${api}${path}`, { headers: { authorization: auth(), "X-Crisp-Tier": "plugin" } });
     return (await res.json()) as CrispResponse;
   }
-  const valid = (ts: string, body: string, sig: string) => verifyCrispSignature(opts.signingSecret, ts, body, sig);
+  // Resolve the auth mode once, loudly: a channel that silently 401s every
+  // delivery because neither source was configured is much harder to diagnose
+  // than a construction-time throw.
+  if (opts.auth && opts.signingSecret !== undefined)
+    throw new Error("crispChannel: pass either `auth` or `signingSecret`, not both");
+  const webhookAuth: CrispWebhookAuth | undefined =
+    opts.auth ?? (opts.signingSecret !== undefined ? { type: "signature", secret: opts.signingSecret } : undefined);
+  if (!webhookAuth) throw new Error("crispChannel: one of `auth` or `signingSecret` is required");
   return {
     name: "crisp",
     path: opts.path ?? "/channels/crisp",
     tools: () => crispTools(crispGet),
     async webhook(req, ctx) {
       const body = await req.text();
-      const ok = await valid(
-        req.headers.get("x-crisp-request-timestamp") ?? "",
-        body,
-        req.headers.get("x-crisp-signature") ?? "",
-      );
-      if (!ok) return new Response("bad signature", { status: 401 });
+      const ok =
+        webhookAuth.type === "signature"
+          ? await verifyCrispSignature(
+              webhookAuth.secret,
+              req.headers.get("x-crisp-request-timestamp") ?? "",
+              body,
+              req.headers.get("x-crisp-signature") ?? "",
+            )
+          : verifyCrispUrlKey(webhookAuth.key, req.url, webhookAuth.param);
+      if (!ok) return new Response(webhookAuth.type === "signature" ? "bad signature" : "bad key", { status: 401 });
 
       const payload = tryParseJson<{
         event?: string;
