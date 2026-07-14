@@ -90,6 +90,12 @@ export interface ToolContext {
   // e.g. slack_read_thread with no args reads ctx.event.threadId. Undefined for turns
   // not driven by a channel envelope (a bare /message POST, a scripted test).
   event?: InboundEvent;
+  // Ask for external (human) input and SUSPEND the turn until session.resume provides it.
+  // First call throws SuspendSignal to park the turn (durably); on the replay after resume it
+  // returns the stored answer. Only usable from an ASYNC tool — a sync (local) tool commits in
+  // the same tx and cannot park, so calling it there throws a plain Error (the turn fails
+  // loudly). `answererId` defaults to the trigger user (ctx.event.user.id).
+  requestInput(req: { id: string; prompt: string; schema?: unknown; answererId?: string }): Promise<unknown>;
 }
 export type Tool = {
   spec: ToolSpec;
@@ -110,6 +116,7 @@ export interface SessionStore {
   hasUserTurn(turnId: string): boolean;
   getStep(id: string): unknown | undefined;
   putStep(id: string, output: unknown): void;
+  delStep(id: string): void; // remove a checkpoint (a consumed suspend park); no-op when absent
   getStatus(): string;
   setStatus(s: string): void;
   tx<T>(fn: () => T): T; // synchronous transaction
@@ -130,7 +137,35 @@ export interface SessionStore {
 // observe replay), not here. P1a emits the structural set (turn.started, action.requested/
 // completed, message.completed, turn.completed/failed); reasoning.delta/message.delta arrive
 // with the streaming Model (P2); input.requested with suspend/resume (P3).
-export type InputRequest = { id: string; prompt: string; schema?: unknown };
+// A tool's request for external (human) input that suspends the turn. `id` keys the answer
+// (stable within the turn). `answererId` is who may answer — defaults to the turn's trigger
+// user; the app widens it (e.g. a manager approves) by passing one to ctx.requestInput.
+// Serializable (it rides input.requested over SSE and persists in the suspended checkpoint).
+export type InputRequest = { id: string; prompt: string; schema?: unknown; answererId?: string };
+
+// Thrown by ctx.requestInput to PARK a turn awaiting input. The engine catches it, persists
+// the pending request as a checkpoint, and reports { status: "suspended" }. A later
+// session.resume stores the answer and replays — the same durable step-checkpoint machine that
+// gives exactly-once, now: "a step whose result comes from a human instead of a tool".
+export class SuspendSignal extends Error {
+  readonly request: InputRequest;
+  readonly callId: string; // the tool call that parked the turn
+  constructor(request: InputRequest, callId: string) {
+    super(`turn suspended awaiting input: ${request.id}`);
+    this.request = request;
+    this.callId = callId;
+  }
+}
+
+// Thrown by AgentSession.resume when the resumer may not answer the pending request.
+// A distinct class so a transport (the DO's /resume) can map it to 403 vs 409.
+export class ResumeAuthorizationError extends Error {}
+
+// What the engine persists under the `suspended` step when a turn parks: enough to
+// validate a later resume (turnId, the pending request) and replay the turn (userText/
+// overlay/event). One per session — turns serialize, and start() rejects new turns while
+// one is parked, so a single fixed key cannot be clobbered.
+type SuspendedCheckpoint = { turnId: string; callId: string; request: InputRequest; userText: string; systemOverlay?: string; event?: InboundEvent };
 export type TurnTrigger =
   | { kind: "inbound"; event: InboundEvent }          // a channel event (message, mention, reaction)
   | { kind: "proactive"; by: string; note?: string }   // a schedule, another channel, the agent itself
@@ -177,13 +212,15 @@ export async function runTurn(
   model: Model,
   tools: Tool[],
   opts: { turnId: string; userText: string; crash?: Crash },
-  env: { runtime: Runtime; agent: string; sessionId: string; event?: InboundEvent; systemOverlay?: string },
+  env: { runtime: Runtime; agent: string; sessionId: string; event?: InboundEvent; systemOverlay?: string; trigger?: TurnTrigger },
 ): Promise<string> {
   if (!store.hasUserTurn(opts.turnId)) {
     store.tx(() => store.appendMessage({ role: "user", turnId: opts.turnId, text: opts.userText }));
   }
   store.setStatus("running");
-  const trigger: TurnTrigger = env.event ? { kind: "inbound", event: env.event } : { kind: "proactive", by: "system" };
+  // env.trigger overrides the derivation: a resume continuation announces { kind: "resume" }
+  // even though it replays with the original inbound event.
+  const trigger: TurnTrigger = env.trigger ?? (env.event ? { kind: "inbound", event: env.event } : { kind: "proactive", by: "system" });
   sink.emit({ type: "turn.started", turnId: opts.turnId, trigger });
 
   const specs = tools.map((t) => t.spec);
@@ -206,6 +243,21 @@ export async function runTurn(
       await modelStep(store, sink, model, specs, `model:${msgs.length}`, msgs, opts, env.systemOverlay);
     }
   } catch (err) {
+    if (err instanceof SuspendSignal) {
+      // park the turn: persist everything a later resume needs to validate + replay (the pending
+      // request + the turn's userText/overlay/event), mark suspended, and announce input.requested.
+      // raw is stripped so the checkpoint stays JSON-serializable on the edge. Guarded put: a
+      // redelivered replay of an already-parked turn re-announces WITHOUT re-inserting (putStep
+      // is insert-only on the SQL stores).
+      const event = env.event ? { ...env.event, raw: undefined } : undefined;
+      const checkpoint: SuspendedCheckpoint = { turnId: opts.turnId, callId: err.callId, request: err.request, userText: opts.userText, systemOverlay: env.systemOverlay, event };
+      store.tx(() => {
+        if (store.getStep("suspended") === undefined) store.putStep("suspended", checkpoint);
+        store.setStatus("suspended");
+      });
+      sink.emit({ type: "input.requested", turnId: opts.turnId, request: err.request });
+      throw err; // AgentSession.result maps this to { status: "suspended" }
+    }
     // includes intentional crash-injection throws (a failed ATTEMPT; replay re-runs).
     sink.emit({ type: "turn.failed", turnId: opts.turnId, error: { message: err instanceof Error ? err.message : String(err) } });
     throw err;
@@ -259,7 +311,21 @@ async function toolStep(
   const tool = tools.find((t) => t.spec.name === call.name);
   if (!tool) throw new Error(`unknown tool ${call.name}`);
   const remote = tool.run.constructor.name === "AsyncFunction";
-  const ctx: ToolContext = { store, runtime: env.runtime, agent: env.agent, sessionId: env.sessionId, callId: call.id, event: env.event };
+  const ctx: ToolContext = {
+    store, runtime: env.runtime, agent: env.agent, sessionId: env.sessionId, callId: call.id, event: env.event,
+    // replay-aware: return the stored answer if resume already provided it, else park the turn.
+    // Answers are TURN-scoped (`input:${turnId}:${id}`): a later turn re-asking the same id must
+    // park again — never silently reuse a prior turn's answer (an approval must not carry over).
+    // Deliberately NOT an async function: a sync (local) tool that misuses it must fail loudly
+    // and synchronously — an async requestInput would hand it a rejected Promise it can't await,
+    // which the local-tool tx would then commit as its checkpointed result.
+    requestInput: (req) => {
+      if (!remote) throw new Error(`requestInput: tool "${call.name}" runs sync (local) — only an async tool can park the turn awaiting input`);
+      const answer = store.getStep(`input:${opts.turnId}:${req.id}`);
+      if (answer !== undefined) return Promise.resolve((answer as { input: unknown }).input);
+      throw new SuspendSignal({ id: req.id, prompt: req.prompt, schema: req.schema, answererId: req.answererId ?? env.event?.user?.id }, call.id);
+    },
+  };
 
   assertCrash(opts.crash, "before-tool-commit", stepId); // nothing done → safe clean re-run
   const toolMsg = (result: unknown): Msg => ({ role: "tool", turnId: opts.turnId, toolCallId: call.id, name: call.name, result });
@@ -347,6 +413,16 @@ export class AgentSession {
   // Durable Object this is blockConcurrencyWhile; here it's a promise chain.)
   start(input: TurnInput): { turnId: string } {
     const turnId = input.turnId ?? `t${++this.seq}`;
+    // While a turn is parked awaiting input, the transcript ends in its dangling tool call —
+    // running a NEW turn on it would corrupt both (the resumed replay would adopt the new
+    // turn's tail as its own result). Reject loudly; redelivering the SAME parked turn is
+    // allowed (it replays, re-parks, and re-announces input.requested).
+    if (this.store.getStatus() === "suspended") {
+      const s = this.store.getStep("suspended") as SuspendedCheckpoint | undefined;
+      if (s && s.turnId !== turnId) {
+        throw new Error(`session is suspended awaiting input "${s.request.id}" (turn ${s.turnId}); resume it before starting a new turn`);
+      }
+    }
     const systemOverlay = input.event ? this.channelInstructions?.[input.event.source] : undefined;
     const run = () =>
       runTurn(
@@ -357,29 +433,76 @@ export class AgentSession {
         { turnId, userText: input.userText, crash: input.crash },
         { runtime: this.runtime, agent: this.agent, sessionId: this.id, event: input.event, systemOverlay },
       );
-    const p = this.chain.then(run);
-    this.chain = p.catch(() => {}); // a failed turn must not break the inbox
-    this.running.set(turnId, p); // held so result() can await a start()ed turn
-    // prune on settle so `running` stays bounded (~in-flight; turns run serially) on a
-    // long-lived actor. Both branches run cleanup, so the rejection is handled here — no
-    // unhandled rejection (result() and the chain hold their own handlers on `p`).
-    p.then(() => this.running.delete(turnId), () => this.running.delete(turnId));
+    this.track(turnId, this.chain.then(run));
     return { turnId };
   }
 
-  // Await a turn's terminal state (completed | failed). `suspended` lands with P3. Reads
-  // the in-flight promise from start(); if the turn already finished, falls back to the
-  // durable log (status + the final assistant text) so a late result() call still resolves.
+  // Register the in-flight promise for result() and prune it on settle. The delete is tied to
+  // THIS promise's identity: a suspend→resume reuses the same turnId, so the parked promise's
+  // late cleanup must NOT clear the continuation's entry (delete by turnId alone would). Both
+  // branches run cleanup, so the rejection is handled here — no unhandled rejection.
+  private track(turnId: string, p: Promise<string>): void {
+    this.chain = p.catch(() => {}); // a failed turn must not break the inbox
+    this.running.set(turnId, p);
+    const clear = () => { if (this.running.get(turnId) === p) this.running.delete(turnId); };
+    p.then(clear, clear);
+  }
+
+  // Await a turn's terminal state (completed | suspended | failed). Reads the in-flight promise
+  // from start(); if the turn already finished/parked, falls back to the durable log (status +
+  // the suspended checkpoint / final assistant text) so a late result() call still resolves.
   async result(turnId: string): Promise<TurnResult> {
     const p = this.running.get(turnId);
     if (p) {
       try { return { status: "completed", text: await p }; }
-      catch (err) { return { status: "failed", error: { message: err instanceof Error ? err.message : String(err) } }; }
+      catch (err) {
+        if (err instanceof SuspendSignal) return { status: "suspended", request: err.request };
+        return { status: "failed", error: { message: err instanceof Error ? err.message : String(err) } };
+      }
+    }
+    if (this.store.getStatus() === "suspended") {
+      const s = this.store.getStep("suspended") as SuspendedCheckpoint | undefined;
+      if (s && s.turnId === turnId) return { status: "suspended", request: s.request }; // only THIS turn's park
     }
     const msgs = this.store.messages().filter((m) => m.turnId === turnId);
     const lastAssistant = [...msgs].reverse().find((m): m is Extract<Msg, { role: "assistant" }> => m.role === "assistant");
     if (lastAssistant && lastAssistant.toolCalls.length === 0) return { status: "completed", text: lastAssistant.text };
     return { status: "failed", error: { message: `no terminal result for turn ${turnId}` } };
+  }
+
+  // Provide the input a suspended turn is waiting on and continue it. Stores the answer as the
+  // `input:{turnId}:{inputId}` checkpoint, then replays the turn: cached steps skip,
+  // ctx.requestInput now finds its answer and returns, and the turn runs on (may complete, or
+  // suspend again). `opts.by` is the resumer's VERIFIED identity — the caller must authenticate
+  // it (e.g. the user id from a signed Slack interaction payload), never trust a client-supplied
+  // value. When the request names an answererId, resume is DEFAULT-DENY: an absent `by` is an
+  // unauthenticated resume and cannot answer. Returns { turnId } like start(); await
+  // result(turnId) for the new terminal state.
+  resume(turnId: string, inputId: string, input: unknown, opts?: { by?: string }): { turnId: string } {
+    const suspended = this.store.getStep("suspended") as SuspendedCheckpoint | undefined;
+    if (!suspended || suspended.turnId !== turnId) throw new Error(`turn ${turnId} is not suspended`);
+    if (inputId !== suspended.request.id) {
+      throw new Error(`turn ${turnId} is awaiting input "${suspended.request.id}", not "${inputId}"`);
+    }
+    if (suspended.request.answererId && opts?.by !== suspended.request.answererId) {
+      throw new ResumeAuthorizationError(`resume: ${opts?.by ?? "<unidentified>"} is not authorized to answer input "${inputId}"`);
+    }
+    this.store.tx(() => {
+      this.store.putStep(`input:${turnId}:${inputId}`, { input });
+      this.store.delStep("suspended"); // consumed — the next park (same turn or a later one) inserts cleanly
+      this.store.setStatus("running");
+    });
+    const run = () =>
+      runTurn(
+        this.store,
+        this.sink,
+        this.model,
+        this.tools,
+        { turnId, userText: suspended.userText },
+        { runtime: this.runtime, agent: this.agent, sessionId: this.id, event: suspended.event, systemOverlay: suspended.systemOverlay, trigger: { kind: "resume", callId: suspended.callId } },
+      );
+    this.track(turnId, this.chain.then(run));
+    return { turnId };
   }
 
   // Sugar: run a turn and await its final text. Explicitly the NON-INTERACTIVE convenience

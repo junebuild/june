@@ -34,6 +34,7 @@ function memStore() {
     hasUserTurn(t) { return msgs.some((m) => m.role === "user" && m.turnId === t); },
     getStep(id) { return steps.has(id) ? steps.get(id) : undefined; },
     putStep(id, o) { steps.set(id, o); },
+    delStep(id) { steps.delete(id); },
     getStatus() { return status; },
     setStatus(s) { status = s; },
     tx(fn) { return fn(); },
@@ -337,6 +338,171 @@ describe("TurnEvent stream (P1)", () => {
     s.start({ turnId: "t1", userText: "Order 3 widgets" });
     expect(await s.result("t1")).toEqual({ status: "completed", text: "Done — order placed." }); // from the in-flight promise
     expect(await s.result("t1")).toEqual({ status: "completed", text: "Done — order placed." }); // after prune → from the log
+  });
+});
+
+describe("suspend / resume (P3 — HITL)", () => {
+  // an async tool that asks for external input, then returns the human's answer
+  function approveTool(runs?: { n: number }): Tool {
+    return {
+      spec: { name: "approve", description: "ask a human to approve", input: { type: "object" } },
+      run: async (_input, ctx) => {
+        if (runs) runs.n++;
+        const decision = await ctx.requestInput({ id: "approve-1", prompt: "Approve the refund?" });
+        return { approved: decision };
+      },
+    };
+  }
+  const APPROVE_SCRIPT: ModelReply[] = [
+    { text: "Let me check.", toolCalls: [{ id: "c1", name: "approve", input: {} }] },
+    { text: "Approved — refund sent.", toolCalls: [] },
+  ];
+  const slackEvent = { source: "slack", kind: "message" as const, channelId: "C1", ts: "1.1", user: { id: "U1" }, raw: {} };
+
+  test("a tool suspends the turn for input, then resume() runs it to completion", async () => {
+    const modelCalls = { n: 0 };
+    const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), scriptedModel(APPROVE_SCRIPT, modelCalls), [approveTool()], noRuntime);
+    const events: TurnEvent[] = [];
+    s.observe((e) => events.push(e));
+
+    const { turnId } = s.start({ turnId: "t1", userText: "refund please", event: slackEvent });
+    expect(await s.result(turnId)).toEqual({ status: "suspended", request: { id: "approve-1", prompt: "Approve the refund?", answererId: "U1" } });
+    expect(events.at(-1)).toMatchObject({ type: "input.requested", request: { id: "approve-1" } });
+    const asked = modelCalls.n; // the model was asked once (the tool-call step)
+
+    s.resume(turnId, "approve-1", true, { by: "U1" });
+    expect(await s.result(turnId)).toEqual({ status: "completed", text: "Approved — refund sent." });
+    expect(modelCalls.n).toBe(asked + 1); // the pre-suspend model step was cached, not re-asked
+    // the continuation announces itself as a resume (of the parking tool call), not a fresh inbound turn
+    expect(events.find((e) => e.type === "turn.started" && e.trigger.kind === "resume"))
+      .toMatchObject({ trigger: { kind: "resume", callId: "c1" } });
+  });
+
+  test("resume enforces the answererId (defaults to the trigger user; absent `by` is denied)", async () => {
+    const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), scriptedModel(APPROVE_SCRIPT), [approveTool()], noRuntime);
+    const { turnId } = s.start({ turnId: "t1", userText: "refund please", event: slackEvent });
+    await s.result(turnId); // suspended, answererId = U1
+
+    expect(() => s.resume(turnId, "approve-1", true, { by: "U2" })).toThrow(/not authorized/);
+    expect(() => s.resume(turnId, "approve-1", true)).toThrow(/not authorized/); // default-deny: no verified resumer
+    s.resume(turnId, "approve-1", true, { by: "U1" }); // the trigger user may answer
+    expect(await s.result(turnId)).toMatchObject({ status: "completed" });
+  });
+
+  test("resume validates the turnId and the inputId against the pending request", async () => {
+    const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), scriptedModel(APPROVE_SCRIPT), [approveTool()], noRuntime);
+    const { turnId } = s.start({ turnId: "t1", userText: "refund please" });
+    await s.result(turnId); // suspended (no event → no answererId)
+
+    expect(() => s.resume("t9", "approve-1", true)).toThrow(/t9 is not suspended/);
+    expect(() => s.resume(turnId, "wrong-id", true)).toThrow(/awaiting input "approve-1", not "wrong-id"/);
+    s.resume(turnId, "approve-1", true);
+    expect(await s.result(turnId)).toMatchObject({ status: "completed" });
+  });
+
+  test("the tool receives the resumed input (exactly-once: not re-run before the answer)", async () => {
+    const runs = { n: 0 };
+    const { store } = memStore();
+    const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), scriptedModel(APPROVE_SCRIPT), [approveTool(runs)], noRuntime);
+    const { turnId } = s.start({ turnId: "t1", userText: "refund please", event: slackEvent });
+    await s.result(turnId);
+    expect(runs.n).toBe(1); // ran once (up to the suspend)
+
+    s.resume(turnId, "approve-1", { approvedBy: "U1" }, { by: "U1" });
+    await s.result(turnId);
+    // the tool re-ran on resume (it hadn't committed), got the input, and its result carries it
+    const toolMsg = store.messages().find((m): m is Extract<Msg, { role: "tool" }> => m.role === "tool" && m.name === "approve");
+    expect(toolMsg!.result).toEqual({ approved: { approvedBy: "U1" } });
+  });
+
+  test("a tool can ask for TWO inputs sequentially (park → resume → park → resume)", async () => {
+    const twoAsks: Tool = {
+      spec: { name: "ask2", description: "asks twice", input: { type: "object" } },
+      run: async (_i, ctx) => ({
+        first: await ctx.requestInput({ id: "q1", prompt: "first?" }),
+        second: await ctx.requestInput({ id: "q2", prompt: "second?" }),
+      }),
+    };
+    const model = scriptedModel([
+      { text: "asking", toolCalls: [{ id: "c1", name: "ask2", input: {} }] },
+      { text: "both answered", toolCalls: [] },
+    ]);
+    const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), model, [twoAsks], noRuntime);
+    const { turnId } = s.start({ turnId: "t1", userText: "go" });
+    expect(await s.result(turnId)).toMatchObject({ status: "suspended", request: { id: "q1" } });
+    s.resume(turnId, "q1", "A");
+    expect(await s.result(turnId)).toMatchObject({ status: "suspended", request: { id: "q2" } }); // parked again
+    s.resume(turnId, "q2", "B");
+    expect(await s.result(turnId)).toEqual({ status: "completed", text: "both answered" });
+  });
+
+  test("answers are turn-scoped: a later turn re-asking the same id parks again", async () => {
+    // same input id every turn — turn 2 must ask its own human, never reuse turn 1's answer
+    // (an approval must not carry over to the next refund).
+    const model: Model = (msgs) => {
+      const assistants = msgs.filter((m) => m.role === "assistant").length;
+      return replyStream(
+        assistants % 2 === 0
+          ? { text: "asking", toolCalls: [{ id: `c${assistants}`, name: "approve", input: {} }] }
+          : { text: "done", toolCalls: [] },
+      );
+    };
+    const { store } = memStore();
+    const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), model, [approveTool()], noRuntime);
+    const t1 = s.start({ turnId: "t1", userText: "one" }).turnId;
+    expect(await s.result(t1)).toMatchObject({ status: "suspended" });
+    s.resume(t1, "approve-1", "yes-1");
+    expect(await s.result(t1)).toMatchObject({ status: "completed" });
+
+    const t2 = s.start({ turnId: "t2", userText: "two" }).turnId;
+    expect(await s.result(t2)).toMatchObject({ status: "suspended", request: { id: "approve-1" } }); // asked AGAIN
+    s.resume(t2, "approve-1", "yes-2");
+    expect(await s.result(t2)).toMatchObject({ status: "completed" });
+    const approvals = store.messages().filter((m): m is Extract<Msg, { role: "tool" }> => m.role === "tool" && m.name === "approve");
+    expect(approvals.map((m) => m.result)).toEqual([{ approved: "yes-1" }, { approved: "yes-2" }]);
+  });
+
+  test("a NEW turn is rejected while one is parked; redelivering the parked turn re-parks", async () => {
+    const events: TurnEvent[] = [];
+    const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), scriptedModel(APPROVE_SCRIPT), [approveTool()], noRuntime);
+    s.observe((e) => events.push(e));
+    const { turnId } = s.start({ turnId: "t1", userText: "refund please" });
+    await s.result(turnId); // parked — the transcript ends in the dangling approve call
+
+    // a new turn on the dangling transcript would corrupt both turns — loud rejection
+    expect(() => s.start({ turnId: "t2", userText: "unrelated" })).toThrow(/suspended awaiting input "approve-1"/);
+
+    // but a redelivery of the SAME parked turn replays and re-announces the request
+    s.start({ turnId: "t1", userText: "refund please" });
+    expect(await s.result(turnId)).toMatchObject({ status: "suspended", request: { id: "approve-1" } });
+    expect(events.filter((e) => e.type === "input.requested").length).toBe(2);
+
+    s.resume(turnId, "approve-1", true);
+    expect(await s.result(turnId)).toMatchObject({ status: "completed" });
+  });
+
+  test("requestInput from a SYNC tool fails the turn loudly (it cannot park)", async () => {
+    const syncMisuse: Tool = {
+      spec: { name: "bad", description: "sync tool misusing requestInput", input: { type: "object" } },
+      run: (_i, ctx) => ctx.requestInput({ id: "x", prompt: "?" }), // sync run — commits in the tool tx
+    };
+    const model = scriptedModel([{ text: "trying", toolCalls: [{ id: "c1", name: "bad", input: {} }] }]);
+    const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), model, [syncMisuse], noRuntime);
+    const { turnId } = s.start({ turnId: "t1", userText: "go" });
+    const r = await s.result(turnId);
+    expect(r).toMatchObject({ status: "failed" });
+    expect((r as Extract<typeof r, { status: "failed" }>).error.message).toMatch(/runs sync .* only an async tool can park/);
+  });
+
+  test("resume synchronously from an input.requested observer keeps the continuation (running-map race)", async () => {
+    // resume() runs while the parked promise is still pending; its late cleanup must NOT clear
+    // the continuation's running[turnId] entry (delete is tied to the promise identity).
+    const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), scriptedModel(APPROVE_SCRIPT), [approveTool()], noRuntime);
+    let resumed = false;
+    s.observe((e) => { if (e.type === "input.requested" && !resumed) { resumed = true; s.resume("t1", "approve-1", true, { by: "U1" }); } });
+    s.start({ turnId: "t1", userText: "refund please", event: slackEvent });
+    await new Promise((r) => setTimeout(r, 20)); // let park→cleanup→resume→continuation settle
+    expect(await s.result("t1")).toEqual({ status: "completed", text: "Approved — refund sent." }); // not a spurious failure
   });
 });
 

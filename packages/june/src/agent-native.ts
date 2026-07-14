@@ -56,6 +56,9 @@ class SqliteSessionStore implements SessionStore {
   putStep(id: string, output: unknown) {
     this.db.query("INSERT INTO agent_steps (session_id, id, output) VALUES (?, ?, ?)").run(this.sid, id, JSON.stringify(output));
   }
+  delStep(id: string) {
+    this.db.query("DELETE FROM agent_steps WHERE session_id = ? AND id = ?").run(this.sid, id);
+  }
   getStatus(): string {
     return (this.db.query("SELECT status FROM agent_sessions WHERE session_id = ?").get(this.sid) as { status: string } | undefined)?.status ?? "new";
   }
@@ -139,6 +142,7 @@ class MemorySessionStore implements SessionStore {
   hasUserTurn(turnId: string): boolean { return this.msgs.some((m) => m.role === "user" && m.turnId === turnId); }
   getStep(id: string): unknown | undefined { return this.steps.has(id) ? this.steps.get(id) : undefined; }
   putStep(id: string, output: unknown) { this.steps.set(id, output); }
+  delStep(id: string) { this.steps.delete(id); }
   getStatus(): string { return this.status; }
   setStatus(s: string) { this.status = s; }
   tx<T>(fn: () => T): T { return fn(); } // no rollback: an in-memory store is not a durability tier

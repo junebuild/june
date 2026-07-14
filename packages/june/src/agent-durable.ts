@@ -17,6 +17,7 @@
 
 import {
   AgentSession,
+  ResumeAuthorizationError,
   withSystem,
   type EventSink,
   type TurnEvent,
@@ -104,6 +105,9 @@ export class DoSessionStore implements SessionStore {
   }
   putStep(id: string, output: unknown) {
     this.sql.exec("INSERT INTO agent_steps (id, output) VALUES (?, ?)", id, JSON.stringify(output));
+  }
+  delStep(id: string) {
+    this.sql.exec("DELETE FROM agent_steps WHERE id = ?", id);
   }
   getStatus(): string {
     const rows = this.sql.exec<{ v: string }>("SELECT v FROM agent_meta WHERE k = 'status'").toArray();
@@ -231,11 +235,33 @@ export class AgentDurableObject {
       // start() schedules the turn on the chain WITHIN the scope, so it runs with ambient
       // db/services (ALS propagates to the .then continuation registered here); subscribing
       // happens synchronously right after, before any event can emit.
-      const started = runInScope({ resources: this.resources, services: this.services }, () => this.session.start({ userText, turnId, event }));
+      let started: { turnId: string };
+      try {
+        started = runInScope({ resources: this.resources, services: this.services }, () => this.session.start({ userText, turnId, event }));
+      } catch (err) {
+        // e.g. the session is suspended awaiting input — a client-resolvable conflict, not a crash
+        return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 409 });
+      }
       return new Response(sseTurnStream(this.session, started.turnId), { headers: SSE_HEADERS });
     }
+    // Provide the input a suspended turn is waiting on and stream its continuation as SSE.
+    // NOTE: this default surface passes `by` straight from the body — the engine treats it as a
+    // VERIFIED identity, so the app must authenticate it upstream (e.g. take the user id from a
+    // signature-checked Slack interaction payload), never expose this endpoint raw to clients.
+    if (req.method === "POST" && url.pathname.endsWith("/resume")) {
+      const { turnId, inputId, input, by } = (await req.json()) as { turnId: string; inputId: string; input: unknown; by?: string };
+      await ensureScope();
+      try {
+        runInScope({ resources: this.resources, services: this.services }, () => this.session.resume(turnId, inputId, input, { by }));
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        // 403: the resumer may not answer; 409: not suspended / wrong turn / wrong input id
+        return Response.json({ error: message }, { status: err instanceof ResumeAuthorizationError ? 403 : 409 });
+      }
+      return new Response(sseTurnStream(this.session, turnId), { headers: SSE_HEADERS });
+    }
     if (url.pathname.endsWith("/transcript")) return Response.json({ transcript: this.transcript() });
-    return new Response("agent DO — POST /turn or GET /transcript", { status: 404 });
+    return new Response("agent DO — POST /turn, POST /resume, or GET /transcript", { status: 404 });
   }
 }
 
@@ -263,7 +289,9 @@ function sseTurnStream(session: AgentSession, turnId: string): ReadableStream<Ui
       }, 20_000);
       unsub = session.observe((e) => {
         controller.enqueue(enc.encode(`data: ${JSON.stringify(e)}\n\n`));
-        if (e.type === "turn.completed" || e.type === "turn.failed") { stop(); controller.close(); }
+        // terminal for the STREAM: completed, failed, OR suspended (input.requested → the turn
+        // parked; the stream ends and a later /resume opens a fresh continuation stream).
+        if (e.type === "turn.completed" || e.type === "turn.failed" || e.type === "input.requested") { stop(); controller.close(); }
       }, { turnId });
     },
     cancel() { stop(); },
