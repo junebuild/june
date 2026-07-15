@@ -259,9 +259,10 @@ export function slackChannel(opts: {
   // for token streaming into ONE message: appendStream handles bursts (unlike chat.update's
   // ~1/s whole-message replace). startStream returns the message ts to append/stop against.
   // seed the stream with the first token (markdown_text) — Slack's streaming API expects
-  // content, and seeding saves the extra appendStream for that token. Slack also requires an
-  // anchor: thread_ts (reply in a thread), or — for a TOP-LEVEL channel message — the
-  // recipient's user+team ids (DeliveryTarget.recipientUserId/recipientTeamId).
+  // content, and seeding saves the extra appendStream for that token. Slack's anchor rule
+  // (live-verified 2026-07-15): a CHANNEL stream requires the recipient's user+team ids
+  // even WITH thread_ts (missing_recipient_team_id otherwise) — the official SDK's streamer
+  // passes channel + thread_ts + recipient_user_id + recipient_team_id together.
   // Content is markdown_text OR a chunks array (task_update / plan_update / blocks) — the
   // task timeline rides the same three calls as the text.
   type StreamContent = { markdown_text?: string; chunks?: Record<string, unknown>[] };
@@ -447,8 +448,15 @@ export function slackChannel(opts: {
     }
   }
   // The inbound reply path: render the turn started FROM an event, to that event's own thread.
+  // The event's author + workspace become the stream's recipient — chat.startStream requires
+  // recipient_user_id/recipient_team_id for CHANNEL streams even in-thread (live-verified
+  // 2026-07-15: missing_recipient_team_id), and "who asked" is exactly what they mean.
   function renderStream(ctx: ChannelContext, event: InboundEvent, userText: string, session: string) {
-    return streamRender({ channelId: event.channelId, threadId: event.threadId }, ctx.runStream!(userText, { session, event }), session);
+    return streamRender(
+      { channelId: event.channelId, threadId: event.threadId, recipientUserId: event.user?.id, recipientTeamId: event.teamId },
+      ctx.runStream!(userText, { session, event }),
+      session,
+    );
   }
   // Post-once render that still understands HITL. The plain ctx.run path collapses the turn
   // to its final text — but a parked turn (input.requested) HAS no final text, so the collapse
@@ -595,13 +603,13 @@ export function slackChannel(opts: {
         return new Response("", { status: 200 }); // fast ACK
       }
 
-      const payload = tryParseJson<{ type?: string; challenge?: string; event?: SlackEvent }>(body);
+      const payload = tryParseJson<{ type?: string; challenge?: string; event?: SlackEvent; team_id?: string }>(body);
       if (!payload) return new Response("", { status: 200 }); // signed but unparseable → ACK, don't retry
       if (payload.type === "url_verification") return Response.json({ challenge: payload.challenge });
 
       if (payload.type === "event_callback") {
         if (opts.accept && !opts.accept(payload)) return new Response("", { status: 200 }); // gated out
-        const norm = normalizeSlackEvent(payload.event ?? {}, events, opts.botUserId);
+        const norm = normalizeSlackEvent(payload.event ?? {}, events, opts.botUserId, payload.team_id);
         // observe: mirror EVERY verified event_callback (raw always; normalized when available)
         if (opts.onEvent) runBackground(ctx, async () => opts.onEvent!({ raw: payload, event: norm?.event }, ctx), opts.onError);
         // typed per-kind observer: fires only for its kind, with a non-optional event
@@ -698,13 +706,16 @@ export function normalizeSlackEvent(
   e: SlackEvent,
   events: SlackEventKind[],
   botUserId?: string,
+  // the envelope's team_id (NOT on the inner event) — chat.startStream demands it as
+  // recipient_team_id when streaming into a channel, even in-thread (live-verified 2026-07-15)
+  teamId?: string,
 ): { event: InboundEvent; session: string; userText: string } | null {
   // text turns: a channel message or an @-mention. Skip our own bot + non-user subtypes,
   // and blank text (a whitespace-only message shouldn't burn a turn).
   if ((e.type === "message" || e.type === "app_mention") && events.includes(e.type) && !e.bot_id && !e.subtype && e.text && e.text.trim() && e.channel && e.ts) {
     const thread = e.thread_ts ?? e.ts; // reply in-thread; one session per thread
     return {
-      event: { source: "slack", kind: e.type, channelId: e.channel, threadId: thread, ts: e.ts, user: e.user ? { id: e.user } : undefined, text: e.text, raw: e },
+      event: { source: "slack", kind: e.type, channelId: e.channel, threadId: thread, teamId, ts: e.ts, user: e.user ? { id: e.user } : undefined, text: e.text, raw: e },
       session: `slack:${e.channel}:${thread}`,
       userText: e.text,
     };
@@ -717,7 +728,7 @@ export function normalizeSlackEvent(
     const channel = e.item.channel, itemTs = e.item.ts;
     const verb = e.type === "reaction_added" ? "added" : "removed";
     return {
-      event: { source: "slack", kind: e.type, channelId: channel, threadId: itemTs, ts: itemTs, user: e.user ? { id: e.user } : undefined, reaction: { name: e.reaction, itemTs }, raw: e },
+      event: { source: "slack", kind: e.type, channelId: channel, threadId: itemTs, teamId, ts: itemTs, user: e.user ? { id: e.user } : undefined, reaction: { name: e.reaction, itemTs }, raw: e },
       session: `slack:${channel}:${itemTs}`,
       userText: `[reaction] <@${e.user ?? "someone"}> ${verb} :${e.reaction}: on a message in this thread`,
     };

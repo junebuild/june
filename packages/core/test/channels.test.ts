@@ -268,6 +268,19 @@ describe("slackChannel", () => {
     ]);
   });
 
+  test("stream render: an inbound channel stream carries the asker + workspace as recipient (live-verified contract)", async () => {
+    streamStub();
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true });
+    const ctx = ctxWith(async () => "unused");
+    ctx.runStream = async function* () { yield delta("Hi."); yield completed("Hi."); };
+    // team_id lives on the EVENT ENVELOPE, not the inner event — startStream needs it as
+    // recipient_team_id for any channel stream, even in-thread (missing_recipient_team_id)
+    const body = JSON.stringify({ type: "event_callback", team_id: "T42", event: { type: "message", text: "hi", channel: "C1", ts: "1.1", user: "U1" } });
+    await ch2.webhook!(await signed(body), ctx);
+    await flush();
+    expect(calls[0]!.body).toMatchObject({ channel: "C1", thread_ts: "1.1", recipient_user_id: "U1", recipient_team_id: "T42" });
+  });
+
   test("proactive: a top-level channel stream carries recipient ids (startStream requires them without thread_ts)", async () => {
     streamStub();
     const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test" });

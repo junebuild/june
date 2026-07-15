@@ -44,6 +44,8 @@ export type InboundEvent = {
   kind: "message" | "app_mention" | "reaction_added" | "reaction_removed" | "message_changed" | "rating" | "state_changed";
   channelId: string;                            // the conversation container: slack channel id / crisp website id
   threadId?: string;                            // thread within it: slack thread_ts / crisp conversation session id
+  teamId?: string;                              // workspace/tenant the event belongs to (slack team_id) —
+                                                // chat.startStream needs it as recipient_team_id in channels
   ts: string;                                   // this event's message ts
   user?: { id: string; name?: string };         // WHO
   text?: string;                                // message / app_mention carry text; reactions don't

@@ -23,50 +23,78 @@ async function slack(method: string, body: Record<string, unknown>): Promise<Rep
   });
   return (await res.json()) as Reply;
 }
+async function slackGet(method: string, params: Record<string, string>): Promise<Reply> {
+  const res = await fetch(`https://slack.com/api/${method}?${new URLSearchParams(params)}`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  return (await res.json()) as Reply;
+}
+// Every ok-assert reports Slack's error CODE on failure — "expected true, got false"
+// tells you nothing; "chat.postMessage failed: not_in_channel" tells you the fix.
+function expectOk(r: Reply, what: string) {
+  if (!r.ok) throw new Error(`${what} failed: ${r.error ?? "no error code"}`);
+}
+// Channel streams require recipient_user_id + recipient_team_id even in-thread (verified live
+// 2026-07-15: missing_recipient_team_id) — use the bot's own identity from auth.test, cached.
+type Ident = Reply & { user_id?: string; team_id?: string };
+let ident: Promise<Ident> | undefined;
+const whoami = () => (ident ??= slack("auth.test", {}) as Promise<Ident>);
 
 describe.skipIf(!token || !channel)("slack live: the chat.startStream contract", () => {
+  test("preflight: the token authenticates and the bot can use the channel", async () => {
+    const auth = await slack("auth.test", {});
+    if (!auth.ok) throw new Error(`auth.test failed: ${auth.error} — is SLACK_LIVE_BOT_TOKEN a valid xoxb-… bot token?`);
+    const info = (await slackGet("conversations.info", { channel: channel! })) as Reply & { channel?: { is_member?: boolean } };
+    // membership check is best-effort: conversations.info needs channels:read, which the
+    // suite itself doesn't — a missing_scope here must not fail an otherwise usable token
+    if (!info.ok && info.error !== "missing_scope") throw new Error(`conversations.info failed: ${info.error} — is SLACK_LIVE_CHANNEL the right C… id (and visible to this app)?`);
+    if (info.ok && info.channel?.is_member === false) throw new Error(`the bot is not a member of ${channel} — run /invite @your-bot in that channel first`);
+  }, 30_000);
+
   test("start → append → stop lands ONE streamed message holding the full text", async () => {
+    const me = await whoami();
     const root = await slack("chat.postMessage", { channel, text: "june live-check root" });
-    expect(root.ok).toBe(true);
-    const start = await slack("chat.startStream", { channel, thread_ts: root.ts, markdown_text: "Hello " });
-    expect(start.ok).toBe(true);
+    expectOk(root, "chat.postMessage (root)");
+    const start = await slack("chat.startStream", { channel, thread_ts: root.ts, markdown_text: "Hello ", recipient_user_id: me.user_id, recipient_team_id: me.team_id });
+    expectOk(start, "chat.startStream");
     const append = await slack("chat.appendStream", { channel, ts: start.ts, markdown_text: "from the june live check." });
-    expect(append.ok).toBe(true);
+    expectOk(append, "chat.appendStream");
     const stop = await slack("chat.stopStream", { channel, ts: start.ts });
-    expect(stop.ok).toBe(true);
+    expectOk(stop, "chat.stopStream");
     // read back — conversations.replies wants URL-encoded GET; skip the assert without history scope
-    const res = await fetch(`https://slack.com/api/conversations.replies?${new URLSearchParams({ channel: channel!, ts: root.ts! })}`, {
-      headers: { authorization: `Bearer ${token}` },
-    });
-    const replies = (await res.json()) as Reply;
+    const replies = await slackGet("conversations.replies", { channel: channel!, ts: root.ts! });
     if (replies.ok) expect(replies.messages?.find((m) => m.ts === start.ts)?.text).toBe("Hello from the june live check.");
   }, 30_000);
 
   test("a stopped stream refuses further appends (the stopped_by_user family)", async () => {
+    const me = await whoami();
     const root = await slack("chat.postMessage", { channel, text: "june live-check root (stop)" });
-    const start = await slack("chat.startStream", { channel, thread_ts: root.ts, markdown_text: "closing…" });
-    expect(start.ok).toBe(true);
+    expectOk(root, "chat.postMessage (root)");
+    const start = await slack("chat.startStream", { channel, thread_ts: root.ts, markdown_text: "closing…", recipient_user_id: me.user_id, recipient_team_id: me.team_id });
+    expectOk(start, "chat.startStream");
     await slack("chat.stopStream", { channel, ts: start.ts });
     const late = await slack("chat.appendStream", { channel, ts: start.ts, markdown_text: "too late" });
     expect(late.ok).toBe(false); // e.g. message_not_in_streaming_state — the state our renderer salvages on
   }, 30_000);
 
   test("task_update chunks and feedback blocks are accepted (the agent-timeline contract)", async () => {
+    const me = await whoami();
     const root = await slack("chat.postMessage", { channel, text: "june live-check root (tasks)" });
-    expect(root.ok).toBe(true);
+    expectOk(root, "chat.postMessage (root)");
     // a chunk can OPEN the stream (no markdown_text) — the renderer relies on this for tool-first turns
     const start = await slack("chat.startStream", {
       channel, thread_ts: root.ts, task_display_mode: "timeline",
+      recipient_user_id: me.user_id, recipient_team_id: me.team_id,
       chunks: [{ type: "task_update", id: "c1", title: "Searching the thread", status: "in_progress" }],
     });
-    expect(start.ok).toBe(true);
+    expectOk(start, "chat.startStream (task chunk seed)");
     const text = await slack("chat.appendStream", { channel, ts: start.ts, markdown_text: "Found it." });
-    expect(text.ok).toBe(true);
+    expectOk(text, "chat.appendStream (markdown)");
     const done = await slack("chat.appendStream", {
       channel, ts: start.ts,
       chunks: [{ type: "task_update", id: "c1", title: "Searching the thread", status: "complete" }],
     });
-    expect(done.ok).toBe(true);
+    expectOk(done, "chat.appendStream (task complete chunk)");
     // stopStream carries the feedback buttons (context_actions + feedback_buttons)
     const stop = await slack("chat.stopStream", {
       channel, ts: start.ts,
@@ -80,7 +108,7 @@ describe.skipIf(!token || !channel)("slack live: the chat.startStream contract",
         }],
       }],
     });
-    expect(stop.ok).toBe(true);
+    expectOk(stop, "chat.stopStream (feedback blocks)");
   }, 30_000);
 
   test("startStream without thread_ts or recipient ids is rejected (documents the anchor rule)", async () => {

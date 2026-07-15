@@ -64,8 +64,10 @@ export type ChannelContext = {
 // (§9). Platform-agnostic: `channelId` is the destination (a Slack channel, a Crisp
 // conversation's website), `threadId` optionally threads it. deliver() renders a turn's
 // event stream to this target with the SAME renderer the inbound path uses.
-// recipientUserId/recipientTeamId are Slack-specific: chat.startStream can only open a stream
-// at a channel's TOP LEVEL (no threadId) when told who it is for — other channels ignore them.
+// recipientUserId/recipientTeamId are Slack-specific: chat.startStream requires them for ANY
+// channel stream — even in-thread (live-verified 2026-07-15: missing_recipient_team_id) — so a
+// proactive channel delivery should supply who the stream is for; other channels ignore them.
+// Without them the renderer still degrades gracefully to chat.postMessage.
 export type DeliveryTarget = { channelId: string; threadId?: string; recipientUserId?: string; recipientTeamId?: string };
 
 export type Channel = {
