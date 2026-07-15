@@ -88,8 +88,10 @@ describe.skipIf(!token || !channel)("slack live: the chat.startStream contract",
       chunks: [{ type: "task_update", id: "c1", title: "Searching the thread", status: "in_progress" }],
     });
     expectOk(start, "chat.startStream (task chunk seed)");
-    const text = await slack("chat.appendStream", { channel, ts: start.ts, markdown_text: "Found it." });
-    expectOk(text, "chat.appendStream (markdown)");
+    // a chunks-opened stream is in CHUNKS MODE: raw markdown_text here is
+    // streaming_mode_mismatch (live-verified) — text must ride as a markdown_text chunk
+    const text = await slack("chat.appendStream", { channel, ts: start.ts, chunks: [{ type: "markdown_text", text: "Found it." }] });
+    expectOk(text, "chat.appendStream (markdown_text chunk)");
     const done = await slack("chat.appendStream", {
       channel, ts: start.ts,
       chunks: [{ type: "task_update", id: "c1", title: "Searching the thread", status: "complete" }],

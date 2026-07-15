@@ -331,14 +331,17 @@ describe("slackChannel", () => {
       { type: "action.completed", turnId: "t1", call: { id: "c1", name: "search", input: {} }, result: {} } as TurnEvent,
       completed("Found it."),
     ]);
-    const chunkOf = (c: { body: unknown }) => (c.body as { chunks?: { id: string; status: string }[] }).chunks?.[0];
-    expect(calls.map((c) => [method(c), chunkOf(c)?.status ?? mdOf(c)])).toEqual([
+    const chunkOf = (c: { body: unknown }) => (c.body as { chunks?: { type: string; id?: string; status?: string; text?: string }[] }).chunks?.[0];
+    // tasks put the WHOLE stream in chunks mode — text rides as markdown_text chunks, because
+    // mixing raw markdown_text into a chunks-opened stream is streaming_mode_mismatch (live)
+    expect(calls.map((c) => [method(c), chunkOf(c)?.status ?? chunkOf(c)?.text])).toEqual([
       ["chat.startStream", "in_progress"], // the first tool call OPENS the stream (a chunk can seed it)
       ["chat.appendStream", "Found it."], // buffered text flushes BEFORE the completion marker…
       ["chat.appendStream", "complete"], // …so the timeline stays in order
       ["chat.stopStream", undefined],
     ]);
     expect(chunkOf(calls[0]!)).toMatchObject({ type: "task_update", id: "c1", title: "Running search", status: "in_progress" });
+    expect(chunkOf(calls[1]!)).toMatchObject({ type: "markdown_text", text: "Found it." });
   });
 
   test("tasks: a tool-only turn posts the timeline (the documented lazy-start departure)", async () => {

@@ -355,20 +355,25 @@ export function slackChannel(opts: {
     let turnId: string | undefined; // stamped from the first event — the feedback buttons carry it
     if (opts.status && threadId) await setStatus(channelId, threadId, opts.status);
     const recipient = { user: surface.recipientUserId, team: surface.recipientTeamId };
+    // A stream is EITHER markdown_text-mode or chunks-mode, fixed at startStream — mixing
+    // raw markdown_text into a chunks-opened stream is streaming_mode_mismatch (live-verified
+    // 2026-07-15). With tasks on, a task chunk may arrive before OR after the first token,
+    // so the whole stream runs in chunks mode: text rides as {type:"markdown_text"} chunks.
+    const asContent = (text: string): StreamContent => (opts.tasks ? { chunks: [{ type: "markdown_text", text }] } : { markdown_text: text });
     const flush = async () => {
       if (!pending || stoppedByUser || broken) return;
       if (!started) {
         started = true;
         lastFlush = Date.now();
         const seed = pending.slice(0, MD_MAX); // seed with the first token(s) — the API expects content
-        streamTs = await startStream(channelId, threadId, { markdown_text: seed }, recipient);
+        streamTs = await startStream(channelId, threadId, asContent(seed), recipient);
         if (!streamTs) return; // unavailable → pending rides whole into the postMessage fallback
         pending = pending.slice(seed.length);
       }
       if (!streamTs) return;
       while (pending && !stoppedByUser && !broken) {
         const slice = pending.slice(0, MD_MAX);
-        const r = await appendStream(channelId, streamTs, { markdown_text: slice });
+        const r = await appendStream(channelId, streamTs, asContent(slice));
         if (r.ok) { pending = pending.slice(slice.length); continue; }
         if (r.error === "stopped_by_user") { stoppedByUser = true; pending = ""; return; } // discard: the human ended it
         broken = true; // `pending` keeps the unsent tail — finish() posts it, nothing silently truncates
