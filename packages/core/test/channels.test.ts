@@ -268,6 +268,19 @@ describe("slackChannel", () => {
     ]);
   });
 
+  test("stream render: an inbound channel stream carries the asker + workspace as recipient (live-verified contract)", async () => {
+    streamStub();
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true });
+    const ctx = ctxWith(async () => "unused");
+    ctx.runStream = async function* () { yield delta("Hi."); yield completed("Hi."); };
+    // team_id lives on the EVENT ENVELOPE, not the inner event — startStream needs it as
+    // recipient_team_id for any channel stream, even in-thread (missing_recipient_team_id)
+    const body = JSON.stringify({ type: "event_callback", team_id: "T42", event: { type: "message", text: "hi", channel: "C1", ts: "1.1", user: "U1" } });
+    await ch2.webhook!(await signed(body), ctx);
+    await flush();
+    expect(calls[0]!.body).toMatchObject({ channel: "C1", thread_ts: "1.1", recipient_user_id: "U1", recipient_team_id: "T42" });
+  });
+
   test("proactive: a top-level channel stream carries recipient ids (startStream requires them without thread_ts)", async () => {
     streamStub();
     const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test" });
@@ -275,6 +288,82 @@ describe("slackChannel", () => {
     await ch2.deliver!({ channelId: "C-ops", recipientUserId: "U7", recipientTeamId: "T7" }, stream());
     expect(calls[0]!.body).toMatchObject({ channel: "C-ops", recipient_user_id: "U7", recipient_team_id: "T7" });
     expect((calls[0]!.body as { thread_ts?: string }).thread_ts).toBeUndefined();
+  });
+
+  test("feedback: stopStream carries the 👍/👎 buttons, values tying back to {rating, turnId, session}", async () => {
+    streamStub();
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true, feedback: true });
+    await driveStream(ch2, [delta("Hi."), completed("Hi.")]);
+    const stop = calls.find((c) => method(c) === "chat.stopStream")!.body as { blocks?: { type: string; elements: { type: string; action_id: string; positive_button: { value: string }; negative_button: { value: string } }[] }[] };
+    expect(stop.blocks![0]!.type).toBe("context_actions");
+    const fb = stop.blocks![0]!.elements[0]!;
+    expect(fb.type).toBe("feedback_buttons");
+    expect(fb.action_id).toBe("june_feedback");
+    expect(JSON.parse(fb.positive_button.value)).toEqual({ rating: "positive", turnId: "t1", session: "slack:C1:1.1" });
+    expect(JSON.parse(fb.negative_button.value)).toEqual({ rating: "negative", turnId: "t1", session: "slack:C1:1.1" });
+  });
+
+  test("feedback: a button click is normalized into onFeedback (who, rating, turn, message)", async () => {
+    streamStub();
+    let seen: unknown;
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true, feedback: true, onFeedback: (fb) => { seen = fb; } });
+    const value = JSON.stringify({ rating: "negative", turnId: "t1", session: "slack:C1:1.1" });
+    const interaction = { type: "block_actions", user: { id: "U1" }, channel: { id: "C1" }, message: { ts: "9.9", thread_ts: "5.5" }, actions: [{ action_id: "june_feedback", value }] };
+    const res = await ch2.webhook!(await signed(`payload=${encodeURIComponent(JSON.stringify(interaction))}`), ctxWith(async () => "unused"));
+    expect(res.status).toBe(200);
+    await flush();
+    expect(seen).toEqual({
+      rating: "negative", turnId: "t1", session: "slack:C1:1.1",
+      user: { id: "U1" }, channelId: "C1", threadId: "5.5", messageTs: "9.9",
+    });
+  });
+
+  test("feedback: an unexpected rating value is NOT forwarded (the contract is positive|negative)", async () => {
+    streamStub();
+    let seen: unknown;
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true, feedback: true, onFeedback: (fb) => { seen = fb; } });
+    const value = JSON.stringify({ rating: "meh", turnId: "t1" }); // not one of ours
+    const interaction = { type: "block_actions", user: { id: "U1" }, channel: { id: "C1" }, message: { ts: "9.9" }, actions: [{ action_id: "june_feedback", value }] };
+    await ch2.webhook!(await signed(`payload=${encodeURIComponent(JSON.stringify(interaction))}`), ctxWith(async () => "unused"));
+    await flush();
+    expect(seen).toBeUndefined();
+  });
+
+  test("tasks: tool calls render as a native task timeline, in order with the text", async () => {
+    streamStub();
+    const ch2 = slackChannel({
+      signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true,
+      tasks: (call) => (call.name === "hidden" ? undefined : `Running ${call.name}`),
+    });
+    await driveStream(ch2, [
+      { type: "action.requested", turnId: "t1", call: { id: "c1", name: "search", input: {} } } as TurnEvent,
+      { type: "action.requested", turnId: "t1", call: { id: "c2", name: "hidden", input: {} } } as TurnEvent, // mapper hides this one
+      delta("Found it."),
+      { type: "action.completed", turnId: "t1", call: { id: "c1", name: "search", input: {} }, result: {} } as TurnEvent,
+      completed("Found it."),
+    ]);
+    const chunkOf = (c: { body: unknown }) => (c.body as { chunks?: { type: string; id?: string; status?: string; text?: string }[] }).chunks?.[0];
+    // tasks put the WHOLE stream in chunks mode — text rides as markdown_text chunks, because
+    // mixing raw markdown_text into a chunks-opened stream is streaming_mode_mismatch (live)
+    expect(calls.map((c) => [method(c), chunkOf(c)?.status ?? chunkOf(c)?.text])).toEqual([
+      ["chat.startStream", "in_progress"], // the first tool call OPENS the stream (a chunk can seed it)
+      ["chat.appendStream", "Found it."], // buffered text flushes BEFORE the completion marker…
+      ["chat.appendStream", "complete"], // …so the timeline stays in order
+      ["chat.stopStream", undefined],
+    ]);
+    expect(chunkOf(calls[0]!)).toMatchObject({ type: "task_update", id: "c1", title: "Running search", status: "in_progress" });
+    expect(chunkOf(calls[1]!)).toMatchObject({ type: "markdown_text", text: "Found it." });
+  });
+
+  test("tasks: a tool-only turn posts the timeline (the documented lazy-start departure)", async () => {
+    streamStub();
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true, tasks: (call) => call.name });
+    await driveStream(ch2, [
+      { type: "action.requested", turnId: "t1", call: { id: "c1", name: "add_reaction", input: {} } } as TurnEvent,
+      { type: "action.completed", turnId: "t1", call: { id: "c1", name: "add_reaction", input: {} }, result: {} } as TurnEvent,
+      completed(""), // acted via a tool, no text — but the timeline IS content
+    ]);
+    expect(calls.map(method)).toEqual(["chat.startStream", "chat.appendStream", "chat.stopStream"]);
   });
 
   test("status: the 'is thinking…' line is set when the turn starts, and the streamed reply auto-clears it", async () => {
@@ -324,6 +413,23 @@ describe("slackChannel", () => {
     await driveStream(ch2, [{ type: "input.requested", turnId: "t1", request: { id: "ok?", prompt: "Proceed?", answererId: "U1" } } as TurnEvent]);
     expect(calls.map(method)).toEqual(["assistant.threads.setStatus", "chat.postMessage", "assistant.threads.setStatus"]);
     expect((calls[2]!.body as { status?: string }).status).toBe("");
+  });
+
+  test("status: tasks + startStream unavailable + tool-only turn still clears the status", async () => {
+    // the task chunk TRIED to open a stream (started=true) but got no ts — nothing ever
+    // posts, so nothing auto-clears; `started` alone must not be treated as "posted"
+    stubSlack((m) => (m === "chat.startStream" ? { json: { ok: false, error: "unknown_method" } } : undefined));
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true, status: "is thinking…", tasks: (c) => c.name, onError: () => {} });
+    await driveStream(ch2, [
+      { type: "action.requested", turnId: "t1", call: { id: "c1", name: "add_reaction", input: {} } } as TurnEvent,
+      { type: "action.completed", turnId: "t1", call: { id: "c1", name: "add_reaction", input: {} }, result: {} } as TurnEvent,
+      completed(""),
+    ]);
+    expect(calls.map((c) => [method(c), (c.body as { status?: string }).status])).toEqual([
+      ["assistant.threads.setStatus", "is thinking…"],
+      ["chat.startStream", undefined], // the attempt that came back without a ts
+      ["assistant.threads.setStatus", ""], // …so the status is cleared explicitly
+    ]);
   });
 
   test("status: a tool-only turn posts nothing, so the status is cleared explicitly", async () => {

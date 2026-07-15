@@ -182,6 +182,18 @@ export function httpChannel(opts: { path?: string; mcp?: (req: Request) => Promi
 // guard for reactions: with it set, the bot's OWN reactions (e.g. from slack_add_reaction)
 // don't trigger a turn — the bot_id/subtype guard already covers self-messages.
 export type SlackEventKind = "message" | "app_mention" | "reaction_added" | "reaction_removed";
+// A feedback_buttons click, normalized: who rated which streamed reply, tied back to the
+// turn/session the buttons were minted with (stopStream embeds them in the button value —
+// a PROACTIVE turn's session is caller-chosen and couldn't be re-derived from the thread).
+export type SlackFeedback = {
+  rating: "positive" | "negative";
+  turnId?: string;
+  session?: string;
+  user?: { id: string };
+  channelId?: string;
+  threadId?: string;
+  messageTs?: string;
+};
 export function slackChannel(opts: {
   signingSecret: string;
   botToken: string;
@@ -212,6 +224,22 @@ export function slackChannel(opts: {
   // tool-only turn that posts nothing clears it explicitly. Needs the app's Agents & AI
   // Apps feature — elsewhere the call fails harmlessly (best-effort), so it is always safe.
   status?: string;
+  // Native 👍/👎 feedback buttons appended when the streamed reply finalizes: chat.stopStream
+  // carries a context_actions block holding Slack's purpose-built feedback_buttons element.
+  // A click arrives as a block_actions interaction and lands in onFeedback (background,
+  // best-effort); the button value ties it back to {turnId, session}. Streaming path only —
+  // the postMessage fallback (older app) skips the buttons. Requires stream: true.
+  feedback?: boolean;
+  onFeedback?: (feedback: SlackFeedback, ctx: ChannelContext) => void | Promise<void>;
+  // Render tool calls as Slack's native task timeline INSIDE the streamed message: map a
+  // tool call to a ≤256-char task title (return undefined/"" to hide that call). A call
+  // shows as in_progress on action.requested and complete on action.completed. NOTE: this
+  // makes a tool-only turn post a message (the timeline IS content) — a deliberate departure
+  // from the lazy-start rule, which is why it is opt-in. Requires stream: true.
+  tasks?: (call: { id: string; name: string; input: unknown }) => string | undefined;
+  // How Slack lays the timeline out: sequential "timeline" (Slack's default), grouped
+  // "plan", or "dense" (consecutive tool calls collapse into one card). Needs `tasks`.
+  taskDisplayMode?: "timeline" | "plan" | "dense";
   onError?: (err: unknown) => void;
 } & ChannelExtensions): Channel {
   const api = opts.apiUrl ?? "https://slack.com/api";
@@ -231,11 +259,15 @@ export function slackChannel(opts: {
   // for token streaming into ONE message: appendStream handles bursts (unlike chat.update's
   // ~1/s whole-message replace). startStream returns the message ts to append/stop against.
   // seed the stream with the first token (markdown_text) — Slack's streaming API expects
-  // content, and seeding saves the extra appendStream for that token. Slack also requires an
-  // anchor: thread_ts (reply in a thread), or — for a TOP-LEVEL channel message — the
-  // recipient's user+team ids (DeliveryTarget.recipientUserId/recipientTeamId).
-  async function startStream(channel: string, thread_ts: string | undefined, markdown_text: string, recipient?: { user?: string; team?: string }): Promise<string | undefined> {
-    const body = { channel, thread_ts, markdown_text, recipient_user_id: recipient?.user, recipient_team_id: recipient?.team };
+  // content, and seeding saves the extra appendStream for that token. Slack's anchor rule
+  // (live-verified 2026-07-15): a CHANNEL stream requires the recipient's user+team ids
+  // even WITH thread_ts (missing_recipient_team_id otherwise) — the official SDK's streamer
+  // passes channel + thread_ts + recipient_user_id + recipient_team_id together.
+  // Content is markdown_text OR a chunks array (task_update / plan_update / blocks) — the
+  // task timeline rides the same three calls as the text.
+  type StreamContent = { markdown_text?: string; chunks?: Record<string, unknown>[] };
+  async function startStream(channel: string, thread_ts: string | undefined, content: StreamContent, recipient?: { user?: string; team?: string }): Promise<string | undefined> {
+    const body = { channel, thread_ts, ...content, task_display_mode: opts.tasks ? opts.taskDisplayMode : undefined, recipient_user_id: recipient?.user, recipient_team_id: recipient?.team };
     const r = (await (await fetch(`${api}/chat.startStream`, { method: "POST", headers: authHeaders, body: JSON.stringify(body) })).json().catch(() => ({}))) as { ts?: string };
     return r.ts;
   }
@@ -243,9 +275,9 @@ export function slackChannel(opts: {
   // bursts; two 429s in a row means back off for real — report, don't spin). The error goes
   // back to the renderer: `stopped_by_user` (the human hit Stop) must end rendering, and any
   // other failure must be LOUD — an ignored append silently truncates the message.
-  async function appendStream(channel: string, ts: string, markdown_text: string): Promise<{ ok: boolean; error?: string }> {
+  async function appendStream(channel: string, ts: string, content: StreamContent): Promise<{ ok: boolean; error?: string }> {
     for (let attempt = 0; ; attempt++) {
-      const res = await fetch(`${api}/chat.appendStream`, { method: "POST", headers: authHeaders, body: JSON.stringify({ channel, ts, markdown_text }) });
+      const res = await fetch(`${api}/chat.appendStream`, { method: "POST", headers: authHeaders, body: JSON.stringify({ channel, ts, ...content }) });
       const body = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
       if (body.ok) return { ok: true };
       if (body.error === "ratelimited" && attempt === 0) {
@@ -255,9 +287,21 @@ export function slackChannel(opts: {
       return { ok: false, error: body.error };
     }
   }
-  async function stopStream(channel: string, ts: string) {
-    await fetch(`${api}/chat.stopStream`, { method: "POST", headers: authHeaders, body: JSON.stringify({ channel, ts }) });
+  async function stopStream(channel: string, ts: string, blocks?: unknown[]) {
+    await fetch(`${api}/chat.stopStream`, { method: "POST", headers: authHeaders, body: JSON.stringify({ channel, ts, blocks }) });
   }
+  // stopStream carries these when opts.feedback is on: one context_actions block holding
+  // Slack's native AI feedback buttons. Each button's value ties the click back to
+  // {rating, turnId, session} for the june_feedback interaction branch below.
+  const feedbackBlocks = (turnId?: string, session?: string) => [{
+    type: "context_actions",
+    elements: [{
+      type: "feedback_buttons",
+      action_id: "june_feedback",
+      positive_button: { text: { type: "plain_text", text: "Good response" }, value: JSON.stringify({ rating: "positive", turnId, session }) },
+      negative_button: { text: { type: "plain_text", text: "Bad response" }, value: JSON.stringify({ rating: "negative", turnId, session }) },
+    }],
+  }];
   // The "is thinking…" presence line under the composer (assistant.threads.setStatus). Slack
   // clears it itself when the app posts/streams into the thread (2-minute timeout otherwise);
   // an empty status clears it explicitly. Best-effort: outside an AI-app assistant thread the
@@ -308,21 +352,28 @@ export function slackChannel(opts: {
     let broken = false; // an append failed hard — keep the tail for a postMessage salvage at finish
     let pending = ""; // deltas awaiting a flush (doubles as the postMessage-fallback accumulator)
     let lastFlush = 0;
+    let turnId: string | undefined; // stamped from the first event — the feedback buttons carry it
     if (opts.status && threadId) await setStatus(channelId, threadId, opts.status);
+    const recipient = { user: surface.recipientUserId, team: surface.recipientTeamId };
+    // A stream is EITHER markdown_text-mode or chunks-mode, fixed at startStream — mixing
+    // raw markdown_text into a chunks-opened stream is streaming_mode_mismatch (live-verified
+    // 2026-07-15). With tasks on, a task chunk may arrive before OR after the first token,
+    // so the whole stream runs in chunks mode: text rides as {type:"markdown_text"} chunks.
+    const asContent = (text: string): StreamContent => (opts.tasks ? { chunks: [{ type: "markdown_text", text }] } : { markdown_text: text });
     const flush = async () => {
       if (!pending || stoppedByUser || broken) return;
       if (!started) {
         started = true;
         lastFlush = Date.now();
         const seed = pending.slice(0, MD_MAX); // seed with the first token(s) — the API expects content
-        streamTs = await startStream(channelId, threadId, seed, { user: surface.recipientUserId, team: surface.recipientTeamId });
+        streamTs = await startStream(channelId, threadId, asContent(seed), recipient);
         if (!streamTs) return; // unavailable → pending rides whole into the postMessage fallback
         pending = pending.slice(seed.length);
       }
       if (!streamTs) return;
       while (pending && !stoppedByUser && !broken) {
         const slice = pending.slice(0, MD_MAX);
-        const r = await appendStream(channelId, streamTs, slice);
+        const r = await appendStream(channelId, streamTs, asContent(slice));
         if (r.ok) { pending = pending.slice(slice.length); continue; }
         if (r.error === "stopped_by_user") { stoppedByUser = true; pending = ""; return; } // discard: the human ended it
         broken = true; // `pending` keeps the unsent tail — finish() posts it, nothing silently truncates
@@ -336,18 +387,48 @@ export function slackChannel(opts: {
       if (started && (!streamTs || broken)) return; // fallback/salvage mode: accumulate only, finish() posts it
       if (!started || pending.length >= MD_MAX || Date.now() - lastFlush >= FLUSH_MS) await flush();
     };
-    const finish = async () => {
+    // A task chunk must land in ORDER relative to the text, so buffered text flushes first.
+    // A failed chunk is decorative loss: report and carry on (if the stream is actually dead
+    // the next text flush notices and salvages); stopped_by_user still ends rendering. The
+    // timeline never rides the postMessage fallback — that path is text-only.
+    const pushChunk = async (chunk: Record<string, unknown>) => {
+      if (stoppedByUser) return;
       await flush();
-      if (stoppedByUser) return; // Slack already closed the stream; appends/stops are refused
-      if (streamTs && !broken) await stopStream(channelId, streamTs);
-      if (pending.trim() && (!streamTs || broken)) await postMessage(channelId, pending, threadId);
+      if (broken) return;
+      if (!started) {
+        started = true;
+        lastFlush = Date.now();
+        streamTs = await startStream(channelId, threadId, { chunks: [chunk] }, recipient); // a chunk can open the stream
+        return;
+      }
+      if (!streamTs) return;
+      const r = await appendStream(channelId, streamTs, { chunks: [chunk] });
+      if (r.error === "stopped_by_user") { stoppedByUser = true; pending = ""; }
+      else if (!r.ok) opts.onError?.(new Error(`slack: task chunk append failed (${r.error ?? "no response"})`));
+    };
+    // Returns whether anything actually POSTED — `started` alone can't tell: a task chunk
+    // may have tried to open a stream that startStream couldn't (no ts), leaving a turn
+    // that rendered nothing. The caller keys the status-clear on this, not on `started`.
+    const finish = async (): Promise<boolean> => {
+      await flush();
+      if (stoppedByUser) return true; // a stream existed (the human stopped it) — content posted
+      if (streamTs && !broken) await stopStream(channelId, streamTs, opts.feedback ? feedbackBlocks(turnId, session) : undefined);
+      if (pending.trim() && (!streamTs || broken)) { await postMessage(channelId, pending, threadId); return true; }
+      return !!streamTs;
     };
     try {
       let streamed = false;
       let finalText = "";
       for await (const e of events) {
         if (stoppedByUser) return; // stop rendering; the turn itself runs on host-side
+        turnId ??= e.turnId;
         if (e.type === "message.delta") { await push(e.text); streamed = true; }
+        else if ((e.type === "action.requested" || e.type === "action.completed") && opts.tasks) {
+          // a tool call becomes a native task-timeline entry: in_progress when requested,
+          // complete when done. The app's mapper names it (or hides it with undefined/"").
+          const title = opts.tasks(e.call);
+          if (title) await pushChunk({ type: "task_update", id: e.call.id, title: title.slice(0, 256), status: e.type === "action.requested" ? "in_progress" : "complete" });
+        }
         else if (e.type === "turn.completed") finalText = e.text;
         else if (e.type === "turn.failed") { await push("\n_(the turn failed)_"); await finish(); return; }
         else if (e.type === "input.requested") {
@@ -362,10 +443,11 @@ export function slackChannel(opts: {
         }
       }
       if (!streamed && finalText.trim()) await push(finalText); // one-shot: the whole reply once
-      if (started) await finish(); // nothing pushed (tool-only/empty) ⇒ never started ⇒ post nothing…
-      // …but a status was set and nothing will ever post to auto-clear it — clear it now
-      // instead of leaving "is thinking…" to Slack's 2-minute timeout.
-      else if (opts.status && threadId) await setStatus(channelId, threadId, "");
+      const posted = started ? await finish() : false; // nothing pushed (tool-only/empty) ⇒ never started ⇒ post nothing
+      // when NOTHING actually posted — never started, or a task chunk tried to start a
+      // stream that startStream couldn't open — nothing will ever auto-clear the status;
+      // clear it now instead of leaving "is thinking…" to Slack's 2-minute timeout.
+      if (!posted && opts.status && threadId) await setStatus(channelId, threadId, "");
     } catch (err) {
       await push("\n_(the turn failed)_").catch(() => {}); // starts the stream/buffer if not yet
       await finish().catch(() => {});
@@ -376,8 +458,15 @@ export function slackChannel(opts: {
     }
   }
   // The inbound reply path: render the turn started FROM an event, to that event's own thread.
+  // The event's author + workspace become the stream's recipient — chat.startStream requires
+  // recipient_user_id/recipient_team_id for CHANNEL streams even in-thread (live-verified
+  // 2026-07-15: missing_recipient_team_id), and "who asked" is exactly what they mean.
   function renderStream(ctx: ChannelContext, event: InboundEvent, userText: string, session: string) {
-    return streamRender({ channelId: event.channelId, threadId: event.threadId }, ctx.runStream!(userText, { session, event }), session);
+    return streamRender(
+      { channelId: event.channelId, threadId: event.threadId, recipientUserId: event.user?.id, recipientTeamId: event.teamId },
+      ctx.runStream!(userText, { session, event }),
+      session,
+    );
   }
   // Post-once render that still understands HITL. The plain ctx.run path collapses the turn
   // to its final text — but a parked turn (input.requested) HAS no final text, so the collapse
@@ -413,6 +502,21 @@ export function slackChannel(opts: {
   function handleInteraction(payload: SlackInteraction, ctx: ChannelContext) {
     if (payload.type !== "block_actions") return;
     const action = payload.actions?.[0];
+    // a feedback_buttons click (minted by stopStream): normalize and hand to onFeedback.
+    // Nothing to resume and no reply expected — pure telemetry, background + best-effort.
+    if (action?.action_id === "june_feedback" && action.value) {
+      const fb = tryParseJson<{ rating?: string; turnId?: string; session?: string }>(action.value);
+      // validate, don't just truthy-check: the declared contract is "positive" | "negative"
+      const rating = fb?.rating === "positive" || fb?.rating === "negative" ? fb.rating : undefined;
+      if (fb && rating && opts.onFeedback) {
+        runBackground(ctx, async () => opts.onFeedback!({
+          rating, turnId: fb.turnId, session: fb.session,
+          user: payload.user?.id ? { id: payload.user.id } : undefined,
+          channelId: payload.channel?.id, threadId: payload.message?.thread_ts ?? payload.message?.ts, messageTs: payload.message?.ts,
+        }, ctx), opts.onError);
+      }
+      return;
+    }
     if (!action?.action_id?.startsWith("june_input:") || !action.value) return; // not our button (action_ids are june_input:yes|no)
     // From here the click IS ours — a dead end must be loud (onError), never a silent no-op.
     const parsed = tryParseJson<{ turnId: string; inputId: string; input: unknown; session?: string }>(action.value);
@@ -510,13 +614,13 @@ export function slackChannel(opts: {
         return new Response("", { status: 200 }); // fast ACK
       }
 
-      const payload = tryParseJson<{ type?: string; challenge?: string; event?: SlackEvent }>(body);
+      const payload = tryParseJson<{ type?: string; challenge?: string; event?: SlackEvent; team_id?: string }>(body);
       if (!payload) return new Response("", { status: 200 }); // signed but unparseable → ACK, don't retry
       if (payload.type === "url_verification") return Response.json({ challenge: payload.challenge });
 
       if (payload.type === "event_callback") {
         if (opts.accept && !opts.accept(payload)) return new Response("", { status: 200 }); // gated out
-        const norm = normalizeSlackEvent(payload.event ?? {}, events, opts.botUserId);
+        const norm = normalizeSlackEvent(payload.event ?? {}, events, opts.botUserId, payload.team_id);
         // observe: mirror EVERY verified event_callback (raw always; normalized when available)
         if (opts.onEvent) runBackground(ctx, async () => opts.onEvent!({ raw: payload, event: norm?.event }, ctx), opts.onError);
         // typed per-kind observer: fires only for its kind, with a non-optional event
@@ -613,13 +717,16 @@ export function normalizeSlackEvent(
   e: SlackEvent,
   events: SlackEventKind[],
   botUserId?: string,
+  // the envelope's team_id (NOT on the inner event) — chat.startStream demands it as
+  // recipient_team_id when streaming into a channel, even in-thread (live-verified 2026-07-15)
+  teamId?: string,
 ): { event: InboundEvent; session: string; userText: string } | null {
   // text turns: a channel message or an @-mention. Skip our own bot + non-user subtypes,
   // and blank text (a whitespace-only message shouldn't burn a turn).
   if ((e.type === "message" || e.type === "app_mention") && events.includes(e.type) && !e.bot_id && !e.subtype && e.text && e.text.trim() && e.channel && e.ts) {
     const thread = e.thread_ts ?? e.ts; // reply in-thread; one session per thread
     return {
-      event: { source: "slack", kind: e.type, channelId: e.channel, threadId: thread, ts: e.ts, user: e.user ? { id: e.user } : undefined, text: e.text, raw: e },
+      event: { source: "slack", kind: e.type, channelId: e.channel, threadId: thread, teamId, ts: e.ts, user: e.user ? { id: e.user } : undefined, text: e.text, raw: e },
       session: `slack:${e.channel}:${thread}`,
       userText: e.text,
     };
@@ -632,7 +739,7 @@ export function normalizeSlackEvent(
     const channel = e.item.channel, itemTs = e.item.ts;
     const verb = e.type === "reaction_added" ? "added" : "removed";
     return {
-      event: { source: "slack", kind: e.type, channelId: channel, threadId: itemTs, ts: itemTs, user: e.user ? { id: e.user } : undefined, reaction: { name: e.reaction, itemTs }, raw: e },
+      event: { source: "slack", kind: e.type, channelId: channel, threadId: itemTs, teamId, ts: itemTs, user: e.user ? { id: e.user } : undefined, reaction: { name: e.reaction, itemTs }, raw: e },
       session: `slack:${channel}:${itemTs}`,
       userText: `[reaction] <@${e.user ?? "someone"}> ${verb} :${e.reaction}: on a message in this thread`,
     };

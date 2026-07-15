@@ -49,6 +49,12 @@ const makeSlack = (env: Env) =>
     // turn runs (assistant.threads.setStatus). Slack clears it when the reply streams in.
     // Needs the app's Agents & AI Apps feature; without it the call fails harmlessly.
     status: "is thinking…",
+    // Tool calls render as Slack's native task timeline inside the streamed reply
+    // ("Running slack read thread…" → ✓). Return undefined to hide a call.
+    tasks: (call) => `Running ${call.name.replaceAll("_", " ")}`,
+    // The finished reply carries native 👍/👎 buttons; clicks land here as telemetry.
+    feedback: true,
+    onFeedback: (fb) => console.log(`feedback: ${fb.rating} on turn ${fb.turnId} by ${fb.user?.id}`),
   });
 
 const INSTRUCTIONS = [
