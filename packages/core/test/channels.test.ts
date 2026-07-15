@@ -318,6 +318,17 @@ describe("slackChannel", () => {
     });
   });
 
+  test("feedback: an unexpected rating value is NOT forwarded (the contract is positive|negative)", async () => {
+    streamStub();
+    let seen: unknown;
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true, feedback: true, onFeedback: (fb) => { seen = fb; } });
+    const value = JSON.stringify({ rating: "meh", turnId: "t1" }); // not one of ours
+    const interaction = { type: "block_actions", user: { id: "U1" }, channel: { id: "C1" }, message: { ts: "9.9" }, actions: [{ action_id: "june_feedback", value }] };
+    await ch2.webhook!(await signed(`payload=${encodeURIComponent(JSON.stringify(interaction))}`), ctxWith(async () => "unused"));
+    await flush();
+    expect(seen).toBeUndefined();
+  });
+
   test("tasks: tool calls render as a native task timeline, in order with the text", async () => {
     streamStub();
     const ch2 = slackChannel({

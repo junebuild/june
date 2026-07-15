@@ -500,9 +500,10 @@ export function slackChannel(opts: {
     // a feedback_buttons click (minted by stopStream): normalize and hand to onFeedback.
     // Nothing to resume and no reply expected — pure telemetry, background + best-effort.
     if (action?.action_id === "june_feedback" && action.value) {
-      const fb = tryParseJson<{ rating?: "positive" | "negative"; turnId?: string; session?: string }>(action.value);
-      if (fb?.rating && opts.onFeedback) {
-        const rating = fb.rating;
+      const fb = tryParseJson<{ rating?: string; turnId?: string; session?: string }>(action.value);
+      // validate, don't just truthy-check: the declared contract is "positive" | "negative"
+      const rating = fb?.rating === "positive" || fb?.rating === "negative" ? fb.rating : undefined;
+      if (fb && rating && opts.onFeedback) {
         runBackground(ctx, async () => opts.onFeedback!({
           rating, turnId: fb.turnId, session: fb.session,
           user: payload.user?.id ? { id: payload.user.id } : undefined,
