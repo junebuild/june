@@ -281,6 +281,21 @@ describe("slackChannel", () => {
     expect(calls[0]!.body).toMatchObject({ channel: "C1", thread_ts: "1.1", recipient_user_id: "U1", recipient_team_id: "T42" });
   });
 
+  test("stream render: a DM stream omits recipient ids (DMs reject them with invalid_arguments)", async () => {
+    streamStub();
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true });
+    const ctx = ctxWith(async () => "unused");
+    ctx.runStream = async function* () { yield delta("Hi."); yield completed("Hi."); };
+    // same envelope shape as a channel event — but the D-prefixed im id must flip the rule
+    const body = JSON.stringify({ type: "event_callback", team_id: "T42", event: { type: "message", text: "hi", channel: "D777", ts: "1.1", user: "U1" } });
+    await ch2.webhook!(await signed(body), ctx);
+    await flush();
+    const start = calls[0]!.body as Record<string, unknown>;
+    expect(start).toMatchObject({ channel: "D777", thread_ts: "1.1" });
+    expect("recipient_user_id" in start).toBe(false);
+    expect("recipient_team_id" in start).toBe(false);
+  });
+
   test("proactive: a top-level channel stream carries recipient ids (startStream requires them without thread_ts)", async () => {
     streamStub();
     const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test" });
