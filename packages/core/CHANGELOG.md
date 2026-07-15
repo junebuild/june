@@ -1,5 +1,11 @@
 # @junejs/core
 
+## 0.1.1-dev.12
+
+### Patch Changes
+
+- [#78](https://github.com/junebuild/june/pull/78) [`7aee078`](https://github.com/junebuild/june/commit/7aee0786f2a28f78e20afe1f56b7d3991514a3b3) Thanks [@linyiru](https://github.com/linyiru)! - Slack DM streams omit recipient ids (live-verified): chat.startStream's recipient rule cuts both ways — a channel stream requires `recipient_user_id`/`recipient_team_id` (`missing_recipient_team_id`), while a DM stream rejects them (`invalid_arguments`). The renderer now branches on the im channel's D-prefix, so streaming works in both surfaces. Also documents the observed rendering surfaces: task cards render in regular channels; feedback buttons attach everywhere but clients may only render them in the agent DM; the Stop affordance is agent-surface-only (our `stopped_by_user` handling is defensive regardless).
+
 ## 0.1.1-dev.11
 
 ### Patch Changes

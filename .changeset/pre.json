@@ -23,6 +23,7 @@
     "channel-turn-control",
     "crisp-event-normalization",
     "crisp-website-hooks-auth",
+    "slack-dm-stream-recipients",
     "slack-feedback-tasks",
     "slack-stream-hardening",
     "streaming-model-p2",
