@@ -406,11 +406,15 @@ export function slackChannel(opts: {
       if (r.error === "stopped_by_user") { stoppedByUser = true; pending = ""; }
       else if (!r.ok) opts.onError?.(new Error(`slack: task chunk append failed (${r.error ?? "no response"})`));
     };
-    const finish = async () => {
+    // Returns whether anything actually POSTED — `started` alone can't tell: a task chunk
+    // may have tried to open a stream that startStream couldn't (no ts), leaving a turn
+    // that rendered nothing. The caller keys the status-clear on this, not on `started`.
+    const finish = async (): Promise<boolean> => {
       await flush();
-      if (stoppedByUser) return; // Slack already closed the stream; appends/stops are refused
+      if (stoppedByUser) return true; // a stream existed (the human stopped it) — content posted
       if (streamTs && !broken) await stopStream(channelId, streamTs, opts.feedback ? feedbackBlocks(turnId, session) : undefined);
-      if (pending.trim() && (!streamTs || broken)) await postMessage(channelId, pending, threadId);
+      if (pending.trim() && (!streamTs || broken)) { await postMessage(channelId, pending, threadId); return true; }
+      return !!streamTs;
     };
     try {
       let streamed = false;
@@ -439,10 +443,11 @@ export function slackChannel(opts: {
         }
       }
       if (!streamed && finalText.trim()) await push(finalText); // one-shot: the whole reply once
-      if (started) await finish(); // nothing pushed (tool-only/empty) ⇒ never started ⇒ post nothing…
-      // …but a status was set and nothing will ever post to auto-clear it — clear it now
-      // instead of leaving "is thinking…" to Slack's 2-minute timeout.
-      else if (opts.status && threadId) await setStatus(channelId, threadId, "");
+      const posted = started ? await finish() : false; // nothing pushed (tool-only/empty) ⇒ never started ⇒ post nothing
+      // when NOTHING actually posted — never started, or a task chunk tried to start a
+      // stream that startStream couldn't open — nothing will ever auto-clear the status;
+      // clear it now instead of leaving "is thinking…" to Slack's 2-minute timeout.
+      if (!posted && opts.status && threadId) await setStatus(channelId, threadId, "");
     } catch (err) {
       await push("\n_(the turn failed)_").catch(() => {}); // starts the stream/buffer if not yet
       await finish().catch(() => {});

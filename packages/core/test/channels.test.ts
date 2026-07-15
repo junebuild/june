@@ -415,6 +415,23 @@ describe("slackChannel", () => {
     expect((calls[2]!.body as { status?: string }).status).toBe("");
   });
 
+  test("status: tasks + startStream unavailable + tool-only turn still clears the status", async () => {
+    // the task chunk TRIED to open a stream (started=true) but got no ts — nothing ever
+    // posts, so nothing auto-clears; `started` alone must not be treated as "posted"
+    stubSlack((m) => (m === "chat.startStream" ? { json: { ok: false, error: "unknown_method" } } : undefined));
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true, status: "is thinking…", tasks: (c) => c.name, onError: () => {} });
+    await driveStream(ch2, [
+      { type: "action.requested", turnId: "t1", call: { id: "c1", name: "add_reaction", input: {} } } as TurnEvent,
+      { type: "action.completed", turnId: "t1", call: { id: "c1", name: "add_reaction", input: {} }, result: {} } as TurnEvent,
+      completed(""),
+    ]);
+    expect(calls.map((c) => [method(c), (c.body as { status?: string }).status])).toEqual([
+      ["assistant.threads.setStatus", "is thinking…"],
+      ["chat.startStream", undefined], // the attempt that came back without a ts
+      ["assistant.threads.setStatus", ""], // …so the status is cleared explicitly
+    ]);
+  });
+
   test("status: a tool-only turn posts nothing, so the status is cleared explicitly", async () => {
     streamStub();
     const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true, status: "is thinking…" });
