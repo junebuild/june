@@ -229,13 +229,17 @@ export function slackChannel(opts: {
   // A click arrives as a block_actions interaction and lands in onFeedback (background,
   // best-effort); the button value ties it back to {turnId, session}. Streaming path only —
   // the postMessage fallback (older app) skips the buttons. Requires stream: true.
+  // Rendering caveat (observed 2026-07-15): the blocks attach to the message everywhere
+  // (visible in the message JSON), but Slack clients may only RENDER them in agent
+  // surfaces (the app DM) — plan the feedback UX around the DM experience.
   feedback?: boolean;
   onFeedback?: (feedback: SlackFeedback, ctx: ChannelContext) => void | Promise<void>;
   // Render tool calls as Slack's native task timeline INSIDE the streamed message: map a
   // tool call to a ≤256-char task title (return undefined/"" to hide that call). A call
   // shows as in_progress on action.requested and complete on action.completed. NOTE: this
   // makes a tool-only turn post a message (the timeline IS content) — a deliberate departure
-  // from the lazy-start rule, which is why it is opt-in. Requires stream: true.
+  // from the lazy-start rule, which is why it is opt-in. Requires stream: true. Task cards
+  // render in regular channels too (verified live 2026-07-15 — a `task_card` block).
   tasks?: (call: { id: string; name: string; input: unknown }) => string | undefined;
   // How Slack lays the timeline out: sequential "timeline" (Slack's default), grouped
   // "plan", or "dense" (consecutive tool calls collapse into one card). Needs `tasks`.
@@ -274,7 +278,8 @@ export function slackChannel(opts: {
   // One append, with a single honored-Retry-After retry on `ratelimited` (Tier 4 allows
   // bursts; two 429s in a row means back off for real — report, don't spin). The error goes
   // back to the renderer: `stopped_by_user` (the human hit Stop) must end rendering, and any
-  // other failure must be LOUD — an ignored append silently truncates the message.
+  // other failure must be LOUD — an ignored append silently truncates the message. (The Stop
+  // affordance only renders in Slack's agent surfaces — the handling is defensive either way.)
   async function appendStream(channel: string, ts: string, content: StreamContent): Promise<{ ok: boolean; error?: string }> {
     for (let attempt = 0; ; attempt++) {
       const res = await fetch(`${api}/chat.appendStream`, { method: "POST", headers: authHeaders, body: JSON.stringify({ channel, ts, ...content }) });
@@ -354,7 +359,10 @@ export function slackChannel(opts: {
     let lastFlush = 0;
     let turnId: string | undefined; // stamped from the first event — the feedback buttons carry it
     if (opts.status && threadId) await setStatus(channelId, threadId, opts.status);
-    const recipient = { user: surface.recipientUserId, team: surface.recipientTeamId };
+    // Slack's recipient rule cuts BOTH ways (live-verified 2026-07-15): a channel stream
+    // REQUIRES recipient_user_id/recipient_team_id (missing_recipient_team_id), while a DM
+    // stream REJECTS them (invalid_arguments) — branch on the id's D-prefix (im channels).
+    const recipient = channelId.startsWith("D") ? undefined : { user: surface.recipientUserId, team: surface.recipientTeamId };
     // A stream is EITHER markdown_text-mode or chunks-mode, fixed at startStream — mixing
     // raw markdown_text into a chunks-opened stream is streaming_mode_mismatch (live-verified
     // 2026-07-15). With tasks on, a task chunk may arrive before OR after the first token,
