@@ -53,6 +53,29 @@ describe("useStore across separate island roots", () => {
     expect(document.querySelector(".badge")!.textContent).toBe("cart: 1"); // the OTHER root updated
   });
 
+  test("an island hydrating AFTER the store changed re-syncs without a hydration mismatch", async () => {
+    // The real cross-island race: islands hydrate at different times, so a user can
+    // click a hydrated AddToCart before CartBadge hydrates. The badge's SSR HTML
+    // holds the initial value while the store already moved — hydrating against the
+    // current value would throw React #418. It must hydrate clean, then re-render.
+    const count = createStore(0);
+    function Badge() {
+      const [n] = useStore(count);
+      return h("span", { className: "late" }, `cart: ${n}`);
+    }
+    document.body.innerHTML = `<div id="late">${renderToString(h(Badge))}</div>`;
+    count.set(1); // a raced-ahead island mutated the store before this one hydrates
+    const recoverable: unknown[] = [];
+    await act(async () => {
+      hydrateRoot(document.getElementById("late")!, h(Badge), {
+        onRecoverableError: (err) => recoverable.push(err),
+      });
+      await flush();
+    });
+    expect(recoverable).toEqual([]); // no #418 — hydration matched the SSR HTML
+    expect(document.querySelector(".late")!.textContent).toBe("cart: 1"); // then re-synced
+  });
+
   test("a selector re-renders only when its slice changes", async () => {
     const store = createStore({ count: 0, name: "june" });
     let renders = 0;

@@ -22,6 +22,12 @@ export type Store<T> = {
   get: () => T;
   set: (next: T | ((prev: T) => T)) => void;
   subscribe: (listener: () => void) => () => void;
+  // The value the server rendered with — the hydration (server) snapshot. Islands
+  // hydrate at different times, so a raced-ahead island may have already mutated the
+  // store; hydrating against the CURRENT value would mismatch the SSR HTML (React
+  // #418). Hydrate against the initial value instead — React re-renders to the
+  // current value right after.
+  getInitial: () => T;
 };
 
 export function createStore<T>(initial: T): Store<T> {
@@ -29,6 +35,7 @@ export function createStore<T>(initial: T): Store<T> {
   const listeners = new Set<() => void>();
   return {
     get: () => value,
+    getInitial: () => initial,
     set: (next) => {
       const v = typeof next === "function" ? (next as (prev: T) => T)(value) : next;
       if (Object.is(v, value)) return; // identical → no needless notify
@@ -52,6 +59,11 @@ export function useStore<T>(store: Store<T>): [T, Store<T>["set"]];
 export function useStore<T, S>(store: Store<T>, selector: (state: T) => S): [S, Store<T>["set"]];
 export function useStore<T, S>(store: Store<T>, selector?: (state: T) => S): [T | S, Store<T>["set"]] {
   const getSnapshot: () => T | S = selector ? () => selector(store.get()) : store.get;
-  const value = useSyncExternalStore(store.subscribe, getSnapshot, getSnapshot);
+  // Server snapshot = the INITIAL value, on the server AND during hydration. SSR
+  // always renders the initial value (nothing mutates the store during a server
+  // render — see the header), so hydrating against it can never mismatch, even when
+  // another island raced ahead and mutated the store first.
+  const getServerSnapshot: () => T | S = selector ? () => selector(store.getInitial()) : store.getInitial;
+  const value = useSyncExternalStore(store.subscribe, getSnapshot, getServerSnapshot);
   return [value, store.set];
 }
