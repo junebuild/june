@@ -26,6 +26,7 @@
     "slack-dm-stream-recipients",
     "slack-feedback-tasks",
     "slack-stream-hardening",
+    "store-hydration-race",
     "streaming-model-p2",
     "turn-as-live-process-p1",
     "turn-suspend-resume-proactive"
