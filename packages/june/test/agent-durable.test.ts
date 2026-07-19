@@ -423,9 +423,12 @@ describe("AgentDurableObject — turn failure observability (#76)", () => {
 
       // the SSE contract is unchanged: the caller still sees the terminal turn.failed
       expect(events.at(-1)).toMatchObject({ type: "turn.failed", turnId: "t1", error: { message: "model exploded (dependency skew)" } });
-      // and the failure is now visible in the DO's own logs (wrangler tail)
+      // and the failure is now visible in the DO's own logs (wrangler tail) — with the
+      // in-flight step and the real stack trace, not just the flattened message (#96)
       expect(err).toHaveBeenCalledTimes(1);
-      expect(err.mock.calls[0]![0]).toBe('[june] agent "ops" turn t1 failed: model exploded (dependency skew)');
+      const logged = String(err.mock.calls[0]![0]);
+      expect(logged).toStartWith('[june] agent "ops" turn t1 failed at model:1: Error: model exploded (dependency skew)');
+      expect(logged).toContain("\n    at "); // a stack frame follows
     } finally {
       err.mockRestore();
     }
@@ -437,7 +440,7 @@ describe("AgentDurableObject — turn failure observability (#76)", () => {
       const agent = new AgentDurableObject({ storage: await storage() }, { model: explodingModel, tools: [] });
       await expect(agent.turn({ turnId: "t1", userText: "go" })).rejects.toThrow("model exploded (dependency skew)");
       expect(err).toHaveBeenCalledTimes(1);
-      expect(err.mock.calls[0]![0]).toBe('[june] agent "agent" turn t1 failed: model exploded (dependency skew)'); // name defaults to "agent"
+      expect(String(err.mock.calls[0]![0])).toStartWith('[june] agent "agent" turn t1 failed at model:1: Error: model exploded (dependency skew)'); // name defaults to "agent"
     } finally {
       err.mockRestore();
     }
@@ -446,7 +449,7 @@ describe("AgentDurableObject — turn failure observability (#76)", () => {
   test("onTurnError takes over reporting: hook sees the failure, default log stays quiet", async () => {
     const err = spyOn(console, "error").mockImplementation(() => {});
     try {
-      const seen: { turnId: string; error: { message: string } }[] = [];
+      const seen: { turnId: string; error: { message: string; stack?: string }; phase?: string; step?: string }[] = [];
       const agent = new AgentDurableObject(
         { storage: await storage() },
         { name: "ops", model: explodingModel, tools: [], onTurnError: (f) => { seen.push(f); } },
@@ -454,7 +457,10 @@ describe("AgentDurableObject — turn failure observability (#76)", () => {
       const events = await drain(await agent.fetch(new Request("https://do/turn", { method: "POST", body: JSON.stringify({ userText: "go", turnId: "t1" }) })));
 
       expect(events.at(-1)).toMatchObject({ type: "turn.failed" });
-      expect(seen).toEqual([{ turnId: "t1", error: { message: "model exploded (dependency skew)" } }]);
+      // #96: the hook gets the failure serialized at the throw site — stack and the
+      // in-flight step included, since for a detached turn this hook is the only surface.
+      expect(seen).toMatchObject([{ turnId: "t1", error: { message: "model exploded (dependency skew)" }, phase: "model", step: "model:1" }]);
+      expect(seen[0]!.error.stack).toContain("model exploded");
       expect(err).not.toHaveBeenCalled();
     } finally {
       err.mockRestore();
@@ -473,7 +479,7 @@ describe("AgentDurableObject — turn failure observability (#76)", () => {
       expect(events.at(-1)).toMatchObject({ type: "turn.failed" }); // a broken hook never breaks the stream
       const logged = err.mock.calls.map((c) => String(c[0]));
       expect(logged.some((l) => l.includes("onTurnError hook threw"))).toBe(true);
-      expect(logged).toContain('[june] agent "ops" turn t1 failed: model exploded (dependency skew)');
+      expect(logged.some((l) => l.startsWith('[june] agent "ops" turn t1 failed at model:1: Error: model exploded (dependency skew)'))).toBe(true);
     } finally {
       err.mockRestore();
     }
@@ -495,7 +501,7 @@ describe("AgentDurableObject — turn failure observability (#76)", () => {
       expect(events.at(-1)).toMatchObject({ type: "turn.failed" });
       const logged = err.mock.calls.map((c) => String(c[0]));
       expect(logged.some((l) => l.includes("onTurnError hook rejected"))).toBe(true);
-      expect(logged).toContain('[june] agent "ops" turn t1 failed: model exploded (dependency skew)');
+      expect(logged.some((l) => l.startsWith('[june] agent "ops" turn t1 failed at model:1: Error: model exploded (dependency skew)'))).toBe(true);
     } finally {
       err.mockRestore();
     }
@@ -767,7 +773,7 @@ describe("AgentDurableObject — detached turns (#77)", () => {
       const agent = new AgentDurableObject({ storage: await storage() }, { name: "ops", model: exploding, tools: [] });
       const res = await agent.fetch(detachReq("t1"));
       expect(res.status).toBe(202); // acceptance is not completion — the failure happens after
-      await until(() => err.mock.calls.some((c) => String(c[0]).includes('turn t1 failed: model exploded (detached)')));
+      await until(() => err.mock.calls.some((c) => String(c[0]).includes('turn t1 failed at model:1: Error: model exploded (detached)')));
     } finally {
       err.mockRestore();
     }

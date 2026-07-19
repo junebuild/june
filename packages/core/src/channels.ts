@@ -487,7 +487,7 @@ export function slackChannel(opts: {
       let finalText = "";
       for await (const e of ctx.runStream!(userText, { session, event })) {
         if (e.type === "turn.completed") finalText = e.text;
-        else if (e.type === "turn.failed") throw new Error(e.error.message);
+        else if (e.type === "turn.failed") throw new Error(e.error.message, { cause: e.error }); // full TurnError rides along
         else if (e.type === "input.requested") {
           const promptTs = await postApproval(event.channelId, event.threadId, e.turnId, e.request, session);
           // a failed prompt post (reported, not thrown) leaves nothing to auto-clear the status

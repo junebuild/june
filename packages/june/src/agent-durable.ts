@@ -28,6 +28,8 @@ import {
   type SessionStore,
   type ProactiveTrigger,
   type Tool,
+  type TurnError,
+  type TurnFailurePhase,
 } from "@junejs/core/agent-runtime";
 import type { Resources } from "@junejs/core/resources";
 import {
@@ -185,11 +187,14 @@ export type DoAgentDef = {
   // Called on every turn.failed for this session — the app's seam for routing turn
   // failures to its own telemetry (Sentry, a ledger, …). Providing it REPLACES the
   // default console.error; if the hook throws (or an async hook rejects), the default
-  // log fires anyway (both errors), so a failure is never silent. It happens to run
-  // inside the failed turn's request scope today (turn.failed is emitted mid-turn and
-  // ALS propagates), but that is NOT contract — don't rely on ambient db/services;
-  // close over what you need.
-  onTurnError?: (failure: { turnId: string; error: { message: string } }) => void | Promise<void>;
+  // log fires anyway (both errors), so a failure is never silent. `error` carries the
+  // full serialized failure (stack, cause chain — see TurnError, #96), and phase/step
+  // name the engine step that was in flight — for a DETACHED turn this hook is the
+  // only failure-surfacing path, so nothing may be flattened before it fires. It
+  // happens to run inside the failed turn's request scope today (turn.failed is
+  // emitted mid-turn and ALS propagates), but that is NOT contract — don't rely on
+  // ambient db/services; close over what you need.
+  onTurnError?: (failure: { turnId: string; error: TurnError; phase?: TurnFailurePhase; step?: string }) => void | Promise<void>;
 };
 
 // The agent runtime INSIDE a Durable Object. A plain class (constructor takes the
@@ -241,10 +246,13 @@ export class AgentDurableObject {
     const sink = new InProcEventSink();
     sink.subscribe((e) => {
       if (e.type !== "turn.failed") return;
-      const defaultLog = () => console.error(`[june] agent "${name}" turn ${e.turnId} failed: ${e.error.message}`);
+      // The stack already opens with the message; log it INSTEAD of the message line
+      // when present so wrangler tail shows one coherent trace, not the message twice.
+      const defaultLog = () =>
+        console.error(`[june] agent "${name}" turn ${e.turnId} failed${e.step ? ` at ${e.step}` : ""}: ${e.error.stack ?? e.error.message}${e.error.causeChain?.length ? `\ncaused by: ${e.error.causeChain.join(" ← ")}` : ""}`);
       if (def.onTurnError) {
         try {
-          const out = def.onTurnError({ turnId: e.turnId, error: e.error });
+          const out = def.onTurnError({ turnId: e.turnId, error: e.error, phase: e.phase, step: e.step });
           // An async hook (e.g. `await sendToSentry(...)`) types as void but returns a
           // Promise — a rejection there must hit the same fallback as a sync throw, or
           // the failure goes silent again (plus an unhandled rejection). No waitUntil
@@ -469,7 +477,7 @@ export async function sseTurnFinalText(res: Response): Promise<string> {
       if (!line) continue;
       const e = JSON.parse(line.slice(5).trim()) as TurnEvent;
       if (e.type === "turn.completed") return e.text;
-      if (e.type === "turn.failed") throw new Error(e.error.message);
+      if (e.type === "turn.failed") throw new Error(e.error.message, { cause: e.error }); // full TurnError rides along
     }
     if (done) break;
   }
