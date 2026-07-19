@@ -20,6 +20,7 @@ import {
   AgentDurableObject,
   DoSessionStore,
   durableAgentSurface,
+  durableChannelSurface,
   durableFetch,
   SESSION_HEADER,
   sseTurnFinalText,
@@ -28,8 +29,8 @@ import {
   type DurableStorage,
   type SqlStorage,
 } from "../src/agent-durable";
-import { createAgentRuntime } from "../src/agent-native";
-import { defineChannel } from "@junejs/core/agent-config";
+import { createAgentRuntime, mountAgent } from "../src/agent-native";
+import { defineChannel, type AgentDefinition } from "@junejs/core/agent-config";
 import { openLocalSqliteSync } from "../src/sqlite-driver";
 import { db, currentServices, requestLocal } from "@junejs/db";
 import type { JuneDb } from "@junejs/core/resources";
@@ -715,6 +716,118 @@ describe("AgentDurableObject — session identity (#75)", () => {
     expect(agent.transcript()).toEqual([]); // read BEFORE any key exists — must not commit "self"
     expect(await sseTurnFinalText(await agent.fetch(turnReq("t1", "crisp:web1:sess42")))).toBe("done");
     expect(seen).toEqual(["crisp:web1:sess42"]);
+  });
+});
+
+// ── fire-and-forget turns (#77): detached execution under the DO's own lifetime ──
+// Holding the caller open for the whole turn bounds turn duration by the CALLER's
+// lifetime — on the edge, the worker's post-ACK waitUntil ceiling killed 24–38s
+// shadow turns in production. Detach: the DO 202s once the turn is durably accepted
+// and keeps running it itself; nobody consumes the result, so failures surface via
+// the #76 default log / onTurnError.
+describe("AgentDurableObject — detached turns (#77)", () => {
+  // a model whose reply is gated: the test controls exactly when the turn can finish
+  const gated = () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const model: Model = () => (async function* () {
+      await gate;
+      yield { type: "done" as const, reply: { text: "done late", toolCalls: [] } };
+    })();
+    return { model, release };
+  };
+  const until = async (pred: () => boolean) => {
+    for (let i = 0; i < 400 && !pred(); i++) await new Promise((r) => setTimeout(r, 5));
+    expect(pred()).toBe(true);
+  };
+  const detachReq = (turnId: string, session = "k1") =>
+    new Request("https://do/turn?detach=1", {
+      method: "POST",
+      headers: { [SESSION_HEADER]: session },
+      body: JSON.stringify({ userText: "go", turnId }),
+    });
+
+  test("/turn?detach=1 202s on acceptance; the turn completes under the DO's own lifetime", async () => {
+    const { model, release } = gated();
+    const agent = new AgentDurableObject({ storage: await storage() }, { name: "ops", model, tools: [] });
+
+    const res = await agent.fetch(detachReq("t1"));
+    expect(res.status).toBe(202);                                    // accepted BEFORE the model replied…
+    expect(await res.json()).toEqual({ turnId: "t1" });
+    expect(agent.transcript().find((t) => t.turnId === "t1")?.text).toBeUndefined(); // …turn still in flight
+
+    release();
+    await until(() => agent.transcript().find((t) => t.turnId === "t1")?.text === "done late");
+  });
+
+  test("a detached turn that fails is 202-then-logged — the #76 seam is its only surface", async () => {
+    const err = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const exploding: Model = () => { throw new Error("model exploded (detached)"); };
+      const agent = new AgentDurableObject({ storage: await storage() }, { name: "ops", model: exploding, tools: [] });
+      const res = await agent.fetch(detachReq("t1"));
+      expect(res.status).toBe(202); // acceptance is not completion — the failure happens after
+      await until(() => err.mock.calls.some((c) => String(c[0]).includes('turn t1 failed: model exploded (detached)')));
+    } finally {
+      err.mockRestore();
+    }
+  });
+
+  test("detach preserves the conflict contract: a parked session still 409s", async () => {
+    const ask: Tool = {
+      spec: { name: "ask", description: "ask a human", input: { type: "object" } },
+      run: async (_i, ctx) => ({ ok: await ctx.requestInput({ id: "a1", prompt: "ok?" }) }),
+    };
+    const model = scriptedModel([
+      { text: "asking", toolCalls: [{ id: "c1", name: "ask", input: {} }] },
+      { text: "done", toolCalls: [] },
+    ]);
+    const agent = new AgentDurableObject({ storage: await storage() }, { name: "ops", model, tools: [ask] });
+    const parked = await agent.fetch(new Request("https://do/turn", { method: "POST", headers: { [SESSION_HEADER]: "k1" }, body: JSON.stringify({ userText: "go", turnId: "t1" }) }));
+    for await (const _ of sseTurnEvents(parked)) { /* drain to the park */ }
+    expect((await agent.fetch(detachReq("t2"))).status).toBe(409);
+  });
+
+  test("durableChannelSurface.runDetached: ?detach=1 on the wire, 202 back, completion later", async () => {
+    const { model, release } = gated();
+    const agent = new AgentDurableObject({ storage: await storage() }, { name: "ops", model, tools: [] });
+    const seenUrls: string[] = [];
+    const ns: DurableObjectNamespace = {
+      idFromName: (n) => n,
+      get: () => ({ fetch: (req) => { seenUrls.push(req.url); return agent.fetch(req); } }),
+    };
+    // a shadow channel: its webhook fires an assessment turn and drops the reply —
+    // exactly the observe-mode pattern the edge ceiling used to kill
+    const shadow = defineChannel({
+      name: "shadow",
+      path: "/hooks/shadow",
+      webhook: async (_req, ctx) => Response.json(await ctx.runDetached!("assess this", { session: "crisp:web1:s1", turnId: "t1" }), { status: 202 }),
+    });
+    const surface = durableChannelSurface(() => ns, { agentName: "ops", channels: [shadow], env: {} });
+
+    const res = await surface(new Request("https://edge/hooks/shadow", { method: "POST" }));
+    expect(res!.status).toBe(202);
+    expect(await res!.json()).toEqual({ turnId: "t1" });
+    expect(seenUrls[0]).toContain("detach=1");
+
+    release();
+    await until(() => agent.transcript().find((t) => t.turnId === "t1")?.text === "done late");
+  });
+
+  test("mountAgent exposes the same seam natively — a channel ports without changes", async () => {
+    const rt = await createAgentRuntime({ ops: { model: scriptedModel([{ text: "done", toolCalls: [] }]), tools: [] } }, { backend: "memory" });
+    const def = { name: "ops", instructions: "", tools: [], skills: [], channels: [], connections: [] } satisfies AgentDefinition;
+    const { ctx } = mountAgent(def, rt);
+    expect(await ctx.runDetached!("go", { session: "s1", turnId: "t1" })).toEqual({ turnId: "t1" });
+    expect(await rt.session("ops", "s1").result("t1")).toEqual({ status: "completed", text: "done" });
+  });
+
+  test("start() on the direct API: accepted now, running after", async () => {
+    const { model, release } = gated();
+    const agent = new AgentDurableObject({ storage: await storage() }, { name: "ops", model, tools: [] });
+    expect(await agent.start({ turnId: "t1", userText: "go", session: "k1" })).toEqual({ turnId: "t1" });
+    release();
+    await until(() => agent.transcript().find((t) => t.turnId === "t1")?.text === "done late");
   });
 });
 

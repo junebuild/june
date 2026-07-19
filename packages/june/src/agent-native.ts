@@ -214,6 +214,11 @@ export function mountAgent(
     services: opts.services, // same DI bag reachable from channel hooks (parity with durableChannelSurface)
     run: (message, o) =>
       runtime.session(agent.name, o?.session ?? "default").turn({ turnId: o?.turnId, userText: message, event: o?.event, trigger: o?.trigger }),
+    // FIRE-AND-FORGET (#77): start() without awaiting the result. Native has no waitUntil
+    // ceiling (Node keeps floating promises alive), but the seam is the same so a channel
+    // written against ctx.runDetached behaves identically on both targets.
+    runDetached: async (message, o) =>
+      runtime.session(agent.name, o?.session ?? "default").start({ turnId: o?.turnId, userText: message, event: o?.event, trigger: o?.trigger }),
   };
   const channels = channelFetch(agent, ctx);
   const surface = async (req: Request): Promise<Response | null> => {
