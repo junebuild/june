@@ -25,7 +25,16 @@
 // an event/store type the server constructs against) — not on every release.
 export const RUNTIME_API_VERSION = 1;
 
-export type ToolCall = { id: string; name: string; input: unknown };
+// `providerState` (#92) is OPAQUE round-trip state a model adapter may attach to a
+// tool call: some providers require it replayed verbatim (Gemini 3+ returns a
+// thoughtSignature per functionCall and rejects replays that omit it). Contract:
+// written by the adapter when it builds the reply, stored on the assistant Msg with
+// the rest of the call, and handed back UNTOUCHED when the transcript replays to the
+// adapter — the engine never reads it, and it is never part of identity (step keys
+// and dispatch use `id` alone). Without this field, adapters smuggle the state
+// inside `id` — leaking it into every ledger keyed by callId and breaking on any
+// id normalization.
+export type ToolCall = { id: string; name: string; input: unknown; providerState?: string };
 export type Msg =
   | { role: "user"; turnId: string; text: string }
   // A proactive turn's opening message (§9): a schedule / another channel / the agent itself

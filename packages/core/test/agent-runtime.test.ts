@@ -358,6 +358,37 @@ describe("TurnEvent stream (P1)", () => {
     expect(out.causeChain).toHaveLength(8); // depth-capped, terminated
   });
 
+  // #92: providerState is opaque adapter state that MUST round-trip through replay
+  // (Gemini 3+ rejects replays omitting its per-call thoughtSignature). The engine
+  // stores it with the call and hands it back untouched — never reads it, never
+  // makes it part of identity.
+  test("ToolCall.providerState round-trips: stored on the transcript, replayed to the model verbatim (#92)", async () => {
+    const seenOnReplay: (string | undefined)[] = [];
+    const echo: Tool = { spec: { name: "echo", description: "", input: {} }, run: (input: unknown) => ({ input }) };
+    let step = 0;
+    const model: Model = (msgs) => {
+      if (step++ === 0) {
+        return replyStream({ text: "", toolCalls: [{ id: "c1", name: "echo", input: { q: 1 }, providerState: "sig~abc123" }] });
+      }
+      // the replayed transcript must carry the adapter's state back verbatim
+      const assistant = msgs.find((m): m is Extract<Msg, { role: "assistant" }> => m.role === "assistant")!;
+      seenOnReplay.push(...assistant.toolCalls.map((c) => c.providerState));
+      return replyStream({ text: "done", toolCalls: [] });
+    };
+    const { store } = memStore();
+    const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), model, [echo], noRuntime);
+    const events: TurnEvent[] = [];
+    s.observe((e) => events.push(e));
+    expect(await s.turn({ turnId: "t1", userText: "go" })).toBe("done");
+
+    expect(seenOnReplay).toEqual(["sig~abc123"]); // handed back untouched on the next model call
+    const assistantMsg = store.messages().find((m): m is Extract<Msg, { role: "assistant" }> => m.role === "assistant")!;
+    expect(assistantMsg.toolCalls[0]!.providerState).toBe("sig~abc123"); // durably on the transcript
+    expect(events.find((e) => e.type === "action.requested")).toMatchObject({ call: { id: "c1", providerState: "sig~abc123" } });
+    // identity stays the bare id: the tool step checkpointed under tool:c1, state excluded
+    expect(store.getStep("tool:c1")).toBeDefined();
+  });
+
   // #95: minted turn ids are globally unique and lexically time-sortable — the
   // per-actor sequence collided across sessions (every first turn was "t1") and
   // within one session across a DO hibernation (in-memory seq reset re-minted
