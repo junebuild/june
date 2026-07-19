@@ -28,6 +28,7 @@
     "detach-turn-mode",
     "do-session-identity",
     "global-turn-ids",
+    "provider-state",
     "slack-dm-stream-recipients",
     "slack-feedback-tasks",
     "slack-stream-hardening",
