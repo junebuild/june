@@ -668,6 +668,17 @@ describe("AgentDurableObject — session identity (#75)", () => {
     expect(() => durableFetch(ns, "support", "crisp:web1:sess42", req())).not.toThrow();
   });
 
+  test("turn({ session }) enforces the same key contract — an invalid key never binds or persists", async () => {
+    const s = await storage();
+    const seen: string[] = [];
+    const agent = mkAgent(s, seen);
+    await expect(agent.turn({ turnId: "t1", userText: "hi", session: "bad\r\nkey" })).rejects.toThrow(/invalid session key/);
+    await expect(agent.turn({ turnId: "t1", userText: "hi", session: "訪客-42" })).rejects.toThrow(/invalid session key/);
+    // nothing was bound or persisted — the object is still addressable by a real key
+    expect(await sseTurnFinalText(await agent.fetch(turnReq("t2", "crisp:web1:sess42")))).toBe("done");
+    expect(seen).toEqual(["crisp:web1:sess42"]);
+  });
+
   test("the chat surface 400s an un-headerable client session — a bad request, not a 500", async () => {
     const agent = mkAgent(await storage(), []);
     const ns: DurableObjectNamespace = { idFromName: (n) => n, get: () => ({ fetch: (req) => agent.fetch(req) }) };

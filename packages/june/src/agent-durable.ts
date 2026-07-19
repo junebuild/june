@@ -287,6 +287,10 @@ export class AgentDurableObject {
   // live identity is a mis-route (or a key-less path was used first) — fail loudly:
   // silently proceeding is exactly the per-conversation data corruption #75 hit.
   private resolveSession(key?: string): AgentSession {
+    // Every entry point shares the session-key contract (turn({ session }) and hand-rolled
+    // SESSION_HEADER values included, not just durableFetch): an invalid key persisted here
+    // would bind an identity no routed request could ever address — an orphaned session.
+    if (key !== undefined) assertSessionKey(key);
     // Live fast path — no storage read once the session exists: this method is the only
     // writer of the persisted key, so within one life it cannot diverge from the live one.
     if (this.session) {
