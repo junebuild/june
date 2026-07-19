@@ -952,15 +952,26 @@ export type CrispEventPayloads = {
 };
 export type CrispEventName = keyof CrispEventPayloads;
 
+// The webhook envelope around every Crisp event — what actually arrives at the
+// endpoint, parsed from untrusted JSON (hence all-optional, the module's posture
+// for external input). Exported (#91) so an app consuming onEvent raws doesn't
+// re-declare this shape; isCrispEvent narrows `event`/`data` within it.
+export type CrispWebhookEnvelope = { website_id?: string; event?: string; data?: unknown; timestamp?: number };
+
 // Narrow an onEvent `raw` to a typed Crisp payload:
 //   if (isCrispEvent(raw, "session:sync:rating")) record(raw.data.rating?.stars)
-// Checks only the discriminant — the data shape is a trusted-typing convenience, the
-// same posture as every other webhook payload cast in this module.
+// Checks the discriminant AND that `data` is an object (#91): the envelope is parsed
+// from untrusted JSON, and a malformed delivery with a null/scalar `data` used to pass
+// the guard and throw on the first `payload.data.x` access downstream. The data SHAPE
+// beyond that remains a trusted-typing convenience, the same posture as every other
+// webhook payload cast in this module.
 export function isCrispEvent<E extends CrispEventName>(
   payload: unknown,
   event: E,
-): payload is { event: E; data: CrispEventPayloads[E]; timestamp?: number } {
-  return typeof payload === "object" && payload !== null && (payload as { event?: unknown }).event === event;
+): payload is CrispWebhookEnvelope & { event: E; data: CrispEventPayloads[E]; timestamp?: number } {
+  if (typeof payload !== "object" || payload === null) return false;
+  const p = payload as { event?: unknown; data?: unknown };
+  return p.event === event && typeof p.data === "object" && p.data !== null;
 }
 
 // The normalized kinds crispChannel can produce (a subset of InboundEvent["kind"]).

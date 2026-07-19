@@ -6,7 +6,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { channelFetch, defineChannel, resolveChannel, type AgentDefinition, type Channel, type ChannelContext } from "@junejs/core/agent-config";
 import type { InboundEvent, ToolContext, TurnEvent } from "@junejs/core/agent-runtime";
-import { crispChannel, httpChannel, slackChannel, receive, verifySlackSignature, verifyCrispSignature, verifyCrispUrlKey, tryParseJson, timestampFresh, normalizeSlackEvent, normalizeCrispEvent, isCrispEvent } from "@junejs/core/channels";
+import { crispChannel, httpChannel, slackChannel, receive, verifySlackSignature, verifyCrispSignature, verifyCrispUrlKey, tryParseJson, timestampFresh, normalizeSlackEvent, normalizeCrispEvent, isCrispEvent, type CrispWebhookEnvelope } from "@junejs/core/channels";
 
 const enc = new TextEncoder();
 async function hmacHex(secret: string, message: string): Promise<string> {
@@ -1147,6 +1147,30 @@ describe("crispChannel", () => {
     expect(isCrispEvent(raw, "session:sync:rating") && raw.data.rating?.stars).toBe(4); // typed access, no cast
     expect(isCrispEvent(raw, "message:send")).toBe(false);
     expect(isCrispEvent(null, "message:send")).toBe(false);
+  });
+
+  // #91: the envelope is parsed from untrusted JSON — a right event name with a
+  // null/missing/scalar `data` must FAIL the guard, not pass it and throw on the
+  // first `payload.data.x` access downstream.
+  test("isCrispEvent rejects a malformed delivery whose data is not an object (#91)", () => {
+    expect(isCrispEvent({ event: "message:send", data: null }, "message:send")).toBe(false);
+    expect(isCrispEvent({ event: "message:send" }, "message:send")).toBe(false);
+    expect(isCrispEvent({ event: "message:send", data: "corrupted" }, "message:send")).toBe(false);
+    expect(isCrispEvent({ event: "message:send", data: 42 }, "message:send")).toBe(false);
+    // and the normalizer built on it drops the same deliveries instead of throwing
+    expect(normalizeCrispEvent({ event: "message:send", data: undefined }, ["message"])).toBeNull();
+    expect(normalizeCrispEvent({ event: "session:sync:rating", data: null }, ["rating"])).toBeNull();
+  });
+
+  test("CrispWebhookEnvelope is the exported envelope shape; isCrispEvent narrows within it (#91)", () => {
+    // an app types its webhook parse ONCE with the exported envelope instead of re-declaring it
+    const envelope: CrispWebhookEnvelope = { website_id: "w1", event: "session:sync:rating", data: { rating: { stars: 2 } }, timestamp: 1 };
+    if (isCrispEvent(envelope, "session:sync:rating")) {
+      expect(envelope.website_id).toBe("w1"); // envelope fields stay readable after the narrow
+      expect(envelope.data.rating?.stars).toBe(2);
+    } else {
+      throw new Error("expected the guard to pass");
+    }
   });
 
   test("respondTo rating: a CSAT score drives a follow-up turn in the SAME conversation session", async () => {
