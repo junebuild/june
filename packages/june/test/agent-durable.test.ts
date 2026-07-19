@@ -659,6 +659,17 @@ describe("AgentDurableObject — session identity (#75)", () => {
     expect(events.at(-1)).toMatchObject({ type: "turn.completed", text: "done" });
   });
 
+  test("an explicit \"self\" stays a placeholder — never persisted, so a real key still adopts after eviction", async () => {
+    const s = await storage();
+    const seen: string[] = [];
+    expect(await sseTurnFinalText(await mkAgent(s, seen).fetch(turnReq("t1", "self")))).toBe("done");
+    expect(seen).toEqual(["self"]); // explicit "self" binds the live placeholder like a key-less call
+
+    const seen2: string[] = [];
+    expect(await sseTurnFinalText(await mkAgent(s, seen2).fetch(turnReq("t2", "crisp:web1:sess42")))).toBe("done");
+    expect(seen2).toEqual(["crisp:web1:sess42"]); // NOT stuck on "self": the placeholder never persisted
+  });
+
   test("durableFetch refuses a session key that can't ride the header — clear error, not a deep TypeError", () => {
     const ns: DurableObjectNamespace = { idFromName: (n) => n, get: () => ({ fetch: async () => new Response("unreached") }) };
     const req = () => new Request("https://do/turn", { method: "POST", body: "{}" });

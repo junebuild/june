@@ -297,7 +297,7 @@ export class AgentDurableObject {
       if (key !== undefined && this.sessionKey !== key) {
         throw new Error(
           this.sessionKey === "self"
-            ? `agent "${this.name}": request session "${key}" arrived, but this session was first used without a key — carry the key on every path (route through durableFetch, or pass turn({ session }) on the direct API)`
+            ? `agent "${this.name}": request session "${key}" arrived, but this session is bound to the placeholder "self" (first used without a real key) — carry the key on every path (route through durableFetch, or pass turn({ session }) on the direct API)`
             : `agent "${this.name}": request session "${key}" does not match this object's session "${this.sessionKey}" — one DO is one session; address each session by its own key (durableFetch, or turn({ session }) on the direct API)`,
         );
       }
@@ -308,13 +308,13 @@ export class AgentDurableObject {
       throw new Error(`agent "${this.name}": request session "${key}" does not match this object's session "${stored}" — one DO is one session; address each session by its own key (durableFetch, or turn({ session }) on the direct API)`);
     }
     const resolved = key ?? stored ?? "self";
-    // "self" is deliberately NOT persisted: it is a placeholder ("no identity externally
-    // assigned yet"), not an identity. Within one life a keyed request after a key-less
-    // one is refused above — two concurrently active paths disagreeing is a live bug.
-    // But across eviction a keyed request ADOPTS the legacy transcript: that asymmetry
-    // IS the migration path from pre-keyed deployments, where persisting "self" would
-    // 409 every keyed request to a pre-existing DO forever.
-    if (key !== undefined && stored === undefined) this.store.setSessionKey(key);
+    // "self" is deliberately NOT persisted — even when a caller passes it EXPLICITLY: it
+    // is a placeholder ("no identity externally assigned yet"), not an identity. Within
+    // one life a keyed request after a "self" binding is refused above — two concurrently
+    // active paths disagreeing is a live bug. But across eviction a keyed request ADOPTS
+    // the legacy transcript: that asymmetry IS the migration path from pre-keyed
+    // deployments, where a persisted "self" would 409 every keyed request forever.
+    if (key !== undefined && key !== "self" && stored === undefined) this.store.setSessionKey(key);
     this.sessionKey = resolved;
     this.session = new AgentSession(this.name, resolved, this.store, this.sink, this.model, this.tools, crossDoUnsupported, this.channelInstructions);
     return this.session;
