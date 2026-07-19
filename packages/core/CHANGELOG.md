@@ -1,5 +1,11 @@
 # @junejs/core
 
+## 0.1.1-dev.19
+
+### Patch Changes
+
+- [#106](https://github.com/junebuild/june/pull/106) [`6a915e4`](https://github.com/junebuild/june/commit/6a915e4f3e2c07b8b35b086e1033836dae6696b3) Thanks [@linyiru](https://github.com/linyiru)! - `ToolCall.providerState` ([#92](https://github.com/junebuild/june/issues/92)) — opaque round-trip state for model adapters. Some providers attach state to tool calls that must be replayed verbatim (Gemini 3+ rejects replays omitting its per-call `thoughtSignature`); adapters previously smuggled it inside the call id, leaking it into ledgers keyed by callId and breaking on id normalization. The field is written by the adapter, stored on the assistant message with the call, and handed back untouched on replay — the engine never reads it and it is never part of identity (step keys and dispatch use `id` alone).
+
 ## 0.1.1-dev.18
 
 ### Patch Changes
