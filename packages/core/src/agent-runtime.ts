@@ -194,13 +194,48 @@ export type TurnEvent =
   | { type: "message.completed"; turnId: string; text: string }
   | { type: "input.requested"; turnId: string; request: InputRequest }
   | { type: "turn.completed"; turnId: string; text: string }
-  | { type: "turn.failed"; turnId: string; error: { message: string } }
+  | { type: "turn.failed"; turnId: string; error: TurnError; phase?: TurnFailurePhase; step?: string }
   | { type: "reasoning.delta"; turnId: string; text: string }
   | { type: "message.delta"; turnId: string; text: string };
 export type TurnResult =
   | { status: "completed"; text: string }
   | { status: "suspended"; request: InputRequest }
-  | { status: "failed"; error: { message: string } };
+  | { status: "failed"; error: TurnError };
+
+// A turn failure, serialized AT THE THROW SITE — the one place the real Error still
+// exists. Everything downstream of the event sink (SSE across the worker→DO isolate,
+// onTurnError, a channel render) sees only this shape, so whatever isn't captured here
+// is gone: for a detached turn this is the ONLY failure-surfacing path (#96).
+// `causeChain` walks `error.cause` outermost-first (messages only — one stack is
+// enough to locate the site, the chain explains why).
+export type TurnError = { message: string; stack?: string; causeChain?: string[] };
+// Which engine step was in flight when the turn died — turns "fetch failed" into
+// "the model call failed" vs "tool tool:call_7 failed". `step` on turn.failed carries
+// the precise step id (`model:<n>` / `tool:<callId>`). Absent when the failure struck
+// between steps (transcript reads, status writes).
+export type TurnFailurePhase = "model" | "tool";
+
+export function serializeTurnError(err: unknown): TurnError {
+  if (err instanceof Error) {
+    const causeChain: string[] = [];
+    // depth-capped: a cyclic cause chain (err.cause === err) must not spin forever
+    for (let c: unknown = err.cause, depth = 0; c !== undefined && depth < 8; depth++) {
+      causeChain.push(c instanceof Error ? c.message : stringifyThrown(c));
+      c = c instanceof Error ? c.cause : undefined;
+    }
+    return { message: err.message, ...(err.stack ? { stack: err.stack } : {}), ...(causeChain.length ? { causeChain } : {}) };
+  }
+  return { message: stringifyThrown(err) };
+}
+// Non-Error throwables keep their JSON shape instead of collapsing to "[object Object]".
+function stringifyThrown(v: unknown): string {
+  if (typeof v === "string") return v;
+  try {
+    const s = JSON.stringify(v);
+    if (s !== undefined) return s;
+  } catch { /* cyclic or hostile toJSON — fall through */ }
+  return String(v);
+}
 
 // The event bus a turn emits to; observers (channels, an SSE surface) subscribe. Replaces
 // the old coarse `Broadcaster.publish(turnId)` poke with typed events.
@@ -249,6 +284,10 @@ export async function runTurn(
   sink.emit({ type: "turn.started", turnId: opts.turnId, trigger });
 
   const specs = tools.map((t) => t.spec);
+  // Which durable step is in flight, for turn.failed attribution: set before each step
+  // await, cleared on its return, so a throw OUTSIDE a step (transcript read, status
+  // write) isn't blamed on the previously completed one.
+  let inFlight: { phase: TurnFailurePhase; step: string } | undefined;
   try {
     while (true) {
       const msgs = store.messages();
@@ -262,10 +301,16 @@ export async function runTurn(
         return last.text;
       }
       if (last.role === "assistant" && last.toolCalls.length > 0) {
-        for (const call of last.toolCalls) await toolStep(store, sink, tools, call, opts, env);
+        for (const call of last.toolCalls) {
+          inFlight = { phase: "tool", step: `tool:${call.id}` };
+          await toolStep(store, sink, tools, call, opts, env);
+          inFlight = undefined;
+        }
         continue;
       }
+      inFlight = { phase: "model", step: `model:${msgs.length}` };
       await modelStep(store, sink, model, specs, `model:${msgs.length}`, msgs, opts, env.systemOverlay);
+      inFlight = undefined;
     }
   } catch (err) {
     if (err instanceof SuspendSignal) {
@@ -284,7 +329,7 @@ export async function runTurn(
       throw err; // AgentSession.result maps this to { status: "suspended" }
     }
     // includes intentional crash-injection throws (a failed ATTEMPT; replay re-runs).
-    sink.emit({ type: "turn.failed", turnId: opts.turnId, error: { message: err instanceof Error ? err.message : String(err) } });
+    sink.emit({ type: "turn.failed", turnId: opts.turnId, error: serializeTurnError(err), phase: inFlight?.phase, step: inFlight?.step });
     throw err;
   }
 }
@@ -488,7 +533,7 @@ export class AgentSession {
       try { return { status: "completed", text: await p }; }
       catch (err) {
         if (err instanceof SuspendSignal) return { status: "suspended", request: err.request };
-        return { status: "failed", error: { message: err instanceof Error ? err.message : String(err) } };
+        return { status: "failed", error: serializeTurnError(err) };
       }
     }
     if (this.store.getStatus() === "suspended") {

@@ -7,6 +7,7 @@ import { describe, expect, test } from "bun:test";
 import {
   AgentSession,
   replyStream,
+  serializeTurnError,
   withSystem,
   type EventSink,
   type TurnEvent,
@@ -289,6 +290,71 @@ describe("TurnEvent stream (P1)", () => {
     s.observe((e) => events.push(e));
     await expect(s.turn({ turnId: "t1", userText: "go" })).rejects.toThrow(/unknown tool nope/);
     expect(events.at(-1)).toMatchObject({ type: "turn.failed", turnId: "t1", error: { message: expect.stringContaining("unknown tool") } });
+  });
+
+  // #96: turn.failed is serialized at the throw site, where the real Error still exists.
+  // For a detached turn this event is the ONLY failure-surfacing path — stack, cause
+  // chain, and the in-flight step must survive into it, not flatten to one string.
+  test("turn.failed carries stack + causeChain + the in-flight model step (#96)", async () => {
+    const model: Model = async function* () {
+      throw new Error("api down", { cause: new Error("ECONNRESET") });
+      yield { type: "done", reply: { text: "", toolCalls: [] } }; // unreachable; types the generator
+    };
+    const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), model, [], noRuntime);
+    const events: TurnEvent[] = [];
+    s.observe((e) => events.push(e));
+    await expect(s.turn({ turnId: "t1", userText: "go" })).rejects.toThrow("api down");
+    const failed = events.at(-1) as Extract<TurnEvent, { type: "turn.failed" }>;
+    expect(failed).toMatchObject({
+      type: "turn.failed",
+      error: { message: "api down", causeChain: ["ECONNRESET"] },
+      phase: "model",
+      step: "model:1", // the opening user msg is the one message on the transcript
+    });
+    expect(failed.error.stack).toContain("api down"); // a real trace, not just the message
+  });
+
+  test("a failing tool step is attributed: phase tool, step tool:<callId> (#96)", async () => {
+    const badModel: Model = () => replyStream({ text: "", toolCalls: [{ id: "c1", name: "nope", input: {} }] });
+    const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), badModel, [], noRuntime);
+    const events: TurnEvent[] = [];
+    s.observe((e) => events.push(e));
+    await expect(s.turn({ turnId: "t1", userText: "go" })).rejects.toThrow(/unknown tool/);
+    expect(events.at(-1)).toMatchObject({ type: "turn.failed", phase: "tool", step: "tool:c1" });
+  });
+
+  test("a non-Error throwable keeps its JSON shape instead of '[object Object]' (#96)", async () => {
+    const model: Model = async function* () {
+      throw { code: 42, hint: "quota" }; // e.g. a provider SDK rejecting with a plain object
+      yield { type: "done", reply: { text: "", toolCalls: [] } };
+    };
+    const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), model, [], noRuntime);
+    const events: TurnEvent[] = [];
+    s.observe((e) => events.push(e));
+    await expect(s.turn({ turnId: "t1", userText: "go" })).rejects.toBeDefined();
+    const failed = events.at(-1) as Extract<TurnEvent, { type: "turn.failed" }>;
+    expect(failed.error.message).toBe('{"code":42,"hint":"quota"}');
+    expect(failed.error.stack).toBeUndefined(); // nothing invented for a stackless throwable
+  });
+
+  test("result() reports the failed turn with the same full TurnError (#96)", async () => {
+    const model: Model = async function* () {
+      throw new Error("mid-turn crash", { cause: "disk full" });
+      yield { type: "done", reply: { text: "", toolCalls: [] } };
+    };
+    const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), model, [], noRuntime);
+    const { turnId } = s.start({ userText: "go" });
+    const r = await s.result(turnId);
+    expect(r).toMatchObject({ status: "failed", error: { message: "mid-turn crash", causeChain: ["disk full"] } });
+    if (r.status === "failed") expect(r.error.stack).toContain("mid-turn crash");
+  });
+
+  test("serializeTurnError caps a cyclic cause chain instead of spinning (#96)", () => {
+    const err = new Error("outer");
+    err.cause = err; // hostile/buggy: an error citing itself
+    const out = serializeTurnError(err);
+    expect(out.message).toBe("outer");
+    expect(out.causeChain).toHaveLength(8); // depth-capped, terminated
   });
 
   test("a proactive turn opens with a `trigger`-role seed (attributed), not a user msg (P4 §9)", async () => {
