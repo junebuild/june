@@ -20,6 +20,7 @@
     "channel-hardening",
     "channel-hooks-round2",
     "channel-observe",
+    "channel-post-interaction",
     "channel-turn-control",
     "core-peer-dep",
     "crisp-event-guard",
