@@ -606,6 +606,24 @@ describe("AgentDurableObject — session identity (#75)", () => {
     expect(res.status).toBe(409); // prior turns already recorded "self" — never silently switch identity
   });
 
+  test("…but after eviction a keyed request ADOPTS a legacy \"self\" transcript (the migration path)", async () => {
+    // "self" is a placeholder, not an identity — it is deliberately never persisted.
+    // Same-life keyed-after-key-less is refused (two live paths disagreeing is a bug,
+    // above); across eviction the keyed request adopts and binds the real identity.
+    // Persisting "self" instead would 409 every keyed request to a pre-#75 DO forever.
+    const s = await storage();
+    expect(await mkAgent(s, []).turn({ turnId: "t1", userText: "hi" })).toBe("done"); // legacy life, id = "self"
+
+    const seen: string[] = [];
+    const adopted = mkAgent(s, seen); // fresh life over the SAME storage
+    expect(await sseTurnFinalText(await adopted.fetch(turnReq("t2", "crisp:web1:sess42")))).toBe("done");
+    expect(seen).toEqual(["crisp:web1:sess42"]); // the keyed request bound the real identity…
+
+    const seen2: string[] = [];
+    expect(await mkAgent(s, seen2).turn({ turnId: "t3", userText: "again" })).toBe("done");
+    expect(seen2).toEqual(["crisp:web1:sess42"]); // …and it persisted: a key-less later life resolves it
+  });
+
   test("/resume carries the key across eviction; a wrong key 409s", async () => {
     const s = await storage();
     const approve: Tool = {
