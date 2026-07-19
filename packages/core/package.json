@@ -173,6 +173,12 @@
       "bun": "./src/instrumentation.ts",
       "types": "./dist/instrumentation.d.ts",
       "default": "./dist/instrumentation.js"
+    },
+    "./test": {
+      "source": "./src/test.ts",
+      "bun": "./src/test.ts",
+      "types": "./dist/test.d.ts",
+      "default": "./dist/test.js"
     }
   },
   "files": [
