@@ -15,7 +15,7 @@ import { anthropic } from "@junejs/core/agent-models";
 import { crispChannel } from "@junejs/core/channels";
 import { defineAction } from "@junejs/core/agent";
 import { actionToTool } from "@junejs/core/agent-config";
-import type { Model, ModelReply, Msg } from "@junejs/core/agent-runtime";
+import { replyStream, type Model, type ModelDelta, type Msg } from "@junejs/core/agent-runtime";
 
 type Env = {
   AGENT: DurableObjectNamespace;
@@ -41,10 +41,10 @@ const INSTRUCTIONS = "You are an ordering assistant. Use create_order, then conf
 // Offline fallback so `wrangler dev` works with no API key — the Model seam is
 // pluggable, so no MSW / HTTP interception is needed to run the whole loop
 // deterministically. Swap in anthropic() the moment a key is present.
-const scripted: Model = async (msgs: Msg[]): Promise<ModelReply> => {
+const scripted: Model = (msgs: Msg[]): AsyncIterable<ModelDelta> => {
   const placed = msgs.some((m) => m.role === "tool" && m.name === "create_order");
-  if (!placed) return { text: "Placing your order.", toolCalls: [{ id: "c1", name: "create_order", input: { item: "widget", qty: 3 } }] };
-  return { text: "Done — order placed.", toolCalls: [] };
+  if (!placed) return replyStream({ text: "Placing your order.", toolCalls: [{ id: "c1", name: "create_order", input: { item: "widget", qty: 3 } }] });
+  return replyStream({ text: "Done — order placed.", toolCalls: [] });
 };
 
 // One DO = one session. The app supplies this thin shell; it delegates to

@@ -171,6 +171,14 @@ export type DoAgentDef = {
   env?: unknown;
   resources?: Resources;
   services?: unknown;
+  // Called on every turn.failed for this session — the app's seam for routing turn
+  // failures to its own telemetry (Sentry, a ledger, …). Providing it REPLACES the
+  // default console.error; if the hook throws (or an async hook rejects), the default
+  // log fires anyway (both errors), so a failure is never silent. It happens to run
+  // inside the failed turn's request scope today (turn.failed is emitted mid-turn and
+  // ALS propagates), but that is NOT contract — don't rely on ambient db/services;
+  // close over what you need.
+  onTurnError?: (failure: { turnId: string; error: { message: string } }) => void | Promise<void>;
 };
 
 // The agent runtime INSIDE a Durable Object. A plain class (constructor takes the
@@ -198,6 +206,40 @@ export class AgentDurableObject {
     const model = def.instructions ? withSystem(def.model, def.instructions) : def.model;
     this.resources = def.resources ?? {};
     this.services = def.services;
+    const name = def.name ?? "agent";
+    // Failure observability (#76): a turn that dies after the fast-ACK has no other
+    // observable surface on the edge — the webhook already 200'd and runBackground
+    // swallows the rejection unless the channel wired onError. Subscribing HERE (the
+    // session sink) covers every turn path — turn(), /turn, /resume — with one seam.
+    // Default: console.error, which wrangler tail surfaces. An app onTurnError takes
+    // over reporting; if IT throws, fall back to the default so nothing goes silent.
+    // (InProcEventSink already guards emit against a throwing subscriber.)
+    const sink = new InProcEventSink();
+    sink.subscribe((e) => {
+      if (e.type !== "turn.failed") return;
+      const defaultLog = () => console.error(`[june] agent "${name}" turn ${e.turnId} failed: ${e.error.message}`);
+      if (def.onTurnError) {
+        try {
+          const out = def.onTurnError({ turnId: e.turnId, error: e.error });
+          // An async hook (e.g. `await sendToSentry(...)`) types as void but returns a
+          // Promise — a rejection there must hit the same fallback as a sync throw, or
+          // the failure goes silent again (plus an unhandled rejection). No waitUntil
+          // keeper is needed here: unlike a Worker, a DO stays active while it has
+          // pending work/IO, and DurableObjectState.waitUntil is documented as a no-op —
+          // this .then subscription is what retains the promise.
+          if (out && typeof (out as Promise<void>).then === "function") {
+            (out as Promise<void>).then(undefined, (hookErr) => {
+              console.error(`[june] agent "${name}": onTurnError hook rejected:`, hookErr);
+              defaultLog();
+            });
+          }
+          return;
+        } catch (hookErr) {
+          console.error(`[june] agent "${name}": onTurnError hook threw:`, hookErr);
+        }
+      }
+      defaultLog();
+    });
     // Merge the mounted channels' capability tools (built here from this DO's env, since a
     // tool's `run` closure can't cross the RPC). The cross-channel source gate on each tool
     // keeps a Slack tool inert during a Crisp turn, so merging all of them is safe.
@@ -209,7 +251,7 @@ export class AgentDurableObject {
       seen.add(t.spec.name);
       tools.push(t);
     }
-    this.session = new AgentSession(def.name ?? "agent", "self", store, new InProcEventSink(), model, tools, crossDoUnsupported, def.channelInstructions);
+    this.session = new AgentSession(name, "self", store, sink, model, tools, crossDoUnsupported, def.channelInstructions);
   }
   // Run the whole turn inside a request scope seeded from this DO's env, so ambient
   // `db`/`kv`/`blob` and `currentServices()` resolve inside a tool exactly as in a
