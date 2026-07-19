@@ -22,6 +22,7 @@
     "channel-observe",
     "channel-turn-control",
     "core-peer-dep",
+    "crisp-event-guard",
     "crisp-event-normalization",
     "crisp-website-hooks-auth",
     "detach-turn-mode",
