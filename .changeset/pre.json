@@ -23,6 +23,7 @@
     "channel-turn-control",
     "crisp-event-normalization",
     "crisp-website-hooks-auth",
+    "detach-turn-mode",
     "do-session-identity",
     "slack-dm-stream-recipients",
     "slack-feedback-tasks",
