@@ -485,11 +485,23 @@ export async function* sseTurnEvents(res: Response): AsyncIterable<TurnEvent> {
 // into the object — exported so a custom shell that bypasses durableFetch can set it.
 export const SESSION_HEADER = "x-june-session";
 
+// A session key rides an HTTP header (SESSION_HEADER) and the DO name (idFromName) —
+// reject values that can't: CR/LF would be header injection, and Headers.set throws a
+// bare TypeError on control/non-ASCII bytes, turning a bad client value into an opaque
+// 500 deep inside durableFetch. Non-empty printable ASCII is the contract.
+const SESSION_KEY_RE = /^[\x20-\x7E]+$/;
+function assertSessionKey(session: string) {
+  if (typeof session !== "string" || !SESSION_KEY_RE.test(session)) {
+    throw new Error(`invalid session key ${JSON.stringify(session)} — a session key must be a non-empty printable-ASCII string (it rides an HTTP header and the DO name)`);
+  }
+}
+
 // Worker-side routing: address a session's DO by (agent, session) and forward the
 // request to it. `env.AGENT` is the DO namespace binding. The session key rides a
 // header (not the body): one seam covers /turn, /resume, and /transcript without
 // touching any body contract, and an older DO simply ignores it.
 export function durableFetch(namespace: DurableObjectNamespace, agent: string, session: string, req: Request): Promise<Response> {
+  assertSessionKey(session);
   const headers = new Headers(req.headers);
   headers.set(SESSION_HEADER, session);
   return namespace.get(namespace.idFromName(`${agent}:${session}`)).fetch(new Request(req, { headers }));
@@ -514,6 +526,15 @@ export function durableAgentSurface(
     const namespace = getNamespace();
     if (!namespace) return null; // no DO binding → not mounted here
     const { message, session } = (await req.json()) as { message: string; session?: string };
+    // `session` is CLIENT input here — an un-headerable value must be a clear 400, not
+    // the opaque 500 assertSessionKey would become this deep in the worker.
+    if (session !== undefined) {
+      try {
+        assertSessionKey(session);
+      } catch (err) {
+        return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 400 });
+      }
+    }
     // Forward to the session's DO on its /turn contract — which now STREAMS SSE. A client
     // that asks for the stream (Accept: text/event-stream) gets live TurnEvents piped
     // through; otherwise collapse to the final { text } (the prior JSON contract).

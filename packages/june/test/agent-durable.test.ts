@@ -19,6 +19,7 @@ import {
 import {
   AgentDurableObject,
   DoSessionStore,
+  durableAgentSurface,
   durableFetch,
   SESSION_HEADER,
   sseTurnFinalText,
@@ -656,6 +657,24 @@ describe("AgentDurableObject — session identity (#75)", () => {
     const events: TurnEvent[] = [];
     for await (const e of sseTurnEvents(ok)) events.push(e);
     expect(events.at(-1)).toMatchObject({ type: "turn.completed", text: "done" });
+  });
+
+  test("durableFetch refuses a session key that can't ride the header — clear error, not a deep TypeError", () => {
+    const ns: DurableObjectNamespace = { idFromName: (n) => n, get: () => ({ fetch: async () => new Response("unreached") }) };
+    const req = () => new Request("https://do/turn", { method: "POST", body: "{}" });
+    expect(() => durableFetch(ns, "support", "bad\r\nx-evil: 1", req())).toThrow(/invalid session key/); // header injection
+    expect(() => durableFetch(ns, "support", "訪客-42", req())).toThrow(/invalid session key/);          // non-ASCII: Headers.set would TypeError
+    expect(() => durableFetch(ns, "support", "", req())).toThrow(/invalid session key/);                 // empty
+    expect(() => durableFetch(ns, "support", "crisp:web1:sess42", req())).not.toThrow();
+  });
+
+  test("the chat surface 400s an un-headerable client session — a bad request, not a 500", async () => {
+    const agent = mkAgent(await storage(), []);
+    const ns: DurableObjectNamespace = { idFromName: (n) => n, get: () => ({ fetch: (req) => agent.fetch(req) }) };
+    const surface = durableAgentSurface(() => ns, { agentName: "support", chatPath: "/message" });
+    const res = await surface(new Request("https://edge/message", { method: "POST", body: JSON.stringify({ message: "hi", session: "bad\r\nkey" }) }));
+    expect(res!.status).toBe(400);
+    expect(((await res!.json()) as { error: string }).error).toMatch(/invalid session key/);
   });
 
   test("a key-less transcript read stays non-committal: a later keyed turn still binds the identity", async () => {
