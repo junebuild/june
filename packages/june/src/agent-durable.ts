@@ -223,7 +223,10 @@ export class AgentDurableObject {
           const out = def.onTurnError({ turnId: e.turnId, error: e.error });
           // An async hook (e.g. `await sendToSentry(...)`) types as void but returns a
           // Promise — a rejection there must hit the same fallback as a sync throw, or
-          // the failure goes silent again (plus an unhandled rejection).
+          // the failure goes silent again (plus an unhandled rejection). No waitUntil
+          // keeper is needed here: unlike a Worker, a DO stays active while it has
+          // pending work/IO, and DurableObjectState.waitUntil is documented as a no-op —
+          // this .then subscription is what retains the promise.
           if (out && typeof (out as Promise<void>).then === "function") {
             (out as Promise<void>).then(undefined, (hookErr) => {
               console.error(`[june] agent "${name}": onTurnError hook rejected:`, hookErr);
