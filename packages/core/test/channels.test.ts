@@ -6,7 +6,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { channelFetch, defineChannel, resolveChannel, type AgentDefinition, type Channel, type ChannelContext } from "@junejs/core/agent-config";
 import type { InboundEvent, ToolContext, TurnEvent } from "@junejs/core/agent-runtime";
-import { crispChannel, httpChannel, slackChannel, receive, verifySlackSignature, verifyCrispSignature, verifyCrispUrlKey, tryParseJson, timestampFresh, normalizeSlackEvent, normalizeCrispEvent, isCrispEvent, type CrispWebhookEnvelope } from "@junejs/core/channels";
+import { crispChannel, httpChannel, slackChannel, receive, verifySlackSignature, verifyCrispSignature, verifyCrispUrlKey, tryParseJson, timestampFresh, normalizeSlackEvent, normalizeCrispEvent, isCrispEvent, feedbackBlocks, type ChannelRejection, type CrispWebhookEnvelope } from "@junejs/core/channels";
 
 const enc = new TextEncoder();
 async function hmacHex(secret: string, message: string): Promise<string> {
@@ -1292,5 +1292,152 @@ describe("crispChannel website-hooks auth (urlKey)", () => {
     const req = post("http://x/channels/crisp?key=nope");
     expect((await urlCh.webhook!(req, ctxWith(async () => ""))).status).toBe(401);
     expect(req.bodyUsed).toBe(false);
+  });
+});
+
+// ── #88 / #89 / #90: post(), the interaction escape hatch, and rejection observability ──
+describe("channel.post + onInteraction + onRejected", () => {
+  const secret = "shhh";
+
+  async function slackSigned(body: string) {
+    const ts = String(Math.floor(Date.now() / 1000));
+    return new Request("http://x/channels/slack", { method: "POST", headers: { "x-slack-request-timestamp": ts, "x-slack-signature": "v0=" + (await hmacHex(secret, `v0:${ts}:${body}`)) }, body });
+  }
+
+  test("slack post: string content → chat.postMessage, identity returned (#89)", async () => {
+    calls = [];
+    globalThis.fetch = (async (url: unknown, init?: { body?: string }) => {
+      calls.push({ url: String(url), body: init?.body ? JSON.parse(init.body) : undefined });
+      return Response.json({ ok: true, ts: "123.45", channel: "C9" });
+    }) as typeof fetch;
+    const ch = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test" });
+    const posted = await ch.post!({ channelId: "C9", threadId: "111.1" }, "assessment ready");
+    expect(calls[0]!.url).toBe("https://slack.test/chat.postMessage");
+    expect(calls[0]!.body).toMatchObject({ channel: "C9", thread_ts: "111.1", text: "assessment ready" });
+    expect(posted).toEqual({ channelId: "C9", threadId: "111.1", ts: "123.45" });
+  });
+
+  test("slack post: blocks + exported feedbackBlocks compose — posted messages carry native 👍/👎 (#88+#89)", async () => {
+    calls = [];
+    globalThis.fetch = (async (url: unknown, init?: { body?: string }) => {
+      calls.push({ url: String(url), body: init?.body ? JSON.parse(init.body) : undefined });
+      return Response.json({ ok: true, ts: "9.9" });
+    }) as typeof fetch;
+    const ch = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test" });
+    const blocks = [{ type: "section", text: { type: "mrkdwn", text: "*Shadow assessment*: risky" } }, ...feedbackBlocks("t_01X", "crisp:w1:s1")];
+    await ch.post!({ channelId: "C1" }, { text: "Shadow assessment", blocks });
+    const sent = calls[0]!.body as { blocks: { type: string; elements?: { action_id?: string; positive_button?: { value: string } }[] }[] };
+    const fb = sent.blocks.find((b) => b.type === "context_actions")!.elements![0]!;
+    expect(fb.action_id).toBe("june_feedback"); // clicks route through the SAME onFeedback branch
+    expect(JSON.parse(fb.positive_button!.value)).toEqual({ rating: "positive", turnId: "t_01X", session: "crisp:w1:s1" });
+  });
+
+  test("slack post: a platform error throws loudly, never silently (#89)", async () => {
+    globalThis.fetch = (async () => Response.json({ ok: false, error: "channel_not_found" })) as unknown as typeof fetch;
+    const ch = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test" });
+    await expect(ch.post!({ channelId: "CX" }, "hi")).rejects.toThrow(/channel_not_found/);
+    // empty content fails fast, client-side — no round-trip to Slack's no_text error
+    await expect(ch.post!({ channelId: "CX" }, {})).rejects.toThrow(/text or non-empty blocks/);
+    await expect(ch.post!({ channelId: "CX" }, { blocks: [] })).rejects.toThrow(/text or non-empty blocks/);
+    await expect(ch.post!({ channelId: "CX" }, "  ")).rejects.toThrow(/text or non-empty blocks/);
+  });
+
+  test("crisp post: operator message → fingerprint as ts; threadId and text required (#89)", async () => {
+    calls = [];
+    globalThis.fetch = (async (url: unknown, init?: { body?: string }) => {
+      calls.push({ url: String(url), body: init?.body ? JSON.parse(init.body) : undefined });
+      return Response.json({ error: false, reason: "dispatched", data: { fingerprint: 998877 } });
+    }) as typeof fetch;
+    const ch = crispChannel({ signingSecret: secret, identifier: "id", key: "key", apiUrl: "https://crisp.test" });
+    const posted = await ch.post!({ channelId: "w1", threadId: "s1" }, "assessment card");
+    expect(calls[0]!.url).toBe("https://crisp.test/website/w1/conversation/s1/message");
+    expect(calls[0]!.body).toMatchObject({ type: "text", from: "operator", content: "assessment card" });
+    expect(posted).toEqual({ channelId: "w1", threadId: "s1", ts: "998877" });
+    await expect(ch.post!({ channelId: "w1" }, "no thread")).rejects.toThrow(/threadId/);
+    await expect(ch.post!({ channelId: "w1", threadId: "s1" }, { blocks: [] })).rejects.toThrow(/text content/);
+    await expect(ch.post!({ channelId: "w1", threadId: "s1" }, "   ")).rejects.toThrow(/text content/); // blank = empty, like every other outgoing path
+  });
+
+  test("onInteraction: an unclaimed action_id reaches the app; june_feedback stays routed (#88)", async () => {
+    captureFetch();
+    const unrouted: unknown[] = [];
+    const fb: unknown[] = [];
+    const ch = slackChannel({
+      signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test",
+      onFeedback: (f) => { fb.push(f); },
+      onInteraction: (p) => { unrouted.push(p); },
+    });
+    const ctx = ctxWith(async () => "unused");
+    // the app's own button (posted via channel.post) clicks back through the same endpoint
+    const mine = { type: "block_actions", user: { id: "U1" }, actions: [{ action_id: "assessment_ack", value: "judgment-42" }] };
+    await ch.webhook!(await slackSigned(`payload=${encodeURIComponent(JSON.stringify(mine))}`), ctx);
+    await flush();
+    expect(unrouted).toHaveLength(1);
+    expect(unrouted[0]).toMatchObject({ actions: [{ action_id: "assessment_ack", value: "judgment-42" }] });
+    // june_feedback is claimed by the built-in branch — never handed to onInteraction
+    const native = { type: "block_actions", user: { id: "U1" }, actions: [{ action_id: "june_feedback", value: JSON.stringify({ rating: "positive", turnId: "t_01X" }) }] };
+    await ch.webhook!(await slackSigned(`payload=${encodeURIComponent(JSON.stringify(native))}`), ctx);
+    await flush();
+    expect(fb).toHaveLength(1);
+    expect(unrouted).toHaveLength(1);
+  });
+
+  test("onRejected: bad signature, malformed body, unrouted interaction — each named (#90)", async () => {
+    captureFetch();
+    const rejections: ChannelRejection[] = [];
+    const ch = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", onRejected: (r) => { rejections.push(r); } });
+    const ctx = ctxWith(async () => "unused");
+    // bad signature → 401 + hook
+    const bad = new Request("http://x/channels/slack", { method: "POST", headers: { "x-slack-request-timestamp": String(Math.floor(Date.now() / 1000)), "x-slack-signature": "v0=deadbeef" }, body: "{}" });
+    expect((await ch.webhook!(bad, ctx)).status).toBe(401);
+    // signed but unparseable events body → ACK + hook
+    expect((await ch.webhook!(await slackSigned("not json"), ctx)).status).toBe(200);
+    // verified interaction nobody claims (no onInteraction) → hook with the action_id
+    const foreign = { type: "block_actions", actions: [{ action_id: "someone_elses_button", value: "x" }] };
+    expect((await ch.webhook!(await slackSigned(`payload=${encodeURIComponent(JSON.stringify(foreign))}`), ctx)).status).toBe(200);
+    expect(rejections.map((r) => r.kind)).toEqual(["bad_signature", "malformed_body", "unrouted_interaction"]);
+    expect(rejections[2]!.detail).toBe("someone_elses_button");
+    // an actions-less payload (shortcut/view submission) falls back to its type as detail
+    const submission = { type: "view_submission", view: { callback_id: "cb" } };
+    expect((await ch.webhook!(await slackSigned(`payload=${encodeURIComponent(JSON.stringify(submission))}`), ctx)).status).toBe(200);
+    expect(rejections[3]).toEqual({ kind: "unrouted_interaction", detail: "view_submission" });
+  });
+
+  test("onRejected fires on crisp auth failures too; a throwing hook never breaks the response (#90)", async () => {
+    captureFetch();
+    const rejections: ChannelRejection[] = [];
+    const ch = crispChannel({ signingSecret: secret, identifier: "id", key: "key", apiUrl: "https://crisp.test", onRejected: (r) => { rejections.push(r); throw new Error("hook exploded"); } });
+    const bad = new Request("http://x/channels/crisp", { method: "POST", headers: { "x-crisp-request-timestamp": String(Date.now()), "x-crisp-signature": "deadbeef" }, body: "{}" });
+    const res = await ch.webhook!(bad, ctxWith(async () => ""));
+    expect(res.status).toBe(401); // the throwing hook didn't change the outcome
+    expect(rejections).toEqual([{ kind: "bad_signature" }]);
+    const urlCh = crispChannel({ auth: { type: "urlKey", key: "k1" }, identifier: "id", key: "key", apiUrl: "https://crisp.test", onRejected: (r) => { rejections.push(r); } });
+    expect((await urlCh.webhook!(new Request("http://x/channels/crisp?key=wrong", { method: "POST", body: "{}" }), ctxWith(async () => ""))).status).toBe(401);
+    expect(rejections[1]).toEqual({ kind: "bad_signature", detail: "url key" });
+  });
+
+  test("an ASYNC rejecting onRejected is contained too — no unhandled rejection (#90)", async () => {
+    const seen: ChannelRejection[] = [];
+    // (r) => void admits an async implementation; its rejection must be swallowed like a sync throw
+    const ch = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", onRejected: async (r) => { seen.push(r); throw new Error("async reporter down"); } });
+    const bad = new Request("http://x/channels/slack", { method: "POST", headers: { "x-slack-request-timestamp": String(Math.floor(Date.now() / 1000)), "x-slack-signature": "v0=deadbeef" }, body: "{}" });
+    expect((await ch.webhook!(bad, ctxWith(async () => ""))).status).toBe(401);
+    await flush(); // let the rejection's containment run — an escape would fail the test as an unhandled rejection
+    expect(seen).toEqual([{ kind: "bad_signature" }]);
+  });
+
+  test("june_input without a value is CLAIMED (loud onError) — never leaked to onInteraction (#88)", async () => {
+    captureFetch();
+    const unrouted: unknown[] = [];
+    const errors: unknown[] = [];
+    const ch = slackChannel({
+      signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test",
+      onInteraction: (p) => { unrouted.push(p); }, onError: (e) => { errors.push(e); },
+    });
+    const broken = { type: "block_actions", user: { id: "U1" }, actions: [{ action_id: "june_input:yes" }] }; // value missing
+    await ch.webhook!(await slackSigned(`payload=${encodeURIComponent(JSON.stringify(broken))}`), ctxWith(async () => "unused"));
+    await flush();
+    expect(unrouted).toHaveLength(0); // a framework action_id never reaches the app's escape hatch
+    expect(errors).toHaveLength(1); // the dead end is loud
   });
 });

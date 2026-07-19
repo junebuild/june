@@ -131,14 +131,38 @@ export type ChannelMode = "respond" | "observe";
 // non-optional and no `event.kind` demux is needed.
 export type KindObserver = (event: InboundEvent, ctx: ChannelContext) => Promise<void> | void;
 
+// A webhook delivery the channel turned away without doing any work (#90) — the
+// silent failure modes a live debug session burns hours on. `bad_signature` covers
+// every auth failure (HMAC mismatch, stale timestamp, bad URL key — the response is
+// a 401 either way, and wrangler tail's pretty format shows "Ok" for it);
+// `malformed_body` is a signature-valid but unparseable body (ACKed 200 so the
+// platform won't retry-storm); `unrouted_interaction` is a verified interaction
+// payload (a click, a shortcut, a view submission) no built-in branch nor
+// onInteraction claimed. Observability only: firing the hook never changes the
+// response.
+export type ChannelRejection = { kind: "bad_signature" | "malformed_body" | "unrouted_interaction"; detail?: string };
+
 // The extension opts both channel factories accept, so an app can sit on the built-in
 // instead of forking its webhook. `accept` gates a verified event before any work (an
-// allowlist lives here) — returning false ACKs 200 and ignores it.
+// allowlist lives here) — returning false ACKs 200 and ignores it. `onRejected` is
+// the debug seam for deliveries the channel turns away silently (see ChannelRejection).
 type ChannelExtensions = {
   mode?: ChannelMode;
   accept?: (raw: unknown) => boolean;
   onEvent?: ChannelObserver;
+  onRejected?: (rejection: ChannelRejection, req: Request) => void;
 };
+
+// Guarded call: a broken app-supplied onRejected must never destabilize the
+// webhook's response path (the exact posture of runBackground's onError guard).
+// `(r, req) => void` admits an async implementation (a Promise is assignable to
+// void), so a rejection there must be contained too — not just a sync throw.
+function reject(opts: { onRejected?: (r: ChannelRejection, req: Request) => void }, req: Request, rejection: ChannelRejection): void {
+  try {
+    const out = opts.onRejected?.(rejection, req) as unknown;
+    if (out && typeof (out as Promise<void>).then === "function") (out as Promise<void>).then(undefined, () => { /* reporting failed */ });
+  } catch { /* reporting failed — nothing more to do */ }
+}
 
 // ── http — a generic Web channel: POST /message runs a turn; optionally serve
 // /mcp (pass your app's mcpHandler) so the same directory is also an MCP server.
@@ -194,6 +218,23 @@ export type SlackFeedback = {
   threadId?: string;
   messageTs?: string;
 };
+// Slack's native AI feedback buttons (one context_actions block): the streamed path
+// attaches these at chat.stopStream when opts.feedback is on, and each button's value
+// ties the click back to {rating, turnId, session} for the june_feedback interaction
+// branch — so clicks land in onFeedback with no extra wiring. Exported (#88) so a
+// message the app posts ITSELF (channel.post / chat.postMessage — e.g. an assessment
+// card) can carry the same buttons as the streamed reply: append to the posted
+// message's blocks, and clicks route through the same onFeedback.
+export const feedbackBlocks = (turnId?: string, session?: string) => [{
+  type: "context_actions",
+  elements: [{
+    type: "feedback_buttons",
+    action_id: "june_feedback",
+    positive_button: { text: { type: "plain_text", text: "Good response" }, value: JSON.stringify({ rating: "positive", turnId, session }) },
+    negative_button: { text: { type: "plain_text", text: "Bad response" }, value: JSON.stringify({ rating: "negative", turnId, session }) },
+  }],
+}];
+
 export function slackChannel(opts: {
   signingSecret: string;
   botToken: string;
@@ -234,6 +275,13 @@ export function slackChannel(opts: {
   // surfaces (the app DM) — plan the feedback UX around the DM experience.
   feedback?: boolean;
   onFeedback?: (feedback: SlackFeedback, ctx: ChannelContext) => void | Promise<void>;
+  // The interaction escape hatch (#88): every signature-verified interaction payload the
+  // built-in routing does NOT claim (june_feedback / june_input:* action_ids) is handed
+  // here instead of silently dropped — the app's own buttons on posted messages route
+  // through the SAME endpoint, no parallel webhook, no duplicated signature verification.
+  // Runs in the background with the fast-ACK discipline (errors → onError). Includes
+  // non-block_actions payload types (shortcuts, view submissions) — payload.type demuxes.
+  onInteraction?: (payload: SlackInteraction, ctx: ChannelContext) => void | Promise<void>;
   // Render tool calls as Slack's native task timeline INSIDE the streamed message: map a
   // tool call to a ≤256-char task title (return undefined/"" to hide that call). A call
   // shows as in_progress on action.requested and complete on action.completed. NOTE: this
@@ -295,18 +343,6 @@ export function slackChannel(opts: {
   async function stopStream(channel: string, ts: string, blocks?: unknown[]) {
     await fetch(`${api}/chat.stopStream`, { method: "POST", headers: authHeaders, body: JSON.stringify({ channel, ts, blocks }) });
   }
-  // stopStream carries these when opts.feedback is on: one context_actions block holding
-  // Slack's native AI feedback buttons. Each button's value ties the click back to
-  // {rating, turnId, session} for the june_feedback interaction branch below.
-  const feedbackBlocks = (turnId?: string, session?: string) => [{
-    type: "context_actions",
-    elements: [{
-      type: "feedback_buttons",
-      action_id: "june_feedback",
-      positive_button: { text: { type: "plain_text", text: "Good response" }, value: JSON.stringify({ rating: "positive", turnId, session }) },
-      negative_button: { text: { type: "plain_text", text: "Bad response" }, value: JSON.stringify({ rating: "negative", turnId, session }) },
-    }],
-  }];
   // The "is thinking…" presence line under the composer (assistant.threads.setStatus). Slack
   // clears it itself when the app posts/streams into the thread (2-minute timeout otherwise);
   // an empty status clears it explicitly. Best-effort: outside an AI-app assistant thread the
@@ -507,8 +543,11 @@ export function slackChannel(opts: {
   // Route an Approve/Deny click to session.resume and render the continuation into the button
   // message. The clicker's id is the VERIFIED resumer (`by`) — the signature was checked above,
   // and Slack's payload.user.id is trustworthy; the engine enforces it against answererId.
-  function handleInteraction(payload: SlackInteraction, ctx: ChannelContext) {
-    if (payload.type !== "block_actions") return;
+  // Returns whether a built-in branch CLAIMED the payload (#88): june_feedback and
+  // june_input:* action_ids are ours (claimed even when dropped — e.g. onFeedback absent);
+  // everything else is unrouted and falls through to onInteraction at the call site.
+  function handleInteraction(payload: SlackInteraction, ctx: ChannelContext): boolean {
+    if (payload.type !== "block_actions") return false;
     const action = payload.actions?.[0];
     // a feedback_buttons click (minted by stopStream): normalize and hand to onFeedback.
     // Nothing to resume and no reply expected — pure telemetry, background + best-effort.
@@ -523,18 +562,20 @@ export function slackChannel(opts: {
           channelId: payload.channel?.id, threadId: payload.message?.thread_ts ?? payload.message?.ts, messageTs: payload.message?.ts,
         }, ctx), opts.onError);
       }
-      return;
+      return true;
     }
-    if (!action?.action_id?.startsWith("june_input:") || !action.value) return; // not our button (action_ids are june_input:yes|no)
-    // From here the click IS ours — a dead end must be loud (onError), never a silent no-op.
-    const parsed = tryParseJson<{ turnId: string; inputId: string; input: unknown; session?: string }>(action.value);
+    if (!action?.action_id?.startsWith("june_input:")) return false; // not our button (action_ids are june_input:yes|no)
+    // From here the click IS ours — CLAIMED even when unusable (a framework action_id
+    // must never leak to onInteraction), and a dead end must be loud (onError), never
+    // a silent no-op. A missing value folds into the unusable-payload branch below.
+    const parsed = action.value ? tryParseJson<{ turnId: string; inputId: string; input: unknown; session?: string }>(action.value) : undefined;
     const channel = payload.channel?.id, msgTs = payload.message?.ts;
     const thread = payload.message?.thread_ts ?? msgTs;
     if (!ctx.resumeStream || !parsed || !channel || !thread || !msgTs) {
       opts.onError?.(new Error(ctx.resumeStream
         ? "slack: HITL click with an unusable payload (value/channel/message missing)"
         : "slack: HITL click but the host provides no resumeStream"));
-      return;
+      return true; // ours (june_input) even when unusable — never handed to onInteraction
     }
     // The button value names the parked turn's session (a PROACTIVE session is caller-chosen);
     // fall back to the inbound convention for buttons posted before the value carried it.
@@ -578,6 +619,7 @@ export function slackChannel(opts: {
         await it.return?.();
       }
     }, opts.onError);
+    return true;
   }
   // Slack Web API read helper: GET with query params + bearer token. Read methods
   // (conversations.replies, reactions.get, users.info) all accept this shape. Returns
@@ -605,6 +647,21 @@ export function slackChannel(opts: {
     // the same renderer as an inbound reply — progressive edits, HITL prompts, final text.
     // `opts.session` routes an HITL prompt's resume back to the caller-chosen session.
     deliver: (target, events, o) => streamRender(target, events, o?.session),
+    // Deterministic outbound post (#89): one app-authored message over the channel's own
+    // auth/transport, returning its (channel, ts) identity. Throws loudly on a platform
+    // error — unlike the best-effort reply path, the app initiated this and must know.
+    async post(target, content) {
+      const text = typeof content === "string" ? content : content.text ?? "";
+      const blocks = typeof content === "string" ? undefined : content.blocks;
+      // fail fast, client-side: an empty post would round-trip to Slack's no_text error
+      if (!text.trim() && !blocks?.length) throw new Error("slack: post needs text or non-empty blocks");
+      const payload: Record<string, unknown> = { channel: target.channelId, thread_ts: target.threadId, text };
+      if (blocks) payload.blocks = blocks;
+      const r = (await (await fetch(`${api}/chat.postMessage`, { method: "POST", headers: authHeaders, body: JSON.stringify(payload) }))
+        .json().catch(() => ({}))) as { ok?: boolean; ts?: string; channel?: string; error?: string };
+      if (!r.ok || !r.ts) throw new Error(`slack: chat.postMessage failed (${r.error ?? "no response"})`);
+      return { channelId: r.channel ?? target.channelId, threadId: target.threadId, ts: r.ts };
+    },
     async webhook(req, ctx) {
       const body = await req.text();
       const ok = await valid(
@@ -612,18 +669,26 @@ export function slackChannel(opts: {
         body,
         req.headers.get("x-slack-signature") ?? "",
       );
-      if (!ok) return new Response("bad signature", { status: 401 });
+      if (!ok) { reject(opts, req, { kind: "bad_signature" }); return new Response("bad signature", { status: 401 }); }
 
       // Slack interactivity (a block_actions click on our Approve/Deny buttons) arrives
-      // form-encoded as `payload=<json>` — not an Events API JSON body. Route it to resume.
+      // form-encoded as `payload=<json>` — not an Events API JSON body. Route it to resume;
+      // anything the built-in branches don't claim goes to onInteraction (#88) so the app's
+      // own buttons ride this endpoint instead of a parallel webhook.
       if (body.startsWith("payload=")) {
         const interaction = tryParseJson<SlackInteraction>(new URLSearchParams(body).get("payload") ?? "");
-        if (interaction) handleInteraction(interaction, ctx);
+        if (!interaction) reject(opts, req, { kind: "malformed_body", detail: "interaction payload" });
+        else if (!handleInteraction(interaction, ctx)) {
+          if (opts.onInteraction) runBackground(ctx, async () => opts.onInteraction!(interaction, ctx), opts.onError);
+          // detail: the action_id for a click; the payload type for actions-less
+          // payloads (a shortcut, a view submission) so the rejection stays actionable
+          else reject(opts, req, { kind: "unrouted_interaction", detail: interaction.actions?.[0]?.action_id ?? interaction.type });
+        }
         return new Response("", { status: 200 }); // fast ACK
       }
 
       const payload = tryParseJson<{ type?: string; challenge?: string; event?: SlackEvent; team_id?: string }>(body);
-      if (!payload) return new Response("", { status: 200 }); // signed but unparseable → ACK, don't retry
+      if (!payload) { reject(opts, req, { kind: "malformed_body" }); return new Response("", { status: 200 }); } // signed but unparseable → ACK, don't retry
       if (payload.type === "url_verification") return Response.json({ challenge: payload.challenge });
 
       if (payload.type === "event_callback") {
@@ -1107,12 +1172,31 @@ export function crispChannel(opts: CrispAuthOpts & {
     name: "crisp",
     path: opts.path ?? "/channels/crisp",
     tools: () => crispTools(crispGet),
+    // Deterministic outbound post (#89), the crisp dual: an operator text message into a
+    // conversation, returning its fingerprint as the identity `ts`. Requires the
+    // conversation session as target.threadId (crisp has no channel-only target), and
+    // text content (no block concept). Throws loudly on a platform error, unlike the
+    // best-effort reply path.
+    async post(target, content) {
+      if (!target.threadId) throw new Error("crisp: post needs target.threadId (the conversation session id)");
+      const text = typeof content === "string" ? content : content.text;
+      if (!text?.trim()) throw new Error("crisp: post needs text content (blocks have no crisp mapping)");
+      const r = (await (await fetch(`${api}/website/${target.channelId}/conversation/${target.threadId}/message`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: auth(), "X-Crisp-Tier": "plugin" },
+        body: JSON.stringify({ type: "text", from: "operator", origin: "chat", content: text }),
+      })).json().catch(() => ({}))) as { error?: boolean; reason?: string; data?: { fingerprint?: number } };
+      if (r.error !== false || r.data?.fingerprint === undefined) throw new Error(`crisp: message send failed (${r.reason ?? "no response"})`);
+      return { channelId: target.channelId, threadId: target.threadId, ts: String(r.data.fingerprint) };
+    },
     async webhook(req, ctx) {
       // urlKey authenticates from the URL alone — reject before reading the body,
       // so an invalid-key request costs a URL parse and nothing else. Signature
       // mode MACs the raw body, so it has to read first.
-      if (webhookAuth.type === "urlKey" && !verifyCrispUrlKey(webhookAuth.key, req.url, webhookAuth.param))
+      if (webhookAuth.type === "urlKey" && !verifyCrispUrlKey(webhookAuth.key, req.url, webhookAuth.param)) {
+        reject(opts, req, { kind: "bad_signature", detail: "url key" });
         return new Response("bad key", { status: 401 });
+      }
       const body = await req.text();
       if (webhookAuth.type === "signature") {
         const ok = await verifyCrispSignature(
@@ -1121,11 +1205,11 @@ export function crispChannel(opts: CrispAuthOpts & {
           body,
           req.headers.get("x-crisp-signature") ?? "",
         );
-        if (!ok) return new Response("bad signature", { status: 401 });
+        if (!ok) { reject(opts, req, { kind: "bad_signature" }); return new Response("bad signature", { status: 401 }); }
       }
 
       const payload = tryParseJson<{ event?: string; data?: unknown }>(body);
-      if (!payload) return new Response("", { status: 200 }); // signed but unparseable → ACK, don't retry
+      if (!payload) { reject(opts, req, { kind: "malformed_body" }); return new Response("", { status: 200 }); } // signed but unparseable → ACK, don't retry
       if (opts.accept && !opts.accept(payload)) return new Response("", { status: 200 }); // gated out (e.g. website allowlist)
 
       const norm = normalizeCrispEvent(payload, events);
