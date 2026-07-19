@@ -79,6 +79,15 @@ export type ChannelContext = {
 // Without them the renderer still degrades gracefully to chat.postMessage.
 export type DeliveryTarget = { channelId: string; threadId?: string; recipientUserId?: string; recipientTeamId?: string };
 
+// What channel.post sends (#89): plain text, or the object form carrying platform
+// blocks (Slack Block Kit) with a `text` notification fallback. Channels without a
+// block concept (Crisp) accept the object form but require `text`.
+export type PostContent = string | { text?: string; blocks?: unknown[] };
+// The sent message's identity — enough to index it (record a (channel, ts) →
+// judgment row) and to resolve later interactions/reactions back to it. `ts` is the
+// platform's message key: Slack's message ts, Crisp's fingerprint (stringified).
+export type PostedMessage = { channelId: string; threadId?: string; ts: string };
+
 export type Channel = {
   name: string;
   // one-shot input source (e.g. cli): run once at startup
@@ -90,6 +99,12 @@ export type Channel = {
   // `session` names the turn's session so an HITL prompt can route its resume back to it —
   // a proactive session is caller-chosen and NOT derivable from the target thread.
   deliver?: (target: DeliveryTarget, events: AsyncIterable<TurnEvent>, opts?: { session?: string }) => Promise<void>;
+  // DETERMINISTIC outbound post (#89): send one app-authored message (no LLM, no
+  // stream) over the channel's own auth/transport and return its identity, so the
+  // app can index it and resolve later reactions/clicks back to it. The dual of
+  // deliver (which renders a TURN's stream). Unlike the reply path (best-effort),
+  // post throws loudly on a platform error — the app initiated it and must know.
+  post?: (target: DeliveryTarget, content: PostContent) => Promise<PostedMessage>;
   // a general fetch handler (e.g. http: POST /message + /mcp)
   fetch?: (ctx: ChannelContext) => (req: Request) => Promise<Response>;
   // a webhook mounted at `path` (e.g. Slack/Crisp): verify signature, ACK fast,
