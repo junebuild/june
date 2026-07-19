@@ -5,7 +5,7 @@
 // storage persists, in-process state is gone. Also drives AgentDurableObject end
 // to end and checks the backend selector.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import {
   AgentSession,
   replyStream,
@@ -397,6 +397,92 @@ describe("AgentDurableObject — DI scope (ambient db/services reach a DO tool)"
     const agent = new AgentDurableObject({ storage: s }, { name: "ops", model: scriptedModel(ORDER_SCRIPT), tools: [createOrderTool()] });
     expect(await agent.turn({ turnId: "t1", userText: "Order 3 widgets" })).toBe("Done — order placed.");
     expect(countOrders(s)).toBe(1);
+  });
+});
+
+// ── failure observability (#76): a failed turn must never be silent ───────────
+// A turn that dies after the fast-ACK has no other observable surface on the edge:
+// the webhook already 200'd, and runBackground swallows the rejection unless the
+// channel wired onError. The DO therefore console.errors turn.failed by default
+// (visible in `wrangler tail`); an app onTurnError hook takes over reporting, and
+// a THROWING hook falls back to the default log — nothing goes silent.
+describe("AgentDurableObject — turn failure observability (#76)", () => {
+  const explodingModel: Model = () => { throw new Error("model exploded (dependency skew)"); };
+  const drain = async (res: Response) => { const out: TurnEvent[] = []; for await (const e of sseTurnEvents(res)) out.push(e); return out; };
+
+  test("default: a model failure is console.error'd, and the stream still terminates with turn.failed", async () => {
+    const err = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const agent = new AgentDurableObject({ storage: await storage() }, { name: "ops", model: explodingModel, tools: [] });
+      const events = await drain(await agent.fetch(new Request("https://do/turn", { method: "POST", body: JSON.stringify({ userText: "go", turnId: "t1" }) })));
+
+      // the SSE contract is unchanged: the caller still sees the terminal turn.failed
+      expect(events.at(-1)).toMatchObject({ type: "turn.failed", turnId: "t1", error: { message: "model exploded (dependency skew)" } });
+      // and the failure is now visible in the DO's own logs (wrangler tail)
+      expect(err).toHaveBeenCalledTimes(1);
+      expect(err.mock.calls[0]![0]).toBe('[june] agent "ops" turn t1 failed: model exploded (dependency skew)');
+    } finally {
+      err.mockRestore();
+    }
+  });
+
+  test("the direct turn() path logs too (one seam covers every turn path)", async () => {
+    const err = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const agent = new AgentDurableObject({ storage: await storage() }, { model: explodingModel, tools: [] });
+      await expect(agent.turn({ turnId: "t1", userText: "go" })).rejects.toThrow("model exploded (dependency skew)");
+      expect(err).toHaveBeenCalledTimes(1);
+      expect(err.mock.calls[0]![0]).toBe('[june] agent "agent" turn t1 failed: model exploded (dependency skew)'); // name defaults to "agent"
+    } finally {
+      err.mockRestore();
+    }
+  });
+
+  test("onTurnError takes over reporting: hook sees the failure, default log stays quiet", async () => {
+    const err = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const seen: { turnId: string; error: { message: string } }[] = [];
+      const agent = new AgentDurableObject(
+        { storage: await storage() },
+        { name: "ops", model: explodingModel, tools: [], onTurnError: (f) => seen.push(f) },
+      );
+      const events = await drain(await agent.fetch(new Request("https://do/turn", { method: "POST", body: JSON.stringify({ userText: "go", turnId: "t1" }) })));
+
+      expect(events.at(-1)).toMatchObject({ type: "turn.failed" });
+      expect(seen).toEqual([{ turnId: "t1", error: { message: "model exploded (dependency skew)" } }]);
+      expect(err).not.toHaveBeenCalled();
+    } finally {
+      err.mockRestore();
+    }
+  });
+
+  test("a THROWING onTurnError falls back to the default log — the failure is never silent", async () => {
+    const err = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const agent = new AgentDurableObject(
+        { storage: await storage() },
+        { name: "ops", model: explodingModel, tools: [], onTurnError: () => { throw new Error("sentry down"); } },
+      );
+      const events = await drain(await agent.fetch(new Request("https://do/turn", { method: "POST", body: JSON.stringify({ userText: "go", turnId: "t1" }) })));
+
+      expect(events.at(-1)).toMatchObject({ type: "turn.failed" }); // a broken hook never breaks the stream
+      const logged = err.mock.calls.map((c) => String(c[0]));
+      expect(logged.some((l) => l.includes("onTurnError hook threw"))).toBe(true);
+      expect(logged).toContain('[june] agent "ops" turn t1 failed: model exploded (dependency skew)');
+    } finally {
+      err.mockRestore();
+    }
+  });
+
+  test("a healthy turn logs nothing", async () => {
+    const err = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const agent = new AgentDurableObject({ storage: await storage() }, { name: "ops", model: scriptedModel(ORDER_SCRIPT), tools: [createOrderTool()] });
+      expect(await agent.turn({ turnId: "t1", userText: "Order 3 widgets" })).toBe("Done — order placed.");
+      expect(err).not.toHaveBeenCalled();
+    } finally {
+      err.mockRestore();
+    }
   });
 });
 
