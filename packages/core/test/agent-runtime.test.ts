@@ -7,6 +7,7 @@ import { describe, expect, test } from "bun:test";
 import {
   AgentSession,
   replyStream,
+  mintTurnId,
   serializeTurnError,
   withSystem,
   type EventSink,
@@ -355,6 +356,44 @@ describe("TurnEvent stream (P1)", () => {
     const out = serializeTurnError(err);
     expect(out.message).toBe("outer");
     expect(out.causeChain).toHaveLength(8); // depth-capped, terminated
+  });
+
+  // #95: minted turn ids are globally unique and lexically time-sortable — the
+  // per-actor sequence collided across sessions (every first turn was "t1") and
+  // within one session across a DO hibernation (in-memory seq reset re-minted
+  // "t1", which hasOpeningMessage treated as a redelivery and silently replayed).
+  test("minted turn ids: t_<ULID> format, unique, lexically increasing (#95)", () => {
+    const ids = Array.from({ length: 1000 }, () => mintTurnId());
+    for (const id of ids) expect(id).toMatch(/^t_[0-9A-HJKMNP-TV-Z]{26}$/); // Crockford base32, no I/L/O/U
+    expect(new Set(ids).size).toBe(1000);
+    expect([...ids].sort()).toEqual(ids); // monotonic even within one ms burst
+    expect("t9" < ids[0]!).toBe(true); // legacy "t<n>" ids sort BEFORE every new id — a mixed ledger stays ordered
+  });
+
+  test("two sessions minting concurrently never share a turn id (#95)", async () => {
+    const rt = new MemRuntime({ ops: { model: scriptedModel([{ text: "hi", toolCalls: [] }, { text: "hi", toolCalls: [] }]), tools: [] } });
+    const a = rt.session("ops", "s1");
+    const b = rt.session("ops", "s2");
+    const ea: TurnEvent[] = []; const eb: TurnEvent[] = [];
+    a.observe((e) => ea.push(e)); b.observe((e) => eb.push(e));
+    await a.turn({ userText: "hi" });
+    await b.turn({ userText: "hi" });
+    const ta = ea.find((e) => e.type === "turn.started")!.turnId;
+    const tb = eb.find((e) => e.type === "turn.started")!.turnId;
+    expect(ta).not.toBe(tb); // the crisp-agent qa_feedback failure: both used to be "t1"
+  });
+
+  test("a rehydrated session (same store, fresh actor) mints a FRESH id — no silent replay (#95)", async () => {
+    // Pre-#95: the second actor's seq reset to 0 → re-minted "t1" → hasOpeningMessage
+    // saw the OLD t1 and replayed its cached steps as if redelivered.
+    const { store } = memStore();
+    const model = scriptedModel([{ text: "first", toolCalls: [] }, { text: "second", toolCalls: [] }]);
+    const s1 = new AgentSession("ops", "s1", store, new MemBroadcaster(), model, [], noRuntime);
+    await s1.turn({ userText: "one" });
+    const s2 = new AgentSession("ops", "s1", store, new MemBroadcaster(), model, [], noRuntime); // hibernation wake
+    expect(await s2.turn({ userText: "two" })).toBe("second"); // a NEW turn, not old-t1's cached "first"
+    const turnIds = new Set(store.messages().map((m) => m.turnId));
+    expect(turnIds.size).toBe(2); // two distinct turns on the durable log
   });
 
   test("a proactive turn opens with a `trigger`-role seed (attributed), not a user msg (P4 §9)", async () => {

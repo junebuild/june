@@ -455,6 +455,49 @@ export function foldTranscript(msgs: Msg[]): Turn[] {
   return order.map((id) => byId.get(id)!);
 }
 
+// ── turn id minting (#95) ─────────────────────────────────────────────────────
+// Globally unique, lexically time-sortable: `t_` + a monotonic ULID (48-bit ms
+// timestamp + 80-bit randomness, Crockford base32). Replaces the per-actor
+// sequence (`t1`, `t2`, …), which collided in BOTH dimensions: across sessions
+// (every session's first turn was "t1" — useless in any table keyed by turnId),
+// and within one session across a DO hibernation (the in-memory seq reset to 0,
+// re-minting "t1" — which hasOpeningMessage then treated as a REDELIVERY of the
+// old turn, silently replaying its steps instead of starting a new turn).
+// The `t_` prefix keeps a mixed ledger ordered across the migration boundary:
+// every legacy id ("t" + digits — "t1", "t42", …) sorts before every new id
+// ("t_01…"), because the character after "t" decides: any digit "0"–"9" < "_".
+// Monotonic within one isolate: same-ms mints increment the random block, so a
+// ledger ordered by id stays insertion-ordered even inside a burst.
+const B32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"; // Crockford
+let lastMs = -1;
+const lastRand = new Uint8Array(10);
+export function mintTurnId(): string {
+  const now = Date.now();
+  if (now > lastMs) {
+    lastMs = now;
+    crypto.getRandomValues(lastRand);
+  } else {
+    // same (or clock-regressed) ms: +1 with carry keeps ids strictly increasing
+    let i = 9;
+    for (; i >= 0; i--) { if (++lastRand[i]! <= 0xff) break; lastRand[i] = 0; }
+    // full 80-bit rollover (a random start adjacent to the max, or a clock stuck
+    // behind): borrow into the time block so the invariant stays absolute
+    if (i < 0) lastMs++;
+  }
+  let time = "";
+  for (let ms = lastMs, i = 0; i < 10; i++) { time = B32[ms % 32]! + time; ms = Math.floor(ms / 32); }
+  let rand = "";
+  for (let i = 0; i < 10; i += 5) {
+    // 5 bytes → 8 base32 chars, MSB-first
+    let acc = 0;
+    for (let j = 0; j < 5; j++) acc = acc * 256 + lastRand[i + j]!;
+    let block = "";
+    for (let j = 0; j < 8; j++) { block = B32[acc % 32]! + block; acc = Math.floor(acc / 32); }
+    rand += block;
+  }
+  return `t_${time}${rand}`;
+}
+
 // ── the outer seam: AgentSession actor (serializes turns via an inbox) ─────────
 // `trigger` marks an agent-INITIATED turn (proactive): no inbound event, the turn opens with a
 // `trigger`-role seed attributed to `by` (a schedule, another channel, the agent). Omitted for a
@@ -464,7 +507,6 @@ export type TurnInput = { turnId?: string; userText: string; crash?: Crash; even
 
 export class AgentSession {
   private chain: Promise<unknown> = Promise.resolve();
-  private seq = 0;
   // Per-turn terminal promise, so result(turnId) can await a turn started with start().
   private readonly running = new Map<string, Promise<string>>();
   // Explicit fields + assignment (not constructor parameter properties): June
@@ -498,7 +540,7 @@ export class AgentSession {
   // awaits the previous on the chain — no interleaving on the shared transcript. (On a
   // Durable Object this is blockConcurrencyWhile; here it's a promise chain.)
   start(input: TurnInput): { turnId: string } {
-    const turnId = input.turnId ?? `t${++this.seq}`;
+    const turnId = input.turnId ?? mintTurnId();
     // While a turn is parked awaiting input, the transcript ends in its dangling tool call —
     // running a NEW turn on it would corrupt both (the resumed replay would adopt the new
     // turn's tail as its own result). Reject loudly; redelivering the SAME parked turn is
