@@ -331,6 +331,15 @@ export class AgentDurableObject {
     const session = this.resolveSession(input.session);
     return runInScope({ resources: this.resources, services: this.services }, () => session.turn(input));
   }
+  // Fire-and-forget for custom shells (#77): resolves once the turn is durably ACCEPTED;
+  // it then runs under the DO's own lifetime (a DO stays alive while it has pending
+  // work), not the caller's. No live consumer sees the result — failures surface via
+  // the default turn-failure log / onTurnError (#76).
+  async start(input: { turnId?: string; userText: string; event?: InboundEvent; trigger?: ProactiveTrigger; session?: string }): Promise<{ turnId: string }> {
+    await ensureScope();
+    const session = this.resolveSession(input.session);
+    return runInScope({ resources: this.resources, services: this.services }, () => session.start(input));
+  }
   // Read-only: folds the durable log. When an identity exists (live, or persisted from a
   // prior life) the session resolves and caches like any other path. Only a read on a
   // NEVER-keyed object stays non-committal — caching there would bake "self" in as the
@@ -364,6 +373,11 @@ export class AgentDurableObject {
         // object's identity — a client-resolvable conflict, not a crash
         return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 409 });
       }
+      // DETACHED (#77): the turn is accepted — 202 now, no stream. It keeps running under
+      // this DO's lifetime (alive while work is pending), so its duration is no longer
+      // bounded by however long the CALLER can hold a connection (the edge waitUntil
+      // ceiling). Nobody consumes the result; failures surface via the #76 log/hook.
+      if (url.searchParams.get("detach") === "1") return Response.json({ turnId: started.turnId }, { status: 202 });
       return new Response(sseTurnStream(session, started.turnId), { headers: SSE_HEADERS });
     }
     // Provide the input a suspended turn is waiting on and stream its continuation as SSE.
@@ -613,6 +627,25 @@ export function durableChannelSurface(
       );
       // /turn streams SSE; the simple path collapses it to the final text.
       return sseTurnFinalText(res);
+    },
+    // FIRE-AND-FORGET (#77): POST /turn?detach=1 — the DO 202s once the turn is accepted
+    // and runs it under its OWN lifetime. This is how a shadow/observe hook (onEvent →
+    // assessment turn, reply dropped) escapes the edge waitUntil ceiling that killed
+    // 24–38s turns in production: nothing holds the edge open while the turn runs.
+    runDetached: async (message, o) => {
+      const namespace = getNamespace();
+      if (!namespace) throw new Error("durableChannelSurface: no Durable Object namespace bound (env.AGENT)");
+      const res = await durableFetch(
+        namespace,
+        opts.agentName,
+        o?.session ?? "default",
+        new Request("https://do/turn?detach=1", { method: "POST", body: serializeTurn(message, o) }),
+      );
+      if (res.status !== 202) {
+        const detail = (await res.text()).slice(0, 200);
+        throw new Error(`runDetached: turn was not accepted (status ${res.status}): ${detail}`);
+      }
+      return (await res.json()) as { turnId: string };
     },
     // The LIVE path: hand the channel the TurnEvent stream so it can render as the turn runs.
     runStream: async function* (message, o) {

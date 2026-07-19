@@ -40,6 +40,15 @@ export type ChannelContext = {
   // `trigger`-role seed attributed to `by`. Passed by receive() (§9); omitted for inbound turns.
   // Proactive-only by type: inbound is derived from `event`, resume is engine-internal.
   runStream?: (message: string, opts?: { session?: string; turnId?: string; event?: InboundEvent; trigger?: ProactiveTrigger }) => AsyncIterable<TurnEvent>;
+  // FIRE-AND-FORGET (#77): start a turn and resolve as soon as it is durably ACCEPTED —
+  // never hold the caller open for the result. For shadow/observe work (an assessment
+  // ledger, mirroring) the reply is dropped anyway, and on the edge awaiting it bounds
+  // turn duration by the EDGE isolate's post-ACK lifetime (the waitUntil ceiling kills
+  // long multi-round turns) instead of the Durable Object's own — a DO stays alive
+  // while it has pending work. A detached turn has no live consumer: failures surface
+  // only via the host's turn-failure logging / onTurnError hook. Optional, like
+  // runStream: the host provides it where detachment is meaningful.
+  runDetached?: (message: string, opts?: { session?: string; turnId?: string; event?: InboundEvent; trigger?: ProactiveTrigger }) => Promise<{ turnId: string }>;
   // Resume a turn that was parked by ctx.requestInput (HITL): provide the answer and get the
   // continuation's TurnEvent stream, so a channel can render the resumed turn to completion.
   // `by` is the VERIFIED resumer identity (e.g. the user id from a signature-checked Slack
