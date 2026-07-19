@@ -27,6 +27,7 @@
     "crisp-website-hooks-auth",
     "detach-turn-mode",
     "do-session-identity",
+    "global-turn-ids",
     "slack-dm-stream-recipients",
     "slack-feedback-tasks",
     "slack-stream-hardening",
