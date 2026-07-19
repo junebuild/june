@@ -15,6 +15,16 @@
 //     SessionStore is session-scoped) so keys cannot leak across sessions.
 
 // ── domain ──────────────────────────────────────────────────────────────────
+
+// The server↔core contract counter (#94). @junejs/server asserts this at surface
+// construction (AgentDurableObject / NativeRuntime) against the number IT was built
+// for — so when a package manager nests a second, older core copy under server
+// (regular-dep version skew), the mismatch fails at POWER-ON with both versions
+// named, instead of mid-turn with something like "sink.emit is not a function".
+// Bump ONLY when the server↔core runtime contract changes shape (a seam signature,
+// an event/store type the server constructs against) — not on every release.
+export const RUNTIME_API_VERSION = 1;
+
 export type ToolCall = { id: string; name: string; input: unknown };
 export type Msg =
   | { role: "user"; turnId: string; text: string }

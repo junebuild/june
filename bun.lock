@@ -20,7 +20,7 @@
     },
     "apps/june.build": {
       "name": "june.build",
-      "version": "0.0.5-dev.4",
+      "version": "0.0.5-dev.14",
       "dependencies": {
         "@junejs/core": "workspace:*",
         "react": "catalog:",
@@ -45,7 +45,7 @@
     },
     "examples/basic": {
       "name": "@june-examples/basic",
-      "version": "0.0.5-dev.4",
+      "version": "0.0.5-dev.14",
       "dependencies": {
         "@junejs/core": "workspace:*",
       },
@@ -55,7 +55,7 @@
     },
     "examples/i18n": {
       "name": "@june-examples/i18n",
-      "version": "0.0.5-dev.4",
+      "version": "0.0.5-dev.14",
       "dependencies": {
         "@junejs/core": "workspace:*",
         "@junejs/i18n": "workspace:*",
@@ -66,7 +66,7 @@
     },
     "examples/juno-crud": {
       "name": "@june-examples/juno-crud",
-      "version": "0.0.5-dev.4",
+      "version": "0.0.5-dev.14",
       "dependencies": {
         "@junejs/core": "workspace:*",
         "@junejs/db": "workspace:*",
@@ -103,7 +103,7 @@
     },
     "packages/core": {
       "name": "@junejs/core",
-      "version": "0.1.1-dev.4",
+      "version": "0.1.1-dev.14",
       "peerDependencies": {
         "@anthropic-ai/sdk": ">=0.60.0",
         "react": "catalog:",
@@ -141,9 +141,8 @@
     },
     "packages/june": {
       "name": "@junejs/server",
-      "version": "0.1.2-dev.2",
+      "version": "0.1.2-dev.7",
       "dependencies": {
-        "@junejs/core": ">=0.1.1-dev.4",
         "@junejs/db": ">=0.0.34-dev.0",
         "@momiji-rs/sparkdown": "^0.0.4",
         "lightningcss": "^1.27.0",
@@ -158,6 +157,7 @@
         "react-server-dom-webpack": "catalog:",
       },
       "peerDependencies": {
+        "@junejs/core": ">=0.1.1-dev.15",
         "@libsql/client": "^0.14.0 || ^0.15.0 || ^0.16.0 || ^0.17.0",
         "mysql2": "^3.0.0",
         "pg": "^8.0.0",
