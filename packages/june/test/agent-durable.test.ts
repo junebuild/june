@@ -444,7 +444,7 @@ describe("AgentDurableObject — turn failure observability (#76)", () => {
       const seen: { turnId: string; error: { message: string } }[] = [];
       const agent = new AgentDurableObject(
         { storage: await storage() },
-        { name: "ops", model: explodingModel, tools: [], onTurnError: (f) => seen.push(f) },
+        { name: "ops", model: explodingModel, tools: [], onTurnError: (f) => { seen.push(f); } },
       );
       const events = await drain(await agent.fetch(new Request("https://do/turn", { method: "POST", body: JSON.stringify({ userText: "go", turnId: "t1" }) })));
 
@@ -468,6 +468,28 @@ describe("AgentDurableObject — turn failure observability (#76)", () => {
       expect(events.at(-1)).toMatchObject({ type: "turn.failed" }); // a broken hook never breaks the stream
       const logged = err.mock.calls.map((c) => String(c[0]));
       expect(logged.some((l) => l.includes("onTurnError hook threw"))).toBe(true);
+      expect(logged).toContain('[june] agent "ops" turn t1 failed: model exploded (dependency skew)');
+    } finally {
+      err.mockRestore();
+    }
+  });
+
+  test("a REJECTING async onTurnError falls back to the default log too — no unhandled rejection", async () => {
+    // `(failure) => void` admits an async implementation (Promise is assignable to void);
+    // its rejection must hit the same fallback as a sync throw, or the failure goes
+    // silent again — the exact hole this feature exists to close.
+    const err = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const agent = new AgentDurableObject(
+        { storage: await storage() },
+        { name: "ops", model: explodingModel, tools: [], onTurnError: async () => { throw new Error("sentry down"); } },
+      );
+      const events = await drain(await agent.fetch(new Request("https://do/turn", { method: "POST", body: JSON.stringify({ userText: "go", turnId: "t1" }) })));
+      await new Promise((r) => setTimeout(r, 0)); // let the rejection's .catch continuation run
+
+      expect(events.at(-1)).toMatchObject({ type: "turn.failed" });
+      const logged = err.mock.calls.map((c) => String(c[0]));
+      expect(logged.some((l) => l.includes("onTurnError hook rejected"))).toBe(true);
       expect(logged).toContain('[june] agent "ops" turn t1 failed: model exploded (dependency skew)');
     } finally {
       err.mockRestore();

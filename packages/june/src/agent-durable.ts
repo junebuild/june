@@ -173,10 +173,12 @@ export type DoAgentDef = {
   services?: unknown;
   // Called on every turn.failed for this session — the app's seam for routing turn
   // failures to its own telemetry (Sentry, a ledger, …). Providing it REPLACES the
-  // default console.error; if the hook itself throws, the default log fires anyway
-  // (both errors), so a failure is never silent. Runs in the DO isolate, outside the
-  // turn scope — no ambient db/services here; close over what you need.
-  onTurnError?: (failure: { turnId: string; error: { message: string } }) => void;
+  // default console.error; if the hook throws (or an async hook rejects), the default
+  // log fires anyway (both errors), so a failure is never silent. It happens to run
+  // inside the failed turn's request scope today (turn.failed is emitted mid-turn and
+  // ALS propagates), but that is NOT contract — don't rely on ambient db/services;
+  // close over what you need.
+  onTurnError?: (failure: { turnId: string; error: { message: string } }) => void | Promise<void>;
 };
 
 // The agent runtime INSIDE a Durable Object. A plain class (constructor takes the
@@ -215,15 +217,25 @@ export class AgentDurableObject {
     const sink = new InProcEventSink();
     sink.subscribe((e) => {
       if (e.type !== "turn.failed") return;
+      const defaultLog = () => console.error(`[june] agent "${name}" turn ${e.turnId} failed: ${e.error.message}`);
       if (def.onTurnError) {
         try {
-          def.onTurnError({ turnId: e.turnId, error: e.error });
+          const out = def.onTurnError({ turnId: e.turnId, error: e.error });
+          // An async hook (e.g. `await sendToSentry(...)`) types as void but returns a
+          // Promise — a rejection there must hit the same fallback as a sync throw, or
+          // the failure goes silent again (plus an unhandled rejection).
+          if (out && typeof (out as Promise<void>).then === "function") {
+            (out as Promise<void>).then(undefined, (hookErr) => {
+              console.error(`[june] agent "${name}": onTurnError hook rejected:`, hookErr);
+              defaultLog();
+            });
+          }
           return;
         } catch (hookErr) {
           console.error(`[june] agent "${name}": onTurnError hook threw:`, hookErr);
         }
       }
-      console.error(`[june] agent "${name}" turn ${e.turnId} failed: ${e.error.message}`);
+      defaultLog();
     });
     // Merge the mounted channels' capability tools (built here from this DO's env, since a
     // tool's `run` closure can't cross the RPC). The cross-channel source gate on each tool
