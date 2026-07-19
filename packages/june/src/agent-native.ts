@@ -20,6 +20,7 @@ import {
 } from "@junejs/core/agent-runtime";
 import { channelFetch, type AgentDefinition, type ChannelContext } from "@junejs/core/agent-config";
 import { openLocalSqliteSync, type SyncSqlite } from "./sqlite-driver";
+import { assertCoreRuntimeVersion } from "./core-version";
 
 function initSchema(db: SyncSqlite) {
   db.exec(`CREATE TABLE IF NOT EXISTS agent_sessions (session_id TEXT PRIMARY KEY, status TEXT)`);
@@ -99,6 +100,7 @@ export class NativeRuntime implements Runtime {
   private readonly db: SyncSqlite;
 
   constructor(agents: Record<string, AgentDef>, db: SyncSqlite) {
+    assertCoreRuntimeVersion("NativeRuntime"); // #94: fail power-on, not mid-turn
     this.agents = agents;
     this.db = db;
     initSchema(db);
@@ -154,6 +156,7 @@ export class MemoryRuntime implements Runtime {
   private stores = new Map<string, MemorySessionStore>();
   private readonly agents: Record<string, AgentDef>;
   constructor(agents: Record<string, AgentDef>) {
+    assertCoreRuntimeVersion("MemoryRuntime"); // #94: fail power-on, not mid-turn
     this.agents = agents;
   }
   session(agent: string, id: string): AgentSession {

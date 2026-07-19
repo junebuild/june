@@ -41,6 +41,7 @@ import {
   type ChannelFactory,
 } from "@junejs/core/agent-config";
 import { ensureScope, runInScope } from "@junejs/db";
+import { assertCoreRuntimeVersion } from "./core-version";
 
 // ── minimal structural Cloudflare surface (no @cloudflare/workers-types dep) ──
 // SqlStorage row values are exactly what workerd's SQLite returns. Mirroring
@@ -231,6 +232,7 @@ export class AgentDurableObject {
   private readonly resources: Resources;
   private readonly services: unknown;
   constructor(state: DurableObjectState, def: DoAgentDef) {
+    assertCoreRuntimeVersion(`AgentDurableObject(${def.name ?? "agent"})`); // #94: fail power-on, not mid-turn
     const store = new DoSessionStore(state.storage);
     const model = def.instructions ? withSystem(def.model, def.instructions) : def.model;
     this.resources = def.resources ?? {};

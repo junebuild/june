@@ -125,7 +125,6 @@
     "build": "tsdown"
   },
   "dependencies": {
-    "@junejs/core": ">=0.1.1-dev.15",
     "@junejs/db": ">=0.0.34-dev.0",
     "@momiji-rs/sparkdown": "^0.0.4",
     "lightningcss": "^1.27.0",
@@ -133,6 +132,7 @@
     "rolldown": "^1.1.0"
   },
   "peerDependencies": {
+    "@junejs/core": ">=0.1.1-dev.15",
     "react": "catalog:",
     "react-dom": "catalog:",
     "react-server-dom-webpack": "catalog:",
