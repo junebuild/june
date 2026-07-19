@@ -1,5 +1,18 @@
 # @junejs/server
 
+## 0.1.2-dev.9
+
+### Patch Changes
+
+- [#99](https://github.com/junebuild/june/pull/99) [`d323e45`](https://github.com/junebuild/june/commit/d323e458f5889b9179b137425af2ae8718b24d6e) Thanks [@linyiru](https://github.com/linyiru)! - `@junejs/core` is now a peerDependency of `@junejs/server` ([#94](https://github.com/junebuild/june/issues/94)) — the app's single core resolution always wins, so a package manager can no longer nest a second, older core copy under server (the version-skew class that surfaced in production as a mid-turn `sink.emit is not a function`).
+
+  Belt-and-braces: core exports `RUNTIME_API_VERSION`, and server asserts it at surface construction (`AgentDurableObject`, `NativeRuntime`) — a skewed tree now fails at power-on with both versions named instead of mid-turn.
+
+  Migration: npm ≥7 / bun / pnpm auto-install required peers, so most apps need no change; if your tool doesn't, add `@junejs/core` to the app's dependencies (it almost certainly already is).
+
+- Updated dependencies [[`d323e45`](https://github.com/junebuild/june/commit/d323e458f5889b9179b137425af2ae8718b24d6e)]:
+  - @junejs/core@0.1.1-dev.16
+
 ## 0.1.2-dev.8
 
 ### Patch Changes
