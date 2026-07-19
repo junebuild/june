@@ -1,5 +1,12 @@
 # @june-examples/juno-crud
 
+## 0.0.5-dev.17
+
+### Patch Changes
+
+- Updated dependencies [[`0703648`](https://github.com/junebuild/june/commit/07036488b678e7cc6b17434d916908320a8fd7f8)]:
+  - @junejs/core@0.1.1-dev.17
+
 ## 0.0.5-dev.16
 
 ### Patch Changes
