@@ -117,6 +117,17 @@ export class DoSessionStore implements SessionStore {
   setStatus(s: string) {
     this.sql.exec("INSERT INTO agent_meta (k, v) VALUES ('status', ?) ON CONFLICT(k) DO UPDATE SET v = ?", s, s);
   }
+  // The externally-assigned session key (#75). A DO cannot read its own idFromName
+  // name, so the key arrives on the first routed request and is persisted here —
+  // surviving hibernation/eviction, where the constructor re-runs with no request
+  // in hand. Not part of core's SessionStore contract: only the DO seam needs it.
+  getSessionKey(): string | undefined {
+    const rows = this.sql.exec<{ v: string }>("SELECT v FROM agent_meta WHERE k = 'session_key'").toArray();
+    return rows.length ? rows[0]!.v : undefined;
+  }
+  setSessionKey(key: string) {
+    this.sql.exec("INSERT INTO agent_meta (k, v) VALUES ('session_key', ?) ON CONFLICT(k) DO UPDATE SET v = ?", key, key);
+  }
   tx<T>(fn: () => T): T {
     return this.storage.transactionSync(fn);
   }
@@ -196,7 +207,20 @@ export type DoAgentDef = {
 //     fetch(req) { return this.agent.fetch(req); }
 //   }
 export class AgentDurableObject {
-  private session: AgentSession;
+  // The AgentSession is constructed LAZILY (#75): the DO is keyed externally by
+  // idFromName(`${agent}:${session}`) but cannot read its own name, so the true
+  // session key only exists on a routed request (the SESSION_HEADER durableFetch
+  // sets). First keyed request wins and persists the key (agent_meta) so it
+  // survives hibernation; key-less paths fall back to the persisted key, then
+  // "self" (the pre-#75 behavior, kept for backward compatibility).
+  private session: AgentSession | undefined;
+  private sessionKey: string | undefined;
+  private readonly name: string;
+  private readonly store: DoSessionStore;
+  private readonly sink: InProcEventSink;
+  private readonly model: Model;
+  private readonly tools: Tool[];
+  private readonly channelInstructions?: Record<string, string>;
   // Built from the DO's env in the constructor (this isolate), shared across turns —
   // env is stable per isolate, like bindWorkerResources memoizes per worker isolate.
   private readonly resources: Resources;
@@ -251,7 +275,49 @@ export class AgentDurableObject {
       seen.add(t.spec.name);
       tools.push(t);
     }
-    this.session = new AgentSession(name, "self", store, sink, model, tools, crossDoUnsupported, def.channelInstructions);
+    this.name = name;
+    this.store = store;
+    this.sink = sink;
+    this.model = model;
+    this.tools = tools;
+    this.channelInstructions = def.channelInstructions;
+  }
+  // Resolve THE session for this DO: explicit key (from a routed request) → persisted
+  // key (a prior life learned it) → "self". A key that contradicts the persisted or
+  // live identity is a mis-route (or a key-less path was used first) — fail loudly:
+  // silently proceeding is exactly the per-conversation data corruption #75 hit.
+  private resolveSession(key?: string): AgentSession {
+    // Every entry point shares the session-key contract (turn({ session }) and hand-rolled
+    // SESSION_HEADER values included, not just durableFetch): an invalid key persisted here
+    // would bind an identity no routed request could ever address — an orphaned session.
+    if (key !== undefined) assertSessionKey(key);
+    // Live fast path — no storage read once the session exists: this method is the only
+    // writer of the persisted key, so within one life it cannot diverge from the live one.
+    if (this.session) {
+      if (key !== undefined && this.sessionKey !== key) {
+        throw new Error(
+          this.sessionKey === "self"
+            ? `agent "${this.name}": request session "${key}" arrived, but this session is bound to the placeholder "self" (first used without a real key) — carry the key on every path (route through durableFetch, or pass turn({ session }) on the direct API)`
+            : `agent "${this.name}": request session "${key}" does not match this object's session "${this.sessionKey}" — one DO is one session; address each session by its own key (durableFetch, or turn({ session }) on the direct API)`,
+        );
+      }
+      return this.session;
+    }
+    const stored = this.store.getSessionKey();
+    if (key !== undefined && stored !== undefined && key !== stored) {
+      throw new Error(`agent "${this.name}": request session "${key}" does not match this object's session "${stored}" — one DO is one session; address each session by its own key (durableFetch, or turn({ session }) on the direct API)`);
+    }
+    const resolved = key ?? stored ?? "self";
+    // "self" is deliberately NOT persisted — even when a caller passes it EXPLICITLY: it
+    // is a placeholder ("no identity externally assigned yet"), not an identity. Within
+    // one life a keyed request after a "self" binding is refused above — two concurrently
+    // active paths disagreeing is a live bug. But across eviction a keyed request ADOPTS
+    // the legacy transcript: that asymmetry IS the migration path from pre-keyed
+    // deployments, where a persisted "self" would 409 every keyed request forever.
+    if (key !== undefined && key !== "self" && stored === undefined) this.store.setSessionKey(key);
+    this.sessionKey = resolved;
+    this.session = new AgentSession(this.name, resolved, this.store, this.sink, this.model, this.tools, crossDoUnsupported, this.channelInstructions);
+    return this.session;
   }
   // Run the whole turn inside a request scope seeded from this DO's env, so ambient
   // `db`/`kv`/`blob` and `currentServices()` resolve inside a tool exactly as in a
@@ -260,32 +326,45 @@ export class AgentDurableObject {
   // Juno's batch-loader registry) can't leak across turns on a long-lived DO.
   // ensureScope() lazily wires node:async_hooks (workerd via nodejs_compat), as the
   // pipeline does; without it runInScope is a pass-through and ambient reads throw.
-  async turn(input: { turnId?: string; userText: string; event?: InboundEvent; trigger?: ProactiveTrigger }): Promise<string> {
+  async turn(input: { turnId?: string; userText: string; event?: InboundEvent; trigger?: ProactiveTrigger; session?: string }): Promise<string> {
     await ensureScope();
-    return runInScope({ resources: this.resources, services: this.services }, () => this.session.turn(input));
+    const session = this.resolveSession(input.session);
+    return runInScope({ resources: this.resources, services: this.services }, () => session.turn(input));
   }
+  // Read-only: folds the durable log. When an identity exists (live, or persisted from a
+  // prior life) the session resolves and caches like any other path. Only a read on a
+  // NEVER-keyed object stays non-committal — caching there would bake "self" in as the
+  // identity and 409 a later keyed turn — so it folds through an ephemeral AgentSession.
   transcript() {
-    return this.session.transcript();
+    if (this.session) return this.session.transcript();
+    if (this.store.getSessionKey() !== undefined) return this.resolveSession().transcript();
+    return new AgentSession(this.name, "self", this.store, this.sink, this.model, this.tools, crossDoUnsupported, this.channelInstructions).transcript();
   }
   // Default HTTP surface: POST …/turn STREAMS the turn's TurnEvents as SSE (start the
   // turn in-scope, then stream from the session sink); GET …/transcript reads the log.
   // The app can call turn()/transcript() directly instead (turn() awaits the final text).
   async fetch(req: Request): Promise<Response> {
     const url = new URL(req.url);
+    // The session key durableFetch stamped on the routed request (#75); absent on a
+    // hand-rolled fetch → the pre-#75 "self" fallback keeps old callers working.
+    const key = req.headers.get(SESSION_HEADER) ?? undefined;
     if (req.method === "POST" && url.pathname.endsWith("/turn")) {
       const { userText, turnId, event, trigger } = (await req.json()) as { userText: string; turnId?: string; event?: InboundEvent; trigger?: ProactiveTrigger };
       await ensureScope();
       // start() schedules the turn on the chain WITHIN the scope, so it runs with ambient
       // db/services (ALS propagates to the .then continuation registered here); subscribing
       // happens synchronously right after, before any event can emit.
+      let session: AgentSession;
       let started: { turnId: string };
       try {
-        started = runInScope({ resources: this.resources, services: this.services }, () => this.session.start({ userText, turnId, event, trigger }));
+        session = this.resolveSession(key);
+        started = runInScope({ resources: this.resources, services: this.services }, () => session.start({ userText, turnId, event, trigger }));
       } catch (err) {
-        // e.g. the session is suspended awaiting input — a client-resolvable conflict, not a crash
+        // e.g. the session is suspended awaiting input, or the key mis-matches this
+        // object's identity — a client-resolvable conflict, not a crash
         return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 409 });
       }
-      return new Response(sseTurnStream(this.session, started.turnId), { headers: SSE_HEADERS });
+      return new Response(sseTurnStream(session, started.turnId), { headers: SSE_HEADERS });
     }
     // Provide the input a suspended turn is waiting on and stream its continuation as SSE.
     // NOTE: this default surface passes `by` straight from the body — the engine treats it as a
@@ -294,16 +373,29 @@ export class AgentDurableObject {
     if (req.method === "POST" && url.pathname.endsWith("/resume")) {
       const { turnId, inputId, input, by } = (await req.json()) as { turnId: string; inputId: string; input: unknown; by?: string };
       await ensureScope();
+      let session: AgentSession;
       try {
-        runInScope({ resources: this.resources, services: this.services }, () => this.session.resume(turnId, inputId, input, { by }));
+        session = this.resolveSession(key);
+        runInScope({ resources: this.resources, services: this.services }, () => session.resume(turnId, inputId, input, { by }));
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        // 403: the resumer may not answer; 409: not suspended / wrong turn / wrong input id
+        // 403: the resumer may not answer; 409: not suspended / wrong turn / wrong input id / key mismatch
         return Response.json({ error: message }, { status: err instanceof ResumeAuthorizationError ? 403 : 409 });
       }
-      return new Response(sseTurnStream(this.session, turnId), { headers: SSE_HEADERS });
+      return new Response(sseTurnStream(session, turnId), { headers: SSE_HEADERS });
     }
-    if (url.pathname.endsWith("/transcript")) return Response.json({ transcript: this.transcript() });
+    if (url.pathname.endsWith("/transcript")) {
+      // A keyed read still conflict-checks (and may commit the key — it is authentic,
+      // idFromName routed it here); a key-less read stays non-committal via transcript().
+      if (key !== undefined) {
+        try {
+          return Response.json({ transcript: this.resolveSession(key).transcript() });
+        } catch (err) {
+          return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 409 });
+        }
+      }
+      return Response.json({ transcript: this.transcript() });
+    }
     return new Response("agent DO — POST /turn, POST /resume, or GET /transcript", { status: 404 });
   }
 }
@@ -394,10 +486,31 @@ export async function* sseTurnEvents(res: Response): AsyncIterable<TurnEvent> {
   }
 }
 
+// The header durableFetch stamps the session key on (#75). A DO cannot read its own
+// idFromName name, so this is how the externally-assigned session identity crosses
+// into the object — exported so a custom shell that bypasses durableFetch can set it.
+export const SESSION_HEADER = "x-june-session";
+
+// A session key rides an HTTP header (SESSION_HEADER) and the DO name (idFromName) —
+// reject values that can't: CR/LF would be header injection, and Headers.set throws a
+// bare TypeError on control/non-ASCII bytes, turning a bad client value into an opaque
+// 500 deep inside durableFetch. Non-empty printable ASCII is the contract.
+const SESSION_KEY_RE = /^[\x20-\x7E]+$/;
+function assertSessionKey(session: string) {
+  if (typeof session !== "string" || !SESSION_KEY_RE.test(session)) {
+    throw new Error(`invalid session key ${JSON.stringify(session)} — a session key must be a non-empty printable-ASCII string (it rides an HTTP header and the DO name)`);
+  }
+}
+
 // Worker-side routing: address a session's DO by (agent, session) and forward the
-// request to it. `env.AGENT` is the DO namespace binding.
+// request to it. `env.AGENT` is the DO namespace binding. The session key rides a
+// header (not the body): one seam covers /turn, /resume, and /transcript without
+// touching any body contract, and an older DO simply ignores it.
 export function durableFetch(namespace: DurableObjectNamespace, agent: string, session: string, req: Request): Promise<Response> {
-  return namespace.get(namespace.idFromName(`${agent}:${session}`)).fetch(req);
+  assertSessionKey(session);
+  const headers = new Headers(req.headers);
+  headers.set(SESSION_HEADER, session);
+  return namespace.get(namespace.idFromName(`${agent}:${session}`)).fetch(new Request(req, { headers }));
 }
 
 // The EDGE agent surface for June's router: route the chat endpoint to the
@@ -419,6 +532,15 @@ export function durableAgentSurface(
     const namespace = getNamespace();
     if (!namespace) return null; // no DO binding → not mounted here
     const { message, session } = (await req.json()) as { message: string; session?: string };
+    // `session` is CLIENT input here — an un-headerable value must be a clear 400, not
+    // the opaque 500 assertSessionKey would become this deep in the worker.
+    if (session !== undefined) {
+      try {
+        assertSessionKey(session);
+      } catch (err) {
+        return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 400 });
+      }
+    }
     // Forward to the session's DO on its /turn contract — which now STREAMS SSE. A client
     // that asks for the stream (Accept: text/event-stream) gets live TurnEvents piped
     // through; otherwise collapse to the final { text } (the prior JSON contract).

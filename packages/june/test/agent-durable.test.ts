@@ -19,8 +19,12 @@ import {
 import {
   AgentDurableObject,
   DoSessionStore,
+  durableAgentSurface,
+  durableFetch,
+  SESSION_HEADER,
   sseTurnFinalText,
   sseTurnEvents,
+  type DurableObjectNamespace,
   type DurableStorage,
   type SqlStorage,
 } from "../src/agent-durable";
@@ -505,6 +509,212 @@ describe("AgentDurableObject — turn failure observability (#76)", () => {
     } finally {
       err.mockRestore();
     }
+  });
+});
+
+// ── session identity (#75): the external session key reaches the turn scope ──
+// The DO is keyed by idFromName(`${agent}:${session}`) but cannot read its own
+// name, so durableFetch stamps the key on a header; the DO resolves it lazily,
+// persists it (survives eviction), and hands it to tools as ctx.sessionId —
+// previously the literal "self" for every conversation.
+describe("AgentDurableObject — session identity (#75)", () => {
+  // records what a tool observes as ctx.sessionId — the exact field #75 corrupted
+  function sessionProbeTool(seen: string[]): Tool {
+    return {
+      spec: { name: "session_probe", description: "read ctx.sessionId", input: { type: "object" } },
+      run: (_i, ctx) => { seen.push(ctx.sessionId); return { sid: ctx.sessionId }; },
+    };
+  }
+  // one probe call per turn, with a turn-unique call id so a second turn's step
+  // isn't skipped by the exactly-once cache
+  const probeModel: Model = (msgs) => {
+    const last = msgs[msgs.length - 1]!;
+    if (last.role === "tool") return replyStream({ text: "done", toolCalls: [] });
+    const turnId = last.role === "user" || last.role === "trigger" ? last.turnId : "t?";
+    return replyStream({ text: "probing", toolCalls: [{ id: `sp-${turnId}`, name: "session_probe", input: {} }] });
+  };
+  const mkAgent = (s: DurableStorage, seen: string[]) =>
+    new AgentDurableObject({ storage: s }, { name: "support", model: probeModel, tools: [sessionProbeTool(seen)] });
+  const turnReq = (turnId: string, session?: string) =>
+    new Request("https://do/turn", {
+      method: "POST",
+      headers: session ? { [SESSION_HEADER]: session } : undefined,
+      body: JSON.stringify({ userText: "hi", turnId }),
+    });
+
+  test("durableFetch stamps the key; the DO routes it to ctx.sessionId", async () => {
+    const seen: string[] = [];
+    const agent = mkAgent(await storage(), seen);
+    const captured: { id?: unknown; req?: Request } = {};
+    const ns: DurableObjectNamespace = {
+      idFromName: (n) => { captured.id = n; return n; },
+      get: () => ({ fetch: (req) => { captured.req = req; return agent.fetch(req); } }),
+    };
+
+    const res = await durableFetch(ns, "support", "crisp:web1:sess42", new Request("https://do/turn", { method: "POST", body: JSON.stringify({ userText: "hi", turnId: "t1" }) }));
+    expect(await sseTurnFinalText(res)).toBe("done");
+    expect(captured.id).toBe("support:crisp:web1:sess42");                          // DO addressed by (agent, session)…
+    expect(captured.req!.headers.get(SESSION_HEADER)).toBe("crisp:web1:sess42");    // …and the SAME key rode the request
+    expect(seen).toEqual(["crisp:web1:sess42"]);                                    // the tool saw the real session, not "self"
+  });
+
+  test("the key persists across eviction: a key-less later life still resolves it", async () => {
+    const s = await storage();
+    const seen: string[] = [];
+    expect(await sseTurnFinalText(await mkAgent(s, seen).fetch(turnReq("t1", "crisp:web1:sess42")))).toBe("done");
+
+    // fresh AgentDurableObject over the SAME storage (models DO eviction), no key in hand
+    const seen2: string[] = [];
+    expect(await mkAgent(s, seen2).turn({ turnId: "t2", userText: "again" })).toBe("done");
+    expect(seen2).toEqual(["crisp:web1:sess42"]); // resolved from agent_meta, not "self"
+  });
+
+  test("no key anywhere → \"self\" (the pre-#75 fallback, backward compatible)", async () => {
+    const seen: string[] = [];
+    const agent = mkAgent(await storage(), seen);
+    expect(await sseTurnFinalText(await agent.fetch(turnReq("t1")))).toBe("done");
+    expect(seen).toEqual(["self"]);
+  });
+
+  test("turn({ session }) carries the key on the direct API too", async () => {
+    const seen: string[] = [];
+    expect(await mkAgent(await storage(), seen).turn({ turnId: "t1", userText: "hi", session: "slack:C1:1.1" })).toBe("done");
+    expect(seen).toEqual(["slack:C1:1.1"]);
+  });
+
+  test("a key that contradicts this object's identity is a loud 409, not silent corruption", async () => {
+    const s = await storage();
+    const seen: string[] = [];
+    const agent = mkAgent(s, seen);
+    expect(await sseTurnFinalText(await agent.fetch(turnReq("t1", "session-a")))).toBe("done");
+
+    // same life: a mis-routed key conflicts with the LIVE session
+    const live = await agent.fetch(turnReq("t2", "session-b"));
+    expect(live.status).toBe(409);
+    expect(((await live.json()) as { error: string }).error).toMatch(/does not match/);
+
+    // later life: the conflict is caught against the PERSISTED key too
+    const evicted = await mkAgent(s, []).fetch(turnReq("t3", "session-b"));
+    expect(evicted.status).toBe(409);
+    expect(seen).toEqual(["session-a"]); // no turn ever ran under the wrong identity
+  });
+
+  test("key-less first use commits \"self\"; a keyed request after it refuses to switch", async () => {
+    const seen: string[] = [];
+    const agent = mkAgent(await storage(), seen);
+    expect(await agent.turn({ turnId: "t1", userText: "hi" })).toBe("done"); // legacy path, id = "self"
+    const res = await agent.fetch(turnReq("t2", "crisp:web1:sess42"));
+    expect(res.status).toBe(409); // prior turns already recorded "self" — never silently switch identity
+  });
+
+  test("…but after eviction a keyed request ADOPTS a legacy \"self\" transcript (the migration path)", async () => {
+    // "self" is a placeholder, not an identity — it is deliberately never persisted.
+    // Same-life keyed-after-key-less is refused (two live paths disagreeing is a bug,
+    // above); across eviction the keyed request adopts and binds the real identity.
+    // Persisting "self" instead would 409 every keyed request to a pre-#75 DO forever.
+    const s = await storage();
+    expect(await mkAgent(s, []).turn({ turnId: "t1", userText: "hi" })).toBe("done"); // legacy life, id = "self"
+
+    const seen: string[] = [];
+    const adopted = mkAgent(s, seen); // fresh life over the SAME storage
+    expect(await sseTurnFinalText(await adopted.fetch(turnReq("t2", "crisp:web1:sess42")))).toBe("done");
+    expect(seen).toEqual(["crisp:web1:sess42"]); // the keyed request bound the real identity…
+
+    const seen2: string[] = [];
+    expect(await mkAgent(s, seen2).turn({ turnId: "t3", userText: "again" })).toBe("done");
+    expect(seen2).toEqual(["crisp:web1:sess42"]); // …and it persisted: a key-less later life resolves it
+  });
+
+  test("/resume carries the key across eviction; a wrong key 409s", async () => {
+    const s = await storage();
+    const approve: Tool = {
+      spec: { name: "approve", description: "ask a human", input: { type: "object" } },
+      run: async (_i, ctx) => ({ approved: await ctx.requestInput({ id: "a1", prompt: "ok?" }) }),
+    };
+    const model = scriptedModel([
+      { text: "asking", toolCalls: [{ id: "c1", name: "approve", input: {} }] },
+      { text: "done", toolCalls: [] },
+    ]);
+    const mk = () => new AgentDurableObject({ storage: s }, { name: "support", model, tools: [approve] });
+    const event = { source: "slack", kind: "message", channelId: "C1", ts: "1.1", user: { id: "U1" } };
+
+    const parked = await mk().fetch(new Request("https://do/turn", {
+      method: "POST",
+      headers: { [SESSION_HEADER]: "slack:C1:1.1" },
+      body: JSON.stringify({ userText: "refund", turnId: "t1", event }),
+    }));
+    for await (const _ of sseTurnEvents(parked)) { /* drain to the park */ }
+
+    // fresh life (eviction while suspended); resume with the WRONG key must not touch the turn
+    const resumeReq = (session: string) => new Request("https://do/resume", {
+      method: "POST",
+      headers: { [SESSION_HEADER]: session },
+      body: JSON.stringify({ turnId: "t1", inputId: "a1", input: true, by: "U1" }),
+    });
+    expect((await mk().fetch(resumeReq("slack:WRONG:9.9"))).status).toBe(409);
+
+    const ok = await mk().fetch(resumeReq("slack:C1:1.1"));
+    const events: TurnEvent[] = [];
+    for await (const e of sseTurnEvents(ok)) events.push(e);
+    expect(events.at(-1)).toMatchObject({ type: "turn.completed", text: "done" });
+  });
+
+  test("an explicit \"self\" stays a placeholder — never persisted, so a real key still adopts after eviction", async () => {
+    const s = await storage();
+    const seen: string[] = [];
+    expect(await sseTurnFinalText(await mkAgent(s, seen).fetch(turnReq("t1", "self")))).toBe("done");
+    expect(seen).toEqual(["self"]); // explicit "self" binds the live placeholder like a key-less call
+
+    const seen2: string[] = [];
+    expect(await sseTurnFinalText(await mkAgent(s, seen2).fetch(turnReq("t2", "crisp:web1:sess42")))).toBe("done");
+    expect(seen2).toEqual(["crisp:web1:sess42"]); // NOT stuck on "self": the placeholder never persisted
+  });
+
+  test("durableFetch refuses a session key that can't ride the header — clear error, not a deep TypeError", () => {
+    const ns: DurableObjectNamespace = { idFromName: (n) => n, get: () => ({ fetch: async () => new Response("unreached") }) };
+    const req = () => new Request("https://do/turn", { method: "POST", body: "{}" });
+    expect(() => durableFetch(ns, "support", "bad\r\nx-evil: 1", req())).toThrow(/invalid session key/); // header injection
+    expect(() => durableFetch(ns, "support", "訪客-42", req())).toThrow(/invalid session key/);          // non-ASCII: Headers.set would TypeError
+    expect(() => durableFetch(ns, "support", "", req())).toThrow(/invalid session key/);                 // empty
+    expect(() => durableFetch(ns, "support", "crisp:web1:sess42", req())).not.toThrow();
+  });
+
+  test("turn({ session }) enforces the same key contract — an invalid key never binds or persists", async () => {
+    const s = await storage();
+    const seen: string[] = [];
+    const agent = mkAgent(s, seen);
+    await expect(agent.turn({ turnId: "t1", userText: "hi", session: "bad\r\nkey" })).rejects.toThrow(/invalid session key/);
+    await expect(agent.turn({ turnId: "t1", userText: "hi", session: "訪客-42" })).rejects.toThrow(/invalid session key/);
+    // nothing was bound or persisted — the object is still addressable by a real key
+    expect(await sseTurnFinalText(await agent.fetch(turnReq("t2", "crisp:web1:sess42")))).toBe("done");
+    expect(seen).toEqual(["crisp:web1:sess42"]);
+  });
+
+  test("the chat surface 400s an un-headerable client session — a bad request, not a 500", async () => {
+    const agent = mkAgent(await storage(), []);
+    const ns: DurableObjectNamespace = { idFromName: (n) => n, get: () => ({ fetch: (req) => agent.fetch(req) }) };
+    const surface = durableAgentSurface(() => ns, { agentName: "support", chatPath: "/message" });
+    const res = await surface(new Request("https://edge/message", { method: "POST", body: JSON.stringify({ message: "hi", session: "bad\r\nkey" }) }));
+    expect(res!.status).toBe(400);
+    expect(((await res!.json()) as { error: string }).error).toMatch(/invalid session key/);
+  });
+
+  test("a transcript read on a later life binds the PERSISTED identity — cached, and still conflict-checked", async () => {
+    const s = await storage();
+    expect(await sseTurnFinalText(await mkAgent(s, []).fetch(turnReq("t1", "crisp:web1:sess42")))).toBe("done");
+
+    const agent = mkAgent(s, []); // fresh life; identity is already persisted, so a read may bind it
+    expect(agent.transcript().length).toBeGreaterThan(0);
+    expect((await agent.fetch(turnReq("t2", "other-session"))).status).toBe(409);   // bound identity still guards
+    expect(await sseTurnFinalText(await agent.fetch(turnReq("t3", "crisp:web1:sess42")))).toBe("done"); // same key proceeds
+  });
+
+  test("a key-less transcript read stays non-committal: a later keyed turn still binds the identity", async () => {
+    const seen: string[] = [];
+    const agent = mkAgent(await storage(), seen);
+    expect(agent.transcript()).toEqual([]); // read BEFORE any key exists — must not commit "self"
+    expect(await sseTurnFinalText(await agent.fetch(turnReq("t1", "crisp:web1:sess42")))).toBe("done");
+    expect(seen).toEqual(["crisp:web1:sess42"]);
   });
 });
 
