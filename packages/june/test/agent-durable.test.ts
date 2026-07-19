@@ -688,6 +688,16 @@ describe("AgentDurableObject — session identity (#75)", () => {
     expect(((await res!.json()) as { error: string }).error).toMatch(/invalid session key/);
   });
 
+  test("a transcript read on a later life binds the PERSISTED identity — cached, and still conflict-checked", async () => {
+    const s = await storage();
+    expect(await sseTurnFinalText(await mkAgent(s, []).fetch(turnReq("t1", "crisp:web1:sess42")))).toBe("done");
+
+    const agent = mkAgent(s, []); // fresh life; identity is already persisted, so a read may bind it
+    expect(agent.transcript().length).toBeGreaterThan(0);
+    expect((await agent.fetch(turnReq("t2", "other-session"))).status).toBe(409);   // bound identity still guards
+    expect(await sseTurnFinalText(await agent.fetch(turnReq("t3", "crisp:web1:sess42")))).toBe("done"); // same key proceeds
+  });
+
   test("a key-less transcript read stays non-committal: a later keyed turn still binds the identity", async () => {
     const seen: string[] = [];
     const agent = mkAgent(await storage(), seen);

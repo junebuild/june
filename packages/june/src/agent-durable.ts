@@ -331,12 +331,14 @@ export class AgentDurableObject {
     const session = this.resolveSession(input.session);
     return runInScope({ resources: this.resources, services: this.services }, () => session.turn(input));
   }
-  // Read-only: folds the durable log. Key-less reads must NOT commit "self" as this
-  // object's identity (a later keyed /turn would then hard-conflict), so an unresolved
-  // session folds through an ephemeral, uncached AgentSession instead.
+  // Read-only: folds the durable log. When an identity exists (live, or persisted from a
+  // prior life) the session resolves and caches like any other path. Only a read on a
+  // NEVER-keyed object stays non-committal — caching there would bake "self" in as the
+  // identity and 409 a later keyed turn — so it folds through an ephemeral AgentSession.
   transcript() {
-    const session = this.session ?? new AgentSession(this.name, this.store.getSessionKey() ?? "self", this.store, this.sink, this.model, this.tools, crossDoUnsupported, this.channelInstructions);
-    return session.transcript();
+    if (this.session) return this.session.transcript();
+    if (this.store.getSessionKey() !== undefined) return this.resolveSession().transcript();
+    return new AgentSession(this.name, "self", this.store, this.sink, this.model, this.tools, crossDoUnsupported, this.channelInstructions).transcript();
   }
   // Default HTTP surface: POST …/turn STREAMS the turn's TurnEvents as SSE (start the
   // turn in-scope, then stream from the session sink); GET …/transcript reads the log.
