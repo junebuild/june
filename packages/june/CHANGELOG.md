@@ -1,5 +1,17 @@
 # @junejs/server
 
+## 0.1.2-dev.5
+
+### Patch Changes
+
+- [#82](https://github.com/junebuild/june/pull/82) [`f08d622`](https://github.com/junebuild/june/commit/f08d622d24f21f2529a9cd784318070122a17d54) Thanks [@linyiru](https://github.com/linyiru)! - Failed turns are no longer silent on the edge ([#76](https://github.com/junebuild/june/issues/76)): AgentDurableObject now
+  `console.error`s every `turn.failed` by default — visible in `wrangler tail`,
+  where a turn that dies after the fast-ACK previously had no observable surface
+  at all. A new `onTurnError` hook on `DoAgentDef` lets the app take over
+  reporting (Sentry, a ledger, …); if the hook itself throws, the default log
+  fires anyway, so a failure can never go unreported. One seam on the session
+  sink covers every turn path: `turn()`, `POST /turn`, and `POST /resume`.
+
 ## 0.1.2-dev.4
 
 ### Patch Changes
