@@ -289,11 +289,11 @@ export class AgentDurableObject {
   private resolveSession(key?: string): AgentSession {
     const stored = this.store.getSessionKey();
     if (key !== undefined && stored !== undefined && key !== stored) {
-      throw new Error(`agent "${this.name}": request session "${key}" does not match this object's session "${stored}" — one DO is one session; mis-routed durableFetch?`);
+      throw new Error(`agent "${this.name}": request session "${key}" does not match this object's session "${stored}" — one DO is one session; address each session by its own key (durableFetch, or turn({ session }) on the direct API)`);
     }
     if (this.session) {
       if (key !== undefined && this.sessionKey !== key) {
-        throw new Error(`agent "${this.name}": request session "${key}" does not match the live session "${this.sessionKey}" — the session was first used without a key; route every request through durableFetch`);
+        throw new Error(`agent "${this.name}": request session "${key}" does not match the live session "${this.sessionKey}" — the session was first used without a key; carry the key on every path (route through durableFetch, or pass turn({ session }) on the direct API)`);
       }
       return this.session;
     }
