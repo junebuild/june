@@ -30,6 +30,7 @@
     "do-session-identity",
     "global-turn-ids",
     "provider-state",
+    "slack-diagnose",
     "slack-dm-stream-recipients",
     "slack-feedback-tasks",
     "slack-stream-hardening",

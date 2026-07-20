@@ -1,5 +1,12 @@
 # june.build
 
+## 0.0.5-dev.22
+
+### Patch Changes
+
+- Updated dependencies [[`6e31981`](https://github.com/junebuild/june/commit/6e319810e5888875434656f282e57818ec895229)]:
+  - @junejs/core@0.1.1-dev.22
+
 ## 0.0.5-dev.21
 
 ### Patch Changes
