@@ -1,5 +1,11 @@
 # @junejs/core
 
+## 0.1.1-dev.23
+
+### Patch Changes
+
+- [#114](https://github.com/junebuild/june/pull/114) [`7d1d670`](https://github.com/junebuild/june/commit/7d1d670734f3e4f478e3936670267616f253bc8f) Thanks [@linyiru](https://github.com/linyiru)! - Adapter conformance suite ([#105](https://github.com/junebuild/june/issues/105)) in `@junejs/core/test` — the Model-adapter contract, runnable instead of discovered by shipping bugs. `runAdapterConformance(makeModel, { usesProviderState?, streaming? })` drives the REAL engine through eight curated scenarios (plain text, terminal-`done` discipline, delta forwarding in order — skippable for non-streaming providers, tool round-trip with empty assistant text, parallel tool calls, the proactive `trigger`-role turn, multi-round tool-chain replay with mixed text+call content, and `providerState` round-trip — skippable for providers with no opaque state) and reports pass/skip/fail per scenario. The author supplies one factory: `(script, capture) => Model` — the script (in June terms) plays back over a stubbed transport, and the stub reports each request the adapter built via `capture`; the suite then asserts provider-shape-agnostic CONTENT containment (a tool result's value, a trigger's seed text, a `providerState` string must appear somewhere in the serialized request), so an adapter that ignores or mangles the transcript fails instead of passing on engine-side observations alone. Also: `memorySessionStore()` exported (a pure `SessionStore` for engine-level tests), and `anthropic()` accepts an injected `client` (skips the SDK import) — June's own adapter passes the suite over a fake transport as proof. `AnthropicClient`/`AnthropicStream`/`AnthropicStreamEvent`/`AnthropicBlock` types are exported for fake-client authors.
+
 ## 0.1.1-dev.22
 
 ### Patch Changes
