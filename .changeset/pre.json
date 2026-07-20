@@ -16,6 +16,7 @@
     "@junejs/og": "0.0.6"
   },
   "changesets": [
+    "adapter-conformance",
     "channel-capabilities",
     "channel-hardening",
     "channel-hooks-round2",
