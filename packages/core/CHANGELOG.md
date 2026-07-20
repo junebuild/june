@@ -1,5 +1,15 @@
 # @junejs/core
 
+## 0.1.1-dev.21
+
+### Patch Changes
+
+- [#110](https://github.com/junebuild/june/pull/110) [`7a6c6e6`](https://github.com/junebuild/june/commit/7a6c6e6887986f027b2bde5e595e1de98b7442d5) Thanks [@linyiru](https://github.com/linyiru)! - New `@junejs/core/test` entry ([#93](https://github.com/junebuild/june/issues/93)) — the test scaffolding every June app was re-implementing by hand, shipped inside core so the fakes stay in version-lockstep with the surfaces they mirror (a subpath, not a separate package, so drift is structurally impossible and there is nothing extra to install):
+
+  - `signSlackRequest(secret, body, { ts?, url? })` / `signCrispRequest(…)` — build a `Request` that passes the real channels' signature verification (ts override for staleness tests).
+  - `makeTestContext({ reply?, streamEvents?, detached?, resumeEvents?, services?, agent? })` — a fake `ChannelContext` with call capture (`ctx.calls.run/runStream/runDetached/resumeStream/waitUntil`) and `ctx.flush()`, an exact join on fast-ACK background work (including work enqueued while settling) that replaces sleep-based flushing. Optional surfaces (`runStream`/`runDetached`/`resumeStream`) appear only when their fixture is provided, keeping channel feature-detection honest.
+  - `turnEvents({ reasoning?, deltas?, text? | fail? | input? })` — build a turn's streaming fixture: `turn.started`, deltas, exactly one terminal.
+
 ## 0.1.1-dev.20
 
 ### Patch Changes

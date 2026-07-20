@@ -35,6 +35,7 @@
     "slack-stream-hardening",
     "store-hydration-race",
     "streaming-model-p2",
+    "test-helpers",
     "turn-as-live-process-p1",
     "turn-error-detail",
     "turn-failed-observability",
