@@ -3,10 +3,10 @@
 // run the turn in the background, and post the reply back out — asserted via a
 // captured global fetch. Loop guards (self-messages) must NOT trigger a reply.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { channelFetch, defineChannel, resolveChannel, type AgentDefinition, type Channel, type ChannelContext } from "@junejs/core/agent-config";
 import type { InboundEvent, ToolContext, TurnEvent } from "@junejs/core/agent-runtime";
-import { crispChannel, httpChannel, slackChannel, receive, verifySlackSignature, verifyCrispSignature, verifyCrispUrlKey, tryParseJson, timestampFresh, normalizeSlackEvent, normalizeCrispEvent, isCrispEvent, feedbackBlocks, type ChannelRejection, type CrispWebhookEnvelope } from "@junejs/core/channels";
+import { crispChannel, httpChannel, slackChannel, receive, verifySlackSignature, verifyCrispSignature, verifyCrispUrlKey, tryParseJson, timestampFresh, normalizeSlackEvent, normalizeCrispEvent, isCrispEvent, feedbackBlocks, resetSlackCounters, type ChannelRejection, type CrispWebhookEnvelope } from "@junejs/core/channels";
 
 const enc = new TextEncoder();
 async function hmacHex(secret: string, message: string): Promise<string> {
@@ -1439,5 +1439,122 @@ describe("channel.post + onInteraction + onRejected", () => {
     await flush();
     expect(unrouted).toHaveLength(0); // a framework action_id never reaches the app's escape hatch
     expect(errors).toHaveLength(1); // the dead end is loud
+  });
+});
+
+// ── #90: preflight diagnostics — the structured answer to the silent-failure hunt ──
+describe("slackChannel.diagnose", () => {
+  const secret = "shhh";
+  beforeEach(() => resetSlackCounters()); // counters are module-level (per-isolate) — isolate the suite
+  async function slackSigned(body: string) {
+    const ts = String(Math.floor(Date.now() / 1000));
+    return new Request("http://x/channels/slack", { method: "POST", headers: { "x-slack-request-timestamp": ts, "x-slack-signature": "v0=" + (await hmacHex(secret, `v0:${ts}:${body}`)) }, body });
+  }
+  const authTestFetch = (scopes: string, extra: Record<string, unknown> = {}) => (async (url: unknown) => {
+    if (String(url).endsWith("/auth.test")) {
+      return new Response(JSON.stringify({ ok: true, team: "KAIK", user_id: "B1", ...extra }), { headers: { "x-oauth-scopes": scopes, "content-type": "application/json" } });
+    }
+    return new Response("{}", { status: 200 });
+  }) as unknown as typeof fetch;
+
+  test("scope comparison: enabled features vs granted scopes, merged per scope", async () => {
+    globalThis.fetch = authTestFetch("chat:write,channels:history");
+    const ch = slackChannel({
+      signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test",
+      stream: true, status: "thinking…", events: ["message", "app_mention", "reaction_added"],
+    });
+    const d = await ch.diagnose();
+    expect(d.auth).toEqual({ ok: true, error: undefined, team: "KAIK", botUserId: "B1" });
+    expect(d.scopes.granted).toEqual(["chat:write", "channels:history"]);
+    const missing = Object.fromEntries(d.scopes.missing.map((m) => [m.scope, m.neededFor]));
+    // includes the ALWAYS-mounted capability tools' scopes — a green diagnose must mean
+    // the model can actually run slack_resolve_user / slack_add_reaction, not just webhooks
+    expect(Object.keys(missing).sort()).toEqual(["app_mentions:read", "assistant:write", "reactions:read", "reactions:write", "users:read"]);
+    expect(missing["assistant:write"]).toContain("streamed replies"); // stream + status merged into ONE entry
+    expect(missing["assistant:write"]).toContain("status line");
+    expect(missing["reactions:read"]).toContain("reaction events"); // feature + tool merged into ONE entry
+    expect(missing["reactions:read"]).toContain("slack_list_reactions");
+    expect(d.hints.some((h) => h.includes('missing scope "assistant:write"'))).toBe(true);
+  });
+
+  test("counters: received kinds, unnormalized raw types, claimed/unrouted interactions, rejections", async () => {
+    captureFetch();
+    const ch = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", onFeedback: () => {} });
+    const ctx = ctxWith(async () => "ok");
+    // a normalized message event
+    await ch.webhook!(await slackSigned(JSON.stringify({ type: "event_callback", event: { type: "message", text: "hi", channel: "C1", ts: "1.1", user: "U1" } })), ctx);
+    // an event that does NOT normalize (bot message) still counts under its raw type
+    await ch.webhook!(await slackSigned(JSON.stringify({ type: "event_callback", event: { type: "message", subtype: "bot_message", text: "loop", channel: "C1", ts: "1.2" } })), ctx);
+    // a claimed interaction (our feedback button) and an unrouted one
+    const fb = { type: "block_actions", actions: [{ action_id: "june_feedback", value: JSON.stringify({ rating: "positive" }) }] };
+    await ch.webhook!(await slackSigned(`payload=${encodeURIComponent(JSON.stringify(fb))}`), ctx);
+    const foreign = { type: "block_actions", actions: [{ action_id: "not_ours", value: "x" }] };
+    await ch.webhook!(await slackSigned(`payload=${encodeURIComponent(JSON.stringify(foreign))}`), ctx);
+    // a signature failure
+    await ch.webhook!(new Request("http://x/channels/slack", { method: "POST", headers: { "x-slack-request-timestamp": String(Math.floor(Date.now() / 1000)), "x-slack-signature": "v0=bad" }, body: "{}" }), ctx);
+    await flush();
+
+    globalThis.fetch = authTestFetch("chat:write,channels:history,app_mentions:read");
+    const d = await ch.diagnose();
+    expect(d.counters.eventsReceived).toMatchObject({ message: 2 }); // both arrived (loop guard filters later — arrival is what diagnose reports)
+    expect(d.counters.interactions).toEqual({ claimed: 1, appHandled: 0, unrouted: 1 });
+    expect(d.counters.rejections).toMatchObject({ bad_signature: 1, unrouted_interaction: 1 });
+    expect(d.hints.some((h) => h.includes("failed signature verification"))).toBe(true);
+    expect(d.hints.some((h) => h.includes("interaction(s) arrived that nothing claimed"))).toBe(true);
+    // app_mention subscribed-by-default but never received → the one-line answer
+    expect(d.hints.some((h) => h.startsWith("app_mention received: 0"))).toBe(true);
+    expect(d.hints.some((h) => h.startsWith("message received: 0"))).toBe(false); // messages DID arrive
+  });
+
+  test("counters survive per-request channel reconstruction (the standard edge mount)", async () => {
+    captureFetch();
+    const make = () => slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test" });
+    // request 1: one channel instance receives an event (durableChannelSurface is
+    // rebuilt per fetch, re-running the factory — instance state would reset here)
+    await make().webhook!(await slackSigned(JSON.stringify({ type: "event_callback", event: { type: "message", text: "hi", channel: "C1", ts: "1.1", user: "U1" } })), ctxWith(async () => "ok"));
+    await flush();
+    // request 2 (an admin route constructing its OWN channel to diagnose) sees the count
+    globalThis.fetch = authTestFetch("chat:write");
+    const d = await make().diagnose();
+    expect(d.counters.eventsReceived).toMatchObject({ message: 1 });
+    // distinct mount paths keep distinct counters
+    globalThis.fetch = authTestFetch("chat:write");
+    const other = await slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", path: "/channels/slack-2" }).diagnose();
+    expect(other.counters.eventsReceived).toEqual({});
+  });
+
+  test("an onInteraction-delivered payload counts appHandled — never a routing failure", async () => {
+    captureFetch();
+    const ch = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", onInteraction: () => {} });
+    const foreign = { type: "block_actions", actions: [{ action_id: "app_button", value: "x" }] };
+    await ch.webhook!(await slackSigned(`payload=${encodeURIComponent(JSON.stringify(foreign))}`), ctxWith(async () => "unused"));
+    await flush();
+    globalThis.fetch = authTestFetch("chat:write");
+    const d = await ch.diagnose();
+    expect(d.counters.interactions).toEqual({ claimed: 0, appHandled: 1, unrouted: 0 });
+    expect(d.counters.rejections.unrouted_interaction).toBe(0); // delivered ≠ rejected
+    expect(d.hints.some((h) => h.includes("nothing claimed"))).toBe(false);
+  });
+
+  test("an accept-gated event still counts as ARRIVED (filtered ≠ never delivered)", async () => {
+    captureFetch();
+    let ran = false;
+    const ch = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", accept: () => false });
+    await ch.webhook!(await slackSigned(JSON.stringify({ type: "event_callback", event: { type: "message", text: "hi", channel: "C1", ts: "1.1", user: "U1" } })), ctxWith(async () => { ran = true; return "x"; }));
+    await flush();
+    expect(ran).toBe(false); // the gate did its job…
+    globalThis.fetch = authTestFetch("chat:write");
+    const d = await ch.diagnose();
+    expect(d.counters.eventsReceived).toMatchObject({ message: 1 }); // …but arrival is still visible
+    expect(d.hints.some((h) => h.startsWith("message received: 0"))).toBe(false);
+  });
+
+  test("auth failure short-circuits scope comparison and says so", async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({ ok: false, error: "invalid_auth" }), { headers: { "content-type": "application/json" } })) as unknown as typeof fetch;
+    const ch = slackChannel({ signingSecret: secret, botToken: "xoxb-revoked", apiUrl: "https://slack.test" });
+    const d = await ch.diagnose();
+    expect(d.auth.ok).toBe(false);
+    expect(d.scopes.missing).toEqual([]); // no scope claims on top of a dead token
+    expect(d.hints[0]).toContain("auth.test failed (invalid_auth)");
   });
 });

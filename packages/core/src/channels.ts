@@ -153,6 +153,46 @@ type ChannelExtensions = {
   onRejected?: (rejection: ChannelRejection, req: Request) => void;
 };
 
+// Preflight diagnostics (#90): the answer to an hour-long "why doesn't my observer
+// fire" hunt, as one structured call. `counters` are per-isolate (since construction —
+// workerd isolates recycle, so treat 0s as "none since this isolate started", which is
+// exactly the live-debugging question anyway). `hints` are the human one-liners:
+// "app_mention received: 0 — check Socket Mode / Request URL".
+export type SlackDiagnosis = {
+  auth: { ok: boolean; error?: string; team?: string; botUserId?: string };
+  scopes: { granted: string[]; missing: { scope: string; neededFor: string }[] };
+  counters: {
+    since: number; // epoch ms of channel construction (this isolate)
+    // per normalized kind; un-normalizable events count under their raw Slack type —
+    // "arriving but filtered" and "not arriving" read differently, deliberately
+    eventsReceived: Record<string, number>;
+    // claimed = a built-in branch took it (june_feedback / june_input:*);
+    // appHandled = delivered to onInteraction; unrouted = nobody took it (a rejection)
+    interactions: { claimed: number; appHandled: number; unrouted: number };
+    rejections: Record<ChannelRejection["kind"], number>;
+  };
+  hints: string[];
+};
+
+// The counter registry behind SlackDiagnosis (#90), keyed by mount path — module
+// scope so counts survive per-request channel reconstruction (see the note at the
+// slackChannel use site). Exported for tests only via resetSlackCounters.
+const slackCounterRegistry = new Map<string, SlackDiagnosis["counters"]>();
+function slackCountersFor(path: string): SlackDiagnosis["counters"] {
+  let c = slackCounterRegistry.get(path);
+  if (!c) {
+    c = { since: Date.now(), eventsReceived: {}, interactions: { claimed: 0, appHandled: 0, unrouted: 0 }, rejections: { bad_signature: 0, malformed_body: 0, unrouted_interaction: 0 } };
+    slackCounterRegistry.set(path, c);
+  }
+  return c;
+}
+// Test seam: isolate suites from each other's counts (a fresh workerd isolate does
+// this for free; a long-lived test process needs it explicitly).
+export function resetSlackCounters(path?: string): void {
+  if (path === undefined) slackCounterRegistry.clear();
+  else slackCounterRegistry.delete(path);
+}
+
 // Guarded call: a broken app-supplied onRejected must never destabilize the
 // webhook's response path (the exact posture of runBackground's onError guard).
 // `(r, req) => void` admits an async implementation (a Promise is assignable to
@@ -293,7 +333,7 @@ export function slackChannel(opts: {
   // "plan", or "dense" (consecutive tool calls collapse into one card). Needs `tasks`.
   taskDisplayMode?: "timeline" | "plan" | "dense";
   onError?: (err: unknown) => void;
-} & ChannelExtensions): Channel {
+} & ChannelExtensions): Channel & { diagnose: () => Promise<SlackDiagnosis> } {
   const api = opts.apiUrl ?? "https://slack.com/api";
   // Derive the subscribe list from intent (respondTo + on keys) so kinds aren't written
   // twice and can't drift; explicit `events` overrides. When the app expresses no intent
@@ -639,6 +679,17 @@ export function slackChannel(opts: {
     return (await res.json()) as SlackResponse;
   }
   const valid = (ts: string, body: string, sig: string) => verifySlackSignature(opts.signingSecret, ts, body, sig);
+  // #90: per-isolate delivery counters feeding diagnose(). Keyed by MOUNT PATH in a
+  // module-level registry, not held on the channel instance: the standard edge mount
+  // rebuilds the surface (and re-runs the channel factory) on every request, so
+  // instance state would reset per delivery and an admin route constructing its own
+  // channel to call diagnose() would always read zero. Module state IS isolate state —
+  // "per isolate" by construction, shared by every same-path construction within it.
+  const counters = slackCountersFor(opts.path ?? "/channels/slack");
+  const turnAway = (req: Request, rejection: ChannelRejection) => {
+    counters.rejections[rejection.kind]++;
+    reject(opts, req, rejection);
+  };
   return {
     name: "slack",
     path: opts.path ?? "/channels/slack",
@@ -662,6 +713,58 @@ export function slackChannel(opts: {
       if (!r.ok || !r.ts) throw new Error(`slack: chat.postMessage failed (${r.error ?? "no response"})`);
       return { channelId: r.channel ?? target.channelId, threadId: target.threadId, ts: r.ts };
     },
+    // Preflight diagnostics (#90): one call answering the silent-failure hunt. Verifies
+    // the token (auth.test), compares the app's GRANTED scopes (the x-oauth-scopes
+    // response header) against what the ENABLED features need, and reports the
+    // per-kind delivery counters — "app_mention received: 0" is the one-line answer
+    // to "Socket Mode is on / the Request URL points elsewhere". Read-only and safe
+    // to expose behind an admin route or run from a REPL.
+    async diagnose(): Promise<SlackDiagnosis> {
+      const res = await fetch(`${api}/auth.test`, { method: "POST", headers: authHeaders }).catch(() => undefined);
+      const granted = (res?.headers.get("x-oauth-scopes") ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+      const j = res ? ((await res.json().catch(() => ({}))) as { ok?: boolean; error?: string; team?: string; user_id?: string }) : {};
+      const auth: SlackDiagnosis["auth"] = { ok: j.ok === true, error: j.error, team: j.team, botUserId: j.user_id };
+
+      // What the ENABLED features need, merged per scope so one missing scope reads once.
+      const needs = new Map<string, string[]>();
+      const need = (scope: string, forWhat: string) => needs.set(scope, [...(needs.get(scope) ?? []), forWhat]);
+      need("chat:write", "posting replies (chat.postMessage)");
+      if (opts.stream) need("assistant:write", "streamed replies (chat.startStream)");
+      if (opts.status) need("assistant:write", "the status line (assistant.threads.setStatus)");
+      if (events.includes("message")) need("channels:history", 'the "message" event subscription');
+      if (events.includes("app_mention")) need("app_mentions:read", 'the "app_mention" event subscription');
+      if (events.includes("reaction_added") || events.includes("reaction_removed")) need("reactions:read", "reaction events");
+      // The capability tools are ALWAYS merged into agent.tools — a green diagnose must
+      // mean the model can actually run them, not just that the webhook paths work.
+      need("channels:history", "the slack_read_thread tool");
+      need("reactions:read", "the slack_list_reactions tool");
+      need("users:read", "the slack_resolve_user tool");
+      need("reactions:write", "the slack_add_reaction tool");
+      const missing = auth.ok
+        ? [...needs].filter(([scope]) => !granted.includes(scope)).map(([scope, why]) => ({ scope, neededFor: why.join("; ") }))
+        : [];
+
+      const hints: string[] = [];
+      if (!auth.ok) hints.push(`auth.test failed (${j.error ?? "no response"}) — is the bot token valid for this workspace?`);
+      for (const m of missing) hints.push(`missing scope "${m.scope}" — needed for ${m.neededFor}; add it and reinstall the app`);
+      for (const kind of events) {
+        if (!counters.eventsReceived[kind]) {
+          hints.push(`${kind} received: 0 since this isolate started — if you have sent one, check Socket Mode is OFF and the Events Request URL points at this deployment`);
+        }
+      }
+      if (counters.interactions.unrouted > 0) {
+        hints.push(`${counters.interactions.unrouted} verified interaction(s) arrived that nothing claimed — check the Interactivity Request URL, or add onInteraction`);
+      }
+      if (counters.rejections.bad_signature > 0) {
+        hints.push(`${counters.rejections.bad_signature} delivery(ies) failed signature verification — signing secret mismatch between Slack and this deployment?`);
+      }
+      return {
+        auth,
+        scopes: { granted, missing },
+        counters: { ...counters, eventsReceived: { ...counters.eventsReceived }, interactions: { ...counters.interactions }, rejections: { ...counters.rejections } },
+        hints,
+      };
+    },
     async webhook(req, ctx) {
       const body = await req.text();
       const ok = await valid(
@@ -669,7 +772,7 @@ export function slackChannel(opts: {
         body,
         req.headers.get("x-slack-signature") ?? "",
       );
-      if (!ok) { reject(opts, req, { kind: "bad_signature" }); return new Response("bad signature", { status: 401 }); }
+      if (!ok) { turnAway(req, { kind: "bad_signature" }); return new Response("bad signature", { status: 401 }); }
 
       // Slack interactivity (a block_actions click on our Approve/Deny buttons) arrives
       // form-encoded as `payload=<json>` — not an Events API JSON body. Route it to resume;
@@ -677,23 +780,34 @@ export function slackChannel(opts: {
       // own buttons ride this endpoint instead of a parallel webhook.
       if (body.startsWith("payload=")) {
         const interaction = tryParseJson<SlackInteraction>(new URLSearchParams(body).get("payload") ?? "");
-        if (!interaction) reject(opts, req, { kind: "malformed_body", detail: "interaction payload" });
-        else if (!handleInteraction(interaction, ctx)) {
-          if (opts.onInteraction) runBackground(ctx, async () => opts.onInteraction!(interaction, ctx), opts.onError);
+        if (!interaction) turnAway(req, { kind: "malformed_body", detail: "interaction payload" });
+        else if (handleInteraction(interaction, ctx)) counters.interactions.claimed++;
+        else if (opts.onInteraction) {
+          counters.interactions.appHandled++; // delivered to the app — NOT a routing failure
+          runBackground(ctx, async () => opts.onInteraction!(interaction, ctx), opts.onError);
+        } else {
+          counters.interactions.unrouted++;
           // detail: the action_id for a click; the payload type for actions-less
           // payloads (a shortcut, a view submission) so the rejection stays actionable
-          else reject(opts, req, { kind: "unrouted_interaction", detail: interaction.actions?.[0]?.action_id ?? interaction.type });
+          turnAway(req, { kind: "unrouted_interaction", detail: interaction.actions?.[0]?.action_id ?? interaction.type });
         }
         return new Response("", { status: 200 }); // fast ACK
       }
 
       const payload = tryParseJson<{ type?: string; challenge?: string; event?: SlackEvent; team_id?: string }>(body);
-      if (!payload) { reject(opts, req, { kind: "malformed_body" }); return new Response("", { status: 200 }); } // signed but unparseable → ACK, don't retry
+      if (!payload) { turnAway(req, { kind: "malformed_body" }); return new Response("", { status: 200 }); } // signed but unparseable → ACK, don't retry
       if (payload.type === "url_verification") return Response.json({ challenge: payload.challenge });
 
       if (payload.type === "event_callback") {
+        // Count ARRIVAL first, before the accept gate and normalization: "arriving but
+        // filtered (accept/loop-guard/kind)" and "never arriving" must read differently
+        // in diagnose(), and a verified delivery has arrived regardless of what the app
+        // then does with it. Keyed by normalized kind when one exists, else raw type.
+        const preNorm = normalizeSlackEvent(payload.event ?? {}, events, opts.botUserId, payload.team_id);
+        const countKey = preNorm?.event.kind ?? payload.event?.type ?? "unknown";
+        counters.eventsReceived[countKey] = (counters.eventsReceived[countKey] ?? 0) + 1;
         if (opts.accept && !opts.accept(payload)) return new Response("", { status: 200 }); // gated out
-        const norm = normalizeSlackEvent(payload.event ?? {}, events, opts.botUserId, payload.team_id);
+        const norm = preNorm;
         // observe: mirror EVERY verified event_callback (raw always; normalized when available)
         if (opts.onEvent) runBackground(ctx, async () => opts.onEvent!({ raw: payload, event: norm?.event }, ctx), opts.onError);
         // typed per-kind observer: fires only for its kind, with a non-optional event
