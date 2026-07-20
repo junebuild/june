@@ -13,7 +13,7 @@ import type { Model, ModelDelta, ModelReply, Msg, ToolSpec } from "./agent-runti
 
 // Structural subset of the Anthropic Messages shapes we emit/read — no
 // `@anthropic-ai/sdk` type import, so core typechecks without the optional dep.
-type AnthropicBlock =
+export type AnthropicBlock =
   | { type: "text"; text: string }
   | { type: "tool_use"; id: string; name: string; input: unknown }
   | { type: "tool_result"; tool_use_id: string; content: string };
@@ -43,23 +43,51 @@ export function toAnthropicMessages(msgs: Msg[]): AnthropicMessage[] {
   return out;
 }
 
-// Anthropic response content → the engine's ModelReply.
-export function fromAnthropicContent(content: AnthropicBlock[]): ModelReply {
+// Response-side content block: an OPEN shape, not the request union above — the
+// real SDK returns a broader ContentBlock union (thinking, redacted_thinking, …)
+// than we consume, and pinning `content` to AnthropicBlock[] would make the REAL
+// `new Anthropic()` client fail the structural check that `client:` injection
+// exists for. Every SDK block satisfies this (a `type` string; the text/tool_use
+// fields optional); fromAnthropicContent narrows on `type` and reads only what
+// it needs.
+export type AnthropicResponseBlock = { type: string; text?: string; id?: string; name?: string; input?: unknown };
+
+// Anthropic response content → the engine's ModelReply. Accepts the open
+// response-side shape; only text and tool_use blocks are consumed.
+export function fromAnthropicContent(content: AnthropicResponseBlock[]): ModelReply {
   let text = "";
   const toolCalls: ModelReply["toolCalls"] = [];
   for (const b of content) {
-    if (b.type === "text") text += b.text;
-    else if (b.type === "tool_use") toolCalls.push({ id: b.id, name: b.name, input: b.input });
+    if (b.type === "text" && typeof b.text === "string") text += b.text;
+    else if (b.type === "tool_use" && typeof b.id === "string" && typeof b.name === "string") toolCalls.push({ id: b.id, name: b.name, input: b.input });
   }
   return { text, toolCalls };
 }
 
+// The request shape anthropic() always sends — the injection contract's input
+// side. Structural and minimal (required fields only where the adapter always
+// emits them; loose value types so the SDK's richer types stay assignable): a
+// client whose stream() cannot consume this object (an unrelated transport,
+// e.g. `stream(body: { token: string })`) fails BOTH directions of the method's
+// bivariant parameter check and is rejected at the type level, while the real
+// SDK's (narrower, richer) params type still satisfies it.
+export type AnthropicRequest = {
+  model: string;
+  max_tokens: number;
+  messages: unknown[];
+  thinking?: unknown;
+  tools?: unknown[];
+  system?: unknown;
+};
+
 // Structural view of just the SDK surface we call (no dependency on its types). The
 // message stream is async-iterable over raw stream events AND exposes finalMessage().
-type AnthropicStreamEvent = { type: string; delta?: { type?: string; text?: string; thinking?: string } };
-type AnthropicStream = AsyncIterable<AnthropicStreamEvent> & { finalMessage(): Promise<{ content: AnthropicBlock[] }> };
-type AnthropicClient = {
-  messages: { stream(body: unknown): AnthropicStream };
+// `stream` is a METHOD signature deliberately (bivariant), so the SDK's narrower
+// parameter type still satisfies it.
+export type AnthropicStreamEvent = { type: string; delta?: { type?: string; text?: string; thinking?: string } };
+export type AnthropicStream = AsyncIterable<AnthropicStreamEvent> & { finalMessage(): Promise<{ content: AnthropicResponseBlock[] }> };
+export type AnthropicClient = {
+  messages: { stream(body: AnthropicRequest): AnthropicStream };
 };
 type AnthropicCtor = new (opts?: { apiKey?: string }) => AnthropicClient;
 
@@ -69,6 +97,11 @@ export type AnthropicOptions = {
   system?: string; // system prompt (e.g. buildSystemPrompt(agent))
   maxTokens?: number; // default 16000
   thinking?: boolean; // default false — see note below
+  // Inject a preconstructed client (structural — anything with messages.stream):
+  // tests drive the adapter's real mapping/streaming code against a fake transport
+  // (see runAdapterConformance), and custom transports skip the SDK entirely.
+  // When set, the lazy @anthropic-ai/sdk import is skipped.
+  client?: AnthropicClient;
 };
 
 export function anthropic(opts: AnthropicOptions = {}): Model {
@@ -79,16 +112,19 @@ export function anthropic(opts: AnthropicOptions = {}): Model {
       // Per-call system (the runtime injects the agent's instructions) wins over a
       // construction-time default.
       const system = callOpts?.system ?? opts.system;
-      // Non-literal specifier (typed `string`) so tsc/bundlers don't require the
-      // optional dep and it stays lazy.
-      const specifier: string = "@anthropic-ai/sdk";
-      let Anthropic: AnthropicCtor;
-      try {
-        Anthropic = ((await import(specifier)) as { default: AnthropicCtor }).default;
-      } catch {
-        throw new Error("anthropic(): install @anthropic-ai/sdk to use the Anthropic model adapter");
+      let client = opts.client;
+      if (!client) {
+        // Non-literal specifier (typed `string`) so tsc/bundlers don't require the
+        // optional dep and it stays lazy.
+        const specifier: string = "@anthropic-ai/sdk";
+        let Anthropic: AnthropicCtor;
+        try {
+          Anthropic = ((await import(specifier)) as { default: AnthropicCtor }).default;
+        } catch {
+          throw new Error("anthropic(): install @anthropic-ai/sdk to use the Anthropic model adapter");
+        }
+        client = new Anthropic(opts.apiKey ? { apiKey: opts.apiKey } : undefined);
       }
-      const client = new Anthropic(opts.apiKey ? { apiKey: opts.apiKey } : undefined);
 
       // Stream the SDK's raw events → yield reasoning/answer token deltas as they arrive,
       // then finalMessage() → the authoritative assembled reply as `done`. Thinking is OFF

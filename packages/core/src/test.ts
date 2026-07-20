@@ -6,7 +6,22 @@
 // ChannelContext change lands in the same package version as the fake that mirrors
 // it. Pure contract-layer code (zero node:*), like everything else in core.
 
-import type { TurnEvent, TurnError, InputRequest, TurnTrigger } from "./agent-runtime";
+import { AgentSession } from "./agent-runtime";
+import type {
+  EventSink,
+  InputRequest,
+  Model,
+  ModelDelta,
+  ModelReply,
+  Msg,
+  ProactiveTrigger,
+  Runtime,
+  SessionStore,
+  Tool,
+  TurnError,
+  TurnEvent,
+  TurnTrigger,
+} from "./agent-runtime";
 import type { AgentDefinition, ChannelContext } from "./agent-config";
 
 // ── signed webhook requests ───────────────────────────────────────────────────
@@ -191,4 +206,232 @@ export function makeTestContext(opts: {
     };
   }
   return ctx;
+}
+
+// ── in-memory SessionStore ────────────────────────────────────────────────────
+// A pure store for driving the REAL engine (AgentSession/runTurn) in tests — the
+// same scaffold every engine-level test hand-rolls. `unwrap()` returns undefined:
+// there is no app storage handle; a local tool that needs one brings its own store.
+export function memorySessionStore(): SessionStore {
+  const msgs: Msg[] = [];
+  const steps = new Map<string, unknown>();
+  let status = "new";
+  return {
+    appendMessage(m) { msgs.push(m); },
+    messages() { return msgs.slice(); },
+    hasOpeningMessage(t) { return msgs.some((m) => (m.role === "user" || m.role === "trigger") && m.turnId === t); },
+    getStep(id) { return steps.has(id) ? steps.get(id) : undefined; },
+    putStep(id, o) { steps.set(id, o); },
+    delStep(id) { steps.delete(id); },
+    getStatus() { return status; },
+    setStatus(s) { status = s; },
+    tx(fn) { return fn(); },
+    unwrap<H = unknown>(): H { return undefined as H; },
+  };
+}
+
+// ── adapter conformance (#105) ────────────────────────────────────────────────
+// The Model-adapter contract, runnable: the seams every non-Anthropic adapter has
+// re-discovered by shipping bugs (the dev.9 trigger→user mapping was learned by
+// trial). The adapter author supplies ONE factory: given a script of replies (in
+// June terms) and a `capture` callback, return their adapter wired to a stubbed
+// transport that (a) plays the script back in the PROVIDER's wire shape and
+// (b) calls `capture(wireRequest)` with each request the adapter actually built.
+// The adapter's real mapping and streaming code runs; only the network is fake.
+//
+// `capture` is what makes the mapping VERIFIABLE, not assumed: the suite cannot
+// know any provider's wire shape, but it can check CONTENT — a tool result's
+// value, a trigger's seed text, a providerState string must appear SOMEWHERE in
+// the serialized request, or the provider never saw them. An adapter that ignores
+// the transcript entirely produces wire requests missing that content and fails
+// here, instead of passing on engine-side observations alone.
+export type ScriptedReply = { reasoning?: string[]; deltas?: string[]; reply: ModelReply };
+export type ConformanceOptions = {
+  // Providers with no opaque per-call state (e.g. Anthropic) cannot round-trip
+  // providerState — set false and that scenario reports skipped, not failed.
+  usesProviderState?: boolean;
+  // Non-streaming providers deliver no incremental deltas — set false and the
+  // delta-forwarding scenario reports skipped. The terminal-done discipline
+  // scenario always runs: it is the hard contract for every adapter.
+  streaming?: boolean;
+};
+export type ConformanceReport = { passed: string[]; skipped: string[]; failed: { scenario: string; error: string }[] };
+
+export async function runAdapterConformance(
+  makeModel: (script: ScriptedReply[], capture: (wireRequest: unknown) => void) => Model | Promise<Model>,
+  opts: ConformanceOptions = {},
+): Promise<ConformanceReport> {
+  const assert = (cond: unknown, msg: string) => { if (!cond) throw new Error(msg); };
+  const echoTool: Tool = { spec: { name: "echo", description: "echoes its input", input: { type: "object" } }, run: (input: unknown) => ({ echoed: input }) };
+  const addTool: Tool = { spec: { name: "add", description: "adds", input: { type: "object" } }, run: () => ({ sum: 3 }) };
+  const noRuntime: Runtime = { session() { throw new Error("conformance: no subagents"); } };
+
+  // Serialize a captured wire request for content-containment checks. Provider-shape
+  // agnostic on purpose: whatever the wire looks like, the CONTENT must be in it.
+  const wireText = (w: unknown) => { try { return JSON.stringify(w) ?? String(w); } catch { return String(w); } };
+  const wireHas = (wires: unknown[], i: number, needle: string, what: string) => {
+    assert(wires.length > i, `expected a captured wire request #${i + 1} — the transport stub must call capture() per request`);
+    assert(wireText(wires[i]).includes(needle), `wire request #${i + 1} must carry ${what} (looked for ${JSON.stringify(needle)}) — the adapter's transcript mapping dropped it`);
+  };
+
+  // Wrap the adapter to observe what it EMITS (each done.reply) while the engine
+  // drives it; what it SENDS is observed via `capture` at the transport stub.
+  function instrument(model: Model) {
+    const invocations: { dones: ModelReply[] }[] = [];
+    const wrapped: Model = (msgs, tools, o) => (async function* () {
+      const rec = { dones: [] as ModelReply[] };
+      invocations.push(rec);
+      for await (const d of model(msgs, tools, o)) {
+        if (d.type === "done") rec.dones.push(d.reply);
+        yield d;
+      }
+    })();
+    return { wrapped, invocations };
+  }
+
+  async function turn(model: Model, tools: Tool[], input: { userText: string; trigger?: ProactiveTrigger }) {
+    const session = new AgentSession("conformance", "s1", memorySessionStore(), memorySink(), model, tools, noRuntime);
+    return session.turn({ turnId: "t_conf", userText: input.userText, trigger: input.trigger });
+  }
+
+  const scenarios: { name: string; skip?: boolean; run: () => Promise<void> }[] = [
+    {
+      name: "plain-text turn",
+      run: async () => {
+        const wires: unknown[] = [];
+        const model = await makeModel([{ reply: { text: "The answer is 4.", toolCalls: [] } }], (w) => wires.push(w));
+        assert((await turn(model, [], { userText: "what is 2+2?" })) === "The answer is 4.", "final text must equal the scripted reply.text (done is authoritative)");
+        wireHas(wires, 0, "what is 2+2?", "the user message");
+      },
+    },
+    {
+      name: "terminal done discipline: exactly one done, nothing after",
+      run: async () => {
+        const model = await makeModel([{ reasoning: ["thinking"], deltas: ["Hel", "lo"], reply: { text: "Hello", toolCalls: [] } }], () => {});
+        const seen: ModelDelta[] = [];
+        for await (const d of model([{ role: "user", turnId: "t_conf", text: "hi" }], [])) seen.push(d);
+        const doneIdx = seen.findIndex((d) => d.type === "done");
+        assert(doneIdx >= 0, "the stream must end with a done event");
+        assert(seen.filter((d) => d.type === "done").length === 1, "exactly ONE done — done is terminal");
+        assert(seen.slice(doneIdx + 1).length === 0, "nothing may follow done (the engine cancels there)");
+        const done = seen[doneIdx] as Extract<ModelDelta, { type: "done" }>;
+        assert(done.reply.text === "Hello", "done.reply is the authoritative assembled reply");
+      },
+    },
+    {
+      name: "delta forwarding: scripted reasoning/text deltas arrive, in order, before done",
+      skip: opts.streaming === false,
+      run: async () => {
+        const model = await makeModel([{ reasoning: ["thinking"], deltas: ["Hel", "lo"], reply: { text: "Hello", toolCalls: [] } }], () => {});
+        const seen: ModelDelta[] = [];
+        for await (const d of model([{ role: "user", turnId: "t_conf", text: "hi" }], [])) seen.push(d);
+        // judge only the deltas BEFORE the first done — done multiplicity is the
+        // terminal-done scenario's defect, and each scenario isolates its own
+        const doneIdx = seen.findIndex((d) => d.type === "done");
+        assert(doneIdx >= 0, "the stream must reach a done event");
+        const sequence = seen.slice(0, doneIdx).map((d) => (d.type === "done" ? "done" : `${d.type}:${d.text}`));
+        assert(
+          JSON.stringify(sequence) === JSON.stringify(["reasoning:thinking", "text:Hel", "text:lo"]),
+          `the scripted deltas must be forwarded in order before done (got ${JSON.stringify(sequence)})`,
+        );
+      },
+    },
+    {
+      name: "tool round-trip (empty assistant text + tool call)",
+      run: async () => {
+        const wires: unknown[] = [];
+        const model = await makeModel([
+          { reply: { text: "", toolCalls: [{ id: "call_1", name: "echo", input: { q: 1 } }] } },
+          { reply: { text: "echoed 1", toolCalls: [] } },
+        ], (w) => wires.push(w));
+        const { wrapped, invocations } = instrument(model);
+        assert((await turn(wrapped, [echoTool], { userText: "echo 1" })) === "echoed 1", "the turn must complete through the tool round");
+        assert(invocations.length === 2, `the adapter must be invoked twice (got ${invocations.length})`);
+        const call = invocations[0]!.dones[0]?.toolCalls[0];
+        assert(call?.id === "call_1" && call.name === "echo", "the adapter must surface the scripted tool call id/name intact");
+        // the SECOND wire request must carry the prior round back to the provider
+        wireHas(wires, 1, "call_1", "the tool call id");
+        wireHas(wires, 1, "echoed", "the tool RESULT content");
+      },
+    },
+    {
+      name: "parallel tool calls in one reply",
+      run: async () => {
+        const wires: unknown[] = [];
+        const model = await makeModel([
+          { reply: { text: "", toolCalls: [{ id: "c1", name: "echo", input: { a: 1 } }, { id: "c2", name: "add", input: { b: 2 } }] } },
+          { reply: { text: "both done", toolCalls: [] } },
+        ], (w) => wires.push(w));
+        assert((await turn(model, [echoTool, addTool], { userText: "do both" })) === "both done", "the turn must complete with BOTH calls executed");
+        // both results — the consecutive-tool-result folding case — must reach the wire
+        wireHas(wires, 1, "echoed", "the first tool's result");
+        wireHas(wires, 1, "sum", "the second tool's result");
+      },
+    },
+    {
+      name: "proactive trigger-role turn",
+      run: async () => {
+        const wires: unknown[] = [];
+        const model = await makeModel([{ reply: { text: "summary sent", toolCalls: [] } }], (w) => wires.push(w));
+        // dev.9 class: the transcript OPENS with a `trigger` msg — an adapter that only
+        // maps user/assistant/tool throws, sends an invalid shape, or drops the seed
+        assert((await turn(model, [], { userText: "summarize the day", trigger: { kind: "proactive", by: "cron:daily" } })) === "summary sent", "a trigger-seeded turn must complete");
+        wireHas(wires, 0, "summarize the day", "the trigger seed text (mapped to a role the provider accepts)");
+      },
+    },
+    {
+      name: "multi-round tool chain replay",
+      run: async () => {
+        const wires: unknown[] = [];
+        const model = await makeModel([
+          { reply: { text: "step one", toolCalls: [{ id: "c1", name: "echo", input: { step: 1 } }] } },
+          { reply: { text: "", toolCalls: [{ id: "c2", name: "echo", input: { step: 2 } }] } },
+          { reply: { text: "chain done", toolCalls: [] } },
+        ], (w) => wires.push(w));
+        assert((await turn(model, [echoTool], { userText: "run the chain" })) === "chain done", "a two-round tool chain must complete");
+        // mixed content: round one had text ALONGSIDE its tool call — the final wire
+        // request must still carry both the text and every prior round's results
+        wireHas(wires, 2, "step one", "round one's assistant text (text-plus-toolCall mixed content)");
+        wireHas(wires, 2, "c2", "round two's call id");
+      },
+    },
+    {
+      name: "providerState round-trip",
+      skip: opts.usesProviderState === false,
+      run: async () => {
+        const wires: unknown[] = [];
+        const model = await makeModel([
+          { reply: { text: "", toolCalls: [{ id: "c1", name: "echo", input: {}, providerState: "sig~conformance" }] } },
+          { reply: { text: "ok", toolCalls: [] } },
+        ], (w) => wires.push(w));
+        const { wrapped, invocations } = instrument(model);
+        assert((await turn(wrapped, [echoTool], { userText: "go" })) === "ok", "the turn must complete");
+        // the adapter's own emit must carry the state (a wire mapping that drops it fails here — the id-smuggling hack #92 replaced)
+        assert(invocations[0]!.dones[0]?.toolCalls[0]?.providerState === "sig~conformance", "the adapter must surface providerState on its emitted ToolCall");
+        // and the REPLAY wire must hand it back to the provider verbatim
+        wireHas(wires, 1, "sig~conformance", "the providerState on replay");
+      },
+    },
+  ];
+
+  const report: ConformanceReport = { passed: [], skipped: [], failed: [] };
+  for (const s of scenarios) {
+    if (s.skip) { report.skipped.push(s.name); continue; }
+    try {
+      await s.run();
+      report.passed.push(s.name);
+    } catch (err) {
+      report.failed.push({ scenario: s.name, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  return report;
+}
+
+// A minimal EventSink for driving AgentSession in tests/conformance.
+function memorySink(): EventSink {
+  const subs = new Set<(e: TurnEvent) => void>();
+  return {
+    emit(e) { subs.forEach((cb) => { try { cb(e); } catch { /* a bad subscriber must not break emit */ } }); },
+    subscribe(cb) { subs.add(cb); return () => subs.delete(cb); },
+  };
 }
