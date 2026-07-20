@@ -1,5 +1,11 @@
 # @junejs/core
 
+## 0.1.1-dev.22
+
+### Patch Changes
+
+- [#112](https://github.com/junebuild/june/pull/112) [`6e31981`](https://github.com/junebuild/june/commit/6e319810e5888875434656f282e57818ec895229) Thanks [@linyiru](https://github.com/linyiru)! - `slackChannel(...).diagnose()` ([#90](https://github.com/junebuild/june/issues/90)) — preflight diagnostics as one structured, read-only call: verifies the bot token (`auth.test`), compares granted scopes (the `x-oauth-scopes` response header) against what the ENABLED features need (stream/status → `assistant:write`, reaction events → `reactions:read`, …), and reports per-isolate delivery counters (events received per kind — un-normalizable events count under their raw Slack type — plus interactions split three ways: claimed by a built-in branch / delivered to `onInteraction` (`appHandled`) / unrouted, and rejection counts). `hints` renders the findings as one-liners: "app_mention received: 0 since this isolate started — check Socket Mode is OFF and the Events Request URL points at this deployment" is the packaged answer to the silent-failure hunt that motivated the issue.
+
 ## 0.1.1-dev.21
 
 ### Patch Changes
