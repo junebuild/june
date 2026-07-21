@@ -3,7 +3,7 @@
   "compilerOptions": {
     "jsx": "react-jsx",
     "resolveJsonModule": true,
-    "types": ["react"]
+    "types": ["bun", "react"]
   },
   "include": ["app", "june.config.ts", "site.test.ts"]
 }
