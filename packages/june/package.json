@@ -156,7 +156,8 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/junebuild/june"
+    "url": "git+https://github.com/junebuild/june.git",
+    "directory": "packages/june"
   },
   "devDependencies": {
     "@libsql/client": "^0.17.3",
