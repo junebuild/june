@@ -7,6 +7,11 @@ export default defineConfig({
   entry: ["src/**/*.ts"],
   format: "esm",
   dts: true,
+  // Gate the published type surface: attw resolves the packed package the way
+  // consumers' tsc does (ESM-only — CJS resolution failures don't apply);
+  // publint lints the exports map. Both fail the build on real problems.
+  attw: { profile: "esm-only", level: "error" },
+  publint: true,
   outDir: "dist",
   platform: "neutral",
 });

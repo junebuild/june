@@ -14,6 +14,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/junebuild/june"
+    "url": "git+https://github.com/junebuild/june.git",
+    "directory": "packages/create-june"
   }
 }

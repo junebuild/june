@@ -58,7 +58,7 @@
     "@types/react": "catalog:",
     "react": "catalog:",
     "satori": "^0.26.0",
-    "typescript": "^5.9.0",
+    "typescript": "^7.0.0",
     "workers-og": "^0.0.27"
   },
   "author": "Lawrence Lin",
