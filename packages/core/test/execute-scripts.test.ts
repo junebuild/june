@@ -175,11 +175,22 @@ describe("neutralize → morph → execute — the invariant", () => {
   });
 
   test('an authored EMPTY type round-trips — script[type=""] stays selector-observable', () => {
+    // type="" is a classic script on a hard load; the stamp must restore the
+    // attribute AS AUTHORED, not strip it. (Execution can't be observed here —
+    // happy-dom's evaluator skips an empty-string type, another browser drift —
+    // so assert the stamp/restore halves.)
+    const next = document.createElement("div");
+    next.innerHTML = '<script type="">1</script>';
+    neutralizeScripts(next);
+    const stamped = next.querySelector("script")!;
+    expect(stamped.getAttribute("type")).toBe("text/x-june-pending"); // classified executable
+    expect(stamped.getAttribute("data-june-type")).toBe(""); // authored "" stashed, not dropped
+
     const t = liveTarget();
-    swap(t, '<script type="">window.__emptyType = (window.__emptyType||0)+1</script>');
-    expect(w.__emptyType).toBe(1); // empty type is executable — it ran
+    swap(t, '<script type="">window.__emptyType = 1</script>');
     const s = t.querySelector("script")!;
     expect(s.getAttribute("type")).toBe(""); // restored as authored, not stripped
+    expect(s.hasAttribute("data-june-type")).toBe(false); // no stash residue
   });
 
   test("authored markup wearing the sentinel type is never promoted to executable", () => {
