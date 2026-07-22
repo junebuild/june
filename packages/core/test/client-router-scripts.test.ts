@@ -149,6 +149,23 @@ describe("soft-nav executes the fragment's scripts", () => {
     expect(w.__shellRan).toBeUndefined(); // never re-run (it's outside the swap region)
   });
 
+  test("a fetch that redirected cross-origin is NEVER applied (no foreign scripts)", async () => {
+    document.body.innerHTML = page('<a href="/redirected">R</a>', "<main data-keep>home</main>");
+    // A same-origin request whose FINAL url (post-redirect) is cross-origin:
+    // only `url` distinguishes it — the body is CORS-readable HTML with a script.
+    globalThis.fetch = (async () => {
+      const res = new Response("<main>evil</main><script>window.__foreignRan = true</script>");
+      Object.defineProperty(res, "url", { value: "http://evil.test/landing" });
+      return res;
+    }) as unknown as typeof fetch;
+
+    clickLink("/redirected");
+    await flush();
+
+    expect(document.querySelector("[data-keep]")).toBeTruthy(); // fragment NOT morphed in
+    expect(w.__foreignRan).toBeUndefined(); // and its script never ran here
+  });
+
   test("popstate navigation re-executes scripts too", async () => {
     w.__popRuns = 0;
     document.body.innerHTML = page('<a href="/pop">P</a>', "<main>home</main>");

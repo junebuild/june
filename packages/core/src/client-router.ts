@@ -102,6 +102,16 @@ export function startClientRouter(rehydrate: Rehydrate): void {
         signal: ac.signal,
       });
       if (!res.ok) throw new Error(`status ${res.status}`);
+      // The click guard checked the REQUESTED origin, but fetch follows
+      // redirects — a same-origin endpoint can land on CORS-readable
+      // cross-origin HTML whose scripts would then run under THIS document's
+      // origin (a hard nav runs them under the destination's). Revalidate the
+      // FINAL url and hand any cross-origin landing back to the browser.
+      // (res.url is "" in some non-browser Response stubs — nothing to check.)
+      if (res.url && new URL(res.url).origin !== location.origin) {
+        if (mine === token) location.href = href;
+        return;
+      }
       html = await res.text();
       // The server encodeTitles the header; decode it back before document.title.
       title = decodeTitle(res.headers.get(TITLE_HEADER));
