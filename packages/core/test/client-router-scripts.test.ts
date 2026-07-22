@@ -172,6 +172,41 @@ describe("soft-nav executes the fragment's scripts", () => {
     expect(w.__foreignRan).toBeUndefined(); // and its script never ran here
   });
 
+  test("a superseded view-transition callback is inert — no stale morph, no stale scripts", async () => {
+    // startViewTransition defers apply; a second navigation can start in the
+    // gap. The stale callback must do nothing when it finally runs.
+    const captured: Array<() => void> = [];
+    (document as { startViewTransition?: (cb: () => void) => void }).startViewTransition = (
+      cb,
+    ) => {
+      captured.push(cb);
+    };
+    try {
+      document.body.innerHTML = page(
+        '<a href="/vt-a">A</a><a href="/vt-b">B</a>',
+        "<main data-page='start'>home</main>",
+      );
+      const links = '<nav><a href="/vt-a">A</a><a href="/vt-b">B</a></nav>';
+      globalThis.fetch = fragment(`${links}<main data-page="a">a</main><script>window.__vtStale = true</script>`);
+      clickLink("/vt-a");
+      await flush(); // apply for A captured, NOT yet run
+      globalThis.fetch = fragment(`${links}<main data-page="b">b</main><script>window.__vtWinner = true</script>`);
+      clickLink("/vt-b");
+      await flush(); // apply for B captured — A is now superseded
+      expect(captured.length).toBe(2);
+
+      captured[0]!(); // the stale callback fires first, as it would in a browser
+      expect(w.__vtStale).toBeUndefined(); // inert: no scripts from the loser
+      expect(document.querySelector('[data-page="a"]')).toBeNull(); // and no stale morph
+
+      captured[1]!();
+      expect(w.__vtWinner).toBe(true); // the winning navigation applies normally
+      expect(document.querySelector('[data-page="b"]')).toBeTruthy();
+    } finally {
+      delete (document as { startViewTransition?: unknown }).startViewTransition;
+    }
+  });
+
   test("popstate navigation re-executes scripts too", async () => {
     w.__popRuns = 0;
     document.body.innerHTML = page('<a href="/pop">P</a>', "<main>home</main>");

@@ -154,6 +154,11 @@ export function startClientRouter(rehydrate: Rehydrate): void {
     if (push) history.pushState({ june: true }, "", href);
 
     const apply = () => {
+      // startViewTransition runs this callback ASYNCHRONOUSLY (after capture) —
+      // a newer navigation may have started since it was scheduled. A stale
+      // callback must be inert: it would morph a superseded response and, worse,
+      // execute that page's scripts into the newer navigation's document.
+      if (mine !== token) return;
       morph(current, next);
       // Title BEFORE scripts: on a hard load the <head> title is parsed before
       // any body script runs, so activated scripts that read document.title
