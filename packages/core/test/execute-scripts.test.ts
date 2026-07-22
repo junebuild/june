@@ -153,18 +153,33 @@ describe("neutralize → morph → execute — the invariant", () => {
     expect(t.querySelector("script")!.textContent).toBe('{"@type":"Thing"}');
   });
 
-  test("island interiors are opaque — their scripts are never touched", () => {
+  test("island-interior scripts NEVER run — stamped through the morph, restored un-run", () => {
     const t = liveTarget();
     const next = t.cloneNode(false) as Element;
     next.innerHTML =
       '<june-island data-june-island="A"><script>window.__island = true</script></june-island>' +
       "<script>window.__outside = true</script>";
     neutralizeScripts(next);
-    // the island-interior script keeps its real (absent) type — not june's to manage
-    expect(next.querySelector("june-island script")!.hasAttribute("type")).toBe(false);
-    expect(next.querySelector(":scope > script")!.getAttribute("type")).toBe("text/x-june-pending");
+    // stamped too: a FRESH island's subtree is imported and connected by the
+    // morph — in a drift DOM that would otherwise execute its scripts mid-swap
+    expect(next.querySelector("june-island script")!.getAttribute("type")).toBe(
+      "text/x-june-pending",
+    );
     morph(t, next);
     executeScripts(t);
+    expect(w.__island).toBeUndefined(); // never ran — not mid-morph, not at activation
+    const inner = t.querySelector("june-island script")!;
+    expect(inner.hasAttribute("type")).toBe(false); // back to its SSR shape pre-rehydration
+    expect(inner.hasAttribute("data-june-pending")).toBe(false); // no stamp residue
     expect(w.__outside).toBe(true); // the sibling outside the island ran
+  });
+
+  test("authored markup wearing the sentinel type is never promoted to executable", () => {
+    // Only scripts BEARING THE MARKER neutralizeScripts set are activated — a
+    // data block that happens to use our sentinel type stays a data block.
+    const t = liveTarget();
+    swap(t, '<script type="text/x-june-pending">window.__forged = true</script>');
+    expect(w.__forged).toBeUndefined();
+    expect(t.querySelector("script")!.getAttribute("type")).toBe("text/x-june-pending"); // as authored
   });
 });

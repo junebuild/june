@@ -31,13 +31,17 @@
 // "idempotent or delegated" — the same bar any script must clear to survive a
 // browser reload.
 //
-// Out of scope by design:
-//  - Island interiors — React-owned DOM is opaque to the swap layer (the morph
-//    contract); islands re-run their own effects via re-hydration.
-//  - Non-executable types (JSON-LD and other data blocks) — nothing to run.
+// Never activated (but still neutralized, so they can't run mid-swap either):
+//  - Island interiors — React-owned DOM the swap layer must not run scripts
+//    in; islands re-run their own effects via re-hydration. Their scripts are
+//    stamped like the rest (a FRESH island's subtree is imported and connected
+//    by the morph — in a drift DOM that's an execution vector) and restored in
+//    place right after the morph, before re-hydration sees the subtree.
 //  - `data-june-once` scripts — full-page-load only (analytics bootstrapping
-//    and the like): neutralized like the rest, then restored in place without
-//    a rebuild, so a swap never runs them.
+//    and the like): restored in place without a rebuild, so a swap never runs
+//    them.
+// Not touched at all:
+//  - Non-executable types (JSON-LD and other data blocks) — nothing to run.
 //
 // Known limits:
 //  - A `<script type="module" src>` re-executes only once per document (the
@@ -85,8 +89,12 @@ const EXECUTABLE = new Set([
 const isExecutable = (type: string): boolean =>
   EXECUTABLE.has((type.split(";")[0] ?? "").trim().toLowerCase());
 
-// The pending stamp and the stash for the script's real type ("" stays absent).
+// The pending stamp: a non-executable type (the inertness guarantee) PLUS a
+// marker attribute (the identity guarantee — authored markup could carry the
+// sentinel type, and activation must never promote a script it didn't stamp).
+// ORIG_TYPE_ATTR stashes the script's real type ("" stays absent).
 const PENDING_TYPE = "text/x-june-pending";
+const PENDING_ATTR = "data-june-pending";
 const ORIG_TYPE_ATTR = "data-june-type";
 
 // Opt-out: this script runs on a full document load only, never on a swap.
@@ -94,13 +102,16 @@ export const RUN_ONCE_ATTR = "data-june-once";
 
 // BEFORE morph: stamp every executable script in the parsed fragment so it
 // cannot run while morph inserts it (regardless of DOM-implementation quirks).
+// Island interiors are stamped too — the morph deep-imports and connects a
+// FRESH island's subtree, which in a drift DOM would otherwise execute its
+// scripts mid-swap; activation restores them un-run before re-hydration.
 export function neutralizeScripts(region: Element): void {
   for (const s of Array.from(region.querySelectorAll("script"))) {
-    if (s.closest(ISLAND_TAG)) continue; // islands are opaque — React owns that DOM
     if (!isExecutable(s.type)) continue; // data block — leave it alone
     const orig = s.getAttribute("type");
     if (orig) s.setAttribute(ORIG_TYPE_ATTR, orig);
     s.setAttribute("type", PENDING_TYPE);
+    s.setAttribute(PENDING_ATTR, "");
   }
 }
 
@@ -111,15 +122,19 @@ export function neutralizeScripts(region: Element): void {
 // that script opted into unordered execution, exactly as on a hard load).
 export function executeScripts(region: Element): void {
   for (const old of Array.from(
-    region.querySelectorAll<HTMLScriptElement>(`script[type="${PENDING_TYPE}"]`),
+    // BOTH halves of the stamp: authored markup wearing the sentinel type (but
+    // never stamped by neutralizeScripts) must not be promoted to executable.
+    region.querySelectorAll<HTMLScriptElement>(`script[type="${PENDING_TYPE}"][${PENDING_ATTR}]`),
   )) {
-    if (old.closest(ISLAND_TAG)) continue;
     const origType = old.getAttribute(ORIG_TYPE_ATTR);
-    if (old.hasAttribute(RUN_ONCE_ATTR)) {
-      // Restore the stamp in place — same node, so it stays un-run.
+    // Island-interior and run-once scripts: restore the stamp in place — same
+    // node, so they stay un-run (and the island subtree is back to its SSR
+    // shape before re-hydration reads it).
+    if (old.closest(ISLAND_TAG) || old.hasAttribute(RUN_ONCE_ATTR)) {
       if (origType) old.setAttribute("type", origType);
       else old.removeAttribute("type");
       old.removeAttribute(ORIG_TYPE_ATTR);
+      old.removeAttribute(PENDING_ATTR);
       continue;
     }
     const fresh = document.createElement("script");
@@ -127,6 +142,7 @@ export function executeScripts(region: Element): void {
     if (origType) fresh.setAttribute("type", origType);
     else fresh.removeAttribute("type");
     fresh.removeAttribute(ORIG_TYPE_ATTR);
+    fresh.removeAttribute(PENDING_ATTR);
     // CSP3 hides `nonce` from getAttribute — carry it via the property.
     if (old.nonce) fresh.nonce = old.nonce;
     fresh.textContent = old.textContent;
