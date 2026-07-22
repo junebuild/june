@@ -168,4 +168,37 @@ describe("startJuneClient (bootstrap)", () => {
     delete w.__juneLiveReload;
     document.body.innerHTML = "";
   });
+
+  test("dev push-HMR hook: a cross-origin redirect landing is refused (hard-reload fallback)", async () => {
+    document.body.innerHTML = '<div data-june-root><h1>keep</h1></div>';
+    await act(async () => {
+      startJuneClient({ loaders });
+      await flush();
+    });
+    const hot = (window as unknown as { __juneLiveReload?: () => Promise<boolean> })
+      .__juneLiveReload!;
+
+    // fetch followed a redirect off-origin: only Response.url says so, and the
+    // CORS-readable body must NOT be applied under this document's origin.
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      const res = new Response("<h1>foreign</h1>");
+      Object.defineProperty(res, "url", { value: "http://evil.test/landing" });
+      return res;
+    }) as unknown as typeof fetch;
+
+    let ok = true;
+    await act(async () => {
+      ok = await hot();
+    });
+    globalThis.fetch = origFetch;
+
+    expect(ok).toBe(false); // caller falls back to a hard reload
+    expect(document.querySelector("h1")!.textContent).toBe("keep"); // nothing applied
+
+    const w = window as unknown as { __juneRouter?: boolean; __juneLiveReload?: unknown };
+    delete w.__juneRouter;
+    delete w.__juneLiveReload;
+    document.body.innerHTML = "";
+  });
 });
