@@ -38,6 +38,11 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  // The booted client bundle's router idempotency flag (and dev-HMR hook) live
+  // on the process-wide globalThis and would survive unregister — a later
+  // router test file's startClientRouter would silently no-op. Clean them up.
+  delete (globalThis as { __juneRouter?: boolean }).__juneRouter;
+  delete (globalThis as { __juneLiveReload?: unknown }).__juneLiveReload;
   GlobalRegistrator.unregister();
   await rm(outDir, { recursive: true, force: true });
 });

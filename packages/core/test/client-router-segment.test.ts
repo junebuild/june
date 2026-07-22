@@ -34,6 +34,10 @@ beforeAll(() => {
   (window as unknown as { happyDOM?: { setURL(u: string): void } }).happyDOM?.setURL(
     "http://june.test/",
   );
+  // Clear a stale idempotency flag an earlier file may have left on the shared
+  // globalThis (e.g. a june-package e2e suite booting the built client bundle) —
+  // otherwise startClientRouter silently no-ops for THIS file's document.
+  delete (globalThis as { __juneRouter?: boolean }).__juneRouter;
   startClientRouter(() => {});
 });
 

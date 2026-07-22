@@ -41,6 +41,12 @@ beforeAll(() => {
   (window as unknown as { happyDOM?: { setURL(u: string): void } }).happyDOM?.setURL(
     "http://june.test/",
   );
+  // The idempotency flag lives on the process-wide globalThis, so an EARLIER
+  // test file that booted a router (the june-package e2e suites run the built
+  // client bundle) leaves it set — and startClientRouter here would silently
+  // no-op, attaching no listeners to THIS file's document. Clear any stale
+  // flag first; execution order across files is not guaranteed.
+  delete (globalThis as { __juneRouter?: boolean }).__juneRouter;
   // The one router for this file; the rehydrate hook records apply-order so a
   // test can assert scripts run BEFORE island hydration (parse-time parity).
   startClientRouter(() => {
