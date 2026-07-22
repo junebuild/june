@@ -110,6 +110,29 @@ describe("neutralize → morph → execute — the invariant", () => {
     expect(s.hasAttribute("type")).toBe(false); // stamp removed — clean DOM, still un-run
   });
 
+  test("legacy JavaScript MIME types are classified executable, parameters and all", () => {
+    // A hard load runs `application/javascript` (and the rest of the spec's
+    // classic-JS essence list) — the swap layer must not misfile them as data
+    // blocks. Assert the classification via the stamp (happy-dom's evaluator
+    // only runs plain/module scripts, so execution itself can't be observed
+    // for these types here).
+    const next = document.createElement("div");
+    next.innerHTML =
+      '<script type="application/javascript">1</script>' +
+      '<script type="text/javascript;charset=utf-8">1</script>' +
+      '<script type="application/ld+json">{}</script>';
+    neutralizeScripts(next);
+    const types = Array.from(next.querySelectorAll("script")).map((s) => s.getAttribute("type"));
+    expect(types).toEqual(["text/x-june-pending", "text/x-june-pending", "application/ld+json"]);
+
+    // ...and activation restores the original type with no stamp residue.
+    const t = liveTarget();
+    swap(t, '<script type="application/javascript">window.__legacy = 1</script>');
+    const s = t.querySelector("script")!;
+    expect(s.getAttribute("type")).toBe("application/javascript");
+    expect(s.hasAttribute("data-june-type")).toBe(false);
+  });
+
   test("data blocks (JSON-LD and friends) are left completely alone", () => {
     const t = liveTarget();
     const next = t.cloneNode(false) as Element;

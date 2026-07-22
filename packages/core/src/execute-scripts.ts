@@ -47,8 +47,34 @@
 // exported from the barrel.
 import { ISLAND_TAG } from "./islands";
 
-// Executable classic/module script types; anything else is a data block.
-const EXECUTABLE = new Set(["", "text/javascript", "module"]);
+// Executable script types — the HTML spec's full classic JavaScript MIME
+// essence list, plus the absent type and "module"; anything else is a data
+// block. A hard load executes ALL of these, so the swap layer must too.
+const EXECUTABLE = new Set([
+  "",
+  "module",
+  "application/ecmascript",
+  "application/javascript",
+  "application/x-ecmascript",
+  "application/x-javascript",
+  "text/ecmascript",
+  "text/javascript",
+  "text/javascript1.0",
+  "text/javascript1.1",
+  "text/javascript1.2",
+  "text/javascript1.3",
+  "text/javascript1.4",
+  "text/javascript1.5",
+  "text/jscript",
+  "text/livescript",
+  "text/x-ecmascript",
+  "text/x-javascript",
+]);
+
+// Match by MIME essence, the way the browser does: parameters stripped
+// (`text/javascript;charset=utf-8` is executable), whitespace trimmed.
+const isExecutable = (type: string): boolean =>
+  EXECUTABLE.has((type.split(";")[0] ?? "").trim().toLowerCase());
 
 // The pending stamp and the stash for the script's real type ("" stays absent).
 const PENDING_TYPE = "text/x-june-pending";
@@ -62,7 +88,7 @@ export const RUN_ONCE_ATTR = "data-june-once";
 export function neutralizeScripts(region: Element): void {
   for (const s of Array.from(region.querySelectorAll("script"))) {
     if (s.closest(ISLAND_TAG)) continue; // islands are opaque — React owns that DOM
-    if (!EXECUTABLE.has(s.type.toLowerCase())) continue; // data block — leave it alone
+    if (!isExecutable(s.type)) continue; // data block — leave it alone
     const orig = s.getAttribute("type");
     if (orig) s.setAttribute(ORIG_TYPE_ATTR, orig);
     s.setAttribute("type", PENDING_TYPE);
