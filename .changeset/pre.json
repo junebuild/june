@@ -35,6 +35,7 @@
     "slack-dm-stream-recipients",
     "slack-feedback-tasks",
     "slack-stream-hardening",
+    "soft-nav-script-execution",
     "store-hydration-race",
     "streaming-model-p2",
     "test-helpers",
