@@ -46,7 +46,7 @@ export function applyLiveUpdate(
   // Title before scripts (reload parity — a script reading document.title must
   // see the pushed value), then activate the re-rendered region's scripts so its
   // behaviors come back (dev HMR relies on this; region scripts must be
-  // idempotent, as on any reload).
+  // repeat-safe in the same realm — see the execute-scripts contract).
   if (title !== null) document.title = title;
   executeScripts(current);
   rehydrate(current); // hydrate any NEW island markers (idempotent — skips live ones)

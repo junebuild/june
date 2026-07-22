@@ -27,9 +27,16 @@
 // The pending stamp also solves morph's node-keeping subtlety for free: an
 // unchanged script element survives the swap already-run, but the DOM it bound
 // listeners to was just replaced. Attribute sync marks the survivor pending, so
-// it re-runs like everything else. The region-script contract is therefore
-// "idempotent or delegated" — the same bar any script must clear to survive a
-// browser reload.
+// it re-runs like everything else.
+//
+// THE REGION-SCRIPT CONTRACT — repeat-safe in the SAME realm, which is
+// STRICTER than surviving a reload: a reload gets a fresh JavaScript realm and
+// a fresh DOM, activation gets neither. Re-runs share the realm's global
+// lexical environment (a bare top-level `const`/`let` throws "already
+// declared" on the second activation — wrap the script in an IIFE, or use
+// `var`/function declarations), and morph PRESERVES unchanged elements (a
+// direct addEventListener on a preserved node accumulates — delegate, guard,
+// or bind only to elements the fragment actually replaced).
 //
 // Never activated (but still neutralized, so they can't run mid-swap either):
 //  - Island interiors — React-owned DOM the swap layer must not run scripts
