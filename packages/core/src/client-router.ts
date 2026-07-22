@@ -112,6 +112,15 @@ export function startClientRouter(rehydrate: Rehydrate): void {
         if (mine === token) location.href = href;
         return;
       }
+      // A SAME-origin redirect must land history on the FINAL url (hard-nav
+      // parity): relative assets in activated scripts resolve against
+      // location, so /docs redirected to /docs/ must not leave /docs in the
+      // bar (src="page.js" would resolve to /page.js instead of
+      // /docs/page.js). The requested hash survives — redirects drop it.
+      if (res.url) {
+        const final = new URL(res.url);
+        href = final.pathname + final.search + (final.hash || new URL(href, location.origin).hash);
+      }
       html = await res.text();
       // The server encodeTitles the header; decode it back before document.title.
       title = decodeTitle(res.headers.get(TITLE_HEADER));

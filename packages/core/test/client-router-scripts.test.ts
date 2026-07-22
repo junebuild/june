@@ -155,6 +155,25 @@ describe("soft-nav executes the fragment's scripts", () => {
     expect(w.__shellRan).toBeUndefined(); // never re-run (it's outside the swap region)
   });
 
+  test("a same-origin redirect lands history on the FINAL url (asset base parity)", async () => {
+    document.body.innerHTML = page('<a href="/docs">Docs</a>', "<main>home</main>");
+    // Requested /docs; the server redirected to /docs/ — only res.url says so.
+    globalThis.fetch = (async () => {
+      const res = new Response(
+        '<nav><a href="/docs">Docs</a></nav><main data-page="docs">d</main><script>window.__redirBase = location.pathname</script>',
+      );
+      Object.defineProperty(res, "url", { value: "http://june.test/docs/" });
+      return res;
+    }) as unknown as typeof fetch;
+
+    clickLink("/docs");
+    await flush();
+
+    expect(document.querySelector('[data-page="docs"]')).toBeTruthy(); // applied (same origin)
+    expect(location.pathname).toBe("/docs/"); // history carries the FINAL url
+    expect(w.__redirBase).toBe("/docs/"); // scripts activate under the final base
+  });
+
   test("a fetch that redirected cross-origin is NEVER applied (no foreign scripts)", async () => {
     document.body.innerHTML = page('<a href="/redirected">R</a>', "<main data-keep>home</main>");
     // A same-origin request whose FINAL url (post-redirect) is cross-origin:
