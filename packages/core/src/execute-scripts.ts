@@ -39,8 +39,17 @@
 //    and the like): neutralized like the rest, then restored in place without
 //    a rebuild, so a swap never runs them.
 //
-// Known limit: a `<script type="module" src>` re-executes only once per
-// document (the module map caches by URL) — inline modules re-run fine.
+// Known limits:
+//  - A `<script type="module" src>` re-executes only once per document (the
+//    module map caches by URL) — inline modules re-run fine.
+//  - Activation does not await the network: inline scripts run synchronously
+//    in document order, and external non-async scripts load in order relative
+//    to EACH OTHER (`async = false`), but a later inline script will not wait
+//    for a preceding external one the way a parsing hard load would. That
+//    trade — shared with Turbo and htmx — keeps activation synchronous, so a
+//    slow CDN can never stall island re-hydration or a rapid follow-up
+//    navigation. An inline script depending on an external sibling should
+//    listen for its load event (or the pair belongs in one script).
 //
 // PURE per the contract layer's rule (no `node:*` / `Bun.*`); browser-only
 // (touches `document`), consumed by client-router and client-live — not
@@ -97,7 +106,9 @@ export function neutralizeScripts(region: Element): void {
 
 // AFTER morph: activate every pending script in the swapped region. Inline
 // scripts execute synchronously at their replace, preserving document order;
-// external ones get `async = false` so the browser queues them in order.
+// external ones not authored `async` get `async = false` so the browser queues
+// them in order relative to each other (an authored `async` is respected —
+// that script opted into unordered execution, exactly as on a hard load).
 export function executeScripts(region: Element): void {
   for (const old of Array.from(
     region.querySelectorAll<HTMLScriptElement>(`script[type="${PENDING_TYPE}"]`),
@@ -119,7 +130,7 @@ export function executeScripts(region: Element): void {
     // CSP3 hides `nonce` from getAttribute — carry it via the property.
     if (old.nonce) fresh.nonce = old.nonce;
     fresh.textContent = old.textContent;
-    if (old.src) fresh.async = false;
+    if (old.src && !old.hasAttribute("async")) fresh.async = false;
     old.replaceWith(fresh); // an inline script executes synchronously here
   }
 }

@@ -102,6 +102,14 @@ describe("neutralize → morph → execute — the invariant", () => {
     expect(mod.hasAttribute("data-june-type")).toBe(false); // no stash residue
   });
 
+  test("an authored `async` external keeps it — that script opted into unordered", () => {
+    const t = liveTarget();
+    swap(t, '<script src="/a.js" async></script>');
+    const s = t.querySelector<HTMLScriptElement>("script[src]")!;
+    expect(s.hasAttribute("async")).toBe(true);
+    expect(s.async).toBe(true); // not forced into the ordered queue
+  });
+
   test(`${RUN_ONCE_ATTR}: restored in place, never run by a swap`, () => {
     const t = liveTarget();
     swap(t, `<script ${RUN_ONCE_ATTR}>window.__optedOut = true</script>`);
