@@ -121,7 +121,9 @@ export function neutralizeScripts(region: Element): void {
   for (const s of Array.from(region.querySelectorAll("script"))) {
     if (!isExecutable(s.type)) continue; // data block — leave it alone
     const orig = s.getAttribute("type");
-    if (orig) s.setAttribute(ORIG_TYPE_ATTR, orig);
+    // null = attribute absent; "" is an AUTHORED empty type and must round-trip
+    // (script[type=""] is selector-observable), so branch on presence.
+    if (orig !== null) s.setAttribute(ORIG_TYPE_ATTR, orig);
     s.setAttribute("type", PENDING_TYPE);
     s.setAttribute(PENDING_ATTR, "");
   }
@@ -138,12 +140,14 @@ export function executeScripts(region: Element): void {
     // never stamped by neutralizeScripts) must not be promoted to executable.
     region.querySelectorAll<HTMLScriptElement>(`script[type="${PENDING_TYPE}"][${PENDING_ATTR}]`),
   )) {
+    // null = no stash (the type attribute was absent); "" round-trips as an
+    // authored empty type.
     const origType = old.getAttribute(ORIG_TYPE_ATTR);
     // Island-interior and run-once scripts: restore the stamp in place — same
     // node, so they stay un-run (and the island subtree is back to its SSR
     // shape before re-hydration reads it).
     if (old.closest(ISLAND_TAG) || old.hasAttribute(RUN_ONCE_ATTR)) {
-      if (origType) old.setAttribute("type", origType);
+      if (origType !== null) old.setAttribute("type", origType);
       else old.removeAttribute("type");
       old.removeAttribute(ORIG_TYPE_ATTR);
       old.removeAttribute(PENDING_ATTR);
@@ -151,7 +155,7 @@ export function executeScripts(region: Element): void {
     }
     const fresh = document.createElement("script");
     for (const a of Array.from(old.attributes)) fresh.setAttribute(a.name, a.value);
-    if (origType) fresh.setAttribute("type", origType);
+    if (origType !== null) fresh.setAttribute("type", origType);
     else fresh.removeAttribute("type");
     fresh.removeAttribute(ORIG_TYPE_ATTR);
     fresh.removeAttribute(PENDING_ATTR);

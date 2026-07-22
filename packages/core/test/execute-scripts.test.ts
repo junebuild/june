@@ -174,6 +174,14 @@ describe("neutralize → morph → execute — the invariant", () => {
     expect(w.__outside).toBe(true); // the sibling outside the island ran
   });
 
+  test('an authored EMPTY type round-trips — script[type=""] stays selector-observable', () => {
+    const t = liveTarget();
+    swap(t, '<script type="">window.__emptyType = (window.__emptyType||0)+1</script>');
+    expect(w.__emptyType).toBe(1); // empty type is executable — it ran
+    const s = t.querySelector("script")!;
+    expect(s.getAttribute("type")).toBe(""); // restored as authored, not stripped
+  });
+
   test("authored markup wearing the sentinel type is never promoted to executable", () => {
     // Only scripts BEARING THE MARKER neutralizeScripts set are activated — a
     // data block that happens to use our sentinel type stays a data block.
