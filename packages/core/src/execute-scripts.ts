@@ -46,14 +46,19 @@
 // Known limits:
 //  - A `<script type="module" src>` re-executes only once per document (the
 //    module map caches by URL) — inline modules re-run fine.
-//  - Activation does not await the network: inline scripts run synchronously
-//    in document order, and external non-async scripts load in order relative
-//    to EACH OTHER (`async = false`), but a later inline script will not wait
-//    for a preceding external one the way a parsing hard load would. That
-//    trade — shared with Turbo and htmx — keeps activation synchronous, so a
-//    slow CDN can never stall island re-hydration or a rapid follow-up
-//    navigation. An inline script depending on an external sibling should
-//    listen for its load event (or the pair belongs in one script).
+//  - Activation does not await the network: inline CLASSIC scripts run
+//    synchronously in document order, and external non-async scripts load in
+//    order relative to EACH OTHER (`async = false`), but a later inline script
+//    will not wait for a preceding external one the way a parsing hard load
+//    would. That trade — shared with Turbo and htmx — keeps activation
+//    synchronous, so a slow CDN can never stall island re-hydration or a rapid
+//    follow-up navigation. An inline script depending on an external sibling
+//    should listen for its load event (or the pair belongs in one script).
+//  - Module evaluation is queued, not synchronous: per the module algorithm,
+//    even an INLINE `type="module"` script evaluates after activation returns
+//    — so island re-hydration (and any later classic script) can run before
+//    it. Module-based page setup that must observe the pre-hydration DOM
+//    belongs in a classic script (or in the island itself).
 //
 // PURE per the contract layer's rule (no `node:*` / `Bun.*`); browser-only
 // (touches `document`), consumed by client-router and client-live — not
@@ -147,6 +152,8 @@ export function executeScripts(region: Element): void {
     if (old.nonce) fresh.nonce = old.nonce;
     fresh.textContent = old.textContent;
     if (old.src && !old.hasAttribute("async")) fresh.async = false;
-    old.replaceWith(fresh); // an inline script executes synchronously here
+    // An inline CLASSIC script executes synchronously right here; an inline
+    // MODULE queues its evaluation (see the module-timing limit above).
+    old.replaceWith(fresh);
   }
 }
