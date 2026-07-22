@@ -161,6 +161,21 @@ export function startJuneClient(options: StartOptions): void {
       try {
         const res = await fetch(location.href, { headers: { accept: FRAGMENT_ACCEPT } });
         if (!res.ok) return false;
+        // Same guard as the soft-nav router: fetch follows redirects, and
+        // applyLiveUpdate now activates fragment scripts — a CORS-readable
+        // cross-origin landing must not run under this document's origin. And
+        // unlike the router, this hook cannot move history to a same-origin
+        // redirect's final url — so a DIFFERENT path/search must also refuse
+        // (relative assets would activate against the wrong base). False →
+        // the dev-reload caller falls back to a hard reload.
+        if (res.url) {
+          const final = new URL(res.url);
+          if (
+            final.origin !== location.origin ||
+            final.pathname + final.search !== location.pathname + location.search
+          )
+            return false;
+        }
         return applyLiveUpdate(
           await res.text(),
           decodeTitle(res.headers.get(TITLE_HEADER)), // server encodeTitles it

@@ -15,6 +15,7 @@
 // (touches `document`/`history`/`fetch`), so — like islands-client — it is
 // exposed ONLY via the `@junejs/core/client-router` subpath and is NOT
 // re-exported from the barrel.
+import { executeScripts, neutralizeScripts } from "./execute-scripts";
 import { morph } from "./morph";
 import { FRAGMENT_ACCEPT, SEGMENT_HEADER, SHELL_ATTR, TITLE_HEADER, decodeTitle } from "./nav-protocol";
 import { outletEl, resolveSwapTarget } from "./shell";
@@ -101,6 +102,25 @@ export function startClientRouter(rehydrate: Rehydrate): void {
         signal: ac.signal,
       });
       if (!res.ok) throw new Error(`status ${res.status}`);
+      // The click guard checked the REQUESTED origin, but fetch follows
+      // redirects — a same-origin endpoint can land on CORS-readable
+      // cross-origin HTML whose scripts would then run under THIS document's
+      // origin (a hard nav runs them under the destination's). Revalidate the
+      // FINAL url and hand any cross-origin landing back to the browser.
+      // (res.url is "" in some non-browser Response stubs — nothing to check.)
+      if (res.url && new URL(res.url).origin !== location.origin) {
+        if (mine === token) location.href = href;
+        return;
+      }
+      // A SAME-origin redirect must land history on the FINAL url (hard-nav
+      // parity): relative assets in activated scripts resolve against
+      // location, so /docs redirected to /docs/ must not leave /docs in the
+      // bar (src="page.js" would resolve to /page.js instead of
+      // /docs/page.js). The requested hash survives — redirects drop it.
+      if (res.url) {
+        const final = new URL(res.url);
+        href = final.pathname + final.search + (final.hash || new URL(href, location.origin).hash);
+      }
       html = await res.text();
       // The server encodeTitles the header; decode it back before document.title.
       title = decodeTitle(res.headers.get(TITLE_HEADER));
@@ -129,6 +149,9 @@ export function startClientRouter(rehydrate: Rehydrate): void {
     // the target, then morph the live target toward it in place.
     const next = current.cloneNode(false) as Element;
     next.innerHTML = html;
+    // The fragment's scripts were parsed inert; stamp them pending so nothing can
+    // run mid-morph, then executeScripts activates them after the swap.
+    neutralizeScripts(next);
     // Whole-chain morph into the root: the root is no longer a boundary shell, so
     // drop any stale shell key the clone copied — else mountedShellKey() would lie
     // on the next navigation and could mis-target a later segment fragment.
@@ -140,8 +163,20 @@ export function startClientRouter(rehydrate: Rehydrate): void {
     if (push) history.pushState({ june: true }, "", href);
 
     const apply = () => {
+      // startViewTransition runs this callback ASYNCHRONOUSLY (after capture) —
+      // a newer navigation may have started since it was scheduled. A stale
+      // callback must be inert: it would morph a superseded response and, worse,
+      // execute that page's scripts into the newer navigation's document.
+      if (mine !== token) return;
       morph(current, next);
+      // Title BEFORE scripts: on a hard load the <head> title is parsed before
+      // any body script runs, so activated scripts that read document.title
+      // (analytics) must see the NEW page's value.
       if (title !== null) document.title = title;
+      // Hard-nav parity: activate the fragment's (pending-stamped) scripts BEFORE
+      // island hydration, mirroring a real page load where inline scripts run
+      // ahead of the deferred islands bundle.
+      executeScripts(current);
       rehydrate(current); // hydrate the new island markers (idempotent — skips live ones)
       updateActiveLinks(); // segment mode: move the shell's aria-current (no-op otherwise)
       window.scrollTo?.(0, 0);

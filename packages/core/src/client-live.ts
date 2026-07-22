@@ -8,6 +8,7 @@
 // navigation it does NOT touch history or scroll — it's the same URL, updated.
 //
 // Browser-only (touches the DOM); exposed via the @junejs/core/client-live subpath.
+import { executeScripts, neutralizeScripts } from "./execute-scripts";
 import { morph } from "./morph";
 import { SHELL_ATTR } from "./nav-protocol";
 import { resolveSwapTarget } from "./shell";
@@ -38,9 +39,16 @@ export function applyLiveUpdate(
   // ALL islands preserved (live-update semantics).
   const next = current.cloneNode(false) as Element;
   next.innerHTML = fragmentHtml;
+  // Stamp the fragment's scripts pending so nothing runs mid-morph; activated below.
+  neutralizeScripts(next);
   if (fragmentShell === null) next.removeAttribute(SHELL_ATTR); // keep the root shell key honest
   morph(current, next, { preserveIslands: "all" });
+  // Title before scripts (reload parity — a script reading document.title must
+  // see the pushed value), then activate the re-rendered region's scripts so its
+  // behaviors come back (dev HMR relies on this; region scripts must be
+  // repeat-safe in the same realm — see the execute-scripts contract).
   if (title !== null) document.title = title;
+  executeScripts(current);
   rehydrate(current); // hydrate any NEW island markers (idempotent — skips live ones)
   return true;
 }
