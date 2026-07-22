@@ -25,7 +25,7 @@ afterAll(() => {
 });
 
 import { startClientRouter } from "@junejs/core/client-router";
-import { SEGMENT_HEADER } from "@junejs/core/nav-protocol";
+import { SEGMENT_HEADER, TITLE_HEADER } from "@junejs/core/nav-protocol";
 
 type W = typeof globalThis & Record<string, unknown>;
 const w = globalThis as W;
@@ -115,6 +115,18 @@ describe("soft-nav executes the fragment's scripts", () => {
     await flush();
     expect(w.__applyOrder).toEqual(["script", "rehydrate"]);
     delete w.__applyOrder;
+  });
+
+  test("scripts see the NEW document.title, as on a hard load", async () => {
+    document.body.innerHTML = page('<a href="/titled">T</a>', "<main>home</main>");
+    document.title = "Old";
+    globalThis.fetch = fragment(
+      '<nav><a href="/titled">T</a></nav><script>window.__seenTitle = document.title</script>',
+      { [TITLE_HEADER]: "New" },
+    );
+    clickLink("/titled");
+    await flush();
+    expect(w.__seenTitle).toBe("New"); // title installed before activation
   });
 
   test("segment mode: outlet scripts run, shell scripts are untouched", async () => {

@@ -145,11 +145,14 @@ export function startClientRouter(rehydrate: Rehydrate): void {
 
     const apply = () => {
       morph(current, next);
+      // Title BEFORE scripts: on a hard load the <head> title is parsed before
+      // any body script runs, so activated scripts that read document.title
+      // (analytics) must see the NEW page's value.
+      if (title !== null) document.title = title;
       // Hard-nav parity: activate the fragment's (pending-stamped) scripts BEFORE
       // island hydration, mirroring a real page load where inline scripts run
       // ahead of the deferred islands bundle.
       executeScripts(current);
-      if (title !== null) document.title = title;
       rehydrate(current); // hydrate the new island markers (idempotent — skips live ones)
       updateActiveLinks(); // segment mode: move the shell's aria-current (no-op otherwise)
       window.scrollTo?.(0, 0);

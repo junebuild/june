@@ -43,11 +43,12 @@ export function applyLiveUpdate(
   neutralizeScripts(next);
   if (fragmentShell === null) next.removeAttribute(SHELL_ATTR); // keep the root shell key honest
   morph(current, next, { preserveIslands: "all" });
-  // Hard-nav parity, same as a soft navigation: activate the re-rendered region's
-  // scripts so its behaviors come back (dev HMR relies on this; region scripts
-  // must be idempotent, as on any reload).
-  executeScripts(current);
+  // Title before scripts (reload parity — a script reading document.title must
+  // see the pushed value), then activate the re-rendered region's scripts so its
+  // behaviors come back (dev HMR relies on this; region scripts must be
+  // idempotent, as on any reload).
   if (title !== null) document.title = title;
+  executeScripts(current);
   rehydrate(current); // hydrate any NEW island markers (idempotent — skips live ones)
   return true;
 }

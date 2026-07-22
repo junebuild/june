@@ -83,15 +83,17 @@ describe("applyLiveUpdate", () => {
     const island = document.querySelector("june-island") as Element & { __juneHydrated?: boolean };
     island.__juneHydrated = true;
 
+    document.title = "Old";
     const ok = applyLiveUpdate(
-      "<main>v2</main><script>window.__liveRuns++</script>" +
+      "<main>v2</main><script>window.__liveRuns++;window.__liveTitle = document.title</script>" +
         '<june-island data-june-island="Live"><script>window.__insideIsland = true</script></june-island>',
-      null,
+      "New",
       () => {},
     );
 
     expect(ok).toBe(true);
     expect(w.__liveRuns).toBe(1); // region script ran, exactly once
+    expect(w.__liveTitle).toBe("New"); // title installed before activation (reload parity)
     expect(document.querySelector("june-island")).toBe(island); // live island reused
     expect(island.textContent).toBe("STATE"); // interior opaque — inert marker ignored
     expect(w.__insideIsland).toBeUndefined();
