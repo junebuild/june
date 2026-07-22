@@ -15,6 +15,7 @@
 // (touches `document`/`history`/`fetch`), so — like islands-client — it is
 // exposed ONLY via the `@junejs/core/client-router` subpath and is NOT
 // re-exported from the barrel.
+import { executeScripts, neutralizeScripts } from "./execute-scripts";
 import { morph } from "./morph";
 import { FRAGMENT_ACCEPT, SEGMENT_HEADER, SHELL_ATTR, TITLE_HEADER, decodeTitle } from "./nav-protocol";
 import { outletEl, resolveSwapTarget } from "./shell";
@@ -129,6 +130,9 @@ export function startClientRouter(rehydrate: Rehydrate): void {
     // the target, then morph the live target toward it in place.
     const next = current.cloneNode(false) as Element;
     next.innerHTML = html;
+    // The fragment's scripts were parsed inert; stamp them pending so nothing can
+    // run mid-morph, then executeScripts activates them after the swap.
+    neutralizeScripts(next);
     // Whole-chain morph into the root: the root is no longer a boundary shell, so
     // drop any stale shell key the clone copied — else mountedShellKey() would lie
     // on the next navigation and could mis-target a later segment fragment.
@@ -141,6 +145,10 @@ export function startClientRouter(rehydrate: Rehydrate): void {
 
     const apply = () => {
       morph(current, next);
+      // Hard-nav parity: activate the fragment's (pending-stamped) scripts BEFORE
+      // island hydration, mirroring a real page load where inline scripts run
+      // ahead of the deferred islands bundle.
+      executeScripts(current);
       if (title !== null) document.title = title;
       rehydrate(current); // hydrate the new island markers (idempotent — skips live ones)
       updateActiveLinks(); // segment mode: move the shell's aria-current (no-op otherwise)

@@ -1,0 +1,9 @@
+---
+"@junejs/core": patch
+---
+
+Soft navigations (and live updates / dev HMR) now execute the swapped-in region's `<script>` elements — hard-navigation parity. Fragments are parsed with `innerHTML`, so their scripts arrived inert and per-page behaviors (tab switchers, copy buttons, diagram renderers) were silently dead after any clientRouter soft-nav; the page looked right but didn't respond.
+
+The fix is a neutralize/activate pair around the morph: before morphing, every executable script in the parsed fragment is stamped with a pending type (so nothing can run mid-swap, in any DOM implementation); after morphing, each pending script is rebuilt as a fresh element — the only spec-sanctioned way to make one runnable — in document order, before island re-hydration. Scripts an identical morph kept in place re-run too (their bound DOM was just replaced), so the region-script contract is "idempotent or delegated" — the same bar a script must clear to survive a browser reload.
+
+Out of scope: island interiors (React-owned, opaque), data blocks (JSON-LD and friends), and scripts marked `data-june-once` (full-page-load only — analytics bootstrapping and the like). Known limit: `<script type="module" src>` re-executes at most once per document (the module map caches by URL); inline modules re-run fine.
