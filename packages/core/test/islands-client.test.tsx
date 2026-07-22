@@ -196,6 +196,24 @@ describe("startJuneClient (bootstrap)", () => {
     expect(ok).toBe(false); // caller falls back to a hard reload
     expect(document.querySelector("h1")!.textContent).toBe("keep"); // nothing applied
 
+    // A SAME-origin redirect to a different path must refuse too — this hook
+    // cannot move history, so relative assets would activate against the
+    // wrong base.
+    globalThis.fetch = (async () => {
+      const res = new Response("<h1>moved</h1>");
+      Object.defineProperty(res, "url", {
+        value: new URL("/somewhere-else", location.origin).href,
+      });
+      return res;
+    }) as unknown as typeof fetch;
+    let ok2 = true;
+    await act(async () => {
+      ok2 = await hot();
+    });
+    globalThis.fetch = origFetch;
+    expect(ok2).toBe(false);
+    expect(document.querySelector("h1")!.textContent).toBe("keep");
+
     const w = window as unknown as { __juneRouter?: boolean; __juneLiveReload?: unknown };
     delete w.__juneRouter;
     delete w.__juneLiveReload;
