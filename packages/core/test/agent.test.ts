@@ -104,3 +104,20 @@ describe("invokeAction()", () => {
     expect(await invokeAction("needsName", { name: "Ada" })).toEqual({ ok: "Ada" });
   });
 });
+
+// ── the identity gate: requiresPrincipal enforced at the dispatch boundary ──
+describe("invokeAction requiresPrincipal", () => {
+  test("rejects an anonymous dispatch and runs an authenticated one", async () => {
+    defineAction({
+      id: "read_tenant_data",
+      description: "Tenant-scoped read",
+      input: { type: "object", properties: {} },
+      requiresPrincipal: true,
+      run: (_i, ctx: ActionContext) => ({ tenant: ctx.user?.id }),
+    });
+    // Anonymous (default ctx {}) → rejected BEFORE run — /mcp and UI POSTs share this gate.
+    await expect(invokeAction("read_tenant_data", {})).rejects.toThrow(/requires an authenticated principal/);
+    // Authenticated → runs with the identity it was gated on.
+    expect(await invokeAction("read_tenant_data", {}, { user: { id: "acme" } })).toEqual({ tenant: "acme" });
+  });
+});

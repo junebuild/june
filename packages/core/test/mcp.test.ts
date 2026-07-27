@@ -102,3 +102,18 @@ describe("mcpHandler()", () => {
     expect(res.status).toBe(202);
   });
 });
+
+describe("tools/list annotations", () => {
+  test("an action's MCP ToolAnnotations are re-served to clients", async () => {
+    defineAction({
+      id: "delete_thing",
+      description: "Removes a thing",
+      input: { type: "object", properties: {} },
+      annotations: { destructiveHint: true, idempotentHint: false },
+      run: () => "gone",
+    });
+    const res = await mcpHandler(rpc({ jsonrpc: "2.0", id: 9, method: "tools/list" }));
+    const json = (await res.json()) as { result: { tools: { name: string; annotations?: unknown }[] } };
+    expect(json.result.tools.find((t) => t.name === "delete_thing")?.annotations).toEqual({ destructiveHint: true, idempotentHint: false });
+  });
+});
