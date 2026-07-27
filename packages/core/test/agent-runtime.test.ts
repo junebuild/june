@@ -713,3 +713,60 @@ describe("channelInstructions overlay (C — real source into the prompt)", () =
     expect(seen.at(-1)).toBe("BASE");
   });
 });
+
+// ── the principal gate: requiresPrincipal tools exist only on identified turns ──
+describe("principal gate (requiresPrincipal)", () => {
+  const gated: Tool = {
+    spec: { name: "get_orders", description: "tenant-scoped data", input: { type: "object", properties: {} } },
+    requiresPrincipal: true,
+    run: (_i: unknown, ctx) => ({ who: ctx.principal?.id, tenant: (ctx.principal as { tenant?: string } | undefined)?.tenant }),
+  };
+  const open: Tool = {
+    spec: { name: "faq", description: "public knowledge", input: { type: "object", properties: {} } },
+    run: () => "public",
+  };
+  const ev = (principal?: { id: string; [k: string]: unknown }): InboundEvent =>
+    ({ source: "crisp", kind: "message", channelId: "w1", threadId: "s1", ts: "1", principal });
+  // A model that records the tool names it was OFFERED each call, then follows the script.
+  function offeredModel(script: ModelReply[], offered: string[][]): Model {
+    return (msgs, tools) => {
+      offered.push(tools.map((t) => t.name));
+      const i = msgs.filter((m) => m.role === "assistant").length;
+      return replyStream(script[Math.min(i, script.length - 1)]!);
+    };
+  }
+
+  test("anonymous turn: the model never sees a gated tool; open tools remain", async () => {
+    const offered: string[][] = [];
+    const model = offeredModel([{ text: "just words", toolCalls: [] }], offered);
+    const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), model, [gated, open], noRuntime);
+    const { turnId } = s.start({ userText: "hi", event: ev(undefined) });
+    expect(await s.result(turnId)).toMatchObject({ status: "completed" });
+    expect(offered[0]).toEqual(["faq"]); // get_orders absent by construction
+  });
+
+  test("identified turn: the gated tool is offered and its ctx carries the principal", async () => {
+    const offered: string[][] = [];
+    const seenByTool: unknown[] = [];
+    const capturing: Tool = {
+      ...gated,
+      run: (_i: unknown, ctx) => { seenByTool.push(ctx.principal); return "ok"; },
+    };
+    const model = offeredModel(
+      [{ text: "", toolCalls: [{ id: "c1", name: "get_orders", input: {} }] }, { text: "done", toolCalls: [] }],
+      offered,
+    );
+    const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), model, [capturing, open], noRuntime);
+    const { turnId } = s.start({ userText: "my orders?", event: ev({ id: "owner@school.tw", tenant: "acme" }) });
+    expect(await s.result(turnId)).toMatchObject({ status: "completed", text: "done" });
+    expect(offered[0]).toEqual(["get_orders", "faq"]);
+    expect(seenByTool).toEqual([{ id: "owner@school.tw", tenant: "acme" }]);
+  });
+
+  test("a hallucinated gated call on an anonymous turn fails loudly (unknown tool)", async () => {
+    const model = offeredModel([{ text: "", toolCalls: [{ id: "c1", name: "get_orders", input: {} }] }], []);
+    const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), model, [gated, open], noRuntime);
+    const { turnId } = s.start({ userText: "hi", event: ev(undefined) });
+    expect(await s.result(turnId)).toMatchObject({ status: "failed", error: { message: "unknown tool get_orders" } });
+  });
+});
