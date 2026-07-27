@@ -34,6 +34,7 @@ import {
   sitemapXml,
 } from "@junejs/core/discovery";
 import { mcpHandler, mcpTools } from "@junejs/core/mcp";
+import type { Principal, Session } from "@junejs/core/context";
 
 import { ensureScope, runInScope, setRequestLocale } from "@junejs/db";
 import type { AgentConfig } from "@junejs/core/config";
@@ -126,6 +127,14 @@ export type PipelineConfig = {
   // `currentServices()` resolves in loaders/views/actions. Absent → currentServices()
   // is undefined. This is the Worker-side twin of a Durable Object seeding services.
   services?: () => Promise<unknown> | unknown;
+  // Resolve the request's authenticated identity (the auth integration's job —
+  // e.g. Better Auth reading the session cookie). The result rides every
+  // ActionContext the pipeline builds, starting with the /mcp mount, so
+  // requiresPrincipal actions and per-call connection auth see the SAME
+  // principal a UI dispatch would. Absent → anonymous (identity-gated actions
+  // reject); a THROWING resolver propagates as a server error — it must never
+  // silently degrade to anonymous.
+  identity?: (request: Request) => Promise<{ user?: Principal; session?: Session }> | { user?: Principal; session?: Session };
   earlyHints?: string[];
   htmlCacheControl?: string;
   notFoundComponent?: React.ComponentType<{ pathname: string }>;
@@ -473,9 +482,11 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
       if (url.pathname === "/mcp") {
         if (!agent.mcp) return notFoundResponse("view", url.pathname);
         // The agent's tool calls run inside the same request scope, so an action's
-        // ambient `db` is the SAME resource the UI uses (and, once auth is wired,
-        // the same principal via ctx). ctx carries identity only — not resources.
-        return mcpHandler(request, { request });
+        // ambient `db` is the SAME resource the UI uses, and — via cfg.identity —
+        // the same principal: requiresPrincipal actions and per-call connection
+        // auth are live on this surface. ctx carries identity only — not resources.
+        const identity = cfg.identity ? await cfg.identity(request) : undefined;
+        return mcpHandler(request, { request, ...identity });
       }
       if (request.method === "GET" && agent.discovery) {
         const d = await discovery(url);

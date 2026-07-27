@@ -63,3 +63,41 @@ describe("durable agent surface in the pipeline", () => {
     expect(p.matchedPath()).toBe("/thing");
   });
 });
+
+// ── /mcp identity: cfg.identity feeds the ActionContext the gateway dispatches with ──
+describe("/mcp mount identity (cfg.identity)", () => {
+  const gatedId = "pipeline_gated_read";
+  function mcpCall(id: number) {
+    return new Request("http://x/mcp", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name: gatedId, arguments: {} } }),
+    });
+  }
+  async function mcpPipeline(identity?: Parameters<typeof createPipeline>[0]["identity"]) {
+    const { defineAction } = await import("@junejs/core/agent");
+    defineAction({
+      id: gatedId,
+      description: "Tenant-scoped read",
+      input: { type: "object", properties: {} },
+      requiresPrincipal: true,
+      run: (_i: unknown, ctx: { user?: { id: string } }) => ({ tenant: ctx.user?.id }),
+    });
+    const resolve: RouteResolver = async () => null;
+    return createPipeline({ docConfig, agent: resolveAgent({ mcp: true }), routeList: () => [], resolve, identity });
+  }
+
+  test("with an identity resolver, a requiresPrincipal action runs as that user", async () => {
+    const p = await mcpPipeline(() => ({ user: { id: "acme" } }));
+    const json = (await (await p.fetch(mcpCall(1))).json()) as { result: { content: { text: string }[]; isError?: boolean } };
+    expect(json.result.isError).toBeUndefined();
+    expect(JSON.parse(json.result.content[0]!.text)).toEqual({ tenant: "acme" });
+  });
+
+  test("without a resolver the same call is rejected (anonymous stays fail-closed)", async () => {
+    const p = await mcpPipeline(undefined);
+    const json = (await (await p.fetch(mcpCall(2))).json()) as { result: { content: { text: string }[]; isError?: boolean } };
+    expect(json.result.isError).toBe(true);
+    expect(json.result.content[0]!.text).toContain("requires an authenticated principal");
+  });
+});
