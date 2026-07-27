@@ -29,10 +29,15 @@ export const createUser = defineAction({
 ```
 
 One `defineAction()` is simultaneously a **server action** (pass it to client
-components as a prop), an **MCP tool** (auto-listed with its schema), and a
-**manifest entry** agents discover. There is no "expose to agents" step and
-no second permission system: `run(input, ctx)` is the only gate, so an agent
-can never do anything your UI's authorization wouldn't allow.
+components as a prop), an **MCP tool** (auto-listed with its schema, plus any
+behavior `annotations` you declare — `readOnlyHint`, `destructiveHint`,
+`idempotentHint`, `openWorldHint`, `title` — which `/mcp` re-serves so clients
+can drive permission UX), and a **manifest entry** agents discover. There is no
+"expose to agents" step and no second permission system: `run(input, ctx)` is
+the gate. Mark an action `requiresPrincipal: true` and every anonymous call is
+refused — UI POST and `/mcp` dispatch reject it before `run`, and agent turns
+hide the tool entirely — so an agent can never do anything your UI's
+authorization wouldn't allow.
 
 ## Try it on this site
 
