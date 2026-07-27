@@ -9,6 +9,7 @@
 
 import { type Channel, type ChannelContext, type DeliveryTarget } from "./agent-config";
 import type { InboundEvent, InputRequest, ProactiveTrigger, Tool, ToolContext, TurnEvent } from "./agent-runtime";
+import type { Principal } from "./context";
 
 // Re-export the normalized inbound envelope from where channel authors live, so an
 // adapter can `import { type InboundEvent } from "@junejs/core/channels"` alongside
@@ -1230,11 +1231,79 @@ export function normalizeCrispEvent(
   return null;
 }
 
+// ── crisp identity (WHO IS SPEAKING) ──────────────────────────────────────────
+// Crisp has TWO unrelated HMACs and only one of them says anything about the visitor:
+// the webhook signature (verified above) proves "Crisp sent this payload"; the
+// IDENTITY VERIFICATION signature (your backend signs the visitor's email with the
+// site's secret and the chatbox submits both) proves "our own server vouched for this
+// email". Crisp records the latter on the CONVERSATION — `verifications: [{ identity:
+// "email", method, annotation: <the email> }]` — NOT in the webhook payload and NOT in
+// `meta` (meta/session:data is client-writable from the widget: treat it as hints,
+// never as authorization input). So identity is always PULLED over authenticated REST,
+// which also makes it equally trustworthy under both webhook auth modes (urlKey
+// website hooks carry no payload integrity at all).
+//
+// Trust is deliberately narrow: only methods your backend asserts count as verified —
+//   sdk   the chatbox HMAC path ($crisp user:email with a signature)
+//   api   the email was set server-side over authenticated REST
+// "link" (visitor clicked a magic link), "dkim"/"spf" (sender domain aligned) prove
+// weaker or different things; they stay visible in `verifications` so a resolver that
+// wants them can widen trust explicitly.
+export type CrispVerification = { identity?: string; method?: string; annotation?: string };
+export type CrispIdentity = {
+  websiteId: string;
+  sessionId: string;
+  fetched: boolean;   // false → the REST lookup failed; every field below is its fail-closed default
+  verified: boolean;  // a backend-asserted email verification exists (method sdk/api)
+  email?: string;     // the VERIFIED email (verifications[].annotation) — absent unless verified
+  method?: string;    // which trusted method verified it
+  verifications: CrispVerification[]; // the raw array (empty when Crisp sends [] or null)
+  meta: { nickname?: string; email?: string; data?: Record<string, unknown> }; // CLAIMED, client-writable — hints only
+};
+
+const TRUSTED_EMAIL_METHODS = ["sdk", "api"];
+
+// Pure derivation from a fetched conversation — exported so a hand-rolled channel (or a
+// test) reuses the trust rule without the factory. Tolerates the shapes Crisp actually
+// sends: `verifications` may be an array, `[]`, `null`, or absent.
+export function deriveCrispIdentity(
+  conversation: { verifications?: CrispVerification[] | null; meta?: CrispIdentity["meta"] | null } | undefined,
+  target: { websiteId: string; sessionId: string; fetched?: boolean },
+): CrispIdentity {
+  const verifications = conversation?.verifications ?? [];
+  const hit = verifications.find((v) => v.identity === "email" && !!v.method && TRUSTED_EMAIL_METHODS.includes(v.method) && !!v.annotation);
+  return {
+    websiteId: target.websiteId,
+    sessionId: target.sessionId,
+    fetched: target.fetched ?? true,
+    verified: hit !== undefined,
+    email: hit?.annotation,
+    method: hit?.method,
+    verifications,
+    meta: conversation?.meta ?? {},
+  };
+}
+
 export function crispChannel(opts: CrispAuthOpts & {
   identifier: string;
   key: string;
+  // Which REST token type `identifier`/`key` is — rides on every outbound call as
+  // X-Crisp-Tier. "plugin" (default, the prior behavior) for Marketplace plugin
+  // tokens; "website" for dashboard-generated website tokens (workspace-scoped,
+  // Settings → Advanced → API Token).
+  tier?: "plugin" | "website";
   path?: string;
   apiUrl?: string;
+  // The identity seam: resolve WHO IS SPEAKING before any consumer of a normalized
+  // event runs. The channel pulls the conversation's verification evidence over
+  // authenticated REST (see CrispIdentity above) and hands it here; the app maps a
+  // trusted email to its own Principal (tenant, roles, …) — or returns null/undefined
+  // to leave the turn anonymous. The result is pinned on event.principal, flows to
+  // ToolContext.principal, and gates Tool.requiresPrincipal tools. Fail-closed
+  // everywhere: a failed REST lookup arrives as { fetched: false, verified: false },
+  // a throwing resolver is reported to onError and the turn runs anonymous. Costs one
+  // REST GET per normalized event — configure it only when tools need identity.
+  resolveIdentity?: (identity: CrispIdentity, ctx: ChannelContext) => Promise<Principal | null | undefined> | Principal | null | undefined;
   // Which arriving events NORMALIZE (become an InboundEvent) — "message" (visitor text)
   // by default. Same derivation as slack: expressing intent via respondTo/on derives the
   // list; explicit `events` overrides. Remember the dashboard checkbox decides what
@@ -1263,16 +1332,31 @@ export function crispChannel(opts: CrispAuthOpts & {
     opts.events ?? (opts.respondTo || opts.on ? [...new Set([...(opts.respondTo ?? []), ...onKinds])] : ["message"]);
   const respondTo: string[] = opts.mode === "observe" ? [] : (opts.respondTo ?? events);
   const auth = () => `Basic ${btoa(`${opts.identifier}:${opts.key}`)}`;
+  const tier = opts.tier ?? "plugin";
   async function sendMessage(websiteId: string, sessionId: string, content: string) {
     await fetch(`${api}/website/${websiteId}/conversation/${sessionId}/message`, {
       method: "POST",
-      headers: { "content-type": "application/json", authorization: auth(), "X-Crisp-Tier": "plugin" },
+      headers: { "content-type": "application/json", authorization: auth(), "X-Crisp-Tier": tier },
       body: JSON.stringify({ type: "text", from: "operator", origin: "chat", content }),
     });
   }
-  async function crispGet(path: string): Promise<CrispResponse> {
-    const res = await fetch(`${api}${path}`, { headers: { authorization: auth(), "X-Crisp-Tier": "plugin" } });
-    return (await res.json()) as CrispResponse;
+  async function crispGet<T = CrispResponse>(path: string): Promise<T> {
+    const res = await fetch(`${api}${path}`, { headers: { authorization: auth(), "X-Crisp-Tier": tier } });
+    return (await res.json()) as T;
+  }
+  // Pull the conversation's verification evidence (see the identity section above).
+  // NEVER throws — any failure (network, non-JSON, Crisp error envelope) degrades to
+  // the fail-closed identity so the resolver always runs with honest inputs.
+  async function fetchIdentity(websiteId: string, sessionId: string): Promise<CrispIdentity> {
+    try {
+      const r = await crispGet<{ error?: boolean; data?: { verifications?: CrispVerification[] | null; meta?: CrispIdentity["meta"] | null } }>(
+        `/website/${websiteId}/conversation/${sessionId}`,
+      );
+      if (r.error || !r.data) return deriveCrispIdentity(undefined, { websiteId, sessionId, fetched: false });
+      return deriveCrispIdentity(r.data, { websiteId, sessionId });
+    } catch {
+      return deriveCrispIdentity(undefined, { websiteId, sessionId, fetched: false });
+    }
   }
   // Resolve the auth mode once, loudly: a channel that silently 401s every
   // delivery because neither source was configured is much harder to diagnose
@@ -1328,20 +1412,40 @@ export function crispChannel(opts: CrispAuthOpts & {
 
       const norm = normalizeCrispEvent(payload, events);
 
+      // identity: when the seam is configured, resolve WHO IS SPEAKING once per
+      // normalized event and pin it on event.principal BEFORE any consumer runs — the
+      // observers and the turn all await this shared promise, so observe-mode apps (a
+      // shadow pipeline running its own turns from onEvent) see the same principal the
+      // respond path would. Never rejects: fetchIdentity fails closed and a throwing
+      // resolver is reported to onError, leaving the event anonymous.
+      const identityReady: Promise<void> =
+        norm && opts.resolveIdentity
+          ? (async () => {
+              const identity = await fetchIdentity(norm.event.channelId, norm.event.threadId!);
+              try {
+                const principal = await opts.resolveIdentity!(identity, ctx);
+                if (principal != null) norm.event.principal = principal;
+              } catch (err) {
+                try { opts.onError?.(err); } catch { /* error reporting failed — nothing more to do */ }
+              }
+            })()
+          : Promise.resolve();
+
       // observe: mirror EVERY verified event (visitor + operator + non-text) — this is how
       // an app records the whole conversation without forking the channel. Narrow `raw`
       // with isCrispEvent for typed access to the un-normalized kinds (message:received…).
-      if (opts.onEvent) runBackground(ctx, async () => opts.onEvent!({ raw: payload, event: norm?.event }, ctx), opts.onError);
+      if (opts.onEvent) runBackground(ctx, async () => { await identityReady; return opts.onEvent!({ raw: payload, event: norm?.event }, ctx); }, opts.onError);
       // typed per-kind observer: fires only for its kind, with a non-optional event
       if (norm) {
         const handler = opts.on?.[norm.event.kind as CrispEventKind];
-        if (handler) runBackground(ctx, async () => handler(norm.event, ctx), opts.onError);
+        if (handler) runBackground(ctx, async () => { await identityReady; return handler(norm.event, ctx); }, opts.onError);
       }
 
       // respond: only kinds in respondTo drive a turn + reply (a rating can stay observe-only).
       if (norm && respondTo.includes(norm.event.kind)) {
         const { event, session, userText } = norm;
         runBackground(ctx, async () => {
+          await identityReady;
           const reply = await ctx.run(userText, { session, event });
           if (reply && reply.trim()) await sendMessage(event.channelId, event.threadId!, reply); // skip empty (tool-only turn)
         }, opts.onError);
