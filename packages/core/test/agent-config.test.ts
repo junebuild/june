@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { ACTION_REGISTRY, defineAction } from "@junejs/core/agent";
 import { actionToTool, buildSystemPrompt, defineAgent, readSkillTool, type Channel, type Skill } from "@junejs/core/agent-config";
-import type { Tool } from "@junejs/core/agent-runtime";
+import type { Tool, ToolContext } from "@junejs/core/agent-runtime";
 
 // defineAction self-registers globally; isolate the registry per test.
 let preexisting = new Map(ACTION_REGISTRY);
@@ -126,5 +126,37 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("You place orders.");
     expect(prompt).toContain("## Available skills (call read_skill to load one)");
     expect(prompt).toContain("- bulk_reorder: Reorder many items");
+  });
+});
+
+// ── actionToTool identity bridging: ToolContext.principal → ActionContext.user ──
+describe("actionToTool identity", () => {
+  test("threads the turn's principal into the action's ctx.user (and nothing when anonymous)", async () => {
+    const seen: unknown[] = [];
+    const whoami = defineAction({
+      id: "whoami",
+      description: "Echo the caller",
+      input: { type: "object", properties: {} },
+      run: (_i, ctx) => { seen.push(ctx); return ctx.user?.id ?? "anonymous"; },
+    });
+    const tool = actionToTool(whoami);
+    // identified turn: the SAME identity field a UI POST or /mcp call carries
+    expect(await tool.run({}, { principal: { id: "owner@school.tw" } } as unknown as ToolContext)).toBe("owner@school.tw");
+    expect(seen[0]).toEqual({ user: { id: "owner@school.tw" } });
+    // anonymous turn: empty ActionContext, exactly like an unauthenticated dispatch
+    expect(await tool.run({}, {} as ToolContext)).toBe("anonymous");
+    expect(seen[1]).toEqual({});
+  });
+
+  test("copies requiresPrincipal onto the bridged Tool (turn-engine gating)", () => {
+    const gated = defineAction({
+      id: "tenant_read",
+      description: "Tenant-scoped read",
+      input: { type: "object", properties: {} },
+      requiresPrincipal: true,
+      run: () => "data",
+    });
+    expect(actionToTool(gated).requiresPrincipal).toBe(true);
+    expect(actionToTool({ ...gated, id: "open_read", requiresPrincipal: undefined }).requiresPrincipal).toBeUndefined();
   });
 });
