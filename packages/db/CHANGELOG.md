@@ -1,5 +1,12 @@
 # @junejs/db
 
+## 0.0.34-dev.1
+
+### Patch Changes
+
+- Updated dependencies [[`fea4078`](https://github.com/junebuild/june/commit/fea407877de98adda39c2f277d45157ea9a8d6f0)]:
+  - @junejs/core@0.2.0-dev.26
+
 ## 0.0.34-dev.0
 
 ### Patch Changes
