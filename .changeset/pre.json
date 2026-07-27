@@ -26,6 +26,7 @@
     "core-peer-dep",
     "crisp-event-guard",
     "crisp-event-normalization",
+    "crisp-identity-principal",
     "crisp-website-hooks-auth",
     "detach-turn-mode",
     "do-session-identity",
