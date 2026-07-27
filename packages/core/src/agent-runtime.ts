@@ -14,6 +14,8 @@
 //     on replay. The checkpoint key ALWAYS carries the session dimension (the
 //     SessionStore is session-scoped) so keys cannot leak across sessions.
 
+import type { Principal } from "./context";
+
 // ── domain ──────────────────────────────────────────────────────────────────
 
 // The server↔core contract counter (#94). @junejs/server asserts this at surface
@@ -66,7 +68,14 @@ export type InboundEvent = {
   teamId?: string;                              // workspace/tenant the event belongs to (slack team_id) —
                                                 // chat.startStream needs it as recipient_team_id in channels
   ts: string;                                   // this event's message ts
-  user?: { id: string; name?: string };         // WHO
+  user?: { id: string; name?: string };         // WHO the platform CLAIMS is speaking (untrusted)
+  // WHO the app VERIFIED is speaking — resolved by a channel identity seam (e.g.
+  // crispChannel's resolveIdentity) from platform-verified evidence, never from the
+  // payload alone. The same Principal the UI/MCP paths carry (ActionContext.user), so
+  // one authorization model spans every dispatch path. Must be JSON-serializable: it
+  // rides the event across the /turn RPC and survives a suspend checkpoint (`raw` is
+  // stripped there; principal is kept). Absent = anonymous turn (see Tool.requiresPrincipal).
+  principal?: Principal;
   text?: string;                                // message / app_mention carry text; reactions don't
   reaction?: { name: string; itemTs: string };  // WHICH emoji, on WHICH message
   rating?: { stars: number; comment?: string }; // rating events: the score the visitor left (CSAT)
@@ -118,6 +127,11 @@ export interface ToolContext {
   // e.g. slack_read_thread with no args reads ctx.event.threadId. Undefined for turns
   // not driven by a channel envelope (a bare /message POST, a scripted test).
   event?: InboundEvent;
+  // The turn's resolved TRUSTED identity — a convenience mirror of event.principal
+  // (see InboundEvent). A tool that reads tenant/user-scoped data keys its queries and
+  // credentials off THIS, never off model-supplied input or event.user: the model
+  // cannot influence it, so a prompt injection cannot steer a tool across tenants.
+  principal?: Principal;
   // Ask for external (human) input and SUSPEND the turn until session.resume provides it.
   // First call throws SuspendSignal to park the turn (durably); on the replay after resume it
   // returns the stored answer. Only usable from an ASYNC tool — a sync (local) tool commits in
@@ -129,6 +143,11 @@ export type Tool = {
   spec: ToolSpec;
   run: (input: any, ctx: ToolContext) => unknown;
   subagent?: boolean;
+  // Principal gate: when true, the tool exists only on turns with a resolved trusted
+  // identity (event.principal) — on an anonymous turn it is dropped from the model's
+  // tool list entirely, so the model can neither call it nor see it. Mark every tool
+  // that reads user/tenant-scoped data; leave knowledge/utility tools unmarked.
+  requiresPrincipal?: boolean;
 };
 
 // ── the two inner seams (LOCAL, per-session, co-located with execution) ───────
@@ -302,7 +321,14 @@ export async function runTurn(
   store.setStatus("running");
   sink.emit({ type: "turn.started", turnId: opts.turnId, trigger });
 
-  const specs = tools.map((t) => t.spec);
+  // Principal gate: on a turn without a resolved trusted identity, requiresPrincipal
+  // tools are absent by construction — not listed to the model, not resolvable by
+  // toolStep (a hallucinated call fails loudly as an unknown tool). Filtered per-turn
+  // (not at registration) because the same agent serves identified and anonymous
+  // conversations; the filter is stable across a crash-replay since the principal
+  // rides the persisted event.
+  const active = env.event?.principal != null ? tools : tools.filter((t) => !t.requiresPrincipal);
+  const specs = active.map((t) => t.spec);
   // Which durable step is in flight, for turn.failed attribution: set before each step
   // await, cleared on its return, so a throw OUTSIDE a step (transcript read, status
   // write) isn't blamed on the previously completed one.
@@ -322,7 +348,7 @@ export async function runTurn(
       if (last.role === "assistant" && last.toolCalls.length > 0) {
         for (const call of last.toolCalls) {
           inFlight = { phase: "tool", step: `tool:${call.id}` };
-          await toolStep(store, sink, tools, call, opts, env);
+          await toolStep(store, sink, active, call, opts, env);
           inFlight = undefined;
         }
         continue;
@@ -401,7 +427,7 @@ async function toolStep(
   if (!tool) throw new Error(`unknown tool ${call.name}`);
   const remote = tool.run.constructor.name === "AsyncFunction";
   const ctx: ToolContext = {
-    store, runtime: env.runtime, agent: env.agent, sessionId: env.sessionId, callId: call.id, event: env.event,
+    store, runtime: env.runtime, agent: env.agent, sessionId: env.sessionId, callId: call.id, event: env.event, principal: env.event?.principal,
     // replay-aware: return the stored answer if resume already provided it, else park the turn.
     // Answers are TURN-scoped (`input:${turnId}:${id}`): a later turn re-asking the same id must
     // park again — never silently reuse a prior turn's answer (an approval must not carry over).
