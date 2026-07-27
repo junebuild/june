@@ -39,6 +39,9 @@ export function mcpTools() {
       name: action.id,
       description: action.description,
       inputSchema: action.input,
+      // MCP ToolAnnotations (spec 2025-11-25) — behavior hints clients use for
+      // permission UX (auto-approve read-only, confirm destructive). Advisory.
+      ...(action.annotations ? { annotations: action.annotations } : {}),
     }));
 }
 

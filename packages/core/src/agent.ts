@@ -89,6 +89,19 @@ export function validateInput(schema: JsonSchema, input: unknown): string | null
   return null;
 }
 
+// MCP-aligned behavior hints (spec 2025-11-25 `ToolAnnotations`). Advisory
+// metadata, never semantics: June's /mcp gateway re-serves them so MCP clients
+// (Claude Code et al.) can drive permission UX — e.g. auto-approve readOnlyHint
+// tools, confirm destructiveHint ones. A connection also carries a remote
+// tool's annotations through unchanged (gateway fidelity).
+export type ToolAnnotations = {
+  title?: string;
+  readOnlyHint?: boolean;
+  destructiveHint?: boolean;
+  idempotentHint?: boolean;
+  openWorldHint?: boolean;
+};
+
 export type ActionDefinition<I = unknown, O = unknown> = {
   id: string;
   description: string;
@@ -98,6 +111,14 @@ export type ActionDefinition<I = unknown, O = unknown> = {
   // ambient `db`/`kv`/`blob`, not on ctx. An action that ignores ctx (one-param
   // run) is still assignable here.
   run: (input: I, ctx: ActionContext) => O | Promise<O>;
+  // See ToolAnnotations above. Optional; absent = no hints.
+  annotations?: ToolAnnotations;
+  // Identity gate, enforced on EVERY dispatch path: invokeAction (UI POST, /mcp
+  // tools/call, Flight) rejects when ctx.user is absent, and the agent turn
+  // engine hides the bridged tool from anonymous turns entirely (see
+  // Tool.requiresPrincipal / actionToTool). Mark every action that reads
+  // user/tenant-scoped data.
+  requiresPrincipal?: boolean;
 };
 
 // `ActionDefinition` is invariant in its input type (the `run` param), so a
@@ -136,6 +157,8 @@ export function defineAction<const S extends JsonSchema, O>(def: {
   description: string;
   input: S;
   run: (input: InferInput<S>, ctx: ActionContext) => O | Promise<O>;
+  annotations?: ToolAnnotations;
+  requiresPrincipal?: boolean;
 }): ActionDefinition<InferInput<S>, O> {
   const action = def as unknown as ActionDefinition<InferInput<S>, O>;
   const existing = ACTION_REGISTRY.get(def.id);
@@ -158,6 +181,12 @@ export async function invokeAction(
 ): Promise<unknown> {
   const action = ACTION_REGISTRY.get(id);
   if (!action) throw new Error(`Unknown action: ${id}`);
+  // Identity gate at the SAME boundary as schema validation: every dispatch
+  // path funnels through here, so a requiresPrincipal action cannot be reached
+  // anonymously via /mcp or a UI POST. (Agent turns enforce the same gate
+  // earlier — the tool is hidden from the model's list; see actionToTool.)
+  if (action.requiresPrincipal && !ctx.user)
+    throw new Error(`Action "${id}" requires an authenticated principal (ctx.user)`);
   // Enforce the schema at the dispatch boundary — /mcp is untrusted input. This
   // used to be a no-op (the schema only described, never enforced).
   const invalid = validateInput(action.input, input);
