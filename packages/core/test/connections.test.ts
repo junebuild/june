@@ -25,7 +25,7 @@ function mockRemotes() {
       const reply = (result: unknown) => new Response(JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result }));
       if (rpc.method === "initialize") return reply({ protocolVersion: "2025-06-18", capabilities: {}, serverInfo: { name: "weather", version: "1" } });
       if (rpc.method === "tools/list")
-        return reply({ tools: [{ name: "get_weather", description: "Current weather", inputSchema: { type: "object", properties: { city: { type: "string" } }, required: ["city"] } }] });
+        return reply({ tools: [{ name: "get_weather", description: "Current weather", inputSchema: { type: "object", properties: { city: { type: "string" } }, required: ["city"] }, annotations: { readOnlyHint: true } }] });
       if (rpc.method === "tools/call") {
         const city = rpc.params?.arguments?.city ?? "?";
         return reply({ content: [{ type: "text", text: JSON.stringify({ city, tempC: 21, sky: "clear" }) }] });
@@ -83,5 +83,55 @@ describe("connectAll", () => {
     ]);
     expect(actions.map((a) => a.id)).toEqual(["weather__get_weather"]); // the good one still connected
     expect(report.find((r) => r.name === "broken")).toMatchObject({ tools: [], error: expect.stringContaining("connection refused") });
+  });
+});
+
+// ── connection identity: per-call auth ctx, requiresPrincipal, annotation fidelity ──
+describe("connection identity + annotations", () => {
+  test("auth receives the call's ActionContext (and none at discovery)", async () => {
+    mockRemotes();
+    // Wrap the mock to also record the Authorization header per request.
+    const inner = globalThis.fetch;
+    const sentAuth: (string | undefined)[] = [];
+    globalThis.fetch = (async (url: unknown, init?: { headers?: Record<string, string>; body?: string }) => {
+      sentAuth.push(init?.headers?.["authorization"]);
+      return inner(url as string, init as RequestInit);
+    }) as typeof fetch;
+
+    const authCtxs: unknown[] = [];
+    const { actions } = await connectAll([
+      defineMcpConnection({
+        name: "weather",
+        url: "http://x/mcp",
+        auth: (ctx) => {
+          authCtxs.push(ctx);
+          const user = (ctx as { user?: { id?: string } } | undefined)?.user;
+          return { token: user?.id ? `tenant-${user.id}` : "svc" };
+        },
+      }),
+    ]);
+    // Discovery (initialize + tools/list) ran WITHOUT ctx → the service credential.
+    expect(authCtxs).toEqual([undefined, undefined]);
+    expect(sentAuth.slice(0, 2)).toEqual(["Bearer svc", "Bearer svc"]);
+
+    // A call carrying identity mints the CALLER's credential.
+    await actions[0]!.run({ city: "Taipei" }, { user: { id: "acme" } });
+    expect(authCtxs[2]).toEqual({ user: { id: "acme" } });
+    expect(sentAuth[2]).toBe("Bearer tenant-acme");
+  });
+
+  test("requiresPrincipal on the connection stamps every exposed action (mcp + openapi)", async () => {
+    mockRemotes();
+    const { actions } = await connectAll([
+      defineMcpConnection({ name: "weather", url: "http://x/mcp", requiresPrincipal: true }),
+      defineOpenapiConnection({ name: "fx", url: "http://x/openapi.json", requiresPrincipal: true }),
+    ]);
+    expect(actions.map((a) => a.requiresPrincipal)).toEqual([true, true]);
+  });
+
+  test("a remote MCP tool's annotations survive into the action (gateway fidelity)", async () => {
+    mockRemotes();
+    const { actions } = await connectAll([defineMcpConnection({ name: "weather", url: "http://x/mcp" })]);
+    expect(actions[0]!.annotations).toEqual({ readOnlyHint: true });
   });
 });

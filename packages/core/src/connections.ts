@@ -15,12 +15,25 @@
 // Web-standard (fetch + JSON-RPC + a minimal OpenAPI subset, zero node:*), so an
 // agent can hold connections on native and on edge alike.
 
-import { defineAction, type AnyAction, type JsonSchema } from "./agent";
+import { defineAction, type AnyAction, type JsonSchema, type ToolAnnotations } from "./agent";
+import type { ActionContext } from "./context";
 
-type Auth = () => Promise<{ token: string }> | { token: string };
+// Resolved per call, server-side — the token never reaches the model. The ctx
+// is the CALL's identity (ActionContext: `user` is the turn's resolved
+// principal via actionToTool, or the request's principal on UI//mcp dispatch),
+// so an auth can mint a per-tenant, short-lived credential instead of holding
+// one static key. Called WITHOUT ctx at discovery time (initialize/tools/list/
+// OpenAPI doc fetch happen before any turn) — an identity-dependent auth must
+// handle `ctx === undefined` by returning a discovery-scoped credential.
+type Auth = (ctx?: ActionContext) => Promise<{ token: string }> | { token: string };
 type Headers = Record<string, string>;
 
-export type McpConnection = { kind: "mcp"; name: string; url: string; headers?: Headers; auth?: Auth };
+// `requiresPrincipal` gates EVERY tool the connection exposes: on turns without
+// a resolved identity they are hidden from the model entirely (the same
+// Tool.requiresPrincipal mechanism app tools use). Set it whenever the remote
+// serves tenant/user-scoped data — which is almost always true when `auth`
+// mints per-tenant tokens.
+export type McpConnection = { kind: "mcp"; name: string; url: string; headers?: Headers; auth?: Auth; requiresPrincipal?: boolean };
 export type OpenapiConnection = {
   kind: "openapi";
   name: string;
@@ -28,6 +41,7 @@ export type OpenapiConnection = {
   baseUrl?: string; // overrides servers[0].url
   headers?: Headers;
   auth?: Auth;
+  requiresPrincipal?: boolean;
 };
 export type Connection = McpConnection | OpenapiConnection;
 
@@ -40,10 +54,10 @@ export function defineOpenapiConnection(c: Omit<OpenapiConnection, "kind">): Ope
 
 export type ConnectionReport = { name: string; kind: string; url: string; tools: string[]; error?: string };
 
-async function resolveHeaders(c: Connection): Promise<Headers> {
+async function resolveHeaders(c: Connection, ctx?: ActionContext): Promise<Headers> {
   const h: Headers = { "content-type": "application/json", ...(c.headers ?? {}) };
   if (c.auth) {
-    const { token } = await c.auth();
+    const { token } = await c.auth(ctx);
     h["authorization"] = `Bearer ${token}`;
   }
   return h;
@@ -65,7 +79,7 @@ async function connectMcp(c: McpConnection): Promise<AnyAction[]> {
     clientInfo: { name: "june", version: "0.0.0" },
   });
   const listed = (await rpc(c.url, await resolveHeaders(c), "tools/list")) as {
-    tools: { name: string; description?: string; inputSchema?: JsonSchema }[];
+    tools: { name: string; description?: string; inputSchema?: JsonSchema; annotations?: ToolAnnotations }[];
   };
 
   return listed.tools.map((t) =>
@@ -73,9 +87,15 @@ async function connectMcp(c: McpConnection): Promise<AnyAction[]> {
       id: `${c.name}__${t.name}`,
       description: `[${c.name}] ${t.description ?? t.name}`,
       input: t.inputSchema ?? { type: "object", properties: {} },
+      // Gateway fidelity: the remote's behavior hints survive re-serving.
+      ...(t.annotations ? { annotations: t.annotations } : {}),
+      ...(c.requiresPrincipal ? { requiresPrincipal: true } : {}),
       // async ⇒ the engine treats this as a remote (at-least-once) tool.
-      run: async (input: unknown) => {
-        const result = (await rpc(c.url, await resolveHeaders(c), "tools/call", { name: t.name, arguments: input })) as {
+      // ctx flows from the dispatch path (turn ToolContext → ActionContext via
+      // actionToTool, or the request identity on UI//mcp) into auth — a
+      // per-tenant auth mints the CALLER's credential, never a global one.
+      run: async (input: unknown, ctx: ActionContext) => {
+        const result = (await rpc(c.url, await resolveHeaders(c, ctx), "tools/call", { name: t.name, arguments: input })) as {
           content?: { type: string; text?: string }[];
         };
         const text = result.content?.find((b) => b.type === "text")?.text;
@@ -125,7 +145,8 @@ async function connectOpenapi(c: OpenapiConnection): Promise<AnyAction[]> {
           id: `${c.name}__${opId}`,
           description: `[${c.name}] ${op.summary ?? opId}`,
           input: { type: "object", properties, ...(required.length ? { required } : {}) },
-          run: async (input: Record<string, unknown>) => {
+          ...(c.requiresPrincipal ? { requiresPrincipal: true } : {}),
+          run: async (input: Record<string, unknown>, ctx: ActionContext) => {
             let url = baseUrl + path;
             const query = new URLSearchParams();
             const body: Record<string, unknown> = { ...input };
@@ -137,7 +158,7 @@ async function connectOpenapi(c: OpenapiConnection): Promise<AnyAction[]> {
             }
             const qs = query.toString();
             if (qs) url += `?${qs}`;
-            const init: RequestInit = { method: method.toUpperCase(), headers: await resolveHeaders(c) };
+            const init: RequestInit = { method: method.toUpperCase(), headers: await resolveHeaders(c, ctx) };
             if (method.toUpperCase() !== "GET" && bodySchema) init.body = JSON.stringify(body);
             return (await fetch(url, init)).json();
           },
