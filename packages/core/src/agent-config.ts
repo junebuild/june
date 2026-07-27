@@ -7,7 +7,7 @@
 // this module is the pure config layer it produces.
 
 import type { AnyAction } from "./agent";
-import type { InboundEvent, ProactiveTrigger, Tool, ToolSpec, TurnEvent } from "./agent-runtime";
+import type { InboundEvent, ProactiveTrigger, Tool, ToolContext, ToolSpec, TurnEvent } from "./agent-runtime";
 import type { ConnectionReport } from "./connections";
 
 // InboundEvent's canonical definition lives in agent-runtime (ToolContext carries it);
@@ -173,18 +173,24 @@ export type AgentDefinition = {
   connections: ConnectionReport[];
 };
 
-// Bridge a `defineAction` into a runtime Tool. The action's run(input, ctx) is
-// invoked with an empty identity ctx (data is ambient — `import { db }`); the
-// runtime threads real identity later. Sync/async is PRESERVED so the engine
-// classifies it right: an async action (the common case — it awaits the ambient
-// db) becomes an at-least-once remote tool; a sync action stays an exactly-once
-// local tool.
+// Bridge a `defineAction` into a runtime Tool. The action's run(input, ctx)
+// receives the TURN's identity: ToolContext.principal (resolved by a channel
+// identity seam) maps onto ActionContext.user — the same field a UI POST or
+// /mcp call carries — so ONE authorization check inside an action covers every
+// dispatch path. Data stays ambient (`import { db }`), never on ctx. Sync/async
+// is PRESERVED so the engine classifies it right: an async action (the common
+// case — it awaits the ambient db) becomes an at-least-once remote tool; a
+// sync action stays an exactly-once local tool. `requiresPrincipal` rides
+// along so the turn engine hides the tool from anonymous turns.
 export function actionToTool(action: AnyAction): Tool {
   const spec: ToolSpec = { name: action.id, description: action.description, input: action.input };
   const isAsync = action.run.constructor.name === "AsyncFunction";
-  return isAsync
-    ? { spec, run: async (input: unknown) => action.run(input, {}) }
-    : { spec, run: (input: unknown) => action.run(input, {}) };
+  const toActionCtx = (ctx?: ToolContext) => (ctx?.principal ? { user: ctx.principal } : {});
+  const tool: Tool = isAsync
+    ? { spec, run: async (input: unknown, ctx?: ToolContext) => action.run(input, toActionCtx(ctx)) }
+    : { spec, run: (input: unknown, ctx?: ToolContext) => action.run(input, toActionCtx(ctx)) };
+  if (action.requiresPrincipal) tool.requiresPrincipal = true;
+  return tool;
 }
 
 function isTool(x: AnyAction | Tool): x is Tool {
