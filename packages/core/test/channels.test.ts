@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { channelFetch, defineChannel, resolveChannel, type AgentDefinition, type Channel, type ChannelContext } from "@junejs/core/agent-config";
 import type { InboundEvent, ToolContext, TurnEvent } from "@junejs/core/agent-runtime";
-import { crispChannel, httpChannel, slackChannel, receive, verifySlackSignature, verifyCrispSignature, verifyCrispUrlKey, tryParseJson, timestampFresh, normalizeSlackEvent, normalizeCrispEvent, isCrispEvent, feedbackBlocks, resetSlackCounters, type ChannelRejection, type CrispWebhookEnvelope } from "@junejs/core/channels";
+import { crispChannel, deriveCrispIdentity, httpChannel, slackChannel, receive, verifySlackSignature, verifyCrispSignature, verifyCrispUrlKey, tryParseJson, timestampFresh, normalizeSlackEvent, normalizeCrispEvent, isCrispEvent, feedbackBlocks, resetSlackCounters, type ChannelRejection, type CrispIdentity, type CrispWebhookEnvelope } from "@junejs/core/channels";
 
 const enc = new TextEncoder();
 async function hmacHex(secret: string, message: string): Promise<string> {
@@ -1556,5 +1556,117 @@ describe("slackChannel.diagnose", () => {
     expect(d.auth.ok).toBe(false);
     expect(d.scopes.missing).toEqual([]); // no scope claims on top of a dead token
     expect(d.hints[0]).toContain("auth.test failed (invalid_auth)");
+  });
+});
+
+// ── crisp identity: resolveIdentity pulls verification evidence and pins the principal ──
+describe("crispChannel identity (resolveIdentity)", () => {
+  const secret = "sekret";
+  async function signed(body: string) {
+    const ts = String(Math.floor(Date.now() / 1000));
+    const sig = await hmacHex(secret, `[${ts};${body}]`);
+    return new Request("http://x/channels/crisp", { method: "POST", headers: { "x-crisp-request-timestamp": ts, "x-crisp-signature": sig }, body });
+  }
+  const visitor = JSON.stringify({ event: "message:send", data: { from: "user", type: "text", content: "my sub status?", website_id: "w1", session_id: "s1" } });
+  const SDK_VERIFIED = { verifications: [{ identity: "email", method: "sdk", annotation: "owner@school.tw" }], meta: { email: "owner@school.tw", data: { subdomain: "acme" } } };
+
+  // A Crisp-shaped fetch fake: GETs serve the conversation lookup (or fail), POSTs
+  // (the reply) are captured like captureFetch. Headers recorded for the tier tests.
+  let headersSeen: Record<string, string>[] = [];
+  function fakeCrisp(conversation: unknown | "fail") {
+    calls = []; headersSeen = [];
+    globalThis.fetch = (async (url: unknown, init?: { method?: string; headers?: Record<string, string>; body?: string }) => {
+      calls.push({ url: String(url), body: init?.body ? JSON.parse(init.body) : undefined });
+      headersSeen.push(init?.headers ?? {});
+      if (!init?.method || init.method === "GET") {
+        if (conversation === "fail") return new Response("boom", { status: 500 }); // non-JSON body → fail-closed
+        return Response.json({ error: false, data: conversation });
+      }
+      return new Response("{}", { status: 200 });
+    }) as typeof fetch;
+  }
+  function identityChannel(
+    resolveIdentity: Parameters<typeof crispChannel>[0]["resolveIdentity"],
+    extra?: { mode?: "observe"; onEvent?: (e: { raw: unknown; event?: InboundEvent }) => void; onError?: (err: unknown) => void; tier?: "plugin" | "website" },
+  ) {
+    return crispChannel({ signingSecret: secret, identifier: "id", key: "key", apiUrl: "https://crisp.test", resolveIdentity, ...extra });
+  }
+
+  test("deriveCrispIdentity: sdk verification → verified email; link/dkim and claimed meta don't count", () => {
+    const sdk = deriveCrispIdentity(SDK_VERIFIED, { websiteId: "w1", sessionId: "s1" });
+    expect(sdk).toMatchObject({ verified: true, email: "owner@school.tw", method: "sdk", fetched: true });
+    const dkim = deriveCrispIdentity({ verifications: [{ identity: "email", method: "dkim", annotation: "x@y.z" }], meta: { email: "x@y.z" } }, { websiteId: "w1", sessionId: "s1" });
+    expect(dkim).toMatchObject({ verified: false, email: undefined });
+    expect(dkim.verifications).toHaveLength(1); // raw evidence retained so a resolver can widen trust explicitly
+    // Crisp sends [] and null interchangeably; absent conversation is the fail-closed shape
+    expect(deriveCrispIdentity({ verifications: null }, { websiteId: "w", sessionId: "s" }).verified).toBe(false);
+    expect(deriveCrispIdentity(undefined, { websiteId: "w", sessionId: "s", fetched: false })).toMatchObject({ verified: false, fetched: false, verifications: [], meta: {} });
+  });
+
+  test("a verified visitor gets a principal pinned on the turn's event", async () => {
+    fakeCrisp(SDK_VERIFIED);
+    const resolved: CrispIdentity[] = [];
+    const ch = identityChannel((id) => { resolved.push(id); return id.verified ? { id: id.email!, tenant: "acme" } : null; });
+    let seen: InboundEvent | undefined;
+    const run = (async (_m: string, o?: { event?: InboundEvent }) => { seen = o?.event; return "here you go"; }) as ChannelContext["run"];
+    await ch.webhook!(await signed(visitor), ctxWith(run));
+    await flush();
+    expect(calls.some((c) => c.url === "https://crisp.test/website/w1/conversation/s1")).toBe(true); // evidence PULLED over REST
+    expect(resolved[0]).toMatchObject({ verified: true, email: "owner@school.tw", method: "sdk", websiteId: "w1", sessionId: "s1" });
+    expect(resolved[0]!.meta).toMatchObject({ data: { subdomain: "acme" } }); // claimed hints ride along, clearly separated
+    expect(seen?.principal).toEqual({ id: "owner@school.tw", tenant: "acme" });
+    expect(calls.at(-1)!.body).toMatchObject({ content: "here you go" }); // the turn still replied
+  });
+
+  test("observe mode: onEvent sees the same principal (shadow-pipeline parity)", async () => {
+    fakeCrisp(SDK_VERIFIED);
+    const events: (InboundEvent | undefined)[] = [];
+    let ran = false;
+    const ch = identityChannel((id) => (id.verified ? { id: id.email! } : null), { mode: "observe", onEvent: (e) => { events.push(e.event); } });
+    await ch.webhook!(await signed(visitor), ctxWith(async () => { ran = true; return "no"; }));
+    await flush();
+    expect(events[0]?.principal).toEqual({ id: "owner@school.tw" });
+    expect(ran).toBe(false); // observe: still no turn
+    expect(calls.filter((c) => c.body !== undefined)).toHaveLength(0); // and no reply POST
+  });
+
+  test("fail-closed: a failed conversation lookup reaches the resolver as unverified", async () => {
+    fakeCrisp("fail");
+    const resolved: CrispIdentity[] = [];
+    const ch = identityChannel((id) => { resolved.push(id); return id.verified ? { id: id.email! } : null; });
+    let seen: InboundEvent | undefined;
+    const run = (async (_m: string, o?: { event?: InboundEvent }) => { seen = o?.event; return "answered anyway"; }) as ChannelContext["run"];
+    await ch.webhook!(await signed(visitor), ctxWith(run));
+    await flush();
+    expect(resolved[0]).toMatchObject({ fetched: false, verified: false });
+    expect(seen?.principal).toBeUndefined();
+    expect(calls.at(-1)!.body).toMatchObject({ content: "answered anyway" }); // anonymous turn still runs
+  });
+
+  test("a throwing resolver reports to onError and leaves the turn anonymous", async () => {
+    fakeCrisp(SDK_VERIFIED);
+    const errors: unknown[] = [];
+    const ch = identityChannel(() => { throw new Error("resolver exploded"); }, { onError: (e) => errors.push(e) });
+    let seen: InboundEvent | undefined;
+    const run = (async (_m: string, o?: { event?: InboundEvent }) => { seen = o?.event; return "still fine"; }) as ChannelContext["run"];
+    await ch.webhook!(await signed(visitor), ctxWith(run));
+    await flush();
+    expect(errors).toHaveLength(1);
+    expect(seen?.principal).toBeUndefined();
+    expect(calls.at(-1)!.body).toMatchObject({ content: "still fine" });
+  });
+
+  test("tier rides X-Crisp-Tier on every REST call: website when configured, plugin by default", async () => {
+    fakeCrisp(SDK_VERIFIED);
+    const website = identityChannel((id) => (id.verified ? { id: id.email! } : null), { tier: "website" });
+    await website.webhook!(await signed(visitor), ctxWith(async () => "ok"));
+    await flush();
+    expect(headersSeen.every((h) => h["X-Crisp-Tier"] === "website")).toBe(true); // identity GET + reply POST
+
+    fakeCrisp(SDK_VERIFIED);
+    const plugin = identityChannel((id) => (id.verified ? { id: id.email! } : null));
+    await plugin.webhook!(await signed(visitor), ctxWith(async () => "ok"));
+    await flush();
+    expect(headersSeen.every((h) => h["X-Crisp-Tier"] === "plugin")).toBe(true);
   });
 });
