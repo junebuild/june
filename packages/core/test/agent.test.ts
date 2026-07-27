@@ -3,6 +3,7 @@ import {
   ACTION_REGISTRY,
   defineAction,
   invokeAction,
+  setServerReferenceRegistrar,
 } from "@junejs/core/agent";
 import type { ActionContext } from "@junejs/core/context";
 
@@ -119,5 +120,38 @@ describe("invokeAction requiresPrincipal", () => {
     await expect(invokeAction("read_tenant_data", {})).rejects.toThrow(/requires an authenticated principal/);
     // Authenticated → runs with the identity it was gated on.
     expect(await invokeAction("read_tenant_data", {}, { user: { id: "acme" } })).toEqual({ tenant: "acme" });
+  });
+});
+
+// ── the Flight path: the registered server reference is the gate, not raw run ──
+describe("serverReferenceRegistrar identity gate", () => {
+  test("a requiresPrincipal action registers a fail-closed wrapper; open actions register as-is", async () => {
+    const registered = new Map<string, (...args: unknown[]) => unknown>();
+    setServerReferenceRegistrar((fn, id) => { registered.set(id, fn); });
+    try {
+      defineAction({
+        id: "flight_gated",
+        description: "Tenant read",
+        input: { type: "object", properties: {} },
+        requiresPrincipal: true,
+        run: (_i, ctx: ActionContext) => ({ who: ctx.user?.id }),
+      });
+      defineAction({
+        id: "flight_open",
+        description: "Public",
+        input: { type: "object", properties: {} },
+        run: () => "open",
+      });
+      const gated = registered.get("flight_gated")!;
+      // identity-less Flight dispatch (no ctx / anonymous ctx) → fail-closed
+      expect(() => gated({})).toThrow(/requires an authenticated principal/);
+      expect(() => gated({}, {})).toThrow(/requires an authenticated principal/);
+      // an RSC runtime that DOES thread identity gets through
+      expect(gated({}, { user: { id: "acme" } })).toEqual({ who: "acme" });
+      // ungated actions are untouched
+      expect(registered.get("flight_open")!({})).toBe("open");
+    } finally {
+      setServerReferenceRegistrar(() => undefined);
+    }
   });
 });

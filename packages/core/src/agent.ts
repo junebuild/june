@@ -113,11 +113,13 @@ export type ActionDefinition<I = unknown, O = unknown> = {
   run: (input: I, ctx: ActionContext) => O | Promise<O>;
   // See ToolAnnotations above. Optional; absent = no hints.
   annotations?: ToolAnnotations;
-  // Identity gate, enforced on EVERY dispatch path: invokeAction (UI POST, /mcp
-  // tools/call, Flight) rejects when ctx.user is absent, and the agent turn
-  // engine hides the bridged tool from anonymous turns entirely (see
-  // Tool.requiresPrincipal / actionToTool). Mark every action that reads
-  // user/tenant-scoped data.
+  // Identity gate, enforced on EVERY dispatch path by construction:
+  //   • invokeAction (UI POST, /mcp tools/call) rejects when ctx.user is absent;
+  //   • the agent turn engine hides the bridged tool from anonymous turns
+  //     entirely (Tool.requiresPrincipal via actionToTool);
+  //   • the Flight server reference registers as a fail-closed wrapper — an
+  //     RSC dispatch that doesn't thread an identified ActionContext throws.
+  // Mark every action that reads user/tenant-scoped data.
   requiresPrincipal?: boolean;
 };
 
@@ -167,7 +169,20 @@ export function defineAction<const S extends JsonSchema, O>(def: {
     console.warn(`[june] defineAction: id "${def.id}" is already registered — overwriting.`);
   }
   ACTION_REGISTRY.set(def.id, action as unknown as AnyAction);
-  serverReferenceRegistrar?.(def.run as (...args: unknown[]) => unknown, def.id);
+  // Flight/server-reference dispatch invokes the REGISTERED function directly —
+  // it never passes through invokeAction — so what we register for a gated
+  // action is a fail-closed wrapper, not the raw run: unless the RSC runtime
+  // hands an ActionContext with a user as the second argument, the reference
+  // throws. An identity-gated action can therefore never run identity-less,
+  // even on dispatch paths this module doesn't own.
+  const flightRun = def.requiresPrincipal
+    ? (...args: unknown[]) => {
+        const ctx = args[1] as ActionContext | undefined;
+        if (!ctx?.user) throw new Error(`Action "${def.id}" requires an authenticated principal (ctx.user)`);
+        return (def.run as (...a: unknown[]) => unknown)(...args);
+      }
+    : (def.run as (...args: unknown[]) => unknown);
+  serverReferenceRegistrar?.(flightRun, def.id);
   return action;
 }
 
