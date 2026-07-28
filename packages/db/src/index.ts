@@ -10,6 +10,7 @@ export {
   runInScope,
   ensureScope,
   requestLocal,
+  isolateLocal,
   setRequestLocale,
   currentLocale,
   currentServices,

@@ -3,7 +3,7 @@
 // them outside a scope, or undeclared, throws actionable guidance.
 import { describe, expect, test, beforeAll } from "bun:test";
 
-import { db, kv, runInScope, ensureScope, requestLocal, registerSqlTagger } from "../src/scope";
+import { db, kv, runInScope, ensureScope, requestLocal, isolateLocal, registerSqlTagger } from "../src/scope";
 import type { JuneDb } from "@junejs/core/resources";
 
 beforeAll(async () => {
@@ -83,5 +83,55 @@ describe("registerSqlTagger — a Tier-3 layer (Juno) makes the canonical db aut
     const rows = await runInScope({ resources: { db: fakeDb } }, () => db.query("select * from posts", [1]));
     expect(tagged).toEqual(["select * from posts"]); // tagger saw the SQL
     expect(rows).toEqual([{ sql: "select * from posts", params: [1] }]); // and the query forwarded
+  });
+});
+
+// ── isolateLocal — the sibling of requestLocal, for state that must OUTLIVE a
+// request. June resolves ChannelFactories and the services provider per request
+// (a Worker has no env at module top-level), so a cache built there is rebuilt
+// per request and never hits; this is where such a cache actually lives.
+describe("isolateLocal — state that outlives the request", () => {
+  test("makes once per key and returns the same value on every later call", () => {
+    let made = 0;
+    const make = () => (made++, new Map<string, number>());
+
+    const a = isolateLocal("test.tokens", make);
+    const b = isolateLocal("test.tokens", make);
+
+    expect(a).toBe(b);
+    expect(made).toBe(1);
+    a.set("k", 1);
+    expect(isolateLocal("test.tokens", make).get("k")).toBe(1);
+  });
+
+  test("survives request scopes — the point of the primitive", async () => {
+    const make = () => new Map<string, number>();
+    // Two separate requests write to and read from the same value.
+    runInScope({ resources: {} }, () => isolateLocal("test.cross", make).set("hits", 1));
+    const seen = runInScope({ resources: {} }, () => isolateLocal("test.cross", make).get("hits"));
+    expect(seen).toBe(1);
+    // And it resolves OUTSIDE any scope too (unlike requestLocal, which throws).
+    expect(isolateLocal("test.cross", make).get("hits")).toBe(1);
+  });
+
+  test("distinct keys are distinct values; symbols work as keys", () => {
+    const one = isolateLocal("test.a", () => ({ id: "a" }));
+    const two = isolateLocal("test.b", () => ({ id: "b" }));
+    expect(one).not.toBe(two);
+
+    const KEY = Symbol("test.sym");
+    const viaSymbol = isolateLocal(KEY, () => ({ id: "sym" }));
+    expect(isolateLocal(KEY, () => ({ id: "other" }))).toBe(viaSymbol);
+  });
+
+  test("shares one registry across module instances (globalThis-keyed)", async () => {
+    // A workspace symlink can give the app and the framework different copies of
+    // this module; a plain module-level Map would then split in two. Re-importing
+    // with a cache-busting query simulates that second instance.
+    const fresh = (await import(`../src/scope?dup=${Date.now()}`)) as {
+      isolateLocal: typeof isolateLocal;
+    };
+    const mine = isolateLocal("test.shared", () => ({ from: "first" }));
+    expect(fresh.isolateLocal("test.shared", () => ({ from: "second" }))).toBe(mine);
   });
 });
