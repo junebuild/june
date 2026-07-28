@@ -95,6 +95,42 @@ export function requestLocal<T>(key: symbol, make: () => T): T {
   return locals.get(key) as T;
 }
 
+// ── isolate-scoped state (the sibling of requestLocal) ────────────────────────
+//
+// `requestLocal` holds state that MUST die with the request. This holds state
+// that must OUTLIVE it: a connection pool, a token cache, a compiled index —
+// anything expensive whose whole value is being reused across requests.
+//
+// It exists because June's own architecture makes the naive version wrong. A
+// ChannelFactory and the `services` provider are resolved PER REQUEST (a Worker
+// has no env at module top-level, so the host must call them inside an
+// invocation). Anything they construct — including a `new Map()` cache — is
+// therefore rebuilt per request, and an app that "added a 5-minute cache"
+// silently never gets a hit. Hoisting to module scope by hand works but has to
+// be re-derived by every app, and a hand-rolled module Map also splits in two
+// when workspace symlinks give the app and the framework different copies of a
+// module. This keys off `globalThis` (the same trick ACTION_REGISTRY uses), so
+// one key means one value per isolate no matter how many module instances load.
+//
+// "Isolate" = the Worker isolate, or the Node/Bun process. Lifetime is the
+// host's, not the request's: values are never evicted here, so anything with a
+// bound (a TTL cache, an LRU) must bound itself.
+//
+//   const tokens = isolateLocal("myapp.tokens", () => new Map<string, string>());
+//
+// Keys are namespaced strings (or symbols) — prefix with your app/package name.
+// A key collision returns the FIRST value, so an unprefixed "cache" is a bug
+// waiting to happen across packages.
+const ISOLATE_LOCALS_KEY = Symbol.for("june.isolateLocals");
+const isolateLocals: Map<string | symbol, unknown> = ((
+  globalThis as Record<symbol, Map<string | symbol, unknown> | undefined>
+)[ISOLATE_LOCALS_KEY] ??= new Map());
+
+export function isolateLocal<T>(key: string | symbol, make: () => T): T {
+  if (!isolateLocals.has(key)) isolateLocals.set(key, make());
+  return isolateLocals.get(key) as T;
+}
+
 // The host sets the resolved locale onto the active scope after it resolves it
 // (the scope is opened before routing, so the locale arrives mid-request). A no-op
 // outside a scope, like the ambient resources.
