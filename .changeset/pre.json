@@ -32,6 +32,7 @@
     "detach-turn-mode",
     "do-session-identity",
     "global-turn-ids",
+    "isolate-scoped-resources",
     "provider-state",
     "slack-diagnose",
     "slack-dm-stream-recipients",

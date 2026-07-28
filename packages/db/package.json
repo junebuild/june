@@ -1,6 +1,6 @@
 {
   "name": "@junejs/db",
-  "version": "0.0.34-dev.1",
+  "version": "0.1.0-dev.2",
   "description": "June — the agent-native React framework. Ambient data resources (db/kv/blob).",
   "type": "module",
   "license": "MIT",
