@@ -159,6 +159,51 @@ describe("durableChannelSurface (edge channel routing)", () => {
     expect(sawServices).toEqual({ feedback: { boundTo: { DB: "d1" } } }); // resolved from env, one DI story
   });
 
+  // A worker builds the surface inside `fetch` (env only exists inside an
+  // invocation), so resolving `services` per construction rebuilt every client
+  // and cache on every request — an app cache in the bag could never hit. The
+  // bag is memoized against the env it was built from.
+  test("resolves services ONCE per isolate, not per surface construction", async () => {
+    const { ns } = fakeAgentNS();
+    const env = { DB: "d1" };
+    let built = 0;
+    const bags: unknown[] = [];
+    const ch = defineChannel({
+      name: "x", path: "/channels/x",
+      async webhook(_req, ctx) { bags.push(ctx.services); return new Response("", { status: 200 }); },
+    });
+    const services = (e: unknown) => { built += 1; return { cache: new Map<string, number>(), boundTo: e }; };
+
+    // Two requests, each constructing its own surface — exactly what a worker does.
+    for (let i = 0; i < 2; i++) {
+      const surface = durableChannelSurface(() => ns, { agentName: AGENT, channels: [ch], env, services });
+      await surface(new Request("http://edge/channels/x", { method: "POST", body: "{}" }));
+    }
+
+    expect(built).toBe(1);
+    expect(bags[0]).toBe(bags[1]); // the SAME bag — so a cache inside it survives
+  });
+
+  test("a different env object gets its own bag (no cross-isolate bleed)", async () => {
+    const { ns } = fakeAgentNS();
+    let built = 0;
+    const bags: unknown[] = [];
+    const ch = defineChannel({
+      name: "x", path: "/channels/x",
+      async webhook(_req, ctx) { bags.push(ctx.services); return new Response("", { status: 200 }); },
+    });
+    const services = (e: unknown) => { built += 1; return { boundTo: e }; };
+
+    for (const env of [{ DB: "a" }, { DB: "b" }]) {
+      const surface = durableChannelSurface(() => ns, { agentName: AGENT, channels: [ch], env, services });
+      await surface(new Request("http://edge/channels/x", { method: "POST", body: "{}" }));
+    }
+
+    expect(built).toBe(2);
+    expect(bags[0]).not.toBe(bags[1]);
+    expect(bags[1]).toEqual({ boundTo: { DB: "b" } });
+  });
+
   test("a bad signature is rejected (the env-resolved secret is actually enforced)", async () => {
     const { ns } = fakeAgentNS();
     const surface = durableChannelSurface(() => ns, { agentName: AGENT, channels: [crispFactory], env: envWith(ns) });
