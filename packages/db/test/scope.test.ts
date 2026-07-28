@@ -124,6 +124,22 @@ describe("isolateLocal — state that outlives the request", () => {
     expect(isolateLocal(KEY, () => ({ id: "other" }))).toBe(viaSymbol);
   });
 
+  test("a plain Symbol() key is per-module-instance — Symbol.for shares", async () => {
+    // The cross-instance guarantee needs a key that HAS cross-instance identity.
+    const fresh = (await import(`../src/scope?sym=${Date.now()}`)) as {
+      isolateLocal: typeof isolateLocal;
+    };
+    // Same description, two Symbol() calls → two identities → two values.
+    expect(
+      fresh.isolateLocal(Symbol("test.plain"), () => ({ from: "second" }))
+    ).not.toBe(isolateLocal(Symbol("test.plain"), () => ({ from: "first" })));
+    // Symbol.for is registry-backed, so it shares like a string does.
+    const shared = isolateLocal(Symbol.for("test.registered"), () => ({ from: "first" }));
+    expect(
+      fresh.isolateLocal(Symbol.for("test.registered"), () => ({ from: "second" }))
+    ).toBe(shared);
+  });
+
   test("shares one registry across module instances (globalThis-keyed)", async () => {
     // A workspace symlink can give the app and the framework different copies of
     // this module; a plain module-level Map would then split in two. Re-importing
