@@ -1,5 +1,12 @@
 # @junejs/i18n
 
+## 0.0.30-dev.1
+
+### Patch Changes
+
+- Updated dependencies [[`e84546c`](https://github.com/junebuild/june/commit/e84546c8e14b87a8cee4a004d67764bc6b17c806)]:
+  - @junejs/db@0.1.0-dev.2
+
 ## 0.0.30-dev.0
 
 ### Patch Changes
