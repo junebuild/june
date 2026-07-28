@@ -184,6 +184,32 @@ describe("durableChannelSurface (edge channel routing)", () => {
     expect(bags[0]).toBe(bags[1]); // the SAME bag — so a cache inside it survives
   });
 
+  test("two surfaces over the same env are partitioned by agentName (mount order can't leak a bag)", async () => {
+    const { ns } = fakeAgentNS();
+    const env = { DB: "d1" };
+    const bags: Record<string, unknown> = {};
+    const ch = (name: string) =>
+      defineChannel({
+        name, path: `/channels/${name}`,
+        async webhook(_req, ctx) { bags[name] = ctx.services; return new Response("", { status: 200 }); },
+      });
+
+    // Same env, DIFFERENT agents with different providers — and the provider is
+    // an inline arrow recreated per call, exactly as the documented shape is.
+    for (const agent of ["ops", "support"]) {
+      const surface = durableChannelSurface(() => ns, {
+        agentName: agent,
+        channels: [ch(agent)],
+        env,
+        services: (e) => ({ owner: agent, boundTo: e }),
+      });
+      await surface(new Request(`http://edge/channels/${agent}`, { method: "POST", body: "{}" }));
+    }
+
+    expect(bags["ops"]).toEqual({ owner: "ops", boundTo: env });
+    expect(bags["support"]).toEqual({ owner: "support", boundTo: env });
+  });
+
   test("a different env object gets its own bag (no cross-isolate bleed)", async () => {
     const { ns } = fakeAgentNS();
     let built = 0;

@@ -605,17 +605,41 @@ export function durableAgentSurface(
 // fails in the background — surfaced via the channel's onError IF one is configured,
 // otherwise swallowed (runBackground never rejects). The app is expected to bind
 // env.AGENT when it mounts channels. Returns null for unclaimed requests.
-// The services bag, memoized per `env` object for the isolate's lifetime. Held in
-// an isolateLocal so duplicate module instances (workspace symlinks) share one
-// cache, and keyed by env identity in a WeakMap so a test or a host that hands
-// out fresh env objects gets fresh bags instead of a leak. A non-object env
-// (tests passing a primitive) skips memoization rather than throwing.
-function resolveServices(factory: ((env: unknown) => unknown) | undefined, env: unknown): unknown {
+// The services bag, memoized per (env object, agentName).
+//
+// Why that key. `env` identity is what makes the memo survive: a worker builds
+// the surface inside `fetch`, so the only thing stable across requests is the
+// env object the host hands in — and NOT the provider function, which the
+// documented shape (`services: (e) => makeServices(e)`) recreates on every
+// fetch. But env alone is too coarse: two surfaces mounted in one worker over
+// the same env would then share whichever bag was built first, making the
+// result depend on mount order. `agentName` is the surface's own stable
+// identity, so it partitions them. (One agent must therefore have ONE services
+// provider — mounting the same agentName twice with different providers is
+// incoherent and keeps the first bag.)
+//
+// Held in an isolateLocal so duplicate module instances (workspace symlinks)
+// share one cache; the outer WeakMap is keyed by env so a host handing out
+// fresh env objects gets fresh bags instead of a leak. A non-object env (tests
+// passing a primitive) skips memoization rather than throwing.
+function resolveServices(
+  factory: ((env: unknown) => unknown) | undefined,
+  env: unknown,
+  agentName: string,
+): unknown {
   if (!factory) return undefined;
   if (typeof env !== "object" || env === null) return factory(env);
-  const cache = isolateLocal("june.durableChannelSurface.services", () => new WeakMap<object, unknown>());
-  if (!cache.has(env)) cache.set(env, factory(env));
-  return cache.get(env);
+  const cache = isolateLocal(
+    "june.durableChannelSurface.services",
+    () => new WeakMap<object, Map<string, unknown>>(),
+  );
+  let perAgent = cache.get(env);
+  if (!perAgent) {
+    perAgent = new Map<string, unknown>();
+    cache.set(env, perAgent);
+  }
+  if (!perAgent.has(agentName)) perAgent.set(agentName, factory(env));
+  return perAgent.get(agentName);
 }
 
 export function durableChannelSurface(
@@ -629,12 +653,15 @@ export function durableChannelSurface(
     // the edge, outside the DO, so they can't read the DO's ambient currentServices(); this
     // gives them the same DI bag.
     //
-    // Called ONCE PER ISOLATE, not per surface: the bag is memoized against the
-    // `env` it was built from (see servicesByEnv below). A worker typically
-    // constructs the surface inside `fetch` — env only exists inside an
-    // invocation — so resolving per construction meant rebuilding every client
-    // and cache on every request, and any cache the bag held could never hit.
-    // The contract is unchanged: this must be a function of `env` alone.
+    // Called once per (env object, agentName) — NOT once per surface. A worker
+    // typically constructs the surface inside `fetch` (env only exists inside an
+    // invocation), so resolving per construction rebuilt every client on every
+    // request and any cache the bag held could never hit. Memoizing on env
+    // identity fixes that; see resolveServices above for why the key is env ×
+    // agentName and not the provider function. Practical consequences: the
+    // provider must be a function of `env` alone, it runs again whenever the
+    // host hands in a different env object (a new isolate, or a test), and one
+    // agentName must have one provider.
     services?: (env: unknown) => unknown;
     waitUntil?: (p: Promise<unknown>) => void;
   },
@@ -644,7 +671,7 @@ export function durableChannelSurface(
     // A minimal but complete AgentDefinition — channels only read ctx.agent.name; the
     // full def isn't present in the worker (tools/model live in the DO).
     agent: { name: opts.agentName, instructions: "", tools: [], skills: [], channels: [], connections: [] } satisfies AgentDefinition,
-    services: resolveServices(opts.services, opts.env),
+    services: resolveServices(opts.services, opts.env, opts.agentName),
     waitUntil: opts.waitUntil,
     run: async (message, o) => {
       const namespace = getNamespace();
