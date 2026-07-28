@@ -40,7 +40,7 @@ import {
   type ChannelContext,
   type ChannelFactory,
 } from "@junejs/core/agent-config";
-import { ensureScope, runInScope } from "@junejs/db";
+import { ensureScope, isolateLocal, runInScope } from "@junejs/db";
 import { assertCoreRuntimeVersion } from "./core-version";
 
 // ── minimal structural Cloudflare surface (no @cloudflare/workers-types dep) ──
@@ -605,6 +605,19 @@ export function durableAgentSurface(
 // fails in the background — surfaced via the channel's onError IF one is configured,
 // otherwise swallowed (runBackground never rejects). The app is expected to bind
 // env.AGENT when it mounts channels. Returns null for unclaimed requests.
+// The services bag, memoized per `env` object for the isolate's lifetime. Held in
+// an isolateLocal so duplicate module instances (workspace symlinks) share one
+// cache, and keyed by env identity in a WeakMap so a test or a host that hands
+// out fresh env objects gets fresh bags instead of a leak. A non-object env
+// (tests passing a primitive) skips memoization rather than throwing.
+function resolveServices(factory: ((env: unknown) => unknown) | undefined, env: unknown): unknown {
+  if (!factory) return undefined;
+  if (typeof env !== "object" || env === null) return factory(env);
+  const cache = isolateLocal("june.durableChannelSurface.services", () => new WeakMap<object, unknown>());
+  if (!cache.has(env)) cache.set(env, factory(env));
+  return cache.get(env);
+}
+
 export function durableChannelSurface(
   getNamespace: () => DurableObjectNamespace | undefined,
   opts: {
@@ -614,7 +627,14 @@ export function durableChannelSurface(
     // The app's services factory — the SAME one AgentDurableObject uses — resolved HERE
     // (worker isolate) and exposed to channel hooks as ctx.services. Channel hooks run at
     // the edge, outside the DO, so they can't read the DO's ambient currentServices(); this
-    // gives them the same DI bag. Resolved once per surface construction.
+    // gives them the same DI bag.
+    //
+    // Called ONCE PER ISOLATE, not per surface: the bag is memoized against the
+    // `env` it was built from (see servicesByEnv below). A worker typically
+    // constructs the surface inside `fetch` — env only exists inside an
+    // invocation — so resolving per construction meant rebuilding every client
+    // and cache on every request, and any cache the bag held could never hit.
+    // The contract is unchanged: this must be a function of `env` alone.
     services?: (env: unknown) => unknown;
     waitUntil?: (p: Promise<unknown>) => void;
   },
@@ -624,7 +644,7 @@ export function durableChannelSurface(
     // A minimal but complete AgentDefinition — channels only read ctx.agent.name; the
     // full def isn't present in the worker (tools/model live in the DO).
     agent: { name: opts.agentName, instructions: "", tools: [], skills: [], channels: [], connections: [] } satisfies AgentDefinition,
-    services: opts.services?.(opts.env),
+    services: resolveServices(opts.services, opts.env),
     waitUntil: opts.waitUntil,
     run: async (message, o) => {
       const namespace = getNamespace();
