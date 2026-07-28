@@ -40,7 +40,8 @@ import {
   type ChannelContext,
   type ChannelFactory,
 } from "@junejs/core/agent-config";
-import { ensureScope, isolateLocal, runInScope } from "@junejs/db";
+import { ensureScope, runInScope } from "@junejs/db";
+import { isolateLocal } from "./isolate-local";
 import { assertCoreRuntimeVersion } from "./core-version";
 
 // ── minimal structural Cloudflare surface (no @cloudflare/workers-types dep) ──
