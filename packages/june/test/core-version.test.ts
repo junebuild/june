@@ -5,6 +5,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { assertCoreRuntimeVersion, checkCoreRuntimeVersion } from "../src/core-version";
+import { isolateLocal, makeIsolateLocalFallback } from "../src/isolate-local";
 import { RUNTIME_API_VERSION } from "@junejs/core/agent-runtime";
 
 describe("core runtime version assert (#94)", () => {
@@ -29,5 +30,32 @@ describe("core runtime version assert (#94)", () => {
     // (or vice versa), every construction in this tree throws — this test makes the
     // lockstep rule fail loudly in CI instead.
     expect(() => checkCoreRuntimeVersion("lockstep", RUNTIME_API_VERSION)).not.toThrow();
+  });
+});
+
+// The isolateLocal optional read (see isolate-local.ts): a named import of an
+// export an older @junejs/db lacks would die at module link time, so the read is
+// a namespace lookup with a local fallback. The ambient read can only ever see
+// the workspace's own (matching) db, so the degraded path is tested directly.
+describe("isolateLocal fallback (older @junejs/db)", () => {
+  test("memoizes per key, so a caller's cache still works", () => {
+    const fallback = makeIsolateLocalFallback();
+    let made = 0;
+    const make = () => (made++, new Map<string, number>());
+
+    const a = fallback("k", make);
+    a.set("hits", 1);
+
+    expect(fallback("k", make)).toBe(a);
+    expect(fallback("k", make).get("hits")).toBe(1);
+    expect(made).toBe(1);
+    expect(fallback("other", make)).not.toBe(a);
+  });
+
+  test("the resolved export is used when the db provides it", () => {
+    // Workspace db has it, so this is the real one — not the fallback.
+    expect(typeof isolateLocal).toBe("function");
+    const shared = isolateLocal("test.june.resolved", () => ({ ok: true }));
+    expect(isolateLocal("test.june.resolved", () => ({ ok: false }))).toBe(shared);
   });
 });

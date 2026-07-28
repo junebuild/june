@@ -125,7 +125,7 @@
     "build": "tsdown"
   },
   "dependencies": {
-    "@junejs/db": ">=0.1.0-dev.2",
+    "@junejs/db": ">=0.0.34-dev.1",
     "@momiji-rs/sparkdown": "^0.0.4",
     "lightningcss": "^1.27.0",
     "oxc-parser": "^0.137.0",
