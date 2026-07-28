@@ -110,7 +110,13 @@ export function requestLocal<T>(key: symbol, make: () => T): T {
 // be re-derived by every app, and a hand-rolled module Map also splits in two
 // when workspace symlinks give the app and the framework different copies of a
 // module. This keys off `globalThis` (the same trick ACTION_REGISTRY uses), so
-// one key means one value per isolate no matter how many module instances load.
+// one key means one value per isolate however many module instances load.
+//
+// ⚠ That cross-instance guarantee needs a key with cross-instance identity: a
+// STRING, or `Symbol.for("…")` from the global symbol registry. A plain
+// `Symbol("…")` is a fresh identity in each module instance, so two copies of
+// the module would each make their own value — fine when a single module owns
+// the key privately, wrong if sharing is the point.
 //
 // "Isolate" = the Worker isolate, or the Node/Bun process. Lifetime is the
 // host's, not the request's: values are never evicted here, so anything with a
