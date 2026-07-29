@@ -150,9 +150,9 @@ export interface ToolContext {
   // cannot influence it, so a prompt injection cannot steer a tool across tenants.
   principal?: Principal;
   // WHO OPENED this session (#128): the first resolved principal any turn arrived with,
-  // recorded durably and immutable thereafter — in a multi-participant thread this is
-  // how a tool distinguishes "who started the work" (initiator) from "who is speaking
-  // on this turn" (principal), e.g. only the initiator may widen a query's scope.
+  // recorded durably and immutable thereafter — in a multi-participant thread this lets
+  // a tool tell the session's opener (initiator) apart from the current turn's speaker
+  // (principal), e.g. only the initiator may widen a query's scope.
   // Deliberately NOT part of the requiresPrincipal gate: tool visibility keys off the
   // CURRENT speaker, so an anonymous follow-up in an operator-opened session does not
   // inherit the operator's tools. Undefined until some turn resolves a principal.
