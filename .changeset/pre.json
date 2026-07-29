@@ -38,6 +38,7 @@
     "slack-diagnose",
     "slack-dm-stream-recipients",
     "slack-feedback-tasks",
+    "slack-identity-seam",
     "slack-stream-hardening",
     "soft-nav-script-execution",
     "store-hydration-race",
