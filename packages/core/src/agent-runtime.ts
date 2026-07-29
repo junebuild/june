@@ -90,16 +90,31 @@ export type InboundEvent = {
 // TurnEvents; `done` carries the authoritative assembled ModelReply the engine checkpoints
 // (the adapter owns assembly, so the engine never re-derives tool calls from partial text).
 // `opts.system` is the per-turn system prompt, injected by the runtime (see withSystem).
+// WHY generation stopped, normalized across providers. Every provider ships its own
+// vocabulary for this — Anthropic's Messages API `stop_reason` (end_turn / max_tokens /
+// stop_sequence / tool_use / pause_turn / refusal / model_context_window_exceeded, per
+// @anthropic-ai/sdk ≥0.60's Message type) and Gemini's `candidates[].finishReason`
+// (STOP / MAX_TOKENS / SAFETY / RECITATION / MALFORMED_FUNCTION_CALL / …, per
+// ai.google.dev/api/generate-content#FinishReason) — and both document that an abnormal
+// stop may come with EMPTY content. An adapter that ignores the field converts a
+// truncated/filtered response into a graceful empty reply, which the engine then
+// "completes" silently (the production failure mode this type exists to kill). `raw`
+// preserves the provider's own value for diagnostics.
+export type ModelFinish = {
+  reason: "stop" | "max_tokens" | "content_filter" | "malformed_tool_call" | "refusal" | "other";
+  raw?: string;
+};
+
 export type ModelDelta =
   | { type: "reasoning"; text: string }   // thinking tokens (when the provider streams them)
   | { type: "text"; text: string }        // answer tokens
-  | { type: "done"; reply: ModelReply };  // terminal: the full assembled reply
+  | { type: "done"; reply: ModelReply; finish?: ModelFinish };  // terminal: the full assembled reply + why it stopped
 export type Model = (msgs: Msg[], tools: ToolSpec[], opts?: { system?: string }) => AsyncIterable<ModelDelta>;
 
 // A one-shot model output: a single-element stream. The degenerate streaming case, for
 // scripted/test models and providers without token streaming.
-export function replyStream(reply: ModelReply): AsyncIterable<ModelDelta> {
-  return (async function* () { yield { type: "done", reply }; })();
+export function replyStream(reply: ModelReply, finish?: ModelFinish): AsyncIterable<ModelDelta> {
+  return (async function* () { yield { type: "done", reply, finish }; })();
 }
 
 // Wrap a Model so every call carries `system` (the agent's instructions). The
@@ -395,13 +410,26 @@ async function modelStep(
   // to checkpoint. The adapter's `done` is authoritative — the engine never assembles the
   // reply from partial text/tool deltas.
   let reply: ModelReply | undefined;
+  let finish: ModelFinish | undefined;
   for await (const d of model(msgs, specs, systemOverlay ? { system: systemOverlay } : undefined)) {
     if (d.type === "reasoning") sink.emit({ type: "reasoning.delta", turnId: opts.turnId, text: d.text });
     else if (d.type === "text") sink.emit({ type: "message.delta", turnId: opts.turnId, text: d.text });
-    else { reply = d.reply; break; } // `done` is terminal: `break` cancels the iterator (return()) so
+    else { reply = d.reply; finish = d.finish; break; } // `done` is terminal: `break` cancels the iterator (return()) so
     // extra deltas / a throw AFTER the authoritative reply can't turn a completed turn into a failure
   }
   if (!reply) throw new Error("model stream ended without a `done` event");
+  // An ABNORMAL stop with an EMPTY reply fails the step instead of committing: providers
+  // signal truncation/filtering via the finish reason, and both major APIs document that
+  // such stops may carry no content at all. Committing "" here would let the turn
+  // "complete" silently — a channel then renders nothing and nobody is told why. A reply
+  // WITH content under an abnormal reason still commits (truncated-but-usable), and an
+  // adapter that reports no finish keeps today's behavior — an empty completion stays
+  // legitimate where it is deliberate (tool-only turns end with empty text by design).
+  // Thrown BEFORE the checkpoint, so a retry re-runs the model like any model failure.
+  if (finish && finish.reason !== "stop" && !reply.text.trim() && reply.toolCalls.length === 0) {
+    const detail = finish.raw && finish.raw !== finish.reason ? ` (provider: ${finish.raw})` : "";
+    throw new Error(`model stopped abnormally — ${finish.reason}${detail} — and returned an empty reply`);
+  }
   assertCrash(opts.crash, "before-model-commit", stepId); // nothing persisted → replay re-asks the model
   store.tx(() => {
     store.putStep(stepId, reply);

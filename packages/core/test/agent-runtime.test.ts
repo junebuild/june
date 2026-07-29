@@ -17,6 +17,7 @@ import {
   type ModelReply,
   type Msg,
   type Runtime,
+  type ModelFinish,
   type SessionStore,
   type Tool,
 } from "@junejs/core/agent-runtime";
@@ -221,6 +222,42 @@ describe("agent-runtime engine", () => {
     const childTranscript = rt.session("researcher", "s1:sub:c1").transcript();
     expect(childTranscript).toHaveLength(1);
     expect(childTranscript[0]!.text).toBe("widgets are trending; buy 3");
+  });
+});
+
+// ── abnormal model finish: the silent-empty-completion killer ──────────────────
+// Providers signal truncation/filtering via a finish reason, and both major APIs
+// document that such stops may carry NO content. Without the guard, an adapter that
+// surfaces the reason would still see the engine commit "" and "complete" the turn —
+// a channel then renders nothing and nobody is told why.
+describe("abnormal model finish (ModelFinish guard)", () => {
+  const modelWith = (reply: ModelReply, finish?: ModelFinish): Model => () => replyStream(reply, finish);
+
+  test("abnormal finish + empty reply fails the turn, with the provider's own value in the error", async () => {
+    const rt = new MemRuntime({ ops: { model: modelWith({ text: "", toolCalls: [] }, { reason: "max_tokens", raw: "MAX_TOKENS" }), tools: [] } });
+    await expect(rt.session("ops", "s1").turn({ turnId: "t1", userText: "go" })).rejects.toThrow(
+      /stopped abnormally — max_tokens \(provider: MAX_TOKENS\) — and returned an empty reply/,
+    );
+  });
+
+  test("abnormal finish WITH content still completes — truncated-but-usable is the caller's call", async () => {
+    const rt = new MemRuntime({ ops: { model: modelWith({ text: "partial ans", toolCalls: [] }, { reason: "max_tokens", raw: "max_tokens" }), tools: [] } });
+    expect(await rt.session("ops", "s1").turn({ turnId: "t1", userText: "go" })).toBe("partial ans");
+  });
+
+  test("a normal stop with an empty reply still completes — tool-only turns end empty by design", async () => {
+    const rt = new MemRuntime({ ops: { model: modelWith({ text: "", toolCalls: [] }, { reason: "stop", raw: "end_turn" }), tools: [] } });
+    expect(await rt.session("ops", "s1").turn({ turnId: "t1", userText: "go" })).toBe("");
+  });
+
+  test("no finish info keeps legacy behavior — an adapter that makes no claim is not judged", async () => {
+    const rt = new MemRuntime({ ops: { model: modelWith({ text: "", toolCalls: [] }), tools: [] } });
+    expect(await rt.session("ops", "s1").turn({ turnId: "t1", userText: "go" })).toBe("");
+  });
+
+  test("a refusal with empty content fails loudly, not silently", async () => {
+    const rt = new MemRuntime({ ops: { model: modelWith({ text: "", toolCalls: [] }, { reason: "refusal" }), tools: [] } });
+    await expect(rt.session("ops", "s1").turn({ turnId: "t1", userText: "go" })).rejects.toThrow(/stopped abnormally — refusal/);
   });
 });
 
