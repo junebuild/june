@@ -67,6 +67,16 @@ export type ChannelContext = {
   // interaction) — the engine enforces it against the request's answererId. Optional, like
   // runStream: provided on streaming targets (the edge Durable Object).
   resumeStream?: (opts: { session?: string; turnId: string; inputId: string; input: unknown; by?: string }) => AsyncIterable<TurnEvent>;
+  // DELIVERED resume (the reply-bearing sibling of resumeStream, mirroring runDelivered):
+  // apply the human's answer and have the TURN'S HOST render the continuation through the
+  // channel's own deliverResume() — 202 on acceptance, nothing held open, so a long
+  // continuation escapes the edge waitUntil ceiling exactly like a delivered turn.
+  // `source` names the channel whose deliverResume renders (the caller passes its own
+  // Channel.name). Rejections keep their meaning: a host that cannot deliver refuses with
+  // DeliverUnsupportedError BEFORE applying the input (safe to fall back to resumeStream
+  // without double-answering); an engine rejection (unauthorized clicker, stale/double
+  // click) surfaces as an ordinary error exactly as resumeStream's first pull would.
+  resumeDelivered?: (opts: { session?: string; turnId: string; inputId: string; input: unknown; by?: string; source: string; target: ResumeDeliveryTarget }) => Promise<{ turnId: string }>;
   // Extend the invocation past the fast-ACK response so a webhook's background work
   // (run the turn, post the reply out-of-band) reliably completes. On the edge the
   // host passes workerd's `ctx.waitUntil` — without it, a promise left floating after
@@ -104,6 +114,11 @@ export class DeliverUnsupportedError extends Error {
 // Without them the renderer still degrades gracefully to chat.postMessage.
 export type DeliveryTarget = { channelId: string; threadId?: string; recipientUserId?: string; recipientTeamId?: string };
 
+// Where a RESUMED turn's continuation renders: the Approve/Deny prompt message itself.
+// Unlike DeliveryTarget (a thread to post into), a resume updates an EXISTING message in
+// place — `messageTs` names it — replacing the buttons with progress and then the outcome.
+export type ResumeDeliveryTarget = { channelId: string; threadId?: string; messageTs: string };
+
 // What channel.post sends (#89): plain text, or the object form carrying platform
 // blocks (Slack Block Kit) with a `text` notification fallback. Channels without a
 // block concept (Crisp) accept the object form but require `text`.
@@ -124,6 +139,11 @@ export type Channel = {
   // `session` names the turn's session so an HITL prompt can route its resume back to it —
   // a proactive session is caller-chosen and NOT derivable from the target thread.
   deliver?: (target: DeliveryTarget, events: AsyncIterable<TurnEvent>, opts?: { session?: string }) => Promise<void>;
+  // Render a RESUMED turn's continuation into the Approve/Deny prompt message (progress →
+  // outcome / failure / next approval). The sibling of deliver() for the HITL resume leg:
+  // the turn's host invokes it (via /resume?deliver=1) so a long continuation runs under
+  // the host's lifetime instead of the webhook isolate's post-ACK grace.
+  deliverResume?: (target: ResumeDeliveryTarget, events: AsyncIterable<TurnEvent>, opts?: { session?: string }) => Promise<void>;
   // DETERMINISTIC outbound post (#89): send one app-authored message (no LLM, no
   // stream) over the channel's own auth/transport and return its identity, so the
   // app can index it and resolve later reactions/clicks back to it. The dual of

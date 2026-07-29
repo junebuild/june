@@ -7,7 +7,7 @@
 // itself portable. An app's agent/channels/slack.ts is then a one-liner:
 //   export default slackChannel({ signingSecret: process.env.SLACK_SIGNING_SECRET! , botToken: ... })
 
-import { DeliverUnsupportedError, type Channel, type ChannelContext, type DeliveryTarget } from "./agent-config";
+import { DeliverUnsupportedError, type Channel, type ChannelContext, type DeliveryTarget, type ResumeDeliveryTarget } from "./agent-config";
 import type { InboundEvent, InputRequest, ProactiveTrigger, Tool, ToolContext, TurnEvent } from "./agent-runtime";
 import type { Principal } from "./context";
 
@@ -358,6 +358,12 @@ export function slackChannel(opts: {
   // surfaces (the app DM) — plan the feedback UX around the DM experience.
   feedback?: boolean;
   onFeedback?: (feedback: SlackFeedback, ctx: ChannelContext) => void | Promise<void>;
+  // Attach Slack's native confirmation dialog to the HITL Approve/Deny buttons: clicking
+  // pops a modal (title / prompt excerpt / Approve-or-Deny / Cancel; the Deny dialog is
+  // styled danger) and the interaction only fires after the human confirms — fat-finger
+  // protection for approval buttons in a busy channel. Off by default (one-click resume,
+  // the prior behavior).
+  approvalConfirm?: boolean;
   // The interaction escape hatch (#88): every signature-verified interaction payload the
   // built-in routing does NOT claim (june_feedback / june_input:* action_ids) is handed
   // here instead of silently dropped — the app's own buttons on posted messages route
@@ -442,10 +448,27 @@ export function slackChannel(opts: {
   // a PROACTIVE turn: its session is caller-chosen, not the inbound slack:<channel>:<thread>
   // convention, so the click couldn't re-derive it from the message's location.
   async function postApproval(channel: string, thread_ts: string | undefined, turnId: string, request: InputRequest, session?: string): Promise<string | undefined> {
+    // Native confirmation dialog (opt-in via approvalConfirm): Slack pops a modal on click
+    // and only sends the interaction after the human confirms — fat-finger protection for
+    // approval buttons sitting in a busy channel. Field limits per the confirmation-dialog
+    // object: title ≤100, text ≤300, confirm/deny labels ≤30.
+    const confirmFor = (approving: boolean) =>
+      opts.approvalConfirm
+        ? {
+            confirm: {
+              title: { type: "plain_text", text: approving ? "Confirm approval" : "Confirm denial" },
+              text: { type: "plain_text", text: request.prompt.slice(0, 300) },
+              confirm: { type: "plain_text", text: approving ? "Approve" : "Deny" },
+              deny: { type: "plain_text", text: "Cancel" },
+              ...(approving ? {} : { style: "danger" }),
+            },
+          }
+        : {};
     const btn = (text: string, input: boolean, style: "primary" | "danger") => ({
       type: "button", text: { type: "plain_text", text }, style,
       action_id: `june_input:${input ? "yes" : "no"}`,
       value: JSON.stringify({ turnId, inputId: request.id, input, session }),
+      ...confirmFor(input),
     });
     const blocks = [
       { type: "section", text: { type: "mrkdwn", text: request.prompt } },
@@ -654,8 +677,8 @@ export function slackChannel(opts: {
     const parsed = action.value ? tryParseJson<{ turnId: string; inputId: string; input: unknown; session?: string }>(action.value) : undefined;
     const channel = payload.channel?.id, msgTs = payload.message?.ts;
     const thread = payload.message?.thread_ts ?? msgTs;
-    if (!ctx.resumeStream || !parsed || !channel || !thread || !msgTs) {
-      opts.onError?.(new Error(ctx.resumeStream
+    if ((!ctx.resumeDelivered && !ctx.resumeStream) || !parsed || !channel || !thread || !msgTs) {
+      opts.onError?.(new Error(ctx.resumeDelivered || ctx.resumeStream
         ? "slack: HITL click with an unusable payload (value/channel/message missing)"
         : "slack: HITL click but the host provides no resumeStream"));
       return true; // ours (june_input) even when unusable — never handed to onInteraction
@@ -664,45 +687,89 @@ export function slackChannel(opts: {
     // fall back to the inbound convention for buttons posted before the value carried it.
     const session = parsed.session ?? `slack:${channel}:${thread}`;
     runBackground(ctx, async () => {
+      const target: ResumeDeliveryTarget = { channelId: channel, threadId: thread, messageTs: msgTs };
+      // DELIVERED resume first: the turn's host applies the answer and renders the
+      // continuation through this channel's own deliverResume() under its OWN lifetime —
+      // a long continuation no longer dies with this isolate's post-ACK grace (which left
+      // the prompt stuck on "_Working…_" forever). An engine rejection (unauthorized
+      // clicker, stale/double click) surfaces as a throw exactly like resumeStream's
+      // first pull, and gets the same ephemeral treatment; only the typed pre-effect
+      // refusal falls back — anything else may already have applied the answer, and
+      // re-resuming would double-answer (the engine would 409 the second apply).
+      if (ctx.resumeDelivered) {
+        try {
+          await ctx.resumeDelivered({ session, turnId: parsed.turnId, inputId: parsed.inputId, input: parsed.input, by: payload.user?.id, source: "slack", target });
+          return;
+        } catch (err) {
+          if (!(err instanceof DeliverUnsupportedError)) {
+            await postEphemeralRejection(payload);
+            throw err; // still record via onError
+          }
+          // the host can't deliver (channel not wired where the turn runs) and the answer
+          // was NOT applied — resume from here instead
+        }
+      }
+      if (!ctx.resumeStream) {
+        opts.onError?.(new Error("slack: HITL click but the host provides no resumeStream"));
+        return;
+      }
       // Pull the FIRST event before touching the message: the engine rejects an unauthorized
       // clicker (403) or a stale/double click (409) on that first pull, and a rejection must
       // leave the Approve/Deny buttons intact for the rightful answerer.
-      const it = ctx.resumeStream!({ session, turnId: parsed.turnId, inputId: parsed.inputId, input: parsed.input, by: payload.user?.id })[Symbol.asyncIterator]();
+      const it = ctx.resumeStream({ session, turnId: parsed.turnId, inputId: parsed.inputId, input: parsed.input, by: payload.user?.id })[Symbol.asyncIterator]();
       let first: IteratorResult<TurnEvent>;
       try {
         first = await it.next();
       } catch (err) {
-        // tell only the clicker why nothing happened (response_url posts ephemerally)
-        if (payload.response_url) {
-          await fetch(payload.response_url, {
-            method: "POST", headers: { "content-type": "application/json" },
-            body: JSON.stringify({ response_type: "ephemeral", replace_original: false, text: "This request can't be resumed by you — it may already be answered, or you're not the designated approver." }),
-          }).catch(() => {});
-        }
+        await postEphemeralRejection(payload);
         throw err; // still record via onError
       }
       try {
-        await updateMessage(channel, msgTs, "_Working…_"); // resume accepted: drop the buttons; show progress
-        let final = "";
-        for (let r = first; !r.done; r = await it.next()) {
-          const ev = r.value;
-          if (ev.type === "turn.completed") final = ev.text;
-          else if (ev.type === "turn.failed") { await updateMessage(channel, msgTs, "_(the turn failed)_"); return; }
-          else if (ev.type === "input.requested") { await postApproval(channel, thread, ev.turnId, ev.request, session); await updateMessage(channel, msgTs, "_(awaiting more input…)_"); return; }
-        }
-        await updateMessage(channel, msgTs, final.trim() || "_(done)_");
-      } catch (err) {
-        // the continuation stream dropped mid-flight (the resume itself was accepted)
-        await updateMessage(channel, msgTs, "_(the turn failed)_").catch(() => {});
-        throw err;
+        await resumeRender(target, prependResult(first, it), session);
       } finally {
-        // Close the manual iterator on every exit (early return on failed/input.requested,
-        // normal completion, or a mid-flight throw) so an SSE-backed resumeStream isn't left
-        // open — a manual `for` over it.next() won't auto-call return() the way for-await would.
+        // Close the manual iterator on every exit so an SSE-backed resumeStream isn't left
+        // open (resumeRender's for-await only closes iterators IT created).
         await it.return?.();
       }
     }, opts.onError);
     return true;
+  }
+  // Tell only the clicker why nothing happened (response_url posts ephemerally); a
+  // rejection leaves the Approve/Deny buttons intact for the rightful answerer.
+  async function postEphemeralRejection(payload: SlackInteraction) {
+    if (!payload.response_url) return;
+    await fetch(payload.response_url, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ response_type: "ephemeral", replace_original: false, text: "This request can't be resumed by you — it may already be answered, or you're not the designated approver." }),
+    }).catch(() => {});
+  }
+  // Re-compose a manually-pulled first result with the rest of its iterator so the shared
+  // renderer consumes one plain AsyncIterable (the worker-side fallback pulls the first
+  // event by hand — an engine rejection must surface BEFORE the buttons are touched).
+  async function* prependResult(first: IteratorResult<TurnEvent>, it: AsyncIterator<TurnEvent>): AsyncIterable<TurnEvent> {
+    for (let r = first; !r.done; r = await it.next()) yield r.value;
+  }
+  // Render a resumed turn's continuation into the Approve/Deny prompt message: drop the
+  // buttons for progress, then the outcome (final text / failure note / the next approval
+  // on a re-park). ONE renderer shared by the worker-side fallback and the channel's
+  // deliverResume() (invoked by the turn's host on a delivered resume), so both isolates
+  // render identically.
+  async function resumeRender(target: ResumeDeliveryTarget, events: AsyncIterable<TurnEvent>, session?: string) {
+    const { channelId, threadId, messageTs } = target;
+    try {
+      await updateMessage(channelId, messageTs, "_Working…_"); // resume accepted: drop the buttons; show progress
+      let final = "";
+      for await (const ev of events) {
+        if (ev.type === "turn.completed") final = ev.text;
+        else if (ev.type === "turn.failed") { await updateMessage(channelId, messageTs, "_(the turn failed)_"); return; }
+        else if (ev.type === "input.requested") { await postApproval(channelId, threadId, ev.turnId, ev.request, session); await updateMessage(channelId, messageTs, "_(awaiting more input…)_"); return; }
+      }
+      await updateMessage(channelId, messageTs, final.trim() || "_(done)_");
+    } catch (err) {
+      // the continuation stream dropped mid-flight (the resume itself was accepted)
+      await updateMessage(channelId, messageTs, "_(the turn failed)_").catch(() => {});
+      throw err;
+    }
   }
   // Slack Web API read helper: GET with query params + bearer token. Read methods
   // (conversations.replies, reactions.get, users.info) all accept this shape. Returns
@@ -741,6 +808,9 @@ export function slackChannel(opts: {
     // the same renderer as an inbound reply — progressive edits, HITL prompts, final text.
     // `opts.session` routes an HITL prompt's resume back to the caller-chosen session.
     deliver: (target, events, o) => streamRender(target, events, o?.session),
+    // Resumed-continuation renderer, host-invokable (delivered resume): same function the
+    // worker-side fallback uses, so rendering is identical wherever the continuation runs.
+    deliverResume: (target, events, o) => resumeRender(target, events, o?.session),
     // Deterministic outbound post (#89): one app-authored message over the channel's own
     // auth/transport, returning its (channel, ts) identity. Throws loudly on a platform
     // error — unlike the best-effort reply path, the app initiated this and must know.
