@@ -48,6 +48,7 @@
     "streaming-model-p2",
     "test-helpers",
     "turn-as-live-process-p1",
+    "turn-control",
     "turn-error-detail",
     "turn-failed-observability",
     "turn-suspend-resume-proactive"
