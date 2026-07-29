@@ -137,6 +137,28 @@ export class DoSessionStore implements SessionStore {
   tx<T>(fn: () => T): T {
     return this.storage.transactionSync(fn);
   }
+  // Session reset (#129): ARCHIVE messages/steps under the current generation (the audit
+  // trail — never deleted), clear the live tables, status → "new". The session key in
+  // agent_meta is deliberately untouched: the DO's identity survives its history. Archive
+  // tables + the generation counter are created lazily, so existing objects stay
+  // untouched until their first reset. seq keeps counting across generations (DELETE
+  // doesn't reset AUTOINCREMENT), so an archived (generation, seq) stays unique.
+  reset(): number {
+    return this.storage.transactionSync(() => {
+      const sql = this.sql;
+      sql.exec(`CREATE TABLE IF NOT EXISTS agent_messages_archive (generation INTEGER, seq INTEGER, body TEXT)`);
+      sql.exec(`CREATE TABLE IF NOT EXISTS agent_steps_archive (generation INTEGER, id TEXT, output TEXT)`);
+      const rows = this.sql.exec<{ v: string }>("SELECT v FROM agent_meta WHERE k = 'generation'").toArray();
+      const generation = rows.length ? Number(rows[0]!.v) : 0;
+      sql.exec("INSERT INTO agent_messages_archive (generation, seq, body) SELECT ?, seq, body FROM agent_messages", generation);
+      sql.exec("DELETE FROM agent_messages");
+      sql.exec("INSERT INTO agent_steps_archive (generation, id, output) SELECT ?, id, output FROM agent_steps", generation);
+      sql.exec("DELETE FROM agent_steps");
+      this.setStatus("new");
+      sql.exec("INSERT INTO agent_meta (k, v) VALUES ('generation', ?) ON CONFLICT(k) DO UPDATE SET v = ?", String(generation + 1), String(generation + 1));
+      return generation;
+    });
+  }
   unwrap<H = unknown>(): H {
     return this.sql as unknown as H;
   }
@@ -358,6 +380,11 @@ export class AgentDurableObject {
     const session = this.resolveSession(input.session);
     return runInScope({ resources: this.resources, services: this.services }, () => session.start(input));
   }
+  // Session reset (#129) for custom shells — the direct sibling of the /reset route. No
+  // scope needed: reset touches only the store (no tools run).
+  reset(opts?: { session?: string }): Promise<{ previousSession: string; generation: number }> {
+    return this.resolveSession(opts?.session).reset();
+  }
   // Read-only: folds the durable log. When an identity exists (live, or persisted from a
   // prior life) the session resolves and caches like any other path. Only a read on a
   // NEVER-keyed object stays non-committal — caching there would bake "self" in as the
@@ -378,6 +405,11 @@ export class AgentDurableObject {
     if (req.method === "POST" && url.pathname.endsWith("/turn")) {
       const { userText, turnId, event, trigger } = (await req.json()) as { userText: string; turnId?: string; event?: InboundEvent; trigger?: ProactiveTrigger };
       await ensureScope();
+      // CANCEL-AND-REPLACE (#129): supersede every unfinished turn on this session before
+      // queuing this one (debounce). A mode flag like deliver/detach, so it rides the query
+      // string and composes with both. A suspended session still 409s below — replace
+      // never cancels a parked approval.
+      const replace = url.searchParams.get("replace") === "1";
       // DELIVERED: like detach=1, the caller gets a 202 and goes away — but the reply is NOT
       // dropped: this DO renders the turn's event stream through the source channel's own
       // deliver() (the inbound renderer), under the DO's lifetime. Capability is checked
@@ -405,7 +437,7 @@ export class AgentDurableObject {
       let started: { turnId: string };
       try {
         session = this.resolveSession(key);
-        started = runInScope({ resources: this.resources, services: this.services }, () => session.start({ userText, turnId, event, trigger }));
+        started = runInScope({ resources: this.resources, services: this.services }, () => session.start({ userText, turnId, event, trigger, replace }));
       } catch (err) {
         // e.g. the session is suspended awaiting input, or the key mis-matches this
         // object's identity — a client-resolvable conflict, not a crash
@@ -516,6 +548,25 @@ export class AgentDurableObject {
       }
       return new Response(sseTurnStream(session, turnId), { headers: SSE_HEADERS });
     }
+    // SESSION RESET (#129): terminally retire this session's history — supersede unfinished
+    // turns, archive messages/steps under the current generation (the audit trail), and
+    // answer with the audit handle. The response waits for in-flight turns to unwind at
+    // their next checkpoint boundary (the reset op runs on the turn chain), which is fine:
+    // a DO stays alive while it has pending work.
+    if (req.method === "POST" && url.pathname.endsWith("/reset")) {
+      let session: AgentSession;
+      try {
+        session = this.resolveSession(key);
+      } catch (err) {
+        return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 409 });
+      }
+      try {
+        return Response.json(await session.reset());
+      } catch (err) {
+        // e.g. a store without reset() — a caller-resolvable refusal, not a crash
+        return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 409 });
+      }
+    }
     if (url.pathname.endsWith("/transcript")) {
       // A keyed read still conflict-checks (and may commit the key — it is authentic,
       // idFromName routed it here); a key-less read stays non-committal via transcript().
@@ -528,7 +579,7 @@ export class AgentDurableObject {
       }
       return Response.json({ transcript: this.transcript() });
     }
-    return new Response("agent DO — POST /turn, POST /resume, or GET /transcript", { status: 404 });
+    return new Response("agent DO — POST /turn, POST /resume, POST /reset, or GET /transcript", { status: 404 });
   }
 }
 
@@ -556,9 +607,9 @@ function sseTurnStream(session: AgentSession, turnId: string): ReadableStream<Ui
       }, 20_000);
       unsub = session.observe((e) => {
         controller.enqueue(enc.encode(`data: ${JSON.stringify(e)}\n\n`));
-        // terminal for the STREAM: completed, failed, OR suspended (input.requested → the turn
-        // parked; the stream ends and a later /resume opens a fresh continuation stream).
-        if (e.type === "turn.completed" || e.type === "turn.failed" || e.type === "input.requested") { stop(); controller.close(); }
+        // terminal for the STREAM: completed, failed, cancelled, OR suspended (input.requested
+        // → the turn parked; the stream ends and a later /resume opens a fresh continuation stream).
+        if (e.type === "turn.completed" || e.type === "turn.failed" || e.type === "turn.cancelled" || e.type === "input.requested") { stop(); controller.close(); }
       }, { turnId });
     },
     cancel() { stop(); },
@@ -578,7 +629,7 @@ function observeTurnEvents(session: AgentSession, turnId: string): AsyncIterable
   let notify: (() => void) | undefined;
   const unsub = session.observe((e) => {
     queue.push(e);
-    if (e.type === "turn.completed" || e.type === "turn.failed" || e.type === "input.requested") terminal = true;
+    if (e.type === "turn.completed" || e.type === "turn.failed" || e.type === "turn.cancelled" || e.type === "input.requested") terminal = true;
     notify?.();
   }, { turnId });
   return {
@@ -627,6 +678,7 @@ export async function sseTurnFinalText(res: Response): Promise<string> {
       const e = JSON.parse(line.slice(5).trim()) as TurnEvent;
       if (e.type === "turn.completed") return e.text;
       if (e.type === "turn.failed") throw new Error(e.error.message, { cause: e.error }); // full TurnError rides along
+      if (e.type === "turn.cancelled") throw new Error(`turn ${e.turnId} was cancelled (superseded by a newer message)`);
     }
     if (done) break;
   }
@@ -827,7 +879,7 @@ export function durableChannelSurface(
         namespace,
         opts.agentName,
         o?.session ?? "default",
-        new Request("https://do/turn", { method: "POST", body: serializeTurn(message, o) }),
+        new Request(`https://do/turn${o?.replace ? "?replace=1" : ""}`, { method: "POST", body: serializeTurn(message, o) }),
       );
       // /turn streams SSE; the simple path collapses it to the final text.
       return sseTurnFinalText(res);
@@ -843,7 +895,7 @@ export function durableChannelSurface(
         namespace,
         opts.agentName,
         o?.session ?? "default",
-        new Request("https://do/turn?detach=1", { method: "POST", body: serializeTurn(message, o) }),
+        new Request(`https://do/turn?detach=1${o?.replace ? "&replace=1" : ""}`, { method: "POST", body: serializeTurn(message, o) }),
       );
       if (res.status !== 202) {
         const detail = (await res.text()).slice(0, 200);
@@ -864,7 +916,7 @@ export function durableChannelSurface(
         namespace,
         opts.agentName,
         o?.session ?? "default",
-        new Request("https://do/turn?deliver=1", { method: "POST", body: serializeTurn(message, o) }),
+        new Request(`https://do/turn?deliver=1${o?.replace ? "&replace=1" : ""}`, { method: "POST", body: serializeTurn(message, o) }),
       );
       if (res.status === 501) {
         throw new DeliverUnsupportedError(`runDelivered: ${((await res.json().catch(() => undefined)) as { error?: string } | undefined)?.error ?? "the turn host cannot deliver this turn"}`);
@@ -883,7 +935,7 @@ export function durableChannelSurface(
         namespace,
         opts.agentName,
         o?.session ?? "default",
-        new Request("https://do/turn", { method: "POST", body: serializeTurn(message, o) }),
+        new Request(`https://do/turn${o?.replace ? "?replace=1" : ""}`, { method: "POST", body: serializeTurn(message, o) }),
       );
       yield* sseTurnEvents(res);
     },
@@ -923,6 +975,24 @@ export function durableChannelSurface(
         throw new Error(`resumeDelivered: resume was not accepted (status ${res.status}): ${detail}`);
       }
       return (await res.json()) as { turnId: string };
+    },
+    // SESSION RESET (#129): retire the session's history on its DO. The response carries
+    // the audit handle ({ previousSession, generation }); a 409 (store without reset(),
+    // key mismatch) surfaces as an ordinary error — there is no fallback to invent.
+    resetSession: async (o) => {
+      const namespace = getNamespace();
+      if (!namespace) throw new Error("durableChannelSurface: no Durable Object namespace bound (env.AGENT)");
+      const res = await durableFetch(
+        namespace,
+        opts.agentName,
+        o?.session ?? "default",
+        new Request("https://do/reset", { method: "POST" }),
+      );
+      if (!res.ok) {
+        const detail = (await res.text()).slice(0, 200);
+        throw new Error(`resetSession: reset was not accepted (status ${res.status}): ${detail}`);
+      }
+      return (await res.json()) as { previousSession: string; generation: number };
     },
   };
   return channelDispatch(resolved, ctx);
