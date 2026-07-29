@@ -7,7 +7,7 @@
 // itself portable. An app's agent/channels/slack.ts is then a one-liner:
 //   export default slackChannel({ signingSecret: process.env.SLACK_SIGNING_SECRET! , botToken: ... })
 
-import { type Channel, type ChannelContext, type DeliveryTarget } from "./agent-config";
+import { DeliverUnsupportedError, type Channel, type ChannelContext, type DeliveryTarget } from "./agent-config";
 import type { InboundEvent, InputRequest, ProactiveTrigger, Tool, ToolContext, TurnEvent } from "./agent-runtime";
 import type { Principal } from "./context";
 
@@ -820,6 +820,22 @@ export function slackChannel(opts: {
         if (norm && respondTo.includes(norm.event.kind)) {
           const { event, session, userText } = norm;
           runBackground(ctx, async () => {
+            // Prefer DELIVERED rendering: the turn's host (the DO) renders the reply through
+            // this channel's own deliver() under its OWN lifetime, so a long multi-round turn
+            // isn't cancelled by the edge waitUntil ceiling ~30s after the ACK (the silent
+            // no-reply failure mode). Fall back to consumer-side rendering ONLY on the typed
+            // pre-start rejection — any other error may mean the turn already runs, and
+            // re-running it here would double-post.
+            if (opts.stream && ctx.runDelivered) {
+              try {
+                await ctx.runDelivered(userText, { session, event });
+                return;
+              } catch (err) {
+                if (!(err instanceof DeliverUnsupportedError)) throw err;
+                // the host can't deliver (channel not wired where the turn runs) and the turn
+                // was NOT started — render from here instead
+              }
+            }
             if (opts.stream && ctx.runStream) return renderStream(ctx, event, userText, session); // live: edit in place
             if (ctx.runStream) return renderOnce(ctx, event, userText, session); // post-once, HITL-aware
             if (opts.status && event.threadId) await setStatus(event.channelId, event.threadId, opts.status);

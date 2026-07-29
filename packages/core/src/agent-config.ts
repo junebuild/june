@@ -49,6 +49,18 @@ export type ChannelContext = {
   // only via the host's turn-failure logging / onTurnError hook. Optional, like
   // runStream: the host provides it where detachment is meaningful.
   runDetached?: (message: string, opts?: { session?: string; turnId?: string; event?: InboundEvent; trigger?: ProactiveTrigger }) => Promise<{ turnId: string }>;
+  // DELIVERED (runDetached's reply-bearing sibling): start the turn, resolve once it is
+  // durably ACCEPTED — and have the TURN'S HOST render the reply through the channel's own
+  // deliver() (same renderer as the inbound path), instead of a consumer at the edge. On the
+  // Durable Object target the turn AND its rendering then run under the DO's own lifetime, so
+  // a reply-bearing turn is no longer bounded by the edge waitUntil ceiling — the failure mode
+  // where a long multi-round turn (and its Slack stream) was cancelled ~30s after the ACK,
+  // silently posting nothing. Requires the host to have the channel (event.source names it)
+  // wired where the turn runs (DoAgentDef.channels); a host that can't deliver rejects with
+  // DeliverUnsupportedError BEFORE starting the turn, so the channel may safely fall back to
+  // consumer-side rendering (ctx.runStream) without double-running the turn. Optional, like
+  // runStream: the host provides it where host-side delivery is meaningful.
+  runDelivered?: (message: string, opts?: { session?: string; turnId?: string; event?: InboundEvent; trigger?: ProactiveTrigger }) => Promise<{ turnId: string }>;
   // Resume a turn that was parked by ctx.requestInput (HITL): provide the answer and get the
   // continuation's TurnEvent stream, so a channel can render the resumed turn to completion.
   // `by` is the VERIFIED resumer identity (e.g. the user id from a signature-checked Slack
@@ -69,6 +81,19 @@ export type ChannelContext = {
   // Opaque here (the app types it at the read), like RequestScope.services.
   services?: unknown;
 };
+
+// runDelivered's capability rejection: the turn's host cannot render this turn through a
+// channel deliver() — the channel isn't wired where the turn runs (e.g. DoAgentDef.channels
+// omits it) or it has no deliver(). Thrown BEFORE the turn starts (that ordering is the
+// contract), so a channel catching THIS error may fall back to consumer-side rendering
+// (ctx.runStream) knowing it won't double-run the turn. Any other runDelivered rejection is
+// ambiguous — the turn may already be running — and must NOT trigger a re-run fallback.
+export class DeliverUnsupportedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DeliverUnsupportedError";
+  }
+}
 // Where a proactive turn's output is posted when there's NO inbound webhook to reply to
 // (§9). Platform-agnostic: `channelId` is the destination (a Slack channel, a Crisp
 // conversation's website), `threadId` optionally threads it. deliver() renders a turn's

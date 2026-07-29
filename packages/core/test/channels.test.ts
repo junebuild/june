@@ -4,7 +4,7 @@
 // captured global fetch. Loop guards (self-messages) must NOT trigger a reply.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { channelFetch, defineChannel, resolveChannel, type AgentDefinition, type Channel, type ChannelContext } from "@junejs/core/agent-config";
+import { channelFetch, defineChannel, DeliverUnsupportedError, resolveChannel, type AgentDefinition, type Channel, type ChannelContext } from "@junejs/core/agent-config";
 import type { InboundEvent, ToolContext, TurnEvent } from "@junejs/core/agent-runtime";
 import { crispChannel, deriveCrispIdentity, httpChannel, slackChannel, receive, verifySlackSignature, verifyCrispSignature, verifyCrispUrlKey, tryParseJson, timestampFresh, normalizeSlackEvent, normalizeCrispEvent, isCrispEvent, feedbackBlocks, resetSlackCounters, type ChannelRejection, type CrispIdentity, type CrispWebhookEnvelope } from "@junejs/core/channels";
 
@@ -165,6 +165,49 @@ describe("slackChannel", () => {
       ["chat.startStream", "Answer."], // no deltas → the whole reply seeds the stream
       ["chat.stopStream", undefined],
     ]);
+  });
+
+  test("delivered render: a streaming turn is handed to ctx.runDelivered — no worker-side rendering", async () => {
+    streamStub();
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true });
+    const delivered: { userText?: string; session?: string; event?: InboundEvent }[] = [];
+    const ctx = ctxWith(async () => "unused");
+    ctx.runDelivered = async (m, o) => { delivered.push({ userText: m, session: o?.session, event: o?.event }); return { turnId: "t1" }; };
+    ctx.runStream = async function* () { throw new Error("runStream must not be used when the host delivers"); };
+    await ch2.webhook!(await signed(JSON.stringify({ type: "event_callback", event: { type: "message", text: "hi", channel: "C1", ts: "1.1", user: "U1" } })), ctx);
+    await flush();
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0]).toMatchObject({ userText: "hi", session: "slack:C1:1.1", event: { channelId: "C1", threadId: "1.1" } });
+    expect(calls).toHaveLength(0); // the turn's host renders; this isolate touches no Slack API
+  });
+
+  test("delivered render: DeliverUnsupportedError (pre-start refusal) falls back to worker-side streaming", async () => {
+    streamStub();
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true });
+    const ctx = ctxWith(async () => "unused");
+    ctx.runDelivered = async () => { throw new DeliverUnsupportedError("channel not wired in the DO"); };
+    ctx.runStream = async function* () {
+      yield { type: "turn.started", turnId: "t1", trigger: { kind: "proactive", by: "x" } } as TurnEvent;
+      yield { type: "turn.completed", turnId: "t1", text: "Answer." } as TurnEvent;
+    };
+    await ch2.webhook!(await signed(JSON.stringify({ type: "event_callback", event: { type: "message", text: "hi", channel: "C1", ts: "1.1", user: "U1" } })), ctx);
+    await flush();
+    expect(calls.map(method)).toEqual(["chat.startStream", "chat.stopStream"]); // rendered from here after the typed refusal
+  });
+
+  test("delivered render: any OTHER runDelivered failure does NOT fall back — the turn may already be running", async () => {
+    streamStub();
+    const errs: unknown[] = [];
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true, onError: (e) => errs.push(e) });
+    let streamed = false;
+    const ctx = ctxWith(async () => "unused");
+    ctx.runDelivered = async () => { throw new Error("DO unreachable mid-flight"); };
+    ctx.runStream = async function* () { streamed = true; };
+    await ch2.webhook!(await signed(JSON.stringify({ type: "event_callback", event: { type: "message", text: "hi", channel: "C1", ts: "1.1", user: "U1" } })), ctx);
+    await flush();
+    expect(streamed).toBe(false);                                   // no re-run: it could double-post
+    expect(calls).toHaveLength(0);
+    expect(String(errs[0])).toContain("DO unreachable mid-flight"); // surfaced, not swallowed
   });
 
   test("stream render: a tool-only / empty turn posts nothing (no empty streamed message)", async () => {
