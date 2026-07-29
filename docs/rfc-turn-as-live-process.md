@@ -271,6 +271,16 @@ turn's own lifecycle.
   instead of `{ text }`. The worker consumes the SSE and drives the channel's `render`. A suspend
   ends the stream with `input.requested`; `resume` is a new `/turn/:id/resume` streamed request that
   continues. A logical turn = one or more physical streamed responses stitched by `turnId`.
+- **Edge caveat — the waitUntil ceiling, and delivered turns.** A worker-side render consumer
+  lives inside `ctx.waitUntil`, which the runtime cancels ~30s after the ACK response ends — a
+  longer turn's rendering dies mid-flight, and cancellation is not an exception (no `turn.failed`,
+  no reply, silence). `?detach=1` rescued reply-DROPPING turns; **`?deliver=1` is the
+  reply-BEARING sibling**: the DO 202s on acceptance and renders the turn's event stream through
+  the source channel's own `deliver()` (§9's renderer) from inside the DO, under the DO's own
+  lifetime. `ctx.runDelivered` exposes it to channels; a host that can't deliver refuses with
+  `DeliverUnsupportedError` *before* starting the turn, so a channel may fall back to worker-side
+  rendering without double-running. (Resumed continuations still render worker-side — a delivered
+  `/resume` is a tracked follow-up.)
 - A public **`GET /agent/:session/turns/:id/events`** SSE surface (reusing the framework's existing
   SSE plumbing) lets a browser/ops UI subscribe with structural replay.
 
