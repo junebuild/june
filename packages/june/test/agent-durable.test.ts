@@ -165,6 +165,35 @@ describe("AgentDurableObject", () => {
     expect(sawEnv).toEqual({ BOT: "xoxb" });            // channel tools were resolved with the DO env
   });
 
+  test("the session initiator crosses the /turn RPC and outlives the turn that set it (#128)", async () => {
+    const s = await storage();
+    const seen: { principal?: string; initiator?: string }[] = [];
+    const idProbe: Tool = {
+      spec: { name: "id_probe", description: "record identities", input: { type: "object" } },
+      run: (_i, ctx) => {
+        seen.push({ principal: (ctx.principal as { id?: string } | undefined)?.id, initiator: (ctx.initiator as { id?: string } | undefined)?.id });
+        return { ok: true };
+      },
+    };
+    const probeModel: Model = (msgs) => {
+      const last = msgs[msgs.length - 1]!;
+      if (last.role === "tool") return replyStream({ text: "done", toolCalls: [] });
+      const turnId = last.role === "user" || last.role === "trigger" ? last.turnId : "t?";
+      return replyStream({ text: "probing", toolCalls: [{ id: `ip-${turnId}`, name: "id_probe", input: {} }] });
+    };
+    const agent = new AgentDurableObject({ storage: s }, { name: "ops", model: probeModel, tools: [idProbe] });
+    const evt = (id: string) => ({ source: "slack", kind: "message", channelId: "C1", ts: "1.1", principal: { id } });
+
+    const turn = (turnId: string, principalId: string) =>
+      agent.fetch(new Request("https://do/turn", { method: "POST", headers: { [SESSION_HEADER]: "k1" }, body: JSON.stringify({ userText: "hi", turnId, event: evt(principalId) }) }));
+    expect(await sseTurnFinalText(await turn("t1", "A"))).toBe("done");
+    expect(await sseTurnFinalText(await turn("t2", "B"))).toBe("done");
+    expect(seen).toEqual([
+      { principal: "A", initiator: "A" },
+      { principal: "B", initiator: "A" }, // B speaks; A opened the session — durable across turns
+    ]);
+  });
+
   test("POST /turn streams the TurnEvent sequence as SSE", async () => {
     const s = await storage();
     const agent = new AgentDurableObject({ storage: s }, { name: "ops", model: scriptedModel(ORDER_SCRIPT), tools: [createOrderTool()] });

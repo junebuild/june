@@ -149,6 +149,14 @@ export interface ToolContext {
   // credentials off THIS, never off model-supplied input or event.user: the model
   // cannot influence it, so a prompt injection cannot steer a tool across tenants.
   principal?: Principal;
+  // WHO OPENED this session (#128): the first resolved principal any turn arrived with,
+  // recorded durably and immutable thereafter — in a multi-participant thread this is
+  // how a tool distinguishes "who started the work" (initiator) from "who is speaking
+  // on this turn" (principal), e.g. only the initiator may widen a query's scope.
+  // Deliberately NOT part of the requiresPrincipal gate: tool visibility keys off the
+  // CURRENT speaker, so an anonymous follow-up in an operator-opened session does not
+  // inherit the operator's tools. Undefined until some turn resolves a principal.
+  initiator?: Principal;
   // Ask for external (human) input and SUSPEND the turn until session.resume provides it.
   // First call throws SuspendSignal to park the turn (durably); on the replay after resume it
   // returns the stored answer. Only usable from an ASYNC tool — a sync (local) tool commits in
@@ -313,6 +321,13 @@ function assertCrash(crash: Crash | undefined, at: Crash["at"], step: string) {
 }
 
 // ── the engine: one durable turn ──────────────────────────────────────────────
+// Reserved step key for the session's initiator principal (#128). It lives in the steps
+// table beside the "suspended" checkpoint and the per-turn step ids ("model:N",
+// "tool:<id>", "input:<turn>:<id>") — a namespace no turn-scoped key can collide with —
+// so recording it needs no SessionStore contract change and it survives eviction with
+// the rest of the durable log.
+const INITIATOR_STEP = "session:initiator";
+
 export async function runTurn(
   store: SessionStore,
   sink: EventSink,
@@ -334,6 +349,19 @@ export async function runTurn(
       ? { role: "trigger", turnId: opts.turnId, text: opts.userText, by: env.trigger.by }
       : { role: "user", turnId: opts.turnId, text: opts.userText };
     store.tx(() => store.appendMessage(opening));
+  }
+  // Durable session identity (#128): the FIRST resolved principal any turn arrives with
+  // becomes the session's initiator — recorded once under a reserved step key (so the
+  // SessionStore contract stays untouched and it survives eviction with the rest of the
+  // log), immutable thereafter. The tx guard mirrors the suspend checkpoint's: a
+  // crash-replay or a raced duplicate must not double-INSERT the step.
+  let initiator = store.getStep(INITIATOR_STEP) as Principal | undefined;
+  if (initiator === undefined && env.event?.principal != null) {
+    const principal = env.event.principal;
+    store.tx(() => {
+      if (store.getStep(INITIATOR_STEP) === undefined) store.putStep(INITIATOR_STEP, principal);
+    });
+    initiator = principal;
   }
   store.setStatus("running");
   sink.emit({ type: "turn.started", turnId: opts.turnId, trigger });
@@ -365,7 +393,7 @@ export async function runTurn(
       if (last.role === "assistant" && last.toolCalls.length > 0) {
         for (const call of last.toolCalls) {
           inFlight = { phase: "tool", step: `tool:${call.id}` };
-          await toolStep(store, sink, active, call, opts, env);
+          await toolStep(store, sink, active, call, opts, { ...env, initiator });
           inFlight = undefined;
         }
         continue;
@@ -449,7 +477,7 @@ async function toolStep(
   tools: Tool[],
   call: ToolCall,
   opts: { turnId: string; crash?: Crash },
-  env: { runtime: Runtime; agent: string; sessionId: string; event?: InboundEvent },
+  env: { runtime: Runtime; agent: string; sessionId: string; event?: InboundEvent; initiator?: Principal },
 ) {
   const stepId = `tool:${call.id}`;
   if (store.getStep(stepId) !== undefined) return;
@@ -457,7 +485,7 @@ async function toolStep(
   if (!tool) throw new Error(`unknown tool ${call.name}`);
   const remote = tool.run.constructor.name === "AsyncFunction";
   const ctx: ToolContext = {
-    store, runtime: env.runtime, agent: env.agent, sessionId: env.sessionId, callId: call.id, event: env.event, principal: env.event?.principal,
+    store, runtime: env.runtime, agent: env.agent, sessionId: env.sessionId, callId: call.id, event: env.event, principal: env.event?.principal, initiator: env.initiator,
     // replay-aware: return the stored answer if resume already provided it, else park the turn.
     // Answers are TURN-scoped (`input:${turnId}:${id}`): a later turn re-asking the same id must
     // park again — never silently reuse a prior turn's answer (an approval must not carry over).
