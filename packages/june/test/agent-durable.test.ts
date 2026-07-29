@@ -1187,7 +1187,7 @@ describe("AgentDurableObject — turn control (#129)", () => {
     await new Promise((r) => setTimeout(r, 15)); // let t1 stream a few deltas
     const second = await agent.fetch(new Request("https://do/turn?replace=1", { method: "POST", body: JSON.stringify({ userText: "corrected question", turnId: "t2" }) }));
     expect((await collect(second)).at(-1)).toMatchObject({ type: "turn.completed", text: "fresh" });
-    expect((await firstEvents).at(-1)).toEqual({ type: "turn.cancelled", turnId: "t1" }); // the SSE terminal — not a hang, not a failure
+    expect((await firstEvents).at(-1)).toEqual({ type: "turn.cancelled", turnId: "t1", reason: "replaced" }); // the SSE terminal — not a hang, not a failure
   });
 
   test("POST /reset retires the history: audit handle out, live log empty, archive rows kept", async () => {

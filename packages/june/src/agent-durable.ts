@@ -678,7 +678,7 @@ export async function sseTurnFinalText(res: Response): Promise<string> {
       const e = JSON.parse(line.slice(5).trim()) as TurnEvent;
       if (e.type === "turn.completed") return e.text;
       if (e.type === "turn.failed") throw new Error(e.error.message, { cause: e.error }); // full TurnError rides along
-      if (e.type === "turn.cancelled") throw new Error(`turn ${e.turnId} was cancelled (superseded by a newer message)`);
+      if (e.type === "turn.cancelled") throw new Error(`turn ${e.turnId} was cancelled (${e.reason})`);
     }
     if (done) break;
   }
