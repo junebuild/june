@@ -364,6 +364,15 @@ export function slackChannel(opts: {
   // protection for approval buttons in a busy channel. Off by default (one-click resume,
   // the prior behavior).
   approvalConfirm?: boolean;
+  // Cancel-and-replace / debounce (#129): a NEW message or mention in a thread supersedes
+  // the turn still running there — the stale turn is cancelled at its next checkpoint
+  // boundary (its stream closes with a "superseded" note; a turn that hadn't posted yet
+  // vanishes silently) and the new message runs instead, so the reply answers the LATEST
+  // question, not an outdated one. Scoped to message/app_mention: a reaction-driven turn
+  // never cancels an answer in progress. A parked approval is never cancelled (the engine
+  // still rejects new turns while one is pending). Off by default: in a thread where
+  // several people ask independent questions, replacing would eat each other's answers.
+  replaceInFlight?: boolean;
   // The interaction escape hatch (#88): every signature-verified interaction payload the
   // built-in routing does NOT claim (june_feedback / june_input:* action_ids) is handed
   // here instead of silently dropped — the app's own buttons on posted messages route
@@ -581,6 +590,14 @@ export function slackChannel(opts: {
         }
         else if (e.type === "turn.completed") finalText = e.text;
         else if (e.type === "turn.failed") { await push("\n_(the turn failed)_"); await finish(); return; }
+        else if (e.type === "turn.cancelled") {
+          // superseded (#129): close what already streamed with a note so the half-answer
+          // isn't mistaken for a full one; a turn that hadn't posted yet vanishes silently
+          // (the replacement turn is about to render its own reply).
+          if (started) { await push("\n_(superseded by a newer message)_"); await finish(); }
+          else if (opts.status && threadId) await setStatus(channelId, threadId, "");
+          return;
+        }
         else if (e.type === "input.requested") {
           // the turn parked awaiting a human: finalize any streamed text, then post the prompt
           // with Approve/Deny buttons. The interaction handler (below) routes the click to resume.
@@ -611,10 +628,10 @@ export function slackChannel(opts: {
   // The event's author + workspace become the stream's recipient — chat.startStream requires
   // recipient_user_id/recipient_team_id for CHANNEL streams even in-thread (live-verified
   // 2026-07-15: missing_recipient_team_id), and "who asked" is exactly what they mean.
-  function renderStream(ctx: ChannelContext, event: InboundEvent, userText: string, session: string) {
+  function renderStream(ctx: ChannelContext, event: InboundEvent, userText: string, session: string, replace?: boolean) {
     return streamRender(
       { channelId: event.channelId, threadId: event.threadId, recipientUserId: event.user?.id, recipientTeamId: event.teamId },
-      ctx.runStream!(userText, { session, event }),
+      ctx.runStream!(userText, { session, event, replace }),
       session,
     );
   }
@@ -623,13 +640,19 @@ export function slackChannel(opts: {
   // errors and the Approve/Deny prompt would never post. When the host provides the event
   // stream, consume it non-live instead: post the final text once, post the approval prompt
   // when the turn parks. Failure semantics match ctx.run (throw → runBackground → onError).
-  async function renderOnce(ctx: ChannelContext, event: InboundEvent, userText: string, session: string) {
+  async function renderOnce(ctx: ChannelContext, event: InboundEvent, userText: string, session: string, replace?: boolean) {
     if (opts.status && event.threadId) await setStatus(event.channelId, event.threadId, opts.status);
     try {
       let finalText = "";
-      for await (const e of ctx.runStream!(userText, { session, event })) {
+      for await (const e of ctx.runStream!(userText, { session, event, replace })) {
         if (e.type === "turn.completed") finalText = e.text;
         else if (e.type === "turn.failed") throw new Error(e.error.message, { cause: e.error }); // full TurnError rides along
+        else if (e.type === "turn.cancelled") {
+          // superseded (#129): this turn's reply will never come — the REPLACEMENT turn is
+          // about to render. Post nothing; just clear the status so it can't stick.
+          if (opts.status && event.threadId) await setStatus(event.channelId, event.threadId, "");
+          return;
+        }
         else if (e.type === "input.requested") {
           const promptTs = await postApproval(event.channelId, event.threadId, e.turnId, e.request, session);
           // a failed prompt post (reported, not thrown) leaves nothing to auto-clear the status
@@ -962,6 +985,9 @@ export function slackChannel(opts: {
         // respond: only kinds in respondTo drive a turn + reply (reactions can stay observe-only)
         if (norm && respondTo.includes(norm.event.kind)) {
           const { event, session, userText } = norm;
+          // Debounce (#129): a new message/mention supersedes the thread's in-flight turn.
+          // Kind-scoped so a reaction-driven turn never cancels an answer in progress.
+          const replace = (opts.replaceInFlight && (event.kind === "message" || event.kind === "app_mention")) || undefined;
           runBackground(ctx, async () => {
             await identityReady; // the turn must carry the resolved principal (requiresPrincipal gating)
             // Prefer DELIVERED rendering: the turn's host (the DO) renders the reply through
@@ -972,7 +998,7 @@ export function slackChannel(opts: {
             // re-running it here would double-post.
             if (opts.stream && ctx.runDelivered) {
               try {
-                await ctx.runDelivered(userText, { session, event });
+                await ctx.runDelivered(userText, { session, event, replace });
                 return;
               } catch (err) {
                 if (!(err instanceof DeliverUnsupportedError)) throw err;
@@ -980,11 +1006,11 @@ export function slackChannel(opts: {
                 // was NOT started — render from here instead
               }
             }
-            if (opts.stream && ctx.runStream) return renderStream(ctx, event, userText, session); // live: edit in place
-            if (ctx.runStream) return renderOnce(ctx, event, userText, session); // post-once, HITL-aware
+            if (opts.stream && ctx.runStream) return renderStream(ctx, event, userText, session, replace); // live: edit in place
+            if (ctx.runStream) return renderOnce(ctx, event, userText, session, replace); // post-once, HITL-aware
             if (opts.status && event.threadId) await setStatus(event.channelId, event.threadId, opts.status);
             try {
-              const reply = await ctx.run(userText, { session, event });
+              const reply = await ctx.run(userText, { session, event, replace });
               // A reaction turn (or any turn) may resolve to no text — the agent acted via a
               // tool (e.g. slack_add_reaction) instead of posting. Only post real content.
               if (reply && reply.trim()) await postMessage(event.channelId, reply, event.threadId);
