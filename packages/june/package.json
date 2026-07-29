@@ -1,6 +1,6 @@
 {
   "name": "@junejs/server",
-  "version": "1.0.0-dev.11",
+  "version": "1.0.0-dev.12",
   "description": "June host adapters + dev server. Host-coupled; depends on the pure @junejs/core contract layer.",
   "type": "module",
   "license": "MIT",
@@ -132,7 +132,7 @@
     "rolldown": "^1.1.0"
   },
   "peerDependencies": {
-    "@junejs/core": ">=0.2.0-dev.26",
+    "@junejs/core": ">=0.2.0-dev.27",
     "react": "catalog:",
     "react-dom": "catalog:",
     "react-server-dom-webpack": "catalog:",
