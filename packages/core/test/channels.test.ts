@@ -624,6 +624,81 @@ describe("slackChannel", () => {
     expect(updates.at(-1)!.body).toMatchObject({ channel: "C1", ts: "9.9", text: "Refund approved." }); // rendered into the button message
   });
 
+  test("HITL delivered resume: a click hands the continuation to ctx.resumeDelivered — no worker-side rendering", async () => {
+    captureFetch();
+    let deliveredArgs: unknown;
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test" });
+    const ctx = ctxWith(async () => "unused");
+    ctx.resumeDelivered = async (o) => { deliveredArgs = o; return { turnId: o.turnId }; };
+    ctx.resumeStream = async function* () { throw new Error("resumeStream must not be used when the host delivers"); };
+    const interaction = { type: "block_actions", user: { id: "U1" }, channel: { id: "C1" }, message: { ts: "9.9", thread_ts: "5.5" }, actions: [{ action_id: "june_input:yes", value: JSON.stringify({ turnId: "t1", inputId: "approve-1", input: true }) }] };
+    await ch2.webhook!(await signed(`payload=${encodeURIComponent(JSON.stringify(interaction))}`), ctx);
+    await flush();
+    expect(deliveredArgs).toEqual({
+      session: "slack:C1:5.5", turnId: "t1", inputId: "approve-1", input: true, by: "U1",
+      source: "slack", target: { channelId: "C1", threadId: "5.5", messageTs: "9.9" },
+    });
+    expect(calls).toHaveLength(0); // the turn's host renders; this isolate touches no Slack API
+  });
+
+  test("HITL delivered resume: the typed pre-effect refusal falls back to resumeStream + worker-side render", async () => {
+    captureFetch();
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test" });
+    const ctx = ctxWith(async () => "unused");
+    ctx.resumeDelivered = async () => { throw new DeliverUnsupportedError("channel not wired in the DO"); };
+    ctx.resumeStream = async function* (o) { yield { type: "turn.completed", turnId: o.turnId, text: "Refund approved." } as TurnEvent; };
+    const interaction = { type: "block_actions", user: { id: "U1" }, channel: { id: "C1" }, message: { ts: "9.9", thread_ts: "5.5" }, actions: [{ action_id: "june_input:yes", value: JSON.stringify({ turnId: "t1", inputId: "approve-1", input: true }) }] };
+    await ch2.webhook!(await signed(`payload=${encodeURIComponent(JSON.stringify(interaction))}`), ctx);
+    await flush();
+    const updates = calls.filter((c) => method(c) === "chat.update");
+    expect(updates.at(-1)!.body).toMatchObject({ channel: "C1", ts: "9.9", text: "Refund approved." }); // fell back and rendered here
+  });
+
+  test("HITL delivered resume: an engine rejection posts the ephemeral note and leaves the buttons intact", async () => {
+    captureFetch();
+    const errs: unknown[] = [];
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", onError: (e) => errs.push(e) });
+    const ctx = ctxWith(async () => "unused");
+    ctx.resumeDelivered = async () => { throw new Error("resumeDelivered: resume was not accepted (status 403): not the designated approver"); };
+    ctx.resumeStream = async function* () { throw new Error("must not fall back on an ambiguous rejection"); };
+    const interaction = { type: "block_actions", user: { id: "U2" }, channel: { id: "C1" }, message: { ts: "9.9", thread_ts: "5.5" }, response_url: "https://hooks.slack.test/resp", actions: [{ action_id: "june_input:yes", value: JSON.stringify({ turnId: "t1", inputId: "approve-1", input: true }) }] };
+    await ch2.webhook!(await signed(`payload=${encodeURIComponent(JSON.stringify(interaction))}`), ctx);
+    await flush();
+    const eph = calls.find((c) => c.url === "https://hooks.slack.test/resp");
+    expect(eph!.body).toMatchObject({ response_type: "ephemeral", replace_original: false }); // only the clicker is told
+    expect(calls.filter((c) => method(c) === "chat.update")).toHaveLength(0); // buttons stay for the rightful answerer
+    expect(String(errs[0])).toContain("status 403"); // still recorded via onError
+  });
+
+  test("HITL: approvalConfirm attaches native confirmation dialogs — danger on Deny, absent by default", async () => {
+    streamStub();
+    const withConfirm = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true, approvalConfirm: true });
+    const parkStream = async function* () {
+      yield { type: "turn.started", turnId: "t1", trigger: { kind: "proactive", by: "x" } } as TurnEvent;
+      yield { type: "input.requested", turnId: "t1", request: { id: "approve-1", prompt: "Approve refund?", answererId: "U1" } } as TurnEvent;
+    };
+    const ctx = ctxWith(async () => "unused");
+    ctx.runStream = parkStream;
+    await withConfirm.webhook!(await signed(JSON.stringify({ type: "event_callback", event: { type: "message", text: "refund", channel: "C1", ts: "1.1", user: "U1" } })), ctx);
+    await flush();
+    type Btn = { confirm?: { title: { text: string }; confirm: { text: string }; deny: { text: string }; style?: string } };
+    const buttons = (calls.find((c) => method(c) === "chat.postMessage")!.body as { blocks: { elements?: Btn[] }[] }).blocks[1]!.elements!;
+    expect(buttons[0]!.confirm).toMatchObject({ title: { text: "Confirm approval" }, confirm: { text: "Approve" }, deny: { text: "Cancel" } });
+    expect(buttons[0]!.confirm!.style).toBeUndefined();
+    expect(buttons[1]!.confirm).toMatchObject({ title: { text: "Confirm denial" }, style: "danger" });
+
+    // default: one-click resume, no dialogs (the prior behavior)
+    streamStub();
+    const plain = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true });
+    const ctx2 = ctxWith(async () => "unused");
+    ctx2.runStream = parkStream;
+    await plain.webhook!(await signed(JSON.stringify({ type: "event_callback", event: { type: "message", text: "refund", channel: "C1", ts: "1.1", user: "U1" } })), ctx2);
+    await flush();
+    const plainButtons = (calls.find((c) => method(c) === "chat.postMessage")!.body as { blocks: { elements?: Btn[] }[] }).blocks[1]!.elements!;
+    expect(plainButtons[0]!.confirm).toBeUndefined();
+    expect(plainButtons[1]!.confirm).toBeUndefined();
+  });
+
   test("HITL: post-once (non-stream) mode still posts the Approve/Deny prompt when the turn parks", async () => {
     streamStub();
     const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test" }); // no stream: true
