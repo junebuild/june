@@ -31,7 +31,7 @@ import {
   type SqlStorage,
 } from "../src/agent-durable";
 import { createAgentRuntime, mountAgent } from "../src/agent-native";
-import { defineChannel, DeliverUnsupportedError, type AgentDefinition } from "@junejs/core/agent-config";
+import { defineChannel, DeliverUnsupportedError, type AgentDefinition, type Channel } from "@junejs/core/agent-config";
 import { openLocalSqliteSync } from "../src/sqlite-driver";
 import { db, currentServices, requestLocal } from "@junejs/db";
 import type { JuneDb } from "@junejs/core/resources";
@@ -923,6 +923,21 @@ describe("AgentDurableObject — delivered turns", () => {
       const model: Model = () => replyStream({ text: "fine", toolCalls: [] });
       const agent = new AgentDurableObject({ storage: await storage() }, { name: "ops", model, tools: [], channels: [exploding] });
       expect((await agent.fetch(deliverReq("t1"))).status).toBe(202);
+      await until(() => err.mock.calls.some((c) => String(c[0]).includes("delivered render for turn t1 failed")));
+      await until(() => agent.transcript().find((t) => t.turnId === "t1")?.text === "fine"); // the TURN completed durably
+    } finally {
+      err.mockRestore();
+    }
+  });
+
+  test("a SYNCHRONOUSLY-throwing deliver() still 202s and logs — never a 500 for a turn that runs anyway", async () => {
+    const err = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      // throws before ever returning a promise — the sharpest shape of app/third-party code
+      const explodingSync = defineChannel({ name: "slackish", path: "/x", deliver: (() => { throw new Error("sync boom"); }) as unknown as Channel["deliver"] });
+      const model: Model = () => replyStream({ text: "fine", toolCalls: [] });
+      const agent = new AgentDurableObject({ storage: await storage() }, { name: "ops", model, tools: [], channels: [explodingSync] });
+      expect((await agent.fetch(deliverReq("t1"))).status).toBe(202); // acceptance stands
       await until(() => err.mock.calls.some((c) => String(c[0]).includes("delivered render for turn t1 failed")));
       await until(() => agent.transcript().find((t) => t.turnId === "t1")?.text === "fine"); // the TURN completed durably
     } finally {

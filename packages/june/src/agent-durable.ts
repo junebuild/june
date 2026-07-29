@@ -417,12 +417,26 @@ export class AgentDurableObject {
         // rendering survives however briefly the caller held its connection. The event is
         // present (checked above); its author/thread are the reply target, exactly the
         // surface the channel's inbound renderStream derives.
-        const events = observeTurnEvents(session, started.turnId);
-        const target = { channelId: event!.channelId, threadId: event!.threadId, recipientUserId: event!.user?.id, recipientTeamId: event!.teamId };
-        runInScope({ resources: this.resources, services: this.services }, () => deliverChannel!.deliver!(target, events, { session: this.sessionKey }))
-          // Rendering failures have no live consumer — this log is their only surfacing path
-          // (the TURN's own failures already surface via the #76 sink subscription).
-          .catch((err) => console.error(`[june] agent "${this.name}": delivered render for turn ${started.turnId} failed:`, err));
+        //
+        // Once start() has queued the turn, NOTHING here may escape: a throw would 500 the
+        // caller for a turn that runs anyway — the exact ambiguity delivered turns exist to
+        // remove. deliver() is app/third-party code that can throw synchronously before
+        // returning its promise, so it is deferred into the chain (the eager subscription
+        // above stays synchronous — that timing guarantee must not move); the try/catch
+        // backstops the subscription itself. Rendering failures have no live consumer —
+        // this log is their only surfacing path (the TURN's own failures already surface
+        // via the #76 sink subscription).
+        const logRenderFailure = (err: unknown) =>
+          console.error(`[june] agent "${this.name}": delivered render for turn ${started.turnId} failed:`, err);
+        try {
+          const events = observeTurnEvents(session, started.turnId);
+          const target = { channelId: event!.channelId, threadId: event!.threadId, recipientUserId: event!.user?.id, recipientTeamId: event!.teamId };
+          Promise.resolve()
+            .then(() => runInScope({ resources: this.resources, services: this.services }, () => deliverChannel!.deliver!(target, events, { session: this.sessionKey })))
+            .catch(logRenderFailure);
+        } catch (err) {
+          logRenderFailure(err);
+        }
         return Response.json({ turnId: started.turnId }, { status: 202 });
       }
       // DETACHED (#77): the turn is accepted — 202 now, no stream. It keeps running under
