@@ -9,7 +9,7 @@
 // native AND edge (a Durable Object) — pass `apiKey` explicitly on edge, where
 // there is no process.env.
 
-import type { Model, ModelDelta, ModelReply, Msg, ToolSpec } from "./agent-runtime";
+import type { Model, ModelDelta, ModelFinish, ModelReply, Msg, ToolSpec } from "./agent-runtime";
 
 // Structural subset of the Anthropic Messages shapes we emit/read — no
 // `@anthropic-ai/sdk` type import, so core typechecks without the optional dep.
@@ -83,9 +83,12 @@ export type AnthropicRequest = {
 // Structural view of just the SDK surface we call (no dependency on its types). The
 // message stream is async-iterable over raw stream events AND exposes finalMessage().
 // `stream` is a METHOD signature deliberately (bivariant), so the SDK's narrower
-// parameter type still satisfies it.
+// parameter type still satisfies it. `stop_reason` is the Messages API's why-it-stopped
+// field (@anthropic-ai/sdk ≥0.60 Message: end_turn / max_tokens / stop_sequence /
+// tool_use / pause_turn / refusal / model_context_window_exceeded / null) — optional
+// here so a minimal fake transport stays assignable.
 export type AnthropicStreamEvent = { type: string; delta?: { type?: string; text?: string; thinking?: string } };
-export type AnthropicStream = AsyncIterable<AnthropicStreamEvent> & { finalMessage(): Promise<{ content: AnthropicResponseBlock[] }> };
+export type AnthropicStream = AsyncIterable<AnthropicStreamEvent> & { finalMessage(): Promise<{ content: AnthropicResponseBlock[]; stop_reason?: string | null }> };
 export type AnthropicClient = {
   messages: { stream(body: AnthropicRequest): AnthropicStream };
 };
@@ -145,6 +148,31 @@ export function anthropic(opts: AnthropicOptions = {}): Model {
         else if (ev.delta.type === "thinking_delta" && ev.delta.thinking) yield { type: "reasoning", text: ev.delta.thinking };
       }
       const message = await stream.finalMessage();
-      yield { type: "done", reply: fromAnthropicContent(message.content) };
+      yield { type: "done", reply: fromAnthropicContent(message.content), finish: finishFromStopReason(message.stop_reason) };
     })();
+}
+
+// Messages API stop_reason → the engine's normalized ModelFinish. The engine only acts
+// on the abnormal-AND-empty combination (agent-runtime.ts modelStep), so the mapping's
+// job is honesty, not policy: `stop` covers every reason that means "the model chose to
+// stop here" (a tool_use stop is a normal mid-turn stop — the reply carries the calls);
+// model_context_window_exceeded folds into max_tokens (both mean "ran out of room");
+// pause_turn (server-tool loop parked — this adapter runs no server tools) and any
+// future value fall to `other` with the provider's own string preserved in `raw`.
+// Exported for tests.
+export function finishFromStopReason(stopReason: string | null | undefined): ModelFinish | undefined {
+  if (stopReason == null) return undefined; // e.g. a minimal fake transport — no claim, engine keeps legacy behavior
+  switch (stopReason) {
+    case "end_turn":
+    case "stop_sequence":
+    case "tool_use":
+      return { reason: "stop", raw: stopReason };
+    case "max_tokens":
+    case "model_context_window_exceeded":
+      return { reason: "max_tokens", raw: stopReason };
+    case "refusal":
+      return { reason: "refusal", raw: stopReason };
+    default:
+      return { reason: "other", raw: stopReason };
+  }
 }
