@@ -279,8 +279,10 @@ turn's own lifecycle.
   the source channel's own `deliver()` (§9's renderer) from inside the DO, under the DO's own
   lifetime. `ctx.runDelivered` exposes it to channels; a host that can't deliver refuses with
   `DeliverUnsupportedError` *before* starting the turn, so a channel may fall back to worker-side
-  rendering without double-running. (Resumed continuations still render worker-side — a delivered
-  `/resume` is a tracked follow-up.)
+  rendering without double-running. The HITL leg works the same way: `/resume?deliver=1` applies
+  the answer and renders the continuation through the channel's `deliverResume()` (the shared
+  prompt-message renderer) under the host's lifetime, with the same pre-effect 501 contract —
+  refused before the answer applies, so a fallback resume cannot double-answer.
 - A public **`GET /agent/:session/turns/:id/events`** SSE surface (reusing the framework's existing
   SSE plumbing) lets a browser/ops UI subscribe with structural replay.
 
