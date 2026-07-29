@@ -30,6 +30,7 @@
     "crisp-identity-principal",
     "crisp-website-hooks-auth",
     "delivered-inbound-turns",
+    "delivered-resume",
     "detach-turn-mode",
     "do-session-identity",
     "global-turn-ids",

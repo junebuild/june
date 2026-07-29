@@ -1,5 +1,12 @@
 # june.build
 
+## 0.0.5-dev.30
+
+### Patch Changes
+
+- Updated dependencies [[`fba01b9`](https://github.com/junebuild/june/commit/fba01b9060774db087594a7e825e8c4e2ff4a73f)]:
+  - @junejs/core@0.2.0-dev.30
+
 ## 0.0.5-dev.29
 
 ### Patch Changes
