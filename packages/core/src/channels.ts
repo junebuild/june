@@ -277,16 +277,26 @@ export const feedbackBlocks = (turnId?: string, session?: string) => [{
 }];
 
 // What slackChannel's resolveIdentity receives: the sender facts carried INSIDE the
-// signature-verified event payload. `userId` is Slack's own assertion of which workspace
-// member acted (absent on the rare kinds that carry no user); `teamId` names the
-// workspace — a resolver granting staff/operator principals should always check it, or a
-// foreign workspace sharing the same app would mint principals too. These are trustworthy
-// as PLATFORM identity ("this Slack user did this"); what they mean to the app — operator,
-// staff, nobody — is exactly what the resolver decides.
+// signature-verified event payload. `userId` is Slack's own assertion of which user acted
+// (absent on the rare kinds that carry no user). These are trustworthy as PLATFORM
+// identity ("this Slack user did this"); what they mean to the app — operator, staff,
+// nobody — is exactly what the resolver decides.
+//
+// ⚠️ Workspace membership is NOT one of these facts. `teamId` is the ENVELOPE workspace —
+// where the app is installed and received the event — and with Slack Connect an external
+// user posting in a shared channel arrives under that same envelope. `senderTeamId`
+// carries the sender's home-workspace id when Slack includes one on the event
+// (`user_team`/`source_team`/`team`); equality with `teamId` supports same-workspace, but
+// ABSENCE proves nothing. A resolver granting elevated (staff/operator) principals must
+// therefore verify membership explicitly: an explicit user-id allowlist, a users.info
+// lookup over the bot token, or restricting the surface to non-shared channels — not the
+// envelope team alone.
 export type SlackIdentity = {
   userId?: string;
-  userName?: string;
+  /** The ENVELOPE workspace (app installation) — NOT proof of the sender's membership. */
   teamId?: string;
+  /** The sender's home workspace, when Slack includes it on the event; absent ⇒ unproven. */
+  senderTeamId?: string;
   channelId: string;
   threadId?: string;
   kind: SlackEventKind;
@@ -316,14 +326,16 @@ export function slackChannel(opts: {
   // PLATFORM-VERIFIED sender to the app's own Principal before any consumer of a
   // normalized event runs. Unlike Crisp — where the webhook's user fields are
   // client-writable hints and identity must be PULLED as verification evidence over
-  // REST — a Slack event's user/team ids arrive inside the signature-verified payload
-  // itself: "this workspace member sent this" is already Slack's own assertion, so
-  // there is no evidence fetch and no extra latency. What the resolver decides is what
-  // that platform identity MEANS to the app: map a workspace member to an operator/
-  // staff Principal (and enforce a team allowlist), or return null/undefined to leave
-  // the turn anonymous. The result is pinned on event.principal, flows to
-  // ToolContext.principal, and gates Tool.requiresPrincipal tools. Fail-closed: a
-  // throwing resolver is reported to onError and the turn runs anonymous.
+  // REST — a Slack event's sender ids arrive inside the signature-verified payload
+  // itself: "this Slack user sent this" is already Slack's own assertion, so there is
+  // no evidence fetch and no extra latency. What the resolver decides is what that
+  // platform identity MEANS to the app: map a known user to an operator/staff
+  // Principal, or return null/undefined to leave the turn anonymous. Granting elevated
+  // principals needs an explicit membership check (user-id allowlist / users.info) —
+  // the envelope teamId alone does not prove membership; see SlackIdentity. The result
+  // is pinned on event.principal, flows to ToolContext.principal, and gates
+  // Tool.requiresPrincipal tools. Fail-closed: a throwing resolver is reported to
+  // onError and the turn runs anonymous.
   resolveIdentity?: (identity: SlackIdentity, ctx: ChannelContext) => Promise<Principal | null | undefined> | Principal | null | undefined;
   // Render the turn LIVE: post a "Thinking…" message, then edit it in place as the turn's
   // events arrive (tool status, then the final answer) instead of posting once at the end.
@@ -844,17 +856,21 @@ export function slackChannel(opts: {
         // observers and the respond path all await this shared promise, so an
         // observe-mode consumer sees the same principal the turn does (the crisp
         // channel's exact pattern). No evidence fetch here: the identity facts come
-        // from the signature-verified payload itself (see SlackIdentity). Never
-        // rejects: a throwing resolver is reported to onError, the event stays
-        // anonymous, and requiresPrincipal tools simply stay hidden for the turn.
+        // from the signature-verified payload itself (see SlackIdentity) — including
+        // the sender's home-workspace id when Slack put one on the raw event, which
+        // is what lets a resolver tell a workspace member from a Slack Connect
+        // external participant arriving under the same envelope. Never rejects: a
+        // throwing resolver is reported to onError, the event stays anonymous, and
+        // requiresPrincipal tools simply stay hidden for the turn.
+        const rawEv = (payload.event ?? {}) as { user_team?: string; source_team?: string; team?: string };
         const identityReady: Promise<void> =
           norm && opts.resolveIdentity
             ? (async () => {
                 try {
                   const principal = await opts.resolveIdentity!({
                     userId: norm.event.user?.id,
-                    userName: norm.event.user?.name,
                     teamId: norm.event.teamId,
+                    senderTeamId: rawEv.user_team ?? rawEv.source_team ?? rawEv.team,
                     channelId: norm.event.channelId,
                     threadId: norm.event.threadId,
                     kind: norm.event.kind as SlackEventKind,
