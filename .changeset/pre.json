@@ -29,6 +29,7 @@
     "crisp-event-normalization",
     "crisp-identity-principal",
     "crisp-website-hooks-auth",
+    "delivered-inbound-turns",
     "detach-turn-mode",
     "do-session-identity",
     "global-turn-ids",
