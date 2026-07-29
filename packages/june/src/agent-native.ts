@@ -79,6 +79,26 @@ class SqliteSessionStore implements SessionStore {
       throw e;
     }
   }
+  // Session reset (#129): ARCHIVE this session's messages/steps under the current
+  // generation (audit trail — never deleted), clear the live rows, status → "new".
+  // Archive tables + the generation counter are created lazily here, so existing
+  // databases stay untouched until the first reset.
+  reset(): number {
+    return this.tx(() => {
+      this.db.exec(`CREATE TABLE IF NOT EXISTS agent_messages_archive (session_id TEXT, generation INTEGER, seq INTEGER, body TEXT)`);
+      this.db.exec(`CREATE TABLE IF NOT EXISTS agent_steps_archive (session_id TEXT, generation INTEGER, id TEXT, output TEXT)`);
+      this.db.exec(`CREATE TABLE IF NOT EXISTS agent_session_generations (session_id TEXT PRIMARY KEY, generation INTEGER)`);
+      const r = this.db.query("SELECT generation FROM agent_session_generations WHERE session_id = ?").get(this.sid) as { generation: number } | undefined;
+      const generation = r?.generation ?? 0;
+      this.db.query("INSERT INTO agent_messages_archive (session_id, generation, seq, body) SELECT session_id, ?, seq, body FROM agent_messages WHERE session_id = ?").run(generation, this.sid);
+      this.db.query("DELETE FROM agent_messages WHERE session_id = ?").run(this.sid);
+      this.db.query("INSERT INTO agent_steps_archive (session_id, generation, id, output) SELECT session_id, ?, id, output FROM agent_steps WHERE session_id = ?").run(generation, this.sid);
+      this.db.query("DELETE FROM agent_steps WHERE session_id = ?").run(this.sid);
+      this.db.query("INSERT INTO agent_sessions (session_id, status) VALUES (?, 'new') ON CONFLICT(session_id) DO UPDATE SET status = 'new'").run(this.sid);
+      this.db.query("INSERT INTO agent_session_generations (session_id, generation) VALUES (?, ?) ON CONFLICT(session_id) DO UPDATE SET generation = ?").run(this.sid, generation + 1, generation + 1);
+      return generation;
+    });
+  }
   unwrap<H = unknown>(): H { return this.db as unknown as H; }
 }
 
@@ -139,6 +159,10 @@ class MemorySessionStore implements SessionStore {
   private msgs: Msg[] = [];
   private steps = new Map<string, unknown>();
   private status = "new";
+  private generation = 0;
+  // Retired generations (#129) — kept for the audit contract even in memory, so the
+  // backend behaves like the durable tiers within one process lifetime.
+  private readonly archives: { generation: number; msgs: Msg[]; steps: Map<string, unknown> }[] = [];
   appendMessage(m: Msg) { this.msgs.push(m); }
   messages(): Msg[] { return this.msgs.slice(); }
   hasOpeningMessage(turnId: string): boolean { return this.msgs.some((m) => (m.role === "user" || m.role === "trigger") && m.turnId === turnId); }
@@ -148,6 +172,14 @@ class MemorySessionStore implements SessionStore {
   getStatus(): string { return this.status; }
   setStatus(s: string) { this.status = s; }
   tx<T>(fn: () => T): T { return fn(); } // no rollback: an in-memory store is not a durability tier
+  reset(): number {
+    const generation = this.generation++;
+    this.archives.push({ generation, msgs: this.msgs, steps: this.steps });
+    this.msgs = [];
+    this.steps = new Map();
+    this.status = "new";
+    return generation;
+  }
   unwrap<H = unknown>(): H { return undefined as unknown as H; }
 }
 
@@ -216,12 +248,16 @@ export function mountAgent(
     agent,
     services: opts.services, // same DI bag reachable from channel hooks (parity with durableChannelSurface)
     run: (message, o) =>
-      runtime.session(agent.name, o?.session ?? "default").turn({ turnId: o?.turnId, userText: message, event: o?.event, trigger: o?.trigger }),
+      runtime.session(agent.name, o?.session ?? "default").turn({ turnId: o?.turnId, userText: message, event: o?.event, trigger: o?.trigger, replace: o?.replace }),
     // FIRE-AND-FORGET (#77): start() without awaiting the result. Native has no waitUntil
     // ceiling (Node keeps floating promises alive), but the seam is the same so a channel
     // written against ctx.runDetached behaves identically on both targets.
     runDetached: async (message, o) =>
-      runtime.session(agent.name, o?.session ?? "default").start({ turnId: o?.turnId, userText: message, event: o?.event, trigger: o?.trigger }),
+      runtime.session(agent.name, o?.session ?? "default").start({ turnId: o?.turnId, userText: message, event: o?.event, trigger: o?.trigger, replace: o?.replace }),
+    // SESSION RESET (#129): same seam as durableChannelSurface — the in-process runtimes'
+    // stores implement archival, so a channel written against ctx.resetSession behaves
+    // identically on both targets.
+    resetSession: (o) => runtime.session(agent.name, o?.session ?? "default").reset(),
   };
   const channels = channelFetch(agent, ctx);
   const surface = async (req: Request): Promise<Response | null> => {

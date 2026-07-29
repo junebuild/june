@@ -12,6 +12,7 @@ import {
   type EventSink,
   type InboundEvent,
   type Model,
+  type ModelDelta,
   type ModelReply,
   type Runtime,
   type Tool,
@@ -1154,5 +1155,78 @@ describe("createAgentRuntime — backend selection", () => {
 
   test("durable backend is not an in-process runtime — it throws with guidance", async () => {
     await expect(createAgentRuntime({}, { backend: "durable" })).rejects.toThrow(/Durable Object target/);
+  });
+});
+
+// ── turn control (#129): cancel-and-replace + session reset across the DO seam ─
+describe("AgentDurableObject — turn control (#129)", () => {
+  const collect = async (res: Response) => { const out: TurnEvent[] = []; for await (const e of sseTurnEvents(res)) out.push(e); return out; };
+  // First call dribbles deltas (yielding between them so a replace can land mid-stream);
+  // later calls answer immediately.
+  const dribbleThenAnswer = (): Model => {
+    let calls = 0;
+    return () => {
+      const n = ++calls;
+      return (async function* (): AsyncGenerator<ModelDelta> {
+        if (n === 1) {
+          for (let i = 0; i < 1000; i++) {
+            yield { type: "text", text: "…" };
+            await new Promise((r) => setTimeout(r, 1));
+          }
+        }
+        yield { type: "done", reply: { text: n === 1 ? "stale" : "fresh", toolCalls: [] } };
+      })();
+    };
+  };
+
+  test("POST /turn?replace=1 supersedes the in-flight turn; its stream ends with turn.cancelled", async () => {
+    const agent = new AgentDurableObject({ storage: await storage() }, { name: "ops", model: dribbleThenAnswer(), tools: [] });
+    const firstEvents = agent
+      .fetch(new Request("https://do/turn", { method: "POST", body: JSON.stringify({ userText: "old question", turnId: "t1" }) }))
+      .then(collect);
+    await new Promise((r) => setTimeout(r, 15)); // let t1 stream a few deltas
+    const second = await agent.fetch(new Request("https://do/turn?replace=1", { method: "POST", body: JSON.stringify({ userText: "corrected question", turnId: "t2" }) }));
+    expect((await collect(second)).at(-1)).toMatchObject({ type: "turn.completed", text: "fresh" });
+    expect((await firstEvents).at(-1)).toEqual({ type: "turn.cancelled", turnId: "t1" }); // the SSE terminal — not a hang, not a failure
+  });
+
+  test("POST /reset retires the history: audit handle out, live log empty, archive rows kept", async () => {
+    const s = await storage();
+    const agent = new AgentDurableObject({ storage: s }, { name: "ops", model: scriptedModel([{ text: "hello!", toolCalls: [] }]), tools: [] });
+    const post = (path: string, body?: unknown) =>
+      agent.fetch(new Request(`https://do${path}`, { method: "POST", headers: { [SESSION_HEADER]: "k1" }, ...(body ? { body: JSON.stringify(body) } : {}) }));
+
+    expect(await sseTurnFinalText(await post("/turn", { userText: "hi", turnId: "t1" }))).toBe("hello!");
+    const reset = await post("/reset");
+    expect(reset.status).toBe(200);
+    expect(await reset.json()).toEqual({ previousSession: "k1#g0", generation: 0 });
+    // live log empty; the audit trail holds the retired transcript
+    const tr = (await (await agent.fetch(new Request("https://do/transcript", { headers: { [SESSION_HEADER]: "k1" } }))).json()) as { transcript: unknown[] };
+    expect(tr.transcript).toEqual([]);
+    expect(Number(s.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM agent_messages_archive").one().n)).toBeGreaterThan(0);
+    // the ADDRESS survives its history: the same key keeps working, generations count up
+    expect(await sseTurnFinalText(await post("/turn", { userText: "again", turnId: "t2" }))).toBe("hello!");
+    expect(await (await post("/reset")).json()).toEqual({ previousSession: "k1#g1", generation: 1 });
+  });
+
+  test("durableChannelSurface: replace rides the wire as replace=1; resetSession hits /reset", async () => {
+    const agent = new AgentDurableObject({ storage: await storage() }, { name: "ops", model: scriptedModel([{ text: "ok", toolCalls: [] }]), tools: [] });
+    const seenUrls: string[] = [];
+    const ns: DurableObjectNamespace = {
+      idFromName: (n) => n,
+      get: () => ({ fetch: (req) => { seenUrls.push(req.url); return agent.fetch(req); } }),
+    };
+    const hook = defineChannel({
+      name: "x",
+      path: "/hooks/x",
+      webhook: async (_req, ctx) => {
+        await ctx.run("go", { session: "k1", turnId: "t1", replace: true });
+        return Response.json(await ctx.resetSession!({ session: "k1" }));
+      },
+    });
+    const res = await durableChannelSurface(() => ns, { agentName: "ops", channels: [hook], env: {} })(new Request("https://edge/hooks/x", { method: "POST" }));
+    expect(await res!.json()).toEqual({ previousSession: "k1#g0", generation: 0 });
+    expect(seenUrls[0]).toContain("replace=1");
+    expect(seenUrls[1]).toContain("/reset");
   });
 });

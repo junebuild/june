@@ -11,7 +11,7 @@ import { join } from "node:path";
 
 import type { Model, ModelReply, Tool } from "@junejs/core/agent-runtime";
 import { replyStream } from "@junejs/core/agent-runtime";
-import { createNativeRuntime, type AgentDef } from "../src/agent-native";
+import { createNativeRuntime, NativeRuntime, type AgentDef } from "../src/agent-native";
 import { openLocalSqliteSync, type SyncSqlite } from "../src/sqlite-driver";
 
 function scriptedModel(script: ModelReply[]): Model {
@@ -111,5 +111,22 @@ describe("agent-native (native SessionStore seam)", () => {
     const rt = await createNativeRuntime({ ops: def });
     await rt.session("ops", "s1").turn({ turnId: "t1", userText: "hi" });
     expect(seenSystem).toBe("You are the ops assistant."); // runtime injected it — not baked into the model
+  });
+
+  test("session reset (#129) archives THIS session's history — the sibling session is untouched", async () => {
+    const db = await openLocalSqliteSync(":memory:");
+    const rt = new NativeRuntime({ ops: { model: scriptedModel(ORDER_SCRIPT), tools: [createOrderTool()] } }, db);
+    await rt.session("ops", "alice").turn({ turnId: "t1", userText: "Order 3 widgets" });
+    await rt.session("ops", "bob").turn({ turnId: "t1", userText: "Order 3 widgets" });
+
+    expect(await rt.session("ops", "alice").reset()).toEqual({ previousSession: "alice#g0", generation: 0 });
+    expect(rt.session("ops", "alice").transcript()).toHaveLength(0);
+    expect(rt.session("ops", "bob").transcript()).toHaveLength(1); // session-scoped: bob keeps his history
+    // the audit rows carry only the reset session, under its archived generation
+    const rows = db.query("SELECT session_id, generation FROM agent_messages_archive").all() as { session_id: string; generation: number }[];
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((r) => r.session_id === "ops:alice" && r.generation === 0)).toBe(true);
+    // and the retired session starts over cleanly
+    expect(await rt.session("ops", "alice").turn({ turnId: "t2", userText: "Order 3 widgets" })).toBe("Done — order placed.");
   });
 });
