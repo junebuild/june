@@ -34,6 +34,7 @@ import {
 import type { Resources } from "@junejs/core/resources";
 import {
   channelDispatch,
+  DeliverUnsupportedError,
   resolveChannel,
   type AgentDefinition,
   type Channel,
@@ -227,6 +228,7 @@ export class AgentDurableObject {
   private readonly sink: InProcEventSink;
   private readonly model: Model;
   private readonly tools: Tool[];
+  private readonly channels: Channel[];
   private readonly channelInstructions?: Record<string, string>;
   // Built from the DO's env in the constructor (this isolate), shared across turns —
   // env is stable per isolate, like bindWorkerResources memoizes per worker isolate.
@@ -277,8 +279,11 @@ export class AgentDurableObject {
     });
     // Merge the mounted channels' capability tools (built here from this DO's env, since a
     // tool's `run` closure can't cross the RPC). The cross-channel source gate on each tool
-    // keeps a Slack tool inert during a Crisp turn, so merging all of them is safe.
-    const channelTools = (def.channels ?? []).flatMap((c) => resolveChannel(c, def.env).tools?.() ?? []);
+    // keeps a Slack tool inert during a Crisp turn, so merging all of them is safe. The
+    // resolved channels are also RETAINED (this.channels): a delivered turn (/turn?deliver=1)
+    // renders its reply through the source channel's deliver() from inside this DO.
+    const channels = (def.channels ?? []).map((c) => resolveChannel(c, def.env));
+    const channelTools = channels.flatMap((c) => c.tools?.() ?? []);
     const tools: Tool[] = [...def.tools];
     const seen = new Set(tools.map((t) => t.spec.name));
     for (const t of channelTools) {
@@ -291,6 +296,7 @@ export class AgentDurableObject {
     this.sink = sink;
     this.model = model;
     this.tools = tools;
+    this.channels = channels;
     this.channelInstructions = def.channelInstructions;
   }
   // Resolve THE session for this DO: explicit key (from a routed request) → persisted
@@ -371,6 +377,26 @@ export class AgentDurableObject {
     if (req.method === "POST" && url.pathname.endsWith("/turn")) {
       const { userText, turnId, event, trigger } = (await req.json()) as { userText: string; turnId?: string; event?: InboundEvent; trigger?: ProactiveTrigger };
       await ensureScope();
+      // DELIVERED: like detach=1, the caller gets a 202 and goes away — but the reply is NOT
+      // dropped: this DO renders the turn's event stream through the source channel's own
+      // deliver() (the inbound renderer), under the DO's lifetime. Capability is checked
+      // BEFORE the turn starts — that ordering is DeliverUnsupportedError's contract at the
+      // surface: on a pre-start rejection the caller may fall back to consumer-side rendering
+      // without double-running the turn.
+      const wantsDeliver = url.searchParams.get("deliver") === "1";
+      let deliverChannel: Channel | undefined;
+      if (wantsDeliver) {
+        if (!event?.channelId) {
+          return Response.json({ error: "deliver=1 needs an inbound event (event.channelId names the reply target)" }, { status: 400 });
+        }
+        deliverChannel = this.channels.find((c) => c.name === event.source);
+        if (!deliverChannel?.deliver) {
+          return Response.json(
+            { error: `agent "${this.name}": no deliver()-capable channel named "${event.source}" is wired into this DO (DoAgentDef.channels) — the turn was NOT started` },
+            { status: 501 },
+          );
+        }
+      }
       // start() schedules the turn on the chain WITHIN the scope, so it runs with ambient
       // db/services (ALS propagates to the .then continuation registered here); subscribing
       // happens synchronously right after, before any event can emit.
@@ -383,6 +409,21 @@ export class AgentDurableObject {
         // e.g. the session is suspended awaiting input, or the key mis-matches this
         // object's identity — a client-resolvable conflict, not a crash
         return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 409 });
+      }
+      if (wantsDeliver) {
+        // Subscribe synchronously (same guarantee sseTurnStream relies on: start() scheduled
+        // the turn, no event can have emitted yet), then render under THIS DO's lifetime —
+        // the retained promise is pending work that keeps the DO alive, so a long turn's
+        // rendering survives however briefly the caller held its connection. The event is
+        // present (checked above); its author/thread are the reply target, exactly the
+        // surface the channel's inbound renderStream derives.
+        const events = observeTurnEvents(session, started.turnId);
+        const target = { channelId: event!.channelId, threadId: event!.threadId, recipientUserId: event!.user?.id, recipientTeamId: event!.teamId };
+        runInScope({ resources: this.resources, services: this.services }, () => deliverChannel!.deliver!(target, events, { session: this.sessionKey }))
+          // Rendering failures have no live consumer — this log is their only surfacing path
+          // (the TURN's own failures already surface via the #76 sink subscription).
+          .catch((err) => console.error(`[june] agent "${this.name}": delivered render for turn ${started.turnId} failed:`, err));
+        return Response.json({ turnId: started.turnId }, { status: 202 });
       }
       // DETACHED (#77): the turn is accepted — 202 now, no stream. It keeps running under
       // this DO's lifetime (alive while work is pending), so its duration is no longer
@@ -456,6 +497,45 @@ function sseTurnStream(session: AgentSession, turnId: string): ReadableStream<Ui
     },
     cancel() { stop(); },
   });
+}
+
+// The IN-PROCESS sibling of sseTurnStream: one turn's TurnEvents as an AsyncIterable, for a
+// consumer living in the SAME isolate as the session (a delivered render). Subscribes eagerly
+// at call time — not at first iteration — so the sseTurnStream timing guarantee carries over
+// (call this synchronously after start(), before any event can emit); events landing before
+// the consumer catches up are buffered. Ends after the turn's terminal event (completed,
+// failed, or input.requested — a park ends this stream; a later /resume is a new one), and an
+// early consumer exit (for-await break/return) unsubscribes rather than buffering forever.
+function observeTurnEvents(session: AgentSession, turnId: string): AsyncIterable<TurnEvent> {
+  const queue: TurnEvent[] = [];
+  let terminal = false;
+  let notify: (() => void) | undefined;
+  const unsub = session.observe((e) => {
+    queue.push(e);
+    if (e.type === "turn.completed" || e.type === "turn.failed" || e.type === "input.requested") terminal = true;
+    notify?.();
+  }, { turnId });
+  return {
+    [Symbol.asyncIterator]() {
+      return {
+        async next(): Promise<IteratorResult<TurnEvent>> {
+          for (;;) {
+            const e = queue.shift();
+            if (e) return { value: e, done: false };
+            if (terminal) { unsub(); return { value: undefined, done: true }; }
+            await new Promise<void>((resolve) => { notify = resolve; });
+            notify = undefined;
+          }
+        },
+        async return(): Promise<IteratorResult<TurnEvent>> {
+          unsub();
+          terminal = true;
+          queue.length = 0;
+          return { value: undefined, done: true };
+        },
+      };
+    },
+  };
 }
 
 // Consume an SSE turn stream to its terminal state: the final text, or throw on failure.
@@ -702,6 +782,30 @@ export function durableChannelSurface(
       if (res.status !== 202) {
         const detail = (await res.text()).slice(0, 200);
         throw new Error(`runDetached: turn was not accepted (status ${res.status}): ${detail}`);
+      }
+      return (await res.json()) as { turnId: string };
+    },
+    // DELIVERED: runDetached's reply-bearing sibling — the DO runs the turn AND renders its
+    // reply through the source channel's deliver() under its OWN lifetime, so a reply-bearing
+    // turn escapes the edge waitUntil ceiling exactly as a shadow turn does. A 501 means the
+    // DO refused BEFORE starting the turn (the channel isn't wired there / has no deliver) —
+    // surfaced as DeliverUnsupportedError, the one rejection a channel may answer with a
+    // consumer-side rendering fallback without double-running the turn.
+    runDelivered: async (message, o) => {
+      const namespace = getNamespace();
+      if (!namespace) throw new Error("durableChannelSurface: no Durable Object namespace bound (env.AGENT)");
+      const res = await durableFetch(
+        namespace,
+        opts.agentName,
+        o?.session ?? "default",
+        new Request("https://do/turn?deliver=1", { method: "POST", body: serializeTurn(message, o) }),
+      );
+      if (res.status === 501) {
+        throw new DeliverUnsupportedError(`runDelivered: ${((await res.json().catch(() => undefined)) as { error?: string } | undefined)?.error ?? "the turn host cannot deliver this turn"}`);
+      }
+      if (res.status !== 202) {
+        const detail = (await res.text()).slice(0, 200);
+        throw new Error(`runDelivered: delivered turn was not accepted (status ${res.status}): ${detail}`);
       }
       return (await res.json()) as { turnId: string };
     },

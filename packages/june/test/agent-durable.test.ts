@@ -10,6 +10,7 @@ import {
   AgentSession,
   replyStream,
   type EventSink,
+  type InboundEvent,
   type Model,
   type ModelReply,
   type Runtime,
@@ -30,7 +31,7 @@ import {
   type SqlStorage,
 } from "../src/agent-durable";
 import { createAgentRuntime, mountAgent } from "../src/agent-native";
-import { defineChannel, type AgentDefinition } from "@junejs/core/agent-config";
+import { defineChannel, DeliverUnsupportedError, type AgentDefinition } from "@junejs/core/agent-config";
 import { openLocalSqliteSync } from "../src/sqlite-driver";
 import { db, currentServices, requestLocal } from "@junejs/db";
 import type { JuneDb } from "@junejs/core/resources";
@@ -834,6 +835,134 @@ describe("AgentDurableObject — detached turns (#77)", () => {
     expect(await agent.start({ turnId: "t1", userText: "go", session: "k1" })).toEqual({ turnId: "t1" });
     release();
     await until(() => agent.transcript().find((t) => t.turnId === "t1")?.text === "done late");
+  });
+});
+
+// ── delivered turns: detach's reply-bearing sibling — the DO renders the reply itself ──
+// A reply-bearing turn rendered by the CALLER dies with the caller (the edge waitUntil
+// ceiling cancelled a >30s Slack Q&A turn in production — silently: cancellation is not an
+// exception, so no failure path ever ran and nothing posted). deliver=1: the DO 202s on
+// acceptance and renders the turn's event stream through the source channel's own deliver()
+// under its OWN lifetime.
+describe("AgentDurableObject — delivered turns", () => {
+  const gated = () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const model: Model = () => (async function* () {
+      await gate;
+      yield { type: "done" as const, reply: { text: "delivered late", toolCalls: [] } };
+    })();
+    return { model, release };
+  };
+  const until = async (pred: () => boolean) => {
+    for (let i = 0; i < 400 && !pred(); i++) await new Promise((r) => setTimeout(r, 5));
+    expect(pred()).toBe(true);
+  };
+  const mention: InboundEvent = { source: "slackish", kind: "app_mention", channelId: "C1", threadId: "111.1", teamId: "T9", ts: "111.1", user: { id: "U1" }, text: "status?" };
+  const deliverReq = (turnId: string, event: InboundEvent | undefined = mention, session = "k1") =>
+    new Request("https://do/turn?deliver=1", {
+      method: "POST",
+      headers: { [SESSION_HEADER]: session },
+      body: JSON.stringify({ userText: "go", turnId, event }),
+    });
+  // a channel whose deliver() records what the DO hands it — target, session, event stream
+  const recordingChannel = () => {
+    const seen: { target?: unknown; session?: string; events: TurnEvent[]; done: boolean } = { events: [], done: false };
+    const channel = defineChannel({
+      name: "slackish",
+      path: "/x",
+      deliver: async (target, events, o) => {
+        seen.target = target;
+        seen.session = o?.session;
+        for await (const e of events) seen.events.push(e);
+        seen.done = true;
+      },
+    });
+    return { seen, channel };
+  };
+
+  test("/turn?deliver=1 202s on acceptance; the DO renders the full event stream through channel.deliver()", async () => {
+    const { model, release } = gated();
+    const { seen, channel } = recordingChannel();
+    const agent = new AgentDurableObject({ storage: await storage() }, { name: "ops", model, tools: [], channels: [channel] });
+
+    const res = await agent.fetch(deliverReq("t1"));
+    expect(res.status).toBe(202);                       // accepted BEFORE the model replied…
+    expect(await res.json()).toEqual({ turnId: "t1" });
+    expect(seen.done).toBe(false);                      // …and the render is still consuming
+
+    release();
+    await until(() => seen.done);
+    // the reply target is the inbound event's author/thread — exactly renderStream's surface
+    expect(seen.target).toEqual({ channelId: "C1", threadId: "111.1", recipientUserId: "U1", recipientTeamId: "T9" });
+    expect(seen.session).toBe("k1");
+    expect(seen.events.map((e) => e.type)).toEqual(["turn.started", "message.completed", "turn.completed"]);
+    expect(seen.events.at(-1)).toMatchObject({ type: "turn.completed", text: "delivered late" });
+  });
+
+  test("no deliver()-capable channel for event.source → 501 BEFORE the turn starts (the safe-fallback contract)", async () => {
+    const agent = new AgentDurableObject({ storage: await storage() }, { name: "ops", model: gated().model, tools: [] }); // no channels wired
+    const res = await agent.fetch(deliverReq("t1"));
+    expect(res.status).toBe(501);
+    expect(((await res.json()) as { error: string }).error).toContain("the turn was NOT started");
+    expect(agent.transcript()).toHaveLength(0);         // nothing ran — a caller may re-run safely
+  });
+
+  test("deliver=1 without an inbound event is a 400 — there is no reply target to derive", async () => {
+    const { channel } = recordingChannel();
+    const agent = new AgentDurableObject({ storage: await storage() }, { name: "ops", model: gated().model, tools: [], channels: [channel] });
+    const eventless = new Request("https://do/turn?deliver=1", { method: "POST", headers: { [SESSION_HEADER]: "k1" }, body: JSON.stringify({ userText: "go", turnId: "t1" }) });
+    expect((await agent.fetch(eventless)).status).toBe(400);
+    expect(agent.transcript()).toHaveLength(0);
+  });
+
+  test("a delivered render failure is logged — the turn itself is unaffected", async () => {
+    const err = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const exploding = defineChannel({ name: "slackish", path: "/x", deliver: async () => { throw new Error("platform down"); } });
+      const model: Model = () => replyStream({ text: "fine", toolCalls: [] });
+      const agent = new AgentDurableObject({ storage: await storage() }, { name: "ops", model, tools: [], channels: [exploding] });
+      expect((await agent.fetch(deliverReq("t1"))).status).toBe(202);
+      await until(() => err.mock.calls.some((c) => String(c[0]).includes("delivered render for turn t1 failed")));
+      await until(() => agent.transcript().find((t) => t.turnId === "t1")?.text === "fine"); // the TURN completed durably
+    } finally {
+      err.mockRestore();
+    }
+  });
+
+  test("durableChannelSurface.runDelivered: deliver=1 on the wire; a 501 maps to DeliverUnsupportedError", async () => {
+    const { model, release } = gated();
+    const { seen, channel } = recordingChannel();
+    const withChannel = new AgentDurableObject({ storage: await storage() }, { name: "ops", model, tools: [], channels: [channel] });
+    const without = new AgentDurableObject({ storage: await storage() }, { name: "ops", model: gated().model, tools: [] });
+    const seenUrls: string[] = [];
+    const nsFor = (agent: AgentDurableObject): DurableObjectNamespace => ({
+      idFromName: (n) => n,
+      get: () => ({ fetch: (req) => { seenUrls.push(req.url); return agent.fetch(req); } }),
+    });
+    // a webhook that runs a delivered turn and reports which path it took
+    const hook = defineChannel({
+      name: "slackish",
+      path: "/hooks/x",
+      webhook: async (_req, ctx) => {
+        try {
+          return Response.json(await ctx.runDelivered!("go", { session: "k1", turnId: "t1", event: mention }), { status: 202 });
+        } catch (e) {
+          return Response.json({ unsupported: e instanceof DeliverUnsupportedError }, { status: 501 });
+        }
+      },
+    });
+
+    const ok = await durableChannelSurface(() => nsFor(withChannel), { agentName: "ops", channels: [hook], env: {} })(new Request("https://edge/hooks/x", { method: "POST" }));
+    expect(ok!.status).toBe(202);
+    expect(await ok!.json()).toEqual({ turnId: "t1" });
+    expect(seenUrls[0]).toContain("deliver=1");
+    release();
+    await until(() => seen.done);
+
+    const refused = await durableChannelSurface(() => nsFor(without), { agentName: "ops", channels: [hook], env: {} })(new Request("https://edge/hooks/x", { method: "POST" }));
+    expect(refused!.status).toBe(501);
+    expect(await refused!.json()).toEqual({ unsupported: true }); // the typed error crossed the surface
   });
 });
 
