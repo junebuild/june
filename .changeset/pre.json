@@ -37,6 +37,7 @@
     "isolate-scoped-resources",
     "model-finish-reason",
     "provider-state",
+    "session-initiator",
     "slack-diagnose",
     "slack-dm-stream-recipients",
     "slack-feedback-tasks",

@@ -1,5 +1,21 @@
 # @junejs/core
 
+## 0.2.0-dev.31
+
+### Patch Changes
+
+- [#135](https://github.com/junebuild/june/pull/135) [`acb081e`](https://github.com/junebuild/june/commit/acb081e3fabf48431dbf8b11afc9e027b9e41301) Thanks [@linyiru](https://github.com/linyiru)! - `ToolContext.initiator` — who OPENED the session, distinct from who is speaking now ([#128](https://github.com/junebuild/june/issues/128)).
+
+  The first resolved principal any turn arrives with is recorded durably under a reserved
+  step key (no SessionStore contract change; survives eviction with the rest of the log)
+  and is immutable thereafter. Tools now see both identities: `ctx.principal` stays the
+  CURRENT turn's resolved identity, `ctx.initiator` is the session's opener — so a
+  multi-participant thread can express policies like "only the initiator may widen the
+  query's scope". Deliberately not part of the `requiresPrincipal` gate: tool visibility
+  keys off the current speaker, so an anonymous follow-up in an operator-opened session
+  does not inherit the operator's tools. An anonymous opener doesn't claim the seat — the
+  first RESOLVED principal does.
+
 ## 0.2.0-dev.30
 
 ### Patch Changes
