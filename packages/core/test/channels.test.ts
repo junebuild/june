@@ -1613,8 +1613,13 @@ describe("slackChannel identity (resolveIdentity)", () => {
   const mention = JSON.stringify({
     type: "event_callback",
     team_id: "T1",
-    event: { type: "app_mention", text: "<@UBOT> review status?", channel: "C1", ts: "9.9", user: "U9" },
+    event: { type: "app_mention", text: "<@UBOT> review status?", channel: "C1", ts: "9.9", user: "U9", team: "T1" },
   });
+  // A resolver following the documented posture for elevated grants: explicit user
+  // allowlist + sender home-workspace check — never the envelope team alone.
+  const STAFF = new Set(["U9"]);
+  const staffResolver = (id: SlackIdentity) =>
+    id.userId && STAFF.has(id.userId) && id.senderTeamId === "T1" ? { id: `slack:${id.userId}`, kind: "operator" } : null;
   function identityChannel(
     resolveIdentity: Parameters<typeof slackChannel>[0]["resolveIdentity"],
     extra?: { onEvent?: (e: { raw: unknown; event?: InboundEvent }) => void; onError?: (err: unknown) => void },
@@ -1625,27 +1630,47 @@ describe("slackChannel identity (resolveIdentity)", () => {
   test("the signature-verified sender reaches the resolver; its principal rides the turn's event", async () => {
     captureFetch();
     const resolved: SlackIdentity[] = [];
-    const ch = identityChannel((id) => { resolved.push(id); return id.teamId === "T1" ? { id: `slack:${id.userId}`, kind: "operator" } : null; });
+    const ch = identityChannel((id) => { resolved.push(id); return staffResolver(id); });
     let seen: InboundEvent | undefined;
     const run = (async (_m: string, o?: { event?: InboundEvent }) => { seen = o?.event; return "on it"; }) as ChannelContext["run"];
     await ch.webhook!(await signed(mention), ctxWith(run));
     await flush();
     // the resolver saw exactly the payload's platform-verified sender facts — no lookup round-trip
-    expect(resolved[0]).toMatchObject({ userId: "U9", teamId: "T1", channelId: "C1", kind: "app_mention", ts: "9.9" });
+    expect(resolved[0]).toMatchObject({ userId: "U9", teamId: "T1", senderTeamId: "T1", channelId: "C1", kind: "app_mention", ts: "9.9" });
     expect(calls.filter((c) => c.url.includes("users."))).toHaveLength(0);
     expect(seen?.principal).toEqual({ id: "slack:U9", kind: "operator" });
   });
 
-  test("a foreign-workspace sender the resolver declines stays anonymous — the turn still runs", async () => {
+  test("a Slack Connect external sender arrives under the SAME envelope team — the sender's home team is what differs", async () => {
     captureFetch();
-    const foreign = JSON.stringify({ type: "event_callback", team_id: "T_EVIL", event: { type: "app_mention", text: "<@UBOT> hi", channel: "C1", ts: "9.9", user: "U9" } });
-    const ch = identityChannel((id) => (id.teamId === "T1" ? { id: `slack:${id.userId}` } : null));
+    // external shared-channel participant: envelope team_id is still OURS (T1); the
+    // event's user_team names the sender's home workspace — the fact a membership
+    // check must use. An envelope-team-only resolver would wrongly grant here.
+    const external = JSON.stringify({
+      type: "event_callback",
+      team_id: "T1",
+      event: { type: "app_mention", text: "<@UBOT> hi", channel: "C1", ts: "9.9", user: "U9", user_team: "T_EXTERNAL" },
+    });
+    const resolved: SlackIdentity[] = [];
+    const ch = identityChannel((id) => { resolved.push(id); return staffResolver(id); });
     let seen: InboundEvent | undefined;
     const run = (async (_m: string, o?: { event?: InboundEvent }) => { seen = o?.event; return "answered"; }) as ChannelContext["run"];
-    await ch.webhook!(await signed(foreign), ctxWith(run));
+    await ch.webhook!(await signed(external), ctxWith(run));
     await flush();
-    expect(seen?.principal).toBeUndefined(); // no principal → requiresPrincipal tools stay hidden
+    expect(resolved[0]).toMatchObject({ teamId: "T1", senderTeamId: "T_EXTERNAL" }); // both facts surfaced, clearly separated
+    expect(seen?.principal).toBeUndefined(); // membership check failed → anonymous
     expect(calls.at(-1)!.body).toMatchObject({ text: "answered" }); // anonymous turn still replied
+  });
+
+  test("no sender-team fact on the event ⇒ senderTeamId absent — membership stays unproven", async () => {
+    captureFetch();
+    const bare = JSON.stringify({ type: "event_callback", team_id: "T1", event: { type: "app_mention", text: "<@UBOT> hi", channel: "C1", ts: "9.9", user: "U9" } });
+    const resolved: SlackIdentity[] = [];
+    const ch = identityChannel((id) => { resolved.push(id); return staffResolver(id); });
+    await ch.webhook!(await signed(bare), ctxWith(async () => "ok"));
+    await flush();
+    expect(resolved[0]!.senderTeamId).toBeUndefined();
+    expect(resolved[0]!.teamId).toBe("T1"); // the envelope team is still known — it just isn't membership
   });
 
   test("observers see the same principal the turn does (shared resolution)", async () => {
