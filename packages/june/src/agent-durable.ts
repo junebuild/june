@@ -40,6 +40,7 @@ import {
   type Channel,
   type ChannelContext,
   type ChannelFactory,
+  type ResumeDeliveryTarget,
 } from "@junejs/core/agent-config";
 import { ensureScope, runInScope } from "@junejs/db";
 import { isolateLocal } from "./isolate-local";
@@ -451,8 +452,31 @@ export class AgentDurableObject {
     // VERIFIED identity, so the app must authenticate it upstream (e.g. take the user id from a
     // signature-checked Slack interaction payload), never expose this endpoint raw to clients.
     if (req.method === "POST" && url.pathname.endsWith("/resume")) {
-      const { turnId, inputId, input, by } = (await req.json()) as { turnId: string; inputId: string; input: unknown; by?: string };
+      const { turnId, inputId, input, by, source, target } = (await req.json()) as {
+        turnId: string; inputId: string; input: unknown; by?: string;
+        source?: string; target?: ResumeDeliveryTarget;
+      };
       await ensureScope();
+      // DELIVERED resume: like /turn?deliver=1, the caller 202s away and THIS DO renders the
+      // continuation through the source channel's deliverResume() — a long continuation no
+      // longer dies with the webhook isolate. Capability is checked BEFORE resume() applies
+      // the answer — the DeliverUnsupportedError contract at the surface: on a pre-effect
+      // refusal the caller may fall back to consumer-side rendering without double-answering
+      // (a second resume of an already-applied input would 409).
+      const wantsDeliver = url.searchParams.get("deliver") === "1";
+      let resumeChannel: Channel | undefined;
+      if (wantsDeliver) {
+        if (!source || !target?.channelId || !target.messageTs) {
+          return Response.json({ error: "resume deliver=1 needs `source` (the channel name) and `target` (channelId + messageTs of the prompt message)" }, { status: 400 });
+        }
+        resumeChannel = this.channels.find((c) => c.name === source);
+        if (!resumeChannel?.deliverResume) {
+          return Response.json(
+            { error: `agent "${this.name}": no deliverResume()-capable channel named "${source}" is wired into this DO (DoAgentDef.channels) — the answer was NOT applied` },
+            { status: 501 },
+          );
+        }
+      }
       let session: AgentSession;
       try {
         session = this.resolveSession(key);
@@ -461,6 +485,23 @@ export class AgentDurableObject {
         const message = err instanceof Error ? err.message : String(err);
         // 403: the resumer may not answer; 409: not suspended / wrong turn / wrong input id / key mismatch
         return Response.json({ error: message }, { status: err instanceof ResumeAuthorizationError ? 403 : 409 });
+      }
+      if (wantsDeliver) {
+        // Same post-acceptance discipline as delivered turns: subscribe synchronously, render
+        // under this DO's lifetime, and let NOTHING escape past the accepted resume — the log
+        // is the render failure's only surfacing path (the TURN's own failures surface via
+        // the #76 sink subscription).
+        const logRenderFailure = (err: unknown) =>
+          console.error(`[june] agent "${this.name}": delivered resume render for turn ${turnId} failed:`, err);
+        try {
+          const events = observeTurnEvents(session, turnId);
+          Promise.resolve()
+            .then(() => runInScope({ resources: this.resources, services: this.services }, () => resumeChannel!.deliverResume!(target!, events, { session: this.sessionKey })))
+            .catch(logRenderFailure);
+        } catch (err) {
+          logRenderFailure(err);
+        }
+        return Response.json({ turnId }, { status: 202 });
       }
       return new Response(sseTurnStream(session, turnId), { headers: SSE_HEADERS });
     }
@@ -847,6 +888,31 @@ export function durableChannelSurface(
       );
       yield* sseTurnEvents(res);
     },
+    // DELIVERED resume (runDelivered's sibling for the HITL leg): the DO applies the answer
+    // AND renders the continuation through the source channel's deliverResume() under its
+    // OWN lifetime. A 501 means the DO refused BEFORE applying the answer (channel not
+    // wired there / no deliverResume) — surfaced as DeliverUnsupportedError, the one
+    // rejection a channel may answer with a consumer-side fallback without double-answering.
+    // Engine rejections (403 unauthorized clicker / 409 stale-or-double click) throw as
+    // ordinary errors, mirroring what resumeStream's first pull would do.
+    resumeDelivered: async (o) => {
+      const namespace = getNamespace();
+      if (!namespace) throw new Error("durableChannelSurface: no Durable Object namespace bound (env.AGENT)");
+      const res = await durableFetch(
+        namespace,
+        opts.agentName,
+        o.session ?? "default",
+        new Request("https://do/resume?deliver=1", { method: "POST", body: serializeResume(o) }),
+      );
+      if (res.status === 501) {
+        throw new DeliverUnsupportedError(`resumeDelivered: ${((await res.json().catch(() => undefined)) as { error?: string } | undefined)?.error ?? "the turn host cannot deliver this continuation"}`);
+      }
+      if (res.status !== 202) {
+        const detail = (await res.text()).slice(0, 200);
+        throw new Error(`resumeDelivered: resume was not accepted (status ${res.status}): ${detail}`);
+      }
+      return (await res.json()) as { turnId: string };
+    },
   };
   return channelDispatch(resolved, ctx);
 }
@@ -861,9 +927,9 @@ export function durableChannelSurface(
 // (third-party) host could hand us something JSON.stringify chokes on (BigInt, circular).
 // Unlike serializeTurn's `raw`, `input` is essential: silently dropping it would resume the
 // turn with the wrong answer. So fail loudly with a clear message rather than corrupt the resume.
-function serializeResume(o: { turnId: string; inputId: string; input: unknown; by?: string }): string {
+function serializeResume(o: { turnId: string; inputId: string; input: unknown; by?: string; source?: string; target?: ResumeDeliveryTarget }): string {
   try {
-    return JSON.stringify({ turnId: o.turnId, inputId: o.inputId, input: o.input, by: o.by });
+    return JSON.stringify({ turnId: o.turnId, inputId: o.inputId, input: o.input, by: o.by, source: o.source, target: o.target });
   } catch (err) {
     throw new Error(`resumeStream: input is not JSON-serializable (${(err as Error).message}) — a resume answer must round-trip to the DO`);
   }

@@ -981,6 +981,136 @@ describe("AgentDurableObject — delivered turns", () => {
   });
 });
 
+// ── delivered resume: the HITL continuation leg of delivered turns ─────────────
+// A resumed continuation rendered by the CALLER dies with the caller (the same edge
+// waitUntil ceiling — worse UX: the prompt is already stuck on "_Working…_").
+// deliver=1 on /resume: the DO applies the answer, 202s, and renders the continuation
+// through the source channel's deliverResume() under its OWN lifetime.
+describe("AgentDurableObject — delivered resume", () => {
+  const until = async (pred: () => boolean) => {
+    for (let i = 0; i < 400 && !pred(); i++) await new Promise((r) => setTimeout(r, 5));
+    expect(pred()).toBe(true);
+  };
+  const ask: Tool = {
+    spec: { name: "ask", description: "ask a human", input: { type: "object" } },
+    run: async (_i, ctx) => ({ ok: await ctx.requestInput({ id: "a1", prompt: "ok?" }) }),
+  };
+  const askModel = () =>
+    scriptedModel([
+      { text: "asking", toolCalls: [{ id: "c1", name: "ask", input: {} }] },
+      { text: "done after approval", toolCalls: [] },
+    ]);
+  const TARGET = { channelId: "C1", threadId: "5.5", messageTs: "9.9" };
+  const recordingResumeChannel = () => {
+    const seen: { target?: unknown; session?: string; events: TurnEvent[]; done: boolean } = { events: [], done: false };
+    const channel = defineChannel({
+      name: "slackish",
+      path: "/x",
+      deliverResume: async (target, events, o) => {
+        seen.target = target;
+        seen.session = o?.session;
+        for await (const e of events) seen.events.push(e);
+        seen.done = true;
+      },
+    });
+    return { seen, channel };
+  };
+  const park = async (agent: AgentDurableObject) => {
+    const res = await agent.fetch(new Request("https://do/turn", { method: "POST", headers: { [SESSION_HEADER]: "k1" }, body: JSON.stringify({ userText: "please", turnId: "t1" }) }));
+    for await (const _ of sseTurnEvents(res)) void _; // drain to the park
+  };
+  const resumeReq = (extra: Record<string, unknown> = {}) =>
+    new Request("https://do/resume?deliver=1", {
+      method: "POST",
+      headers: { [SESSION_HEADER]: "k1" },
+      body: JSON.stringify({ turnId: "t1", inputId: "a1", input: true, source: "slackish", target: TARGET, ...extra }),
+    });
+
+  test("/resume?deliver=1 202s; the continuation renders through deliverResume", async () => {
+    const { seen, channel } = recordingResumeChannel();
+    const agent = new AgentDurableObject({ storage: await storage() }, { name: "ops", model: askModel(), tools: [ask], channels: [channel] });
+    await park(agent);
+
+    const res = await agent.fetch(resumeReq());
+    expect(res.status).toBe(202);
+    expect(await res.json()).toEqual({ turnId: "t1" });
+
+    await until(() => seen.done);
+    expect(seen.target).toEqual(TARGET);
+    expect(seen.session).toBe("k1");
+    expect(seen.events.at(-1)).toMatchObject({ type: "turn.completed", text: "done after approval" });
+  });
+
+  test("no deliverResume-capable channel → 501 BEFORE the answer applies; a plain /resume afterwards still succeeds", async () => {
+    const agent = new AgentDurableObject({ storage: await storage() }, { name: "ops", model: askModel(), tools: [ask] }); // no channels wired
+    await park(agent);
+
+    const refused = await agent.fetch(resumeReq());
+    expect(refused.status).toBe(501);
+    expect(((await refused.json()) as { error: string }).error).toContain("the answer was NOT applied");
+
+    // the turn is STILL parked — the ordinary resume path completes it
+    const plain = await agent.fetch(new Request("https://do/resume", { method: "POST", headers: { [SESSION_HEADER]: "k1" }, body: JSON.stringify({ turnId: "t1", inputId: "a1", input: true }) }));
+    const events: TurnEvent[] = [];
+    for await (const e of sseTurnEvents(plain)) events.push(e);
+    expect(events.at(-1)).toMatchObject({ type: "turn.completed", text: "done after approval" });
+  });
+
+  test("deliver=1 without source/target is a 400 — nothing applied", async () => {
+    const { channel } = recordingResumeChannel();
+    const agent = new AgentDurableObject({ storage: await storage() }, { name: "ops", model: askModel(), tools: [ask], channels: [channel] });
+    await park(agent);
+    const res = await agent.fetch(new Request("https://do/resume?deliver=1", { method: "POST", headers: { [SESSION_HEADER]: "k1" }, body: JSON.stringify({ turnId: "t1", inputId: "a1", input: true }) }));
+    expect(res.status).toBe(400);
+  });
+
+  test("an engine rejection (not suspended) 409s and deliverResume never runs", async () => {
+    const { seen, channel } = recordingResumeChannel();
+    const agent = new AgentDurableObject({ storage: await storage() }, { name: "ops", model: scriptedModel([{ text: "done", toolCalls: [] }]), tools: [], channels: [channel] });
+    // complete a turn normally — nothing is parked
+    const res = await agent.fetch(new Request("https://do/turn", { method: "POST", headers: { [SESSION_HEADER]: "k1" }, body: JSON.stringify({ userText: "go", turnId: "t1" }) }));
+    for await (const _ of sseTurnEvents(res)) void _;
+
+    expect((await agent.fetch(resumeReq())).status).toBe(409);
+    expect(seen.done).toBe(false);
+    expect(seen.events).toHaveLength(0);
+  });
+
+  test("durableChannelSurface.resumeDelivered: deliver=1 on the wire; a 501 maps to DeliverUnsupportedError", async () => {
+    const { seen, channel } = recordingResumeChannel();
+    const withChannel = new AgentDurableObject({ storage: await storage() }, { name: "ops", model: askModel(), tools: [ask], channels: [channel] });
+    const without = new AgentDurableObject({ storage: await storage() }, { name: "ops", model: askModel(), tools: [ask] });
+    await park(withChannel);
+    await park(without);
+    const seenUrls: string[] = [];
+    const nsFor = (agent: AgentDurableObject): DurableObjectNamespace => ({
+      idFromName: (n) => n,
+      get: () => ({ fetch: (req) => { seenUrls.push(req.url); return agent.fetch(req); } }),
+    });
+    const hook = defineChannel({
+      name: "slackish",
+      path: "/hooks/x",
+      webhook: async (_req, ctx) => {
+        try {
+          return Response.json(await ctx.resumeDelivered!({ session: "k1", turnId: "t1", inputId: "a1", input: true, source: "slackish", target: TARGET }), { status: 202 });
+        } catch (e) {
+          return Response.json({ unsupported: e instanceof DeliverUnsupportedError }, { status: 501 });
+        }
+      },
+    });
+
+    const ok = await durableChannelSurface(() => nsFor(withChannel), { agentName: "ops", channels: [hook], env: {} })(new Request("https://edge/hooks/x", { method: "POST" }));
+    expect(ok!.status).toBe(202);
+    expect(await ok!.json()).toEqual({ turnId: "t1" });
+    expect(seenUrls[0]).toContain("deliver=1");
+    await until(() => seen.done);
+
+    const refused = await durableChannelSurface(() => nsFor(without), { agentName: "ops", channels: [hook], env: {} })(new Request("https://edge/hooks/x", { method: "POST" }));
+    expect(refused!.status).toBe(501);
+    expect(await refused!.json()).toEqual({ unsupported: true }); // the typed error crossed the surface
+  });
+});
+
 describe("createAgentRuntime — backend selection", () => {
   test("memory backend runs a durable turn (ephemeral)", async () => {
     // memory has no SQL handle, so use a pure tool (no unwrap): durable side
