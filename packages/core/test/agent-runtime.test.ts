@@ -17,6 +17,7 @@ import {
   type ModelReply,
   type Msg,
   type Runtime,
+  type ModelDelta,
   type ModelFinish,
   type SessionStore,
   type Tool,
@@ -30,6 +31,8 @@ function memStore() {
   const msgs: Msg[] = [];
   const steps = new Map<string, unknown>();
   let status = "new";
+  let generation = 0;
+  const archives: { generation: number; msgs: Msg[]; steps: Map<string, unknown> }[] = [];
   const app: { orders: { item: string; qty: number }[] } = { orders: [] };
   const store: SessionStore = {
     appendMessage(m) { msgs.push(m); },
@@ -41,9 +44,15 @@ function memStore() {
     getStatus() { return status; },
     setStatus(s) { status = s; },
     tx(fn) { return fn(); },
+    reset() {
+      archives.push({ generation, msgs: msgs.splice(0), steps: new Map(steps) });
+      steps.clear();
+      status = "new";
+      return generation++;
+    },
     unwrap<H = unknown>(): H { return app as unknown as H; },
   };
-  return { store, app };
+  return { store, app, archives };
 }
 
 class MemBroadcaster implements EventSink {
@@ -299,6 +308,176 @@ describe("session initiator (#128)", () => {
     await s.turn({ turnId: "t1", userText: "open", event: evt({ id: "A" }) });
     const openingTx = txWrites.find((w) => w.includes("append:user"));
     expect(openingTx).toContain("put:session:initiator");
+  });
+});
+
+// ── cancel-and-replace (#129): supersede the in-flight turn at a checkpoint boundary ──
+describe("cancel-and-replace (#129)", () => {
+  // A model whose FIRST call dribbles deltas — yielding to the event loop between them, so
+  // a cancel request can land mid-stream — and whose later calls answer immediately.
+  const dribbleThenAnswer = (): Model => {
+    let calls = 0;
+    return () => {
+      const n = ++calls;
+      return (async function* (): AsyncGenerator<ModelDelta> {
+        if (n === 1) {
+          for (let i = 0; i < 1000; i++) {
+            yield { type: "text", text: "…" };
+            await new Promise((r) => setTimeout(r, 1));
+          }
+          yield { type: "done", reply: { text: "stale answer", toolCalls: [] } };
+        } else {
+          yield { type: "done", reply: { text: "fresh answer", toolCalls: [] } };
+        }
+      })();
+    };
+  };
+
+  test("a replace turn supersedes the in-flight turn between model deltas", async () => {
+    const { store } = memStore();
+    const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), dribbleThenAnswer(), [], noRuntime);
+    const events: TurnEvent[] = [];
+    s.observe((e) => events.push(e));
+    const t1 = s.start({ turnId: "t1", userText: "old question" }).turnId;
+    await new Promise((r) => setTimeout(r, 10)); // let t1 stream a few deltas
+    const t2 = s.start({ turnId: "t2", userText: "corrected question", replace: true }).turnId;
+    expect(await s.result(t1)).toEqual({ status: "cancelled" });
+    expect(await s.result(t2)).toEqual({ status: "completed", text: "fresh answer" });
+    expect(events.some((e) => e.type === "turn.cancelled" && e.turnId === "t1")).toBe(true);
+    // nothing of t1's model step committed — the only assistant message is t2's answer
+    const assistants = store.messages().filter((m) => m.role === "assistant");
+    expect(assistants).toHaveLength(1);
+    expect(assistants[0]).toMatchObject({ turnId: "t2", text: "fresh answer" });
+  });
+
+  test("a queued turn superseded before it starts persists NOTHING", async () => {
+    const { store } = memStore();
+    const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), dribbleThenAnswer(), [], noRuntime);
+    const t1 = s.start({ turnId: "t1", userText: "one" }).turnId;
+    const t2 = s.start({ turnId: "t2", userText: "two" }).turnId; // queued behind t1
+    const t3 = s.start({ turnId: "t3", userText: "three", replace: true }).turnId;
+    expect(await s.result(t1)).toEqual({ status: "cancelled" });
+    expect(await s.result(t2)).toEqual({ status: "cancelled" });
+    expect(await s.result(t3)).toMatchObject({ status: "completed" });
+    expect(store.messages().filter((m) => m.turnId === "t2")).toHaveLength(0); // never opened
+  });
+
+  test("cancelled mid-tool-batch: remaining calls get synthetic results, the transcript stays provider-clean", async () => {
+    const { store } = memStore();
+    const ranB = { n: 0 };
+    // tool `a` supersedes its own turn — a stand-in for a replace landing mid-batch
+    let s: AgentSession;
+    const toolA: Tool = { spec: { name: "a", description: "d", input: { type: "object" } }, run: () => { s.cancelPending(); return { ok: 1 }; } };
+    const toolB: Tool = { spec: { name: "b", description: "d", input: { type: "object" } }, run: () => { ranB.n++; return { ok: 2 }; } };
+    const script: ModelReply[] = [
+      { text: "working", toolCalls: [{ id: "c1", name: "a", input: {} }, { id: "c2", name: "b", input: {} }] },
+      { text: "done", toolCalls: [] },
+    ];
+    s = new AgentSession("ops", "s1", store, new MemBroadcaster(), scriptedModel(script), [toolA, toolB], noRuntime);
+    expect(await s.result(s.start({ turnId: "t1", userText: "go" }).turnId)).toEqual({ status: "cancelled" });
+    expect(ranB.n).toBe(0); // the second call never ran
+    const tools = store.messages().filter((m) => m.role === "tool");
+    expect(tools).toHaveLength(2); // every tool_use answered — c2 synthetically
+    expect(tools[1]).toMatchObject({ toolCallId: "c2", result: { cancelled: true } });
+    // the next turn builds on the closed batch and completes normally
+    expect(await s.turn({ turnId: "t2", userText: "again" })).toBe("done");
+  });
+
+  test("replace does NOT cancel a suspended turn — a parked approval still blocks new turns", async () => {
+    const approve: Tool = {
+      spec: { name: "approve", description: "d", input: { type: "object" } },
+      run: async (_i, ctx) => ({ ok: await ctx.requestInput({ id: "q", prompt: "?" }) }),
+    };
+    const script: ModelReply[] = [
+      { text: "check", toolCalls: [{ id: "c1", name: "approve", input: {} }] },
+      { text: "after", toolCalls: [] },
+    ];
+    const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), scriptedModel(script), [approve], noRuntime);
+    const t1 = s.start({ turnId: "t1", userText: "park" }).turnId;
+    expect(await s.result(t1)).toMatchObject({ status: "suspended" });
+    expect(() => s.start({ turnId: "t2", userText: "new", replace: true })).toThrow(/suspended/);
+    expect(s.cancel("t1")).toBe(false); // a parked turn is not cancellable either
+  });
+
+  test("cancel() targets one turn: true while unfinished, false once it settled", async () => {
+    const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), dribbleThenAnswer(), [], noRuntime);
+    const t1 = s.start({ turnId: "t1", userText: "go" }).turnId;
+    expect(s.cancel("nope")).toBe(false);
+    expect(s.cancel(t1)).toBe(true);
+    expect(await s.result(t1)).toEqual({ status: "cancelled" });
+    expect(s.cancel(t1)).toBe(false); // already settled
+  });
+});
+
+// ── session reset (#129): terminally retire the history, keep the address ─────
+describe("session reset (#129)", () => {
+  test("reset() archives the history and returns the audit handle", async () => {
+    const { store, archives } = memStore();
+    const model: Model = () => replyStream({ text: "hi there", toolCalls: [] });
+    const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), model, [], noRuntime);
+    const event: InboundEvent = { source: "slack", kind: "message", channelId: "C1", ts: "1.1", principal: { id: "A" } };
+    await s.turn({ turnId: "t1", userText: "hello", event });
+    expect(store.getStep("session:initiator")).toEqual({ id: "A" });
+    expect(await s.reset()).toEqual({ previousSession: "s1#g0", generation: 0 });
+    expect(store.messages()).toHaveLength(0);
+    expect(store.getStatus()).toBe("new");
+    expect(store.getStep("session:initiator")).toBeUndefined(); // fresh state — the seat is open again
+    expect(archives).toHaveLength(1);
+    expect(archives[0]!.msgs.length).toBeGreaterThan(0); // the audit trail holds the retired transcript
+    await s.turn({ turnId: "t2", userText: "again" });
+    expect(await s.reset()).toEqual({ previousSession: "s1#g1", generation: 1 }); // generations count up
+  });
+
+  test("reset() supersedes the in-flight turn, then archives — ordered on the turn chain", async () => {
+    const { store, archives } = memStore();
+    let calls = 0;
+    const model: Model = () => {
+      const n = ++calls;
+      return (async function* (): AsyncGenerator<ModelDelta> {
+        if (n === 1) {
+          for (let i = 0; i < 1000; i++) {
+            yield { type: "text", text: "…" };
+            await new Promise((r) => setTimeout(r, 1));
+          }
+        }
+        yield { type: "done", reply: { text: "fresh", toolCalls: [] } };
+      })();
+    };
+    const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), model, [], noRuntime);
+    const t1 = s.start({ turnId: "t1", userText: "old" }).turnId;
+    const r1 = s.result(t1); // grab the live promise now — after reset the log is archived
+    await new Promise((r) => setTimeout(r, 10)); // t1 is mid-stream
+    const r = await s.reset();
+    expect(r).toEqual({ previousSession: "s1#g0", generation: 0 });
+    expect(await r1).toEqual({ status: "cancelled" });
+    expect(store.messages()).toHaveLength(0); // t1's opening went to the archive, not the live log
+    expect(archives[0]!.msgs.some((m) => m.turnId === "t1")).toBe(true);
+    // a turn started after the reset lands in the fresh generation
+    expect(await s.turn({ turnId: "t2", userText: "new era" })).toBe("fresh");
+    expect(store.messages().every((m) => m.turnId === "t2")).toBe(true);
+  });
+
+  test("reset() clears a stale suspended park — the escape hatch for a dead approval", async () => {
+    const approve: Tool = {
+      spec: { name: "approve", description: "d", input: { type: "object" } },
+      run: async (_i, ctx) => ({ ok: await ctx.requestInput({ id: "q", prompt: "?" }) }),
+    };
+    let calls = 0;
+    const model: Model = () =>
+      replyStream(++calls === 1 ? { text: "check", toolCalls: [{ id: "c1", name: "approve", input: {} }] } : { text: "clean", toolCalls: [] });
+    const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), model, [approve], noRuntime);
+    const t1 = s.start({ turnId: "t1", userText: "park" }).turnId;
+    expect(await s.result(t1)).toMatchObject({ status: "suspended" });
+    expect(() => s.start({ turnId: "t2", userText: "blocked" })).toThrow(/suspended/);
+    await s.reset();
+    expect(await s.turn({ turnId: "t3", userText: "fresh start" })).toBe("clean"); // no 409 — the park is archived
+  });
+
+  test("a store without reset() fails loudly, before anything is cancelled or cleared", async () => {
+    const { store } = memStore();
+    const bare: SessionStore = { ...store, reset: undefined };
+    const s = new AgentSession("ops", "s1", bare, new MemBroadcaster(), () => replyStream({ text: "hi", toolCalls: [] }), [], noRuntime);
+    await expect(s.reset()).rejects.toThrow(/does not implement reset/);
   });
 });
 
