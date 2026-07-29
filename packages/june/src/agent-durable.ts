@@ -430,11 +430,17 @@ export class AgentDurableObject {
         const logRenderFailure = (err: unknown) =>
           console.error(`[june] agent "${this.name}": delivered render for turn ${started.turnId} failed:`, err);
         try {
-          const events = observeTurnEvents(session, started.turnId);
+          // Own the iterator here: observeTurnEvents subscribes EAGERLY, and a deliver()
+          // that throws before ever iterating would otherwise leave that subscription
+          // attached, buffering this turn's events forever. return() is idempotent, so
+          // closing in finally is safe whether deliver consumed the stream or died early.
+          const it = observeTurnEvents(session, started.turnId)[Symbol.asyncIterator]();
+          const events: AsyncIterable<TurnEvent> = { [Symbol.asyncIterator]: () => it };
           const target = { channelId: event!.channelId, threadId: event!.threadId, recipientUserId: event!.user?.id, recipientTeamId: event!.teamId };
           Promise.resolve()
             .then(() => runInScope({ resources: this.resources, services: this.services }, () => deliverChannel!.deliver!(target, events, { session: this.sessionKey })))
-            .catch(logRenderFailure);
+            .catch(logRenderFailure)
+            .finally(() => { void it.return?.(); });
         } catch (err) {
           logRenderFailure(err);
         }
@@ -494,10 +500,15 @@ export class AgentDurableObject {
         const logRenderFailure = (err: unknown) =>
           console.error(`[june] agent "${this.name}": delivered resume render for turn ${turnId} failed:`, err);
         try {
-          const events = observeTurnEvents(session, turnId);
+          // Own the iterator (same rationale as the delivered-turn path): the eager
+          // subscription must be released even when deliverResume throws before
+          // iterating — e.g. its very first message update fails.
+          const it = observeTurnEvents(session, turnId)[Symbol.asyncIterator]();
+          const events: AsyncIterable<TurnEvent> = { [Symbol.asyncIterator]: () => it };
           Promise.resolve()
             .then(() => runInScope({ resources: this.resources, services: this.services }, () => resumeChannel!.deliverResume!(target!, events, { session: this.sessionKey })))
-            .catch(logRenderFailure);
+            .catch(logRenderFailure)
+            .finally(() => { void it.return?.(); });
         } catch (err) {
           logRenderFailure(err);
         }
@@ -931,7 +942,8 @@ function serializeResume(o: { turnId: string; inputId: string; input: unknown; b
   try {
     return JSON.stringify({ turnId: o.turnId, inputId: o.inputId, input: o.input, by: o.by, source: o.source, target: o.target });
   } catch (err) {
-    throw new Error(`resumeStream: input is not JSON-serializable (${(err as Error).message}) — a resume answer must round-trip to the DO`);
+    // API-neutral prefix: this serializer backs both resumeStream and resumeDelivered.
+    throw new Error(`resume: input is not JSON-serializable (${(err as Error).message}) — a resume answer must round-trip to the DO`);
   }
 }
 
