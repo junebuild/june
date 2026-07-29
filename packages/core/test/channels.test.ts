@@ -210,6 +210,48 @@ describe("slackChannel", () => {
     expect(String(errs[0])).toContain("DO unreachable mid-flight"); // surfaced, not swallowed
   });
 
+  test("replaceInFlight (#129): a message turn passes replace to the host; a reaction turn does not", async () => {
+    streamStub();
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true, replaceInFlight: true, respondTo: ["message", "reaction_added"] });
+    const delivered: { replace?: boolean }[] = [];
+    const ctx = ctxWith(async () => "unused");
+    ctx.runDelivered = async (_m, o) => { delivered.push({ replace: o?.replace }); return { turnId: "t1" }; };
+    await ch2.webhook!(await signed(JSON.stringify({ type: "event_callback", event: { type: "message", text: "hi", channel: "C1", ts: "1.1", user: "U1" } })), ctx);
+    await flush();
+    await ch2.webhook!(await signed(JSON.stringify({ type: "event_callback", event: { type: "reaction_added", reaction: "eyes", user: "U1", item: { channel: "C1", ts: "1.1" } } })), ctx);
+    await flush();
+    // kind-scoped: the correction supersedes, the reaction never cancels an answer in progress
+    expect(delivered).toEqual([{ replace: true }, { replace: undefined }]);
+  });
+
+  test("stream render: turn.cancelled closes a started stream with a superseded note (#129)", async () => {
+    streamStub();
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true });
+    const ctx = ctxWith(async () => "unused");
+    ctx.runStream = async function* () {
+      yield { type: "turn.started", turnId: "t1", trigger: { kind: "proactive", by: "x" } } as TurnEvent;
+      yield { type: "message.delta", turnId: "t1", text: "half an answer" } as TurnEvent;
+      yield { type: "turn.cancelled", turnId: "t1" } as TurnEvent;
+    };
+    await ch2.webhook!(await signed(JSON.stringify({ type: "event_callback", event: { type: "message", text: "hi", channel: "C1", ts: "1.1", user: "U1" } })), ctx);
+    await flush();
+    expect(calls.map(method)).toEqual(["chat.startStream", "chat.appendStream", "chat.stopStream"]);
+    expect((calls[1]!.body as { markdown_text?: string }).markdown_text).toContain("superseded"); // the half-answer is labeled, not passed off as complete
+  });
+
+  test("stream render: a turn cancelled before posting anything vanishes silently (#129)", async () => {
+    streamStub();
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true });
+    const ctx = ctxWith(async () => "unused");
+    ctx.runStream = async function* () {
+      yield { type: "turn.started", turnId: "t1", trigger: { kind: "proactive", by: "x" } } as TurnEvent;
+      yield { type: "turn.cancelled", turnId: "t1" } as TurnEvent;
+    };
+    await ch2.webhook!(await signed(JSON.stringify({ type: "event_callback", event: { type: "message", text: "hi", channel: "C1", ts: "1.1", user: "U1" } })), ctx);
+    await flush();
+    expect(calls).toHaveLength(0); // no stray "(superseded)" message — the replacement turn renders its own reply
+  });
+
   test("stream render: a tool-only / empty turn posts nothing (no empty streamed message)", async () => {
     streamStub();
     const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true });
