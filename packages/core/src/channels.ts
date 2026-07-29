@@ -591,11 +591,14 @@ export function slackChannel(opts: {
         else if (e.type === "turn.completed") finalText = e.text;
         else if (e.type === "turn.failed") { await push("\n_(the turn failed)_"); await finish(); return; }
         else if (e.type === "turn.cancelled") {
-          // superseded (#129): close what already streamed with a note so the half-answer
-          // isn't mistaken for a full one; a turn that hadn't posted yet vanishes silently
-          // (the replacement turn is about to render its own reply).
-          if (started) { await push("\n_(superseded by a newer message)_"); await finish(); }
-          else if (opts.status && threadId) await setStatus(channelId, threadId, "");
+          // Cancelled (#129): close what already streamed with a note so the half-answer
+          // isn't mistaken for a full one — "superseded" only when a newer message really
+          // replaced it (e.reason), neutral copy otherwise (an explicit cancel, a session
+          // reset). A turn that hadn't posted yet vanishes silently. The status line is
+          // deliberately NOT touched: under replace the SUCCESSOR turn already owns it and
+          // clearing from here would wipe the newer turn's indicator (races the setStatus
+          // it issued at entry); Slack's 2-minute timeout backstops the no-successor case.
+          if (started) { await push(e.reason === "replaced" ? "\n_(superseded by a newer message)_" : "\n_(cancelled)_"); await finish(); }
           return;
         }
         else if (e.type === "input.requested") {
@@ -648,9 +651,10 @@ export function slackChannel(opts: {
         if (e.type === "turn.completed") finalText = e.text;
         else if (e.type === "turn.failed") throw new Error(e.error.message, { cause: e.error }); // full TurnError rides along
         else if (e.type === "turn.cancelled") {
-          // superseded (#129): this turn's reply will never come — the REPLACEMENT turn is
-          // about to render. Post nothing; just clear the status so it can't stick.
-          if (opts.status && event.threadId) await setStatus(event.channelId, event.threadId, "");
+          // Cancelled (#129): this turn's reply will never come. Post nothing, and leave
+          // the status line alone — under replace the successor turn owns it (clearing
+          // here would wipe the newer turn's indicator); Slack's 2-minute timeout
+          // backstops a cancellation with no successor.
           return;
         }
         else if (e.type === "input.requested") {
