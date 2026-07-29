@@ -276,6 +276,30 @@ describe("session initiator (#128)", () => {
     await s2.turn({ turnId: "t2", userText: "later", event: evt({ id: "B" }) });
     expect(seen[1]).toEqual({ principal: { id: "B" }, initiator: { id: "A" } });
   });
+
+  test("the opening message and the seat claim commit in ONE tx — a crash can't leave the session opened with the seat empty", async () => {
+    // If they committed separately, a crash between the two would replay into a session
+    // that is durably opened but unclaimed — and a LATER turn's different principal could
+    // take the opener's seat. Assert the writes share a transaction, so they land or
+    // vanish together.
+    const { store } = memStore();
+    const txWrites: string[][] = [];
+    let current: string[] | undefined;
+    const instrumented: SessionStore = {
+      ...store,
+      appendMessage(m) { current?.push(`append:${m.role}`); store.appendMessage(m); },
+      putStep(id, o) { current?.push(`put:${id}`); store.putStep(id, o); },
+      tx(fn) {
+        current = [];
+        try { return store.tx(fn); } finally { txWrites.push(current); current = undefined; }
+      },
+    };
+    const seen: Seen[] = [];
+    const s = new AgentSession("ops", "s1", instrumented, new MemBroadcaster(), probeModel, [idProbe(seen)], noRuntime);
+    await s.turn({ turnId: "t1", userText: "open", event: evt({ id: "A" }) });
+    const openingTx = txWrites.find((w) => w.includes("append:user"));
+    expect(openingTx).toContain("put:session:initiator");
+  });
 });
 
 // ── abnormal model finish: the silent-empty-completion killer ──────────────────

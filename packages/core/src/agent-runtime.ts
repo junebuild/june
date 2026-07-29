@@ -339,29 +339,34 @@ export async function runTurn(
   // env.trigger overrides the derivation: a resume continuation announces { kind: "resume" }
   // even though it replays with the original inbound event.
   const trigger: TurnTrigger = env.trigger ?? (env.event ? { kind: "inbound", event: env.event } : { kind: "proactive", by: "system" });
-  if (!store.hasOpeningMessage(opts.turnId)) {
-    // An EXPLICITLY proactive turn (receive() / a schedule / another channel passed
-    // env.trigger) opens with a `trigger` msg attributing who seeded it. A plain programmatic
-    // turn (no event, no explicit trigger — CLI/http) is derived proactive/system for the live
-    // turn.started event, but its opening stays a `user` msg: it's an API caller, not an
-    // attributed agent-initiated seed. So key the role off the EXPLICIT trigger. See RFC §9 / #6.
-    const opening: Msg = env.trigger?.kind === "proactive"
+  // An EXPLICITLY proactive turn (receive() / a schedule / another channel passed
+  // env.trigger) opens with a `trigger` msg attributing who seeded it. A plain programmatic
+  // turn (no event, no explicit trigger — CLI/http) is derived proactive/system for the live
+  // turn.started event, but its opening stays a `user` msg: it's an API caller, not an
+  // attributed agent-initiated seed. So key the role off the EXPLICIT trigger. See RFC §9 / #6.
+  const opening: Msg | undefined = store.hasOpeningMessage(opts.turnId)
+    ? undefined
+    : env.trigger?.kind === "proactive"
       ? { role: "trigger", turnId: opts.turnId, text: opts.userText, by: env.trigger.by }
       : { role: "user", turnId: opts.turnId, text: opts.userText };
-    store.tx(() => store.appendMessage(opening));
-  }
   // Durable session identity (#128): the FIRST resolved principal any turn arrives with
   // becomes the session's initiator — recorded once under a reserved step key (so the
   // SessionStore contract stays untouched and it survives eviction with the rest of the
-  // log), immutable thereafter. The tx guard mirrors the suspend checkpoint's: a
-  // crash-replay or a raced duplicate must not double-INSERT the step.
+  // log), immutable thereafter. The seat is claimed in the SAME transaction as the opening
+  // message: committed separately, a crash could land between "session durably opened" and
+  // "seat claimed", and on replay a later turn's different principal would take a seat that
+  // was already spoken for. An anonymous opener still leaves the seat empty on purpose —
+  // the first identified turn claims it then. The tx guard mirrors the suspend
+  // checkpoint's: a crash-replay or a raced duplicate must not double-INSERT the step.
   let initiator = store.getStep(INITIATOR_STEP) as Principal | undefined;
-  if (initiator === undefined && env.event?.principal != null) {
-    const principal = env.event.principal;
+  const claimant = initiator === undefined && env.event?.principal != null ? env.event.principal : undefined;
+  if (opening !== undefined || claimant !== undefined) {
     store.tx(() => {
-      if (store.getStep(INITIATOR_STEP) === undefined) store.putStep(INITIATOR_STEP, principal);
+      if (opening !== undefined) store.appendMessage(opening);
+      if (claimant !== undefined && store.getStep(INITIATOR_STEP) === undefined) store.putStep(INITIATOR_STEP, claimant);
     });
-    initiator = principal;
+    // Read back rather than assume: if a raced duplicate won the guard, its principal holds the seat.
+    if (claimant !== undefined) initiator = store.getStep(INITIATOR_STEP) as Principal | undefined;
   }
   store.setStatus("running");
   sink.emit({ type: "turn.started", turnId: opts.turnId, trigger });
