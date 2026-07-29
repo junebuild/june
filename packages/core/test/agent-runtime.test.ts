@@ -407,6 +407,76 @@ describe("cancel-and-replace (#129)", () => {
     expect(await s.result(t1)).toEqual({ status: "cancelled" });
     expect(s.cancel(t1)).toBe(false); // already settled
   });
+
+  test("turn.cancelled carries WHY: replaced / requested / reset", async () => {
+    const reasons: string[] = [];
+    const mk = () => {
+      const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), dribbleThenAnswer(), [], noRuntime);
+      s.observe((e) => { if (e.type === "turn.cancelled") reasons.push(e.reason); });
+      return s;
+    };
+    const a = mk();
+    const ta = a.start({ turnId: "t1", userText: "old" }).turnId;
+    a.start({ turnId: "t2", userText: "new", replace: true });
+    await a.result(ta);
+    const b = mk();
+    const tb = b.start({ turnId: "t1", userText: "go" }).turnId;
+    b.cancel(tb);
+    await b.result(tb);
+    const c = mk();
+    const rc = c.result(c.start({ turnId: "t1", userText: "go" }).turnId);
+    await c.reset();
+    await rc;
+    expect(reasons).toEqual(["replaced", "requested", "reset"]); // a renderer can be honest about each
+  });
+
+  test("a cancellation landing during the done delta's iterator cleanup still wins — the stale reply never commits", async () => {
+    const { store } = memStore();
+    let s: AgentSession;
+    let calls = 0;
+    // The provider finishes its reply, but its cleanup (for-await's return() on `break`)
+    // yields — and the replace lands exactly in that window.
+    const model: Model = () => {
+      const n = ++calls;
+      return (async function* (): AsyncGenerator<ModelDelta> {
+        try {
+          yield { type: "done", reply: { text: n === 1 ? "stale answer" : "fresh answer", toolCalls: [] } };
+        } finally {
+          if (n === 1) {
+            await new Promise((r) => setTimeout(r, 0)); // cleanup yields…
+            s.start({ turnId: "t2", userText: "corrected", replace: true }); // …and the replace lands here
+          }
+        }
+      })();
+    };
+    s = new AgentSession("ops", "s1", store, new MemBroadcaster(), model, [], noRuntime);
+    const t1 = s.start({ turnId: "t1", userText: "old" }).turnId;
+    expect(await s.result(t1)).toEqual({ status: "cancelled" }); // rechecked before the commit
+    expect(await s.result("t2")).toEqual({ status: "completed", text: "fresh answer" });
+    const assistants = store.messages().filter((m) => m.role === "assistant");
+    expect(assistants).toHaveLength(1); // the stale reply never reached the transcript
+    expect(assistants[0]).toMatchObject({ turnId: "t2" });
+  });
+
+  test("a turn queued behind one that later PARKS fails loudly at run time — it must not corrupt the park", async () => {
+    const approve: Tool = {
+      spec: { name: "approve", description: "d", input: { type: "object" } },
+      run: async (_i, ctx) => ({ ok: await ctx.requestInput({ id: "q", prompt: "?" }) }),
+    };
+    const script: ModelReply[] = [
+      { text: "check", toolCalls: [{ id: "c1", name: "approve", input: {} }] },
+      { text: "after", toolCalls: [] },
+    ];
+    const { store } = memStore();
+    const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), scriptedModel(script), [approve], noRuntime);
+    // t2 is queued while t1 RUNS (the start()-time check sees nothing suspended yet);
+    // t1 then parks — t2 must not run over the park and adopt its dangling tool call.
+    const t1 = s.start({ turnId: "t1", userText: "park" }).turnId;
+    const t2 = s.start({ turnId: "t2", userText: "sneaks in" }).turnId;
+    expect(await s.result(t1)).toMatchObject({ status: "suspended" });
+    expect(await s.result(t2)).toMatchObject({ status: "failed", error: { message: expect.stringMatching(/suspended awaiting input/) } });
+    expect(store.messages().filter((m) => m.turnId === "t2")).toHaveLength(0); // nothing persisted for t2
+  });
 });
 
 // ── session reset (#129): terminally retire the history, keep the address ─────
@@ -471,6 +541,43 @@ describe("session reset (#129)", () => {
     expect(() => s.start({ turnId: "t2", userText: "blocked" })).toThrow(/suspended/);
     await s.reset();
     expect(await s.turn({ turnId: "t3", userText: "fresh start" })).toBe("clean"); // no 409 — the park is archived
+  });
+
+  test("a turn started right after reset() — no await — queues past a suspended park into the fresh generation", async () => {
+    const approve: Tool = {
+      spec: { name: "approve", description: "d", input: { type: "object" } },
+      run: async (_i, ctx) => ({ ok: await ctx.requestInput({ id: "q", prompt: "?" }) }),
+    };
+    let calls = 0;
+    const model: Model = () =>
+      replyStream(++calls === 1 ? { text: "check", toolCalls: [{ id: "c1", name: "approve", input: {} }] } : { text: "clean", toolCalls: [] });
+    const { store } = memStore();
+    const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), model, [approve], noRuntime);
+    expect(await s.result(s.start({ turnId: "t1", userText: "park" }).turnId)).toMatchObject({ status: "suspended" });
+    // the documented sequence, WITHOUT awaiting the reset first: the pending reset waives
+    // start()'s suspended check, and chain order still lands t2 on the fresh generation
+    const reset = s.reset();
+    const t2 = s.start({ turnId: "t2", userText: "fresh" }).turnId; // must NOT throw "suspended"
+    expect((await reset).generation).toBe(0);
+    expect(await s.result(t2)).toEqual({ status: "completed", text: "clean" });
+    expect(store.messages().every((m) => m.turnId === "t2")).toBe(true);
+  });
+
+  test("resume() is refused while a reset is pending — the park is being retired", async () => {
+    const approve: Tool = {
+      spec: { name: "approve", description: "d", input: { type: "object" } },
+      run: async (_i, ctx) => ({ ok: await ctx.requestInput({ id: "q", prompt: "?" }) }),
+    };
+    const script: ModelReply[] = [
+      { text: "check", toolCalls: [{ id: "c1", name: "approve", input: {} }] },
+      { text: "after", toolCalls: [] },
+    ];
+    const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), scriptedModel(script), [approve], noRuntime);
+    const t1 = s.start({ turnId: "t1", userText: "park" }).turnId;
+    expect(await s.result(t1)).toMatchObject({ status: "suspended" });
+    const reset = s.reset();
+    expect(() => s.resume(t1, "q", true)).toThrow(/reset is pending/); // answering would race the archival
+    await reset;
   });
 
   test("a store without reset() fails loudly, before anything is cancelled or cleared", async () => {

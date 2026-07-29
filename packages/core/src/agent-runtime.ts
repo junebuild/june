@@ -241,6 +241,12 @@ export class SuspendSignal extends Error {
 // A distinct class so a transport (the DO's /resume) can map it to 403 vs 409.
 export class ResumeAuthorizationError extends Error {}
 
+// Why a turn was cancelled (#129) — carried on CancelSignal and the turn.cancelled event
+// so a consumer can pick honest copy: "replaced" (a newer message superseded it, the
+// debounce path), "reset" (the session is being retired), "requested" (an explicit
+// session.cancel with no replacement implied).
+export type CancelReason = "replaced" | "reset" | "requested";
+
 // Thrown by the engine when a cancellation request (session.cancel / a replace turn)
 // takes effect — always at a CHECKPOINT BOUNDARY, never mid-step: everything committed
 // stays committed, nothing dangles (a partially-run tool batch is closed with synthetic
@@ -250,9 +256,11 @@ export class ResumeAuthorizationError extends Error {}
 // the request lives in memory, so a crash-replay re-runs the turn uncancelled.
 export class CancelSignal extends Error {
   readonly turnId: string;
-  constructor(turnId: string) {
-    super(`turn ${turnId} was cancelled (superseded)`);
+  readonly reason: CancelReason;
+  constructor(turnId: string, reason: CancelReason) {
+    super(`turn ${turnId} was cancelled (${reason})`);
     this.turnId = turnId;
+    this.reason = reason;
   }
 }
 
@@ -279,9 +287,10 @@ export type TurnEvent =
   | { type: "input.requested"; turnId: string; request: InputRequest }
   | { type: "turn.completed"; turnId: string; text: string }
   | { type: "turn.failed"; turnId: string; error: TurnError; phase?: TurnFailurePhase; step?: string }
-  // The turn was cancelled (superseded) at a checkpoint boundary — no reply follows.
+  // The turn was cancelled at a checkpoint boundary — no reply follows. `reason` says
+  // why ("replaced" | "reset" | "requested") so a renderer can pick honest copy.
   // Live-only, like turn.failed: not foldable from the durable log.
-  | { type: "turn.cancelled"; turnId: string }
+  | { type: "turn.cancelled"; turnId: string; reason: CancelReason }
   | { type: "reasoning.delta"; turnId: string; text: string }
   | { type: "message.delta"; turnId: string; text: string };
 export type TurnResult =
@@ -358,19 +367,22 @@ export async function runTurn(
   sink: EventSink,
   model: Model,
   tools: Tool[],
-  opts: { turnId: string; userText: string; crash?: Crash; isCancelled?: () => boolean },
+  opts: { turnId: string; userText: string; crash?: Crash; cancelled?: () => CancelReason | undefined },
   env: { runtime: Runtime; agent: string; sessionId: string; event?: InboundEvent; systemOverlay?: string; trigger?: TurnTrigger },
 ): Promise<string> {
   // Cancellation (#129) is polled at CHECKPOINT BOUNDARIES only — before the opening
   // commits, before each model call, between model deltas, and between tool calls — so a
   // cancelled turn always ends with the transcript in a state the next turn can build on.
-  const isCancelled = opts.isCancelled ?? (() => false);
+  // `cancelled` returns the pending request's reason (or undefined): the reason rides the
+  // signal and the turn.cancelled event so renderers can say WHY the reply never came.
+  const cancelled = opts.cancelled ?? (() => undefined);
   // Superseded before it started (a queued turn a replace overtook): nothing has been
   // persisted for a fresh turn, so it vanishes without a trace. Emitted here — the loop's
   // catch handles in-flight cancellation, but this point is before the try.
-  if (isCancelled()) {
-    sink.emit({ type: "turn.cancelled", turnId: opts.turnId });
-    throw new CancelSignal(opts.turnId);
+  const early = cancelled();
+  if (early) {
+    sink.emit({ type: "turn.cancelled", turnId: opts.turnId, reason: early });
+    throw new CancelSignal(opts.turnId, early);
   }
   // env.trigger overrides the derivation: a resume continuation announces { kind: "resume" }
   // even though it replays with the original inbound event.
@@ -437,9 +449,10 @@ export async function runTurn(
           // pending gets a synthetic "cancelled" result IN ONE TX, so no tool_use dangles
           // unanswered — the transcript stays valid for the next turn's model call (and
           // the model sees the work was interrupted, not that it silently vanished).
-          if (isCancelled()) {
+          const why = cancelled();
+          if (why) {
             cancelToolBatch(store, last.toolCalls, opts.turnId);
-            throw new CancelSignal(opts.turnId);
+            throw new CancelSignal(opts.turnId, why);
           }
           inFlight = { phase: "tool", step: `tool:${call.id}` };
           await toolStep(store, sink, active, call, opts, { ...env, initiator });
@@ -449,9 +462,10 @@ export async function runTurn(
       }
       // About to ask the model: the transcript is provider-clean here (every tool_use
       // answered), so a cancelled turn simply ends without a final assistant message.
-      if (isCancelled()) throw new CancelSignal(opts.turnId);
+      const why = cancelled();
+      if (why) throw new CancelSignal(opts.turnId, why);
       inFlight = { phase: "model", step: `model:${msgs.length}` };
-      await modelStep(store, sink, model, specs, `model:${msgs.length}`, msgs, opts, env.systemOverlay, isCancelled);
+      await modelStep(store, sink, model, specs, `model:${msgs.length}`, msgs, opts, env.systemOverlay, cancelled);
       inFlight = undefined;
     }
   } catch (err) {
@@ -460,7 +474,7 @@ export async function runTurn(
       // "done" so the session is immediately ready for the replacement turn. No turn.failed
       // — cancellation is an outcome, not an error; result() maps it to { status: "cancelled" }.
       store.setStatus("done");
-      sink.emit({ type: "turn.cancelled", turnId: opts.turnId });
+      sink.emit({ type: "turn.cancelled", turnId: opts.turnId, reason: err.reason });
       throw err;
     }
     if (err instanceof SuspendSignal) {
@@ -509,7 +523,7 @@ async function modelStep(
   msgs: Msg[],
   opts: { turnId: string; crash?: Crash },
   systemOverlay?: string,
-  isCancelled?: () => boolean,
+  cancelled?: () => CancelReason | undefined,
 ) {
   if (store.getStep(stepId) !== undefined) return; // cached: assistant already appended in the same tx
   // Iterate the model stream: forward reasoning/answer tokens as LIVE TurnEvents (not
@@ -524,7 +538,8 @@ async function modelStep(
     // reply — the checkpoint machine treats it like a model call that never happened.
     // Polling per delta means cancellation lands without a Model contract change; a
     // provider that is silent between deltas is only interrupted at its next token.
-    if (isCancelled?.()) throw new CancelSignal(opts.turnId);
+    const why = cancelled?.();
+    if (why) throw new CancelSignal(opts.turnId, why);
     if (d.type === "reasoning") sink.emit({ type: "reasoning.delta", turnId: opts.turnId, text: d.text });
     else if (d.type === "text") sink.emit({ type: "message.delta", turnId: opts.turnId, text: d.text });
     else { reply = d.reply; finish = d.finish; break; } // `done` is terminal: `break` cancels the iterator (return()) so
@@ -543,6 +558,12 @@ async function modelStep(
     const detail = finish.raw && finish.raw !== finish.reason ? ` (provider: ${finish.raw})` : "";
     throw new Error(`model stopped abnormally — ${finish.reason}${detail} — and returned an empty reply`);
   }
+  // Recheck before committing: `break` on the done delta awaits the provider iterator's
+  // return() (cleanup can yield), so a cancellation landing during that await would
+  // otherwise commit the stale reply — and a call-less reply would then COMPLETE the
+  // superseded turn. Nothing is persisted yet, so cancelling here is still free.
+  const lateCancel = cancelled?.();
+  if (lateCancel) throw new CancelSignal(opts.turnId, lateCancel);
   assertCrash(opts.crash, "before-model-commit", stepId); // nothing persisted → replay re-asks the model
   store.tx(() => {
     store.putStep(stepId, reply);
@@ -690,10 +711,15 @@ export class AgentSession {
   private chain: Promise<unknown> = Promise.resolve();
   // Per-turn terminal promise, so result(turnId) can await a turn started with start().
   private readonly running = new Map<string, Promise<string>>();
-  // Turn ids whose cancellation was requested (#129). In-memory on purpose: cancellation
-  // is best-effort liveness (the engine polls at checkpoint boundaries), not a durability
-  // contract — after a crash the request is gone and a replay runs uncancelled.
-  private readonly cancelRequests = new Set<string>();
+  // Turn ids whose cancellation was requested (#129), each with WHY. In-memory on
+  // purpose: cancellation is best-effort liveness (the engine polls at checkpoint
+  // boundaries), not a durability contract — after a crash the request is gone and a
+  // replay runs uncancelled.
+  private readonly cancelRequests = new Map<string, CancelReason>();
+  // A reset() whose archival op is still queued on the chain (#129). While set, start()
+  // lets a new turn queue PAST a suspended park (the reset will retire it first) and
+  // resume() refuses (the park is being retired — answering it would race the archival).
+  private pendingReset = false;
   // Explicit fields + assignment (not constructor parameter properties): June
   // ships raw .ts, so consumers type-strip it — parameter properties aren't
   // erasable and break `erasableSyntaxOnly` / Node native strip-types.
@@ -730,7 +756,11 @@ export class AgentSession {
     // running a NEW turn on it would corrupt both (the resumed replay would adopt the new
     // turn's tail as its own result). Reject loudly; redelivering the SAME parked turn is
     // allowed (it replays, re-parks, and re-announces input.requested).
-    if (this.store.getStatus() === "suspended") {
+    // A PENDING RESET waives this check: the queued archival retires the park before this
+    // turn runs (chain order), so the turn lands on a fresh transcript — exactly the
+    // "reset and start over" sequence. The run-time guard below still protects the park
+    // if that archival fails.
+    if (this.store.getStatus() === "suspended" && !this.pendingReset) {
       const s = this.store.getStep("suspended") as SuspendedCheckpoint | undefined;
       if (s && s.turnId !== turnId) {
         throw new Error(`session is suspended awaiting input "${s.request.id}" (turn ${s.turnId}); resume it before starting a new turn`);
@@ -739,17 +769,29 @@ export class AgentSession {
     // The replace affordance (#129): supersede every unfinished turn BEFORE queuing this
     // one — they unwind at their next checkpoint boundary, then this turn runs. Ordered
     // after the suspended check on purpose: replace never cancels a parked approval.
-    if (input.replace) this.cancelPending();
+    if (input.replace) this.cancelPending("replaced");
     const systemOverlay = input.event ? this.channelInstructions?.[input.event.source] : undefined;
-    const run = () =>
-      runTurn(
+    const run = () => {
+      // Run-time re-check of the park: the start()-time check can be stale by the time the
+      // chain reaches this turn — an EARLIER queued turn may have parked meanwhile, or a
+      // pending reset's archival may have FAILED (leaving the park it was meant to retire).
+      // Running over a foreign park would corrupt it (the resumed replay would adopt this
+      // turn's tail), so fail loudly instead; redelivering the SAME parked turn stays allowed.
+      if (this.store.getStatus() === "suspended") {
+        const s = this.store.getStep("suspended") as SuspendedCheckpoint | undefined;
+        if (s && s.turnId !== turnId) {
+          return Promise.reject(new Error(`session is suspended awaiting input "${s.request.id}" (turn ${s.turnId}); resume it before starting a new turn`));
+        }
+      }
+      return runTurn(
         this.store,
         this.sink,
         this.model,
         this.tools,
-        { turnId, userText: input.userText, crash: input.crash, isCancelled: () => this.cancelRequests.has(turnId) },
+        { turnId, userText: input.userText, crash: input.crash, cancelled: () => this.cancelRequests.get(turnId) },
         { runtime: this.runtime, agent: this.agent, sessionId: this.id, event: input.event, systemOverlay, trigger: input.trigger },
       );
+    };
     this.track(turnId, this.chain.then(run));
     return { turnId };
   }
@@ -760,16 +802,18 @@ export class AgentSession {
   // (a suspended turn is not cancellable), or never started.
   cancel(turnId: string): boolean {
     if (!this.running.has(turnId)) return false;
-    this.cancelRequests.add(turnId);
+    this.cancelRequests.set(turnId, "requested");
     return true;
   }
 
   // The replace primitive: request cancellation of EVERY unfinished turn (in-flight and
   // queued). Returns the turn ids marked. A suspended turn is not in `running`, so a
-  // parked approval survives — by design (see TurnInput.replace).
-  cancelPending(): string[] {
+  // parked approval survives — by design (see TurnInput.replace). `reason` rides the
+  // CancelSignal and the turn.cancelled event ("replaced" from a replace turn, "reset"
+  // from reset(), "requested" for an explicit call).
+  cancelPending(reason: CancelReason = "requested"): string[] {
     const ids = [...this.running.keys()];
-    for (const id of ids) this.cancelRequests.add(id);
+    for (const id of ids) this.cancelRequests.set(id, reason);
     return ids;
   }
 
@@ -818,6 +862,9 @@ export class AgentSession {
   // unauthenticated resume and cannot answer. Returns { turnId } like start(); await
   // result(turnId) for the new terminal state.
   resume(turnId: string, inputId: string, input: unknown, opts?: { by?: string }): { turnId: string } {
+    // A pending reset is about to retire the park this answer targets — applying it would
+    // race the archival (the continuation could replay over an emptied store). Refuse.
+    if (this.pendingReset) throw new Error(`turn ${turnId} cannot be resumed: a session reset is pending and will retire the suspended turn`);
     const suspended = this.store.getStep("suspended") as SuspendedCheckpoint | undefined;
     if (!suspended || suspended.turnId !== turnId) throw new Error(`turn ${turnId} is not suspended`);
     if (inputId !== suspended.request.id) {
@@ -837,7 +884,7 @@ export class AgentSession {
         this.sink,
         this.model,
         this.tools,
-        { turnId, userText: suspended.userText, isCancelled: () => this.cancelRequests.has(turnId) },
+        { turnId, userText: suspended.userText, cancelled: () => this.cancelRequests.get(turnId) },
         { runtime: this.runtime, agent: this.agent, sessionId: this.id, event: suspended.event, systemOverlay: suspended.systemOverlay, trigger: { kind: "resume", callId: suspended.callId } },
       );
     this.track(turnId, this.chain.then(run));
@@ -857,11 +904,17 @@ export class AgentSession {
     if (!store.reset) {
       return Promise.reject(new Error(`agent "${this.agent}" session "${this.id}": this SessionStore does not implement reset()`));
     }
-    this.cancelPending();
+    this.cancelPending("reset");
+    // pendingReset opens the gate for turns queued BEHIND this archival (start() waives
+    // its suspended check) and closes resume(); cleared when the op settles either way —
+    // on failure the park still stands, and start()'s run-time guard protects it again.
+    this.pendingReset = true;
     const op = this.chain.then(() => {
       const generation = store.reset!();
       return { previousSession: `${this.id}#g${generation}`, generation };
     });
+    const clear = () => { this.pendingReset = false; };
+    op.then(clear, clear);
     this.chain = op.catch(() => {}); // a failed reset must not break the inbox
     return op;
   }
