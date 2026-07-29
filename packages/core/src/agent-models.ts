@@ -148,7 +148,10 @@ export function anthropic(opts: AnthropicOptions = {}): Model {
         else if (ev.delta.type === "thinking_delta" && ev.delta.thinking) yield { type: "reasoning", text: ev.delta.thinking };
       }
       const message = await stream.finalMessage();
-      yield { type: "done", reply: fromAnthropicContent(message.content), finish: finishFromStopReason(message.stop_reason) };
+      // Spread, don't assign: a transport that omits stop_reason must yield the same delta
+      // shape as before this field existed (no own `finish: undefined` property).
+      const finish = finishFromStopReason(message.stop_reason);
+      yield { type: "done", reply: fromAnthropicContent(message.content), ...(finish ? { finish } : {}) };
     })();
 }
 

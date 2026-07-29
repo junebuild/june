@@ -245,6 +245,24 @@ describe("abnormal model finish (ModelFinish guard)", () => {
     expect(await rt.session("ops", "s1").turn({ turnId: "t1", userText: "go" })).toBe("partial ans");
   });
 
+  test("a TOOL CALL is content too — abnormal finish with empty text but a pending call proceeds mid-turn", async () => {
+    // e.g. a provider reports its token limit on a round that still carries a valid
+    // function call: the call must run and the loop continue, not fail the turn.
+    const ping: Tool = { spec: { name: "ping", description: "d", input: { type: "object" } }, run: () => ({ pong: true }) };
+    const model: Model = (msgs) =>
+      msgs[msgs.length - 1]!.role === "tool"
+        ? replyStream({ text: "done after call", toolCalls: [] }, { reason: "stop", raw: "end_turn" })
+        : replyStream({ text: "", toolCalls: [{ id: "c1", name: "ping", input: {} }] }, { reason: "max_tokens", raw: "MAX_TOKENS" });
+    const rt = new MemRuntime({ ops: { model, tools: [ping] } });
+    expect(await rt.session("ops", "s1").turn({ turnId: "t1", userText: "go" })).toBe("done after call");
+  });
+
+  test("a no-claim done delta carries NO own finish property — the additive field stays invisible when unused", async () => {
+    for await (const d of replyStream({ text: "hi", toolCalls: [] })) {
+      expect("finish" in d).toBe(false);
+    }
+  });
+
   test("a normal stop with an empty reply still completes — tool-only turns end empty by design", async () => {
     const rt = new MemRuntime({ ops: { model: modelWith({ text: "", toolCalls: [] }, { reason: "stop", raw: "end_turn" }), tools: [] } });
     expect(await rt.session("ops", "s1").turn({ turnId: "t1", userText: "go" })).toBe("");
