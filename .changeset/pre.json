@@ -34,6 +34,7 @@
     "do-session-identity",
     "global-turn-ids",
     "isolate-scoped-resources",
+    "model-finish-reason",
     "provider-state",
     "slack-diagnose",
     "slack-dm-stream-recipients",
