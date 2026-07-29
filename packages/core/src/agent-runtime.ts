@@ -114,7 +114,9 @@ export type Model = (msgs: Msg[], tools: ToolSpec[], opts?: { system?: string })
 // A one-shot model output: a single-element stream. The degenerate streaming case, for
 // scripted/test models and providers without token streaming.
 export function replyStream(reply: ModelReply, finish?: ModelFinish): AsyncIterable<ModelDelta> {
-  return (async function* () { yield { type: "done", reply, finish }; })();
+  // Spread, don't assign: a no-claim call must not add an own `finish: undefined` property —
+  // the pre-finish delta shape stays byte-identical for presence checks and deep equality.
+  return (async function* () { yield { type: "done", reply, ...(finish ? { finish } : {}) }; })();
 }
 
 // Wrap a Model so every call carries `system` (the agent's instructions). The
