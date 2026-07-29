@@ -30,7 +30,14 @@ export type ChannelContext = {
   // normalized envelope threads it through so the turn (and its tools) can see the
   // actor/kind/reaction. Batch 1 defines the seam; the Slack/Crisp adapters and the
   // durable /turn edge start populating it in the following batches.
-  run: (message: string, opts?: { session?: string; turnId?: string; event?: InboundEvent; trigger?: ProactiveTrigger }) => Promise<string>;
+  //
+  // `replace` (#129, on run/runStream/runDetached/runDelivered): cancel-and-replace
+  // (debounce) — every unfinished turn on the session is superseded at its next
+  // checkpoint boundary (it settles as cancelled, emitting turn.cancelled), then this
+  // turn runs. A SUSPENDED turn is never cancelled by replace: starting over a pending
+  // approval still rejects. Opt-in per call — a channel where several participants ask
+  // independent questions in one thread must NOT blanket-replace.
+  run: (message: string, opts?: { session?: string; turnId?: string; event?: InboundEvent; trigger?: ProactiveTrigger; replace?: boolean }) => Promise<string>;
   // The LIVE variant: run a turn and get its TurnEvent stream, so a channel can render the
   // turn as it happens (typing indicator, progressive edits, tool status) instead of only
   // posting the final text. Optional — a host that can't stream (or a channel that doesn't
@@ -39,7 +46,7 @@ export type ChannelContext = {
   // `trigger` marks an agent-INITIATED (proactive) turn — no inbound event; the turn opens with a
   // `trigger`-role seed attributed to `by`. Passed by receive() (§9); omitted for inbound turns.
   // Proactive-only by type: inbound is derived from `event`, resume is engine-internal.
-  runStream?: (message: string, opts?: { session?: string; turnId?: string; event?: InboundEvent; trigger?: ProactiveTrigger }) => AsyncIterable<TurnEvent>;
+  runStream?: (message: string, opts?: { session?: string; turnId?: string; event?: InboundEvent; trigger?: ProactiveTrigger; replace?: boolean }) => AsyncIterable<TurnEvent>;
   // FIRE-AND-FORGET (#77): start a turn and resolve as soon as it is durably ACCEPTED —
   // never hold the caller open for the result. For shadow/observe work (an assessment
   // ledger, mirroring) the reply is dropped anyway, and on the edge awaiting it bounds
@@ -48,7 +55,7 @@ export type ChannelContext = {
   // while it has pending work. A detached turn has no live consumer: failures surface
   // only via the host's turn-failure logging / onTurnError hook. Optional, like
   // runStream: the host provides it where detachment is meaningful.
-  runDetached?: (message: string, opts?: { session?: string; turnId?: string; event?: InboundEvent; trigger?: ProactiveTrigger }) => Promise<{ turnId: string }>;
+  runDetached?: (message: string, opts?: { session?: string; turnId?: string; event?: InboundEvent; trigger?: ProactiveTrigger; replace?: boolean }) => Promise<{ turnId: string }>;
   // DELIVERED (runDetached's reply-bearing sibling): start the turn, resolve once it is
   // durably ACCEPTED — and have the TURN'S HOST render the reply through the channel's own
   // deliver() (same renderer as the inbound path), instead of a consumer at the edge. On the
@@ -60,7 +67,7 @@ export type ChannelContext = {
   // DeliverUnsupportedError BEFORE starting the turn, so the channel may safely fall back to
   // consumer-side rendering (ctx.runStream) without double-running the turn. Optional, like
   // runStream: the host provides it where host-side delivery is meaningful.
-  runDelivered?: (message: string, opts?: { session?: string; turnId?: string; event?: InboundEvent; trigger?: ProactiveTrigger }) => Promise<{ turnId: string }>;
+  runDelivered?: (message: string, opts?: { session?: string; turnId?: string; event?: InboundEvent; trigger?: ProactiveTrigger; replace?: boolean }) => Promise<{ turnId: string }>;
   // Resume a turn that was parked by ctx.requestInput (HITL): provide the answer and get the
   // continuation's TurnEvent stream, so a channel can render the resumed turn to completion.
   // `by` is the VERIFIED resumer identity (e.g. the user id from a signature-checked Slack
@@ -77,6 +84,14 @@ export type ChannelContext = {
   // without double-answering); an engine rejection (unauthorized clicker, stale/double
   // click) surfaces as an ordinary error exactly as resumeStream's first pull would.
   resumeDelivered?: (opts: { session?: string; turnId: string; inputId: string; input: unknown; by?: string; source: string; target: ResumeDeliveryTarget }) => Promise<{ turnId: string }>;
+  // SESSION RESET (#129): terminally retire a session's accumulated history — unfinished
+  // turns are superseded, then messages/steps/status are ARCHIVED under the session's
+  // current generation and the live state starts fresh (empty transcript, no initiator,
+  // any stale suspended park cleared). The session's address is unchanged (one DO is one
+  // session); `previousSession` is the audit handle naming the archived generation
+  // (`<session>#g<N>` — the rows live on in the store's archive tables). Optional, like
+  // runStream: provided where the host's store supports archival.
+  resetSession?: (opts?: { session?: string }) => Promise<{ previousSession: string; generation: number }>;
   // Extend the invocation past the fast-ACK response so a webhook's background work
   // (run the turn, post the reply out-of-band) reliably completes. On the edge the
   // host passes workerd's `ctx.waitUntil` — without it, a promise left floating after
