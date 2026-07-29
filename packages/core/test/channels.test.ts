@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { channelFetch, defineChannel, DeliverUnsupportedError, resolveChannel, type AgentDefinition, type Channel, type ChannelContext } from "@junejs/core/agent-config";
 import type { InboundEvent, ToolContext, TurnEvent } from "@junejs/core/agent-runtime";
-import { crispChannel, deriveCrispIdentity, httpChannel, slackChannel, receive, verifySlackSignature, verifyCrispSignature, verifyCrispUrlKey, tryParseJson, timestampFresh, normalizeSlackEvent, normalizeCrispEvent, isCrispEvent, feedbackBlocks, resetSlackCounters, type ChannelRejection, type CrispIdentity, type CrispWebhookEnvelope } from "@junejs/core/channels";
+import { crispChannel, deriveCrispIdentity, httpChannel, slackChannel, receive, verifySlackSignature, verifyCrispSignature, verifyCrispUrlKey, tryParseJson, timestampFresh, normalizeSlackEvent, normalizeCrispEvent, isCrispEvent, feedbackBlocks, resetSlackCounters, type ChannelRejection, type CrispIdentity, type CrispWebhookEnvelope, type SlackIdentity } from "@junejs/core/channels";
 
 const enc = new TextEncoder();
 async function hmacHex(secret: string, message: string): Promise<string> {
@@ -1599,6 +1599,75 @@ describe("slackChannel.diagnose", () => {
     expect(d.auth.ok).toBe(false);
     expect(d.scopes.missing).toEqual([]); // no scope claims on top of a dead token
     expect(d.hints[0]).toContain("auth.test failed (invalid_auth)");
+  });
+});
+
+// ── slack identity: resolveIdentity maps the signature-verified sender to a principal ──
+describe("slackChannel identity (resolveIdentity)", () => {
+  const secret = "shhh";
+  async function signed(body: string) {
+    const ts = String(Math.floor(Date.now() / 1000));
+    const sig = "v0=" + (await hmacHex(secret, `v0:${ts}:${body}`));
+    return new Request("http://x/channels/slack", { method: "POST", headers: { "x-slack-request-timestamp": ts, "x-slack-signature": sig }, body });
+  }
+  const mention = JSON.stringify({
+    type: "event_callback",
+    team_id: "T1",
+    event: { type: "app_mention", text: "<@UBOT> review status?", channel: "C1", ts: "9.9", user: "U9" },
+  });
+  function identityChannel(
+    resolveIdentity: Parameters<typeof slackChannel>[0]["resolveIdentity"],
+    extra?: { onEvent?: (e: { raw: unknown; event?: InboundEvent }) => void; onError?: (err: unknown) => void },
+  ) {
+    return slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", resolveIdentity, ...extra });
+  }
+
+  test("the signature-verified sender reaches the resolver; its principal rides the turn's event", async () => {
+    captureFetch();
+    const resolved: SlackIdentity[] = [];
+    const ch = identityChannel((id) => { resolved.push(id); return id.teamId === "T1" ? { id: `slack:${id.userId}`, kind: "operator" } : null; });
+    let seen: InboundEvent | undefined;
+    const run = (async (_m: string, o?: { event?: InboundEvent }) => { seen = o?.event; return "on it"; }) as ChannelContext["run"];
+    await ch.webhook!(await signed(mention), ctxWith(run));
+    await flush();
+    // the resolver saw exactly the payload's platform-verified sender facts — no lookup round-trip
+    expect(resolved[0]).toMatchObject({ userId: "U9", teamId: "T1", channelId: "C1", kind: "app_mention", ts: "9.9" });
+    expect(calls.filter((c) => c.url.includes("users."))).toHaveLength(0);
+    expect(seen?.principal).toEqual({ id: "slack:U9", kind: "operator" });
+  });
+
+  test("a foreign-workspace sender the resolver declines stays anonymous — the turn still runs", async () => {
+    captureFetch();
+    const foreign = JSON.stringify({ type: "event_callback", team_id: "T_EVIL", event: { type: "app_mention", text: "<@UBOT> hi", channel: "C1", ts: "9.9", user: "U9" } });
+    const ch = identityChannel((id) => (id.teamId === "T1" ? { id: `slack:${id.userId}` } : null));
+    let seen: InboundEvent | undefined;
+    const run = (async (_m: string, o?: { event?: InboundEvent }) => { seen = o?.event; return "answered"; }) as ChannelContext["run"];
+    await ch.webhook!(await signed(foreign), ctxWith(run));
+    await flush();
+    expect(seen?.principal).toBeUndefined(); // no principal → requiresPrincipal tools stay hidden
+    expect(calls.at(-1)!.body).toMatchObject({ text: "answered" }); // anonymous turn still replied
+  });
+
+  test("observers see the same principal the turn does (shared resolution)", async () => {
+    captureFetch();
+    const observed: (InboundEvent | undefined)[] = [];
+    const ch = identityChannel((id) => ({ id: `slack:${id.userId}` }), { onEvent: (e) => { observed.push(e.event); } });
+    await ch.webhook!(await signed(mention), ctxWith(async () => "ok"));
+    await flush();
+    expect(observed[0]?.principal).toEqual({ id: "slack:U9" });
+  });
+
+  test("a throwing resolver reports to onError and leaves the turn anonymous", async () => {
+    captureFetch();
+    const errors: unknown[] = [];
+    const ch = identityChannel(() => { throw new Error("resolver exploded"); }, { onError: (e) => errors.push(e) });
+    let seen: InboundEvent | undefined;
+    const run = (async (_m: string, o?: { event?: InboundEvent }) => { seen = o?.event; return "still fine"; }) as ChannelContext["run"];
+    await ch.webhook!(await signed(mention), ctxWith(run));
+    await flush();
+    expect(errors).toHaveLength(1);
+    expect(seen?.principal).toBeUndefined();
+    expect(calls.at(-1)!.body).toMatchObject({ text: "still fine" });
   });
 });
 

@@ -276,6 +276,23 @@ export const feedbackBlocks = (turnId?: string, session?: string) => [{
   }],
 }];
 
+// What slackChannel's resolveIdentity receives: the sender facts carried INSIDE the
+// signature-verified event payload. `userId` is Slack's own assertion of which workspace
+// member acted (absent on the rare kinds that carry no user); `teamId` names the
+// workspace — a resolver granting staff/operator principals should always check it, or a
+// foreign workspace sharing the same app would mint principals too. These are trustworthy
+// as PLATFORM identity ("this Slack user did this"); what they mean to the app — operator,
+// staff, nobody — is exactly what the resolver decides.
+export type SlackIdentity = {
+  userId?: string;
+  userName?: string;
+  teamId?: string;
+  channelId: string;
+  threadId?: string;
+  kind: SlackEventKind;
+  ts: string;
+};
+
 export function slackChannel(opts: {
   signingSecret: string;
   botToken: string;
@@ -295,6 +312,19 @@ export function slackChannel(opts: {
   // firehose). A kind present here is auto-subscribed (see the `events` derivation).
   on?: Partial<Record<SlackEventKind, KindObserver>>;
   botUserId?: string;
+  // The identity seam (the Slack sibling of crispChannel's resolveIdentity): map the
+  // PLATFORM-VERIFIED sender to the app's own Principal before any consumer of a
+  // normalized event runs. Unlike Crisp — where the webhook's user fields are
+  // client-writable hints and identity must be PULLED as verification evidence over
+  // REST — a Slack event's user/team ids arrive inside the signature-verified payload
+  // itself: "this workspace member sent this" is already Slack's own assertion, so
+  // there is no evidence fetch and no extra latency. What the resolver decides is what
+  // that platform identity MEANS to the app: map a workspace member to an operator/
+  // staff Principal (and enforce a team allowlist), or return null/undefined to leave
+  // the turn anonymous. The result is pinned on event.principal, flows to
+  // ToolContext.principal, and gates Tool.requiresPrincipal tools. Fail-closed: a
+  // throwing resolver is reported to onError and the turn runs anonymous.
+  resolveIdentity?: (identity: SlackIdentity, ctx: ChannelContext) => Promise<Principal | null | undefined> | Principal | null | undefined;
   // Render the turn LIVE: post a "Thinking…" message, then edit it in place as the turn's
   // events arrive (tool status, then the final answer) instead of posting once at the end.
   // Requires the host to supply ctx.runStream (the edge Durable Object does); falls back to
@@ -809,17 +839,45 @@ export function slackChannel(opts: {
         counters.eventsReceived[countKey] = (counters.eventsReceived[countKey] ?? 0) + 1;
         if (opts.accept && !opts.accept(payload)) return new Response("", { status: 200 }); // gated out
         const norm = preNorm;
+        // identity: when the seam is configured, resolve WHO IS SPEAKING once per
+        // normalized event and pin it on event.principal BEFORE any consumer runs —
+        // observers and the respond path all await this shared promise, so an
+        // observe-mode consumer sees the same principal the turn does (the crisp
+        // channel's exact pattern). No evidence fetch here: the identity facts come
+        // from the signature-verified payload itself (see SlackIdentity). Never
+        // rejects: a throwing resolver is reported to onError, the event stays
+        // anonymous, and requiresPrincipal tools simply stay hidden for the turn.
+        const identityReady: Promise<void> =
+          norm && opts.resolveIdentity
+            ? (async () => {
+                try {
+                  const principal = await opts.resolveIdentity!({
+                    userId: norm.event.user?.id,
+                    userName: norm.event.user?.name,
+                    teamId: norm.event.teamId,
+                    channelId: norm.event.channelId,
+                    threadId: norm.event.threadId,
+                    kind: norm.event.kind as SlackEventKind,
+                    ts: norm.event.ts,
+                  }, ctx);
+                  if (principal != null) norm.event.principal = principal;
+                } catch (err) {
+                  try { opts.onError?.(err); } catch { /* error reporting failed — nothing more to do */ }
+                }
+              })()
+            : Promise.resolve();
         // observe: mirror EVERY verified event_callback (raw always; normalized when available)
-        if (opts.onEvent) runBackground(ctx, async () => opts.onEvent!({ raw: payload, event: norm?.event }, ctx), opts.onError);
+        if (opts.onEvent) runBackground(ctx, async () => { await identityReady; return opts.onEvent!({ raw: payload, event: norm?.event }, ctx); }, opts.onError);
         // typed per-kind observer: fires only for its kind, with a non-optional event
         if (norm) {
           const handler = opts.on?.[norm.event.kind as SlackEventKind];
-          if (handler) runBackground(ctx, async () => handler(norm.event, ctx), opts.onError);
+          if (handler) runBackground(ctx, async () => { await identityReady; return handler(norm.event, ctx); }, opts.onError);
         }
         // respond: only kinds in respondTo drive a turn + reply (reactions can stay observe-only)
         if (norm && respondTo.includes(norm.event.kind)) {
           const { event, session, userText } = norm;
           runBackground(ctx, async () => {
+            await identityReady; // the turn must carry the resolved principal (requiresPrincipal gating)
             // Prefer DELIVERED rendering: the turn's host (the DO) renders the reply through
             // this channel's own deliver() under its OWN lifetime, so a long multi-round turn
             // isn't cancelled by the edge waitUntil ceiling ~30s after the ACK (the silent
