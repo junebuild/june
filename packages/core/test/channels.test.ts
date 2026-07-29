@@ -231,7 +231,7 @@ describe("slackChannel", () => {
     ctx.runStream = async function* () {
       yield { type: "turn.started", turnId: "t1", trigger: { kind: "proactive", by: "x" } } as TurnEvent;
       yield { type: "message.delta", turnId: "t1", text: "half an answer" } as TurnEvent;
-      yield { type: "turn.cancelled", turnId: "t1" } as TurnEvent;
+      yield { type: "turn.cancelled", turnId: "t1", reason: "replaced" } as TurnEvent;
     };
     await ch2.webhook!(await signed(JSON.stringify({ type: "event_callback", event: { type: "message", text: "hi", channel: "C1", ts: "1.1", user: "U1" } })), ctx);
     await flush();
@@ -245,11 +245,27 @@ describe("slackChannel", () => {
     const ctx = ctxWith(async () => "unused");
     ctx.runStream = async function* () {
       yield { type: "turn.started", turnId: "t1", trigger: { kind: "proactive", by: "x" } } as TurnEvent;
-      yield { type: "turn.cancelled", turnId: "t1" } as TurnEvent;
+      yield { type: "turn.cancelled", turnId: "t1", reason: "replaced" } as TurnEvent;
     };
     await ch2.webhook!(await signed(JSON.stringify({ type: "event_callback", event: { type: "message", text: "hi", channel: "C1", ts: "1.1", user: "U1" } })), ctx);
     await flush();
     expect(calls).toHaveLength(0); // no stray "(superseded)" message — the replacement turn renders its own reply
+  });
+
+  test("stream render: a NON-replace cancellation gets neutral copy, not \"superseded\" (#129)", async () => {
+    streamStub();
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true });
+    const ctx = ctxWith(async () => "unused");
+    ctx.runStream = async function* () {
+      yield { type: "turn.started", turnId: "t1", trigger: { kind: "proactive", by: "x" } } as TurnEvent;
+      yield { type: "message.delta", turnId: "t1", text: "half an answer" } as TurnEvent;
+      yield { type: "turn.cancelled", turnId: "t1", reason: "reset" } as TurnEvent;
+    };
+    await ch2.webhook!(await signed(JSON.stringify({ type: "event_callback", event: { type: "message", text: "hi", channel: "C1", ts: "1.1", user: "U1" } })), ctx);
+    await flush();
+    const appended = (calls[1]!.body as { markdown_text?: string }).markdown_text ?? "";
+    expect(appended).toContain("cancelled");        // honest, neutral copy…
+    expect(appended).not.toContain("superseded");   // …no invented "newer message"
   });
 
   test("stream render: a tool-only / empty turn posts nothing (no empty streamed message)", async () => {
