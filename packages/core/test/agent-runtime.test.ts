@@ -225,6 +225,59 @@ describe("agent-runtime engine", () => {
   });
 });
 
+// ── session initiator (#128): who OPENED the session vs who is speaking now ────
+describe("session initiator (#128)", () => {
+  type Seen = { principal?: unknown; initiator?: unknown };
+  const idProbe = (seen: Seen[]): Tool => ({
+    spec: { name: "id_probe", description: "record identities", input: { type: "object" } },
+    run: (_i, ctx) => {
+      seen.push({ principal: ctx.principal, initiator: ctx.initiator });
+      return { ok: true };
+    },
+  });
+  // one probe call per turn, turn-unique call ids so the exactly-once cache never skips
+  const probeModel: Model = (msgs) => {
+    const last = msgs[msgs.length - 1]!;
+    if (last.role === "tool") return replyStream({ text: "done", toolCalls: [] });
+    const turnId = last.role === "user" || last.role === "trigger" ? last.turnId : "t?";
+    return replyStream({ text: "probing", toolCalls: [{ id: `ip-${turnId}`, name: "id_probe", input: {} }] });
+  };
+  const evt = (principal?: { id: string; [k: string]: unknown }): InboundEvent => ({
+    source: "slack", kind: "message", channelId: "C1", ts: "1.1", ...(principal ? { principal } : {}),
+  });
+
+  test("the first resolved principal becomes the initiator; later turns keep their own current principal", async () => {
+    const seen: Seen[] = [];
+    const rt = new MemRuntime({ ops: { model: probeModel, tools: [idProbe(seen)] } });
+    await rt.session("ops", "s1").turn({ turnId: "t1", userText: "open", event: evt({ id: "A", kind: "operator" }) });
+    await rt.session("ops", "s1").turn({ turnId: "t2", userText: "follow up", event: evt({ id: "B", kind: "operator" }) });
+    expect(seen[0]).toEqual({ principal: { id: "A", kind: "operator" }, initiator: { id: "A", kind: "operator" } });
+    // B speaks now, but A opened the session — and the seat is immutable
+    expect(seen[1]).toEqual({ principal: { id: "B", kind: "operator" }, initiator: { id: "A", kind: "operator" } });
+  });
+
+  test("an anonymous opener doesn't claim the seat — the first RESOLVED principal does", async () => {
+    const seen: Seen[] = [];
+    const rt = new MemRuntime({ ops: { model: probeModel, tools: [idProbe(seen)] } });
+    await rt.session("ops", "s1").turn({ turnId: "t1", userText: "anon", event: evt() });
+    await rt.session("ops", "s1").turn({ turnId: "t2", userText: "hi", event: evt({ id: "B" }) });
+    await rt.session("ops", "s1").turn({ turnId: "t3", userText: "hi", event: evt({ id: "C" }) });
+    expect(seen[0]).toEqual({ principal: undefined, initiator: undefined }); // nothing resolved yet
+    expect(seen[1]).toEqual({ principal: { id: "B" }, initiator: { id: "B" } }); // first RESOLVED claims it
+    expect(seen[2]).toEqual({ principal: { id: "C" }, initiator: { id: "B" } }); // and keeps it
+  });
+
+  test("the initiator survives eviction — a fresh session over the same store still knows who opened it", async () => {
+    const { store } = memStore();
+    const seen: Seen[] = [];
+    const s1 = new AgentSession("ops", "s1", store, new MemBroadcaster(), probeModel, [idProbe(seen)], noRuntime);
+    await s1.turn({ turnId: "t1", userText: "open", event: evt({ id: "A" }) });
+    const s2 = new AgentSession("ops", "s1", store, new MemBroadcaster(), probeModel, [idProbe(seen)], noRuntime);
+    await s2.turn({ turnId: "t2", userText: "later", event: evt({ id: "B" }) });
+    expect(seen[1]).toEqual({ principal: { id: "B" }, initiator: { id: "A" } });
+  });
+});
+
 // ── abnormal model finish: the silent-empty-completion killer ──────────────────
 // Providers signal truncation/filtering via a finish reason, and both major APIs
 // document that such stops may carry NO content. Without the guard, an adapter that
