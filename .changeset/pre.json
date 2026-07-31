@@ -18,6 +18,7 @@
   "changesets": [
     "action-identity-annotations",
     "adapter-conformance",
+    "agent-build-automount",
     "agent-compile",
     "channel-capabilities",
     "channel-hardening",
