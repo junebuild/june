@@ -1222,6 +1222,16 @@ describe("channel policies (surface overlay modes + denyTools)", () => {
     expect(seen[2]!.system).toBe("BASE");
   });
 
+  test("replace consumes an EMPTY overlay too — the turn's system prompt is empty, not the base", async () => {
+    const { seen, model } = probe();
+    const { store } = memStore();
+    const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), withSystem(model, "BASE"), [], noRuntime, {
+      web: { overlay: "", overlayMode: "replace" },
+    });
+    await s.turn({ turnId: "t1", userText: "hi", event: event("web") });
+    expect(seen[0]!.system).toBe(""); // truthiness would silently fall back to BASE
+  });
+
   test("a bare string policy stays the classic append overlay", async () => {
     const { seen, model } = probe();
     const { store } = memStore();
