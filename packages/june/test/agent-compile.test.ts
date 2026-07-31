@@ -36,7 +36,10 @@ describe("scanAgentDir", () => {
     expect(scan.tools).toEqual(["./tools/create_order.ts"]);
     expect(scan.skills.map((s) => s.name)).toEqual(["bulk_reorder"]);
     expect(scan.channels).toEqual(["./channels/http.ts", "./channels/slack.ts"]);
-    expect(scan.channelOverlays.map((o) => o.source)).toEqual(["slack"]);
+    // instructions.slack.md is a SURFACE variant (#149) — agent-level prose,
+    // not a channel overlay; the legacy channels/*.md slot is empty here.
+    expect(scan.surfaceVariants.map((v) => v.source)).toEqual(["slack"]);
+    expect(scan.channelOverlays).toEqual([]);
     expect(scan.connections).toEqual([]);
   });
 

@@ -53,8 +53,11 @@ describe("discoverAgent", () => {
     ]);
     // channels discovered too (a plain http channel + a factory-built slack one)
     expect(agent.channels.map((c) => c.name).sort()).toEqual(["http", "slack"]);
-    // channels/slack.md rides along as the slack-source system overlay
-    expect(agent.channelInstructions).toEqual({ slack: expect.stringContaining("operator Slack channel") });
+    // instructions.slack.md + agent.ts surfaces.slack derive the slack policy
+    // (#149): the surface variant as the overlay, the mechanical deny alongside.
+    expect(agent.channelInstructions).toEqual({
+      slack: { overlay: expect.stringContaining("operator Slack channel"), denyTools: ["create_order"] },
+    });
   });
 
   test("resolves a Shape-B (env)=>Channel factory channel from process.env (native)", async () => {
