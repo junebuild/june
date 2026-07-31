@@ -239,9 +239,14 @@ export function redis(opts: { url: string }): CacheStoreFactory {
     kind: "redis",
     async connect() {
       // Non-literal specifier: bundlers (wrangler/esbuild for Workers) must not
-      // try to resolve "bun" — it exists only at Bun runtime.
-      const bunSpecifier = "bun";
-      const mod = (await import(bunSpecifier)) as unknown as {
+      // try to resolve "bun" — it exists only at Bun runtime. A plain
+      // `const s = "bun"; import(s)` is NOT enough: tsdown/rolldown constant-
+      // folds it back into a literal `import("bun")` in dist (#141), which then
+      // breaks every consumer whose own bundler resolves imports statically.
+      // The specifier therefore lives in DATA — no bundler evaluates a Map —
+      // and scripts/smoke-packed.sh asserts the packed dist stays fold-free.
+      const runtimeModules = new Map([["redis", "bun"]]);
+      const mod = (await import(runtimeModules.get("redis")!)) as unknown as {
         RedisClient: new (url: string) => RedisLike;
       };
       return new RedisStore(new mod.RedisClient(opts.url));

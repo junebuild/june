@@ -46,6 +46,21 @@ for tgz in "$work"/*.tgz; do
   fi
 done
 
+# A consumer's bundler (wrangler/esbuild) resolves LITERAL import specifiers
+# statically, and "bun" exists only at the Bun runtime — a literal import("bun")
+# in the shipped dist breaks every Workers consumer at build time (#141). The
+# source guards this with a data-indirected specifier; assert tsdown didn't
+# constant-fold it back (it folded a plain `const s = "bun"; import(s)` once).
+echo "→ verifying the packed core dist carries no literal runtime-only imports"
+core_dist=$(tar -xzOf "$work"/junejs-core-*.tgz package/dist/cache.js) || {
+  echo "✘ could not read dist/cache.js from the packed @junejs/core"
+  exit 1
+}
+if printf '%s' "$core_dist" | grep -qE 'import\((["'\''])bun'; then
+  echo "✘ @junejs/core dist/cache.js contains a literal import(\"bun\") — the non-literal guard was constant-folded (#141)"
+  exit 1
+fi
+
 echo "→ scaffolding from the packed create-june"
 mkdir -p "$work/scaffold" && (cd "$work/scaffold" && tar -xzf "$work"/create-june-*.tgz)
 node "$work/scaffold/package/bin.mjs" "$work/app" >/dev/null
