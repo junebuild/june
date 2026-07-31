@@ -5,7 +5,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { ACTION_REGISTRY, defineAction } from "@junejs/core/agent";
-import { actionToTool, assembleAgent, assembleDurable, buildSystemPrompt, defineAgent, parseSkill, readSkillTool, type AgentModule, type Channel, type Skill } from "@junejs/core/agent-config";
+import { actionToTool, assembleAgent, assembleDurable, buildSystemPrompt, defineAgent, parseSkill, readSkillTool, surfacePolicies, type AgentModule, type Channel, type Skill } from "@junejs/core/agent-config";
 import type { Tool, ToolContext } from "@junejs/core/agent-runtime";
 
 // defineAction self-registers globally; isolate the registry per test.
@@ -172,12 +172,18 @@ function opsModule(): AgentModule {
     return { name: "slack", path: "/channels/slack" } as Channel;
   };
   const mod: AgentModule = {
-    config: { name: "ops", model: "claude-opus-4-8", description: "Ops assistant" },
+    config: {
+      name: "ops", model: "claude-opus-4-8", description: "Ops assistant",
+      // Per-surface mechanics (#149): the slack surface REPLACES the base prompt
+      // and mechanically loses create_order.
+      surfaces: { slack: { mode: "replace", denyTools: ["create_order"] } },
+    },
     instructions: "You place orders.",
+    surfaceInstructions: { slack: "ASSIST: answer the operator directly." },
     tools: [createOrder],
     skills: [{ name: "bulk_reorder", description: "Reorder many items", whenToUse: "restocking", body: "steps" }],
     channels: { http: { name: "http" } as Channel, slack: slackFactory },
-    channelInstructions: { slack: "ASSIST overlay" },
+    channelInstructions: {},
     connections: [],
   };
   return Object.assign(mod, { resolved }) as AgentModule;
@@ -192,7 +198,10 @@ describe("assembleAgent", () => {
     expect(agent.instructions).toBe("You place orders.");
     expect(agent.tools.map((t) => t.spec.name)).toEqual(["create_order", "read_skill"]);
     expect(agent.channels.map((c) => c.name).sort()).toEqual(["http", "slack"]);
-    expect(agent.channelInstructions).toEqual({ slack: "ASSIST overlay" });
+    // surface variant + surfaces config derive the slack policy (#149)
+    expect(agent.channelInstructions).toEqual({
+      slack: { overlay: "ASSIST: answer the operator directly.", overlayMode: "replace", denyTools: ["create_order"] },
+    });
     expect((mod as unknown as { resolved: { env?: unknown } }).resolved.env).toEqual({ SLACK_SIGNING_SECRET: "s" });
   });
 
@@ -200,6 +209,7 @@ describe("assembleAgent", () => {
     const agent = await assembleAgent({
       config: { name: "bare", instructions: "From config." },
       instructions: "",
+      surfaceInstructions: {},
       tools: [], skills: [], channels: {}, channelInstructions: {}, connections: [],
     });
     expect(agent.instructions).toBe("From config.");
@@ -217,7 +227,9 @@ describe("assembleDurable", () => {
     // the prompt is pre-composed (the DO applies it via withSystem as-is)
     expect(def.instructions).toContain("You place orders.");
     expect(def.instructions).toContain("- bulk_reorder: Reorder many items — when to use: restocking");
-    expect(def.channelInstructions).toEqual({ slack: "ASSIST overlay" });
+    expect(def.channelInstructions).toEqual({
+      slack: { overlay: "ASSIST: answer the operator directly.", overlayMode: "replace", denyTools: ["create_order"] },
+    });
     // channels pass through UNRESOLVED — the DO resolves them with ITS env
     expect(def.channels).toHaveLength(2);
     expect(typeof def.channels[1]).toBe("function");
@@ -228,7 +240,7 @@ describe("assembleDurable", () => {
     const dup: Tool = { spec: { name: "x", description: "d", input: { type: "object", properties: {} } }, run: () => ({}) };
     expect(() =>
       assembleDurable({
-        config: { name: "ops" }, instructions: "i",
+        config: { name: "ops" }, instructions: "i", surfaceInstructions: {},
         tools: [dup, { ...dup }], skills: [], channels: {}, channelInstructions: {}, connections: [],
       }),
     ).toThrow(/duplicate tool name "x"/);
@@ -275,5 +287,47 @@ describe("actionToTool identity", () => {
     });
     expect(actionToTool(gated).requiresPrincipal).toBe(true);
     expect(actionToTool({ ...gated, id: "open_read", requiresPrincipal: undefined }).requiresPrincipal).toBeUndefined();
+  });
+});
+
+// ── surfacePolicies (#149): the derivation with fail-loud edges ───────────────
+describe("surfacePolicies", () => {
+  test("variant + surfaces config merge into one policy; deny-only without a file is legal", () => {
+    const p = surfacePolicies({
+      surfaces: { slack: { mode: "replace", denyTools: ["x"] }, api: { denyTools: ["y"] } },
+      surfaceInstructions: { slack: "OV" },
+    })!;
+    expect(p.slack).toEqual({ overlay: "OV", overlayMode: "replace", denyTools: ["x"] });
+    expect(p.api).toEqual({ denyTools: ["y"] }); // policy without prose
+  });
+
+  test("mode declared without a variant file throws at assembly, not at runtime", () => {
+    expect(() => surfacePolicies({ agent: "ops", surfaces: { slack: { mode: "replace" } } })).toThrow(
+      /instructions\.slack\.md does not exist/,
+    );
+  });
+
+  test("a source in both the new pieces and the legacy map throws — one source of truth", () => {
+    expect(() =>
+      surfacePolicies({ surfaceInstructions: { slack: "NEW" }, channelInstructions: { slack: "OLD" } }),
+    ).toThrow(/one source of truth/);
+  });
+
+  test("legacy map entries for other sources pass through; orphan keys warn when channels are known", () => {
+    const warns: string[] = [];
+    const orig = console.warn;
+    console.warn = (m: string) => void warns.push(String(m));
+    try {
+      const p = surfacePolicies({
+        surfaceInstructions: { slack: "OV" },
+        channelInstructions: { crisp: "LEGACY" },
+        channelNames: ["slack"],
+      })!;
+      expect(p.slack).toEqual({ overlay: "OV" });
+      expect(p.crisp).toBe("LEGACY");
+      expect(warns.join(" ")).toContain('"crisp"'); // no channel named crisp → never fires
+    } finally {
+      console.warn = orig;
+    }
   });
 });
