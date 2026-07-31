@@ -5,7 +5,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { ACTION_REGISTRY, defineAction } from "@junejs/core/agent";
-import { actionToTool, buildSystemPrompt, defineAgent, readSkillTool, type Channel, type Skill } from "@junejs/core/agent-config";
+import { actionToTool, assembleAgent, assembleDurable, buildSystemPrompt, defineAgent, parseSkill, readSkillTool, type AgentModule, type Channel, type Skill } from "@junejs/core/agent-config";
 import type { Tool, ToolContext } from "@junejs/core/agent-runtime";
 
 // defineAction self-registers globally; isolate the registry per test.
@@ -126,6 +126,112 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("You place orders.");
     expect(prompt).toContain("## Available skills (call read_skill to load one)");
     expect(prompt).toContain("- bulk_reorder: Reorder many items");
+  });
+
+  test("a skill's whenToUse rides its index line", () => {
+    const prompt = buildSystemPrompt({
+      instructions: "You place orders.",
+      skills: [{ name: "bulk_reorder", description: "Reorder many items", whenToUse: "more than one item", body: "..." }],
+    });
+    expect(prompt).toContain("- bulk_reorder: Reorder many items — when to use: more than one item");
+  });
+});
+
+describe("parseSkill", () => {
+  test("parses frontmatter, including the hyphenated when-to-use key", () => {
+    const skill = parseSkill("bulk_reorder", "---\nname: bulk_reorder\ndescription: Reorder many items.\nwhen-to-use: A supplier list is pasted.\n---\n\n1. Read the list.");
+    expect(skill).toEqual({
+      name: "bulk_reorder",
+      description: "Reorder many items.",
+      whenToUse: "A supplier list is pasted.",
+      body: "1. Read the list.",
+    });
+  });
+
+  test("accepts the camelCase whenToUse spelling too", () => {
+    const skill = parseSkill("x", "---\ndescription: d\nwhenToUse: now\n---\nbody");
+    expect(skill.whenToUse).toBe("now");
+  });
+
+  test("no frontmatter → first line (minus '# ') is the description, body is the whole text", () => {
+    const skill = parseSkill("triage", "# Triage a thread\nSteps follow.");
+    expect(skill).toEqual({ name: "triage", description: "Triage a thread", body: "# Triage a thread\nSteps follow." });
+  });
+});
+
+// ── AgentModule assembly: the single path native discovery and a compiled
+// _agent.gen.ts share (assembleAgent), and its durable sibling (assembleDurable) ──
+function opsModule(): AgentModule {
+  const createOrder = defineAction({
+    id: "create_order", description: "Place an order", input: orderSchema,
+    run: (input) => ({ item: input.item }),
+  });
+  const resolved: { env?: unknown } = {};
+  const slackFactory = (env: unknown) => {
+    resolved.env = env;
+    return { name: "slack", path: "/channels/slack" } as Channel;
+  };
+  const mod: AgentModule = {
+    config: { name: "ops", model: "claude-opus-4-8", description: "Ops assistant" },
+    instructions: "You place orders.",
+    tools: [createOrder],
+    skills: [{ name: "bulk_reorder", description: "Reorder many items", whenToUse: "restocking", body: "steps" }],
+    channels: { http: { name: "http" } as Channel, slack: slackFactory },
+    channelInstructions: { slack: "ASSIST overlay" },
+    connections: [],
+  };
+  return Object.assign(mod, { resolved }) as AgentModule;
+}
+
+describe("assembleAgent", () => {
+  test("resolves channel factories against env and assembles via defineAgent", async () => {
+    const mod = opsModule();
+    const agent = await assembleAgent(mod, { SLACK_SIGNING_SECRET: "s" });
+
+    expect(agent.name).toBe("ops");
+    expect(agent.instructions).toBe("You place orders.");
+    expect(agent.tools.map((t) => t.spec.name)).toEqual(["create_order", "read_skill"]);
+    expect(agent.channels.map((c) => c.name).sort()).toEqual(["http", "slack"]);
+    expect(agent.channelInstructions).toEqual({ slack: "ASSIST overlay" });
+    expect((mod as unknown as { resolved: { env?: unknown } }).resolved.env).toEqual({ SLACK_SIGNING_SECRET: "s" });
+  });
+
+  test("empty instructions fall back to config.instructions", async () => {
+    const agent = await assembleAgent({
+      config: { name: "bare", instructions: "From config." },
+      instructions: "",
+      tools: [], skills: [], channels: {}, channelInstructions: {}, connections: [],
+    });
+    expect(agent.instructions).toBe("From config.");
+    expect(agent.channelInstructions).toBeUndefined();
+  });
+});
+
+describe("assembleDurable", () => {
+  test("produces the DoAgentDef pieces: adapted tools + read_skill, prompt with the skill index, factories untouched", () => {
+    const mod = opsModule();
+    const def = assembleDurable(mod);
+
+    expect(def.name).toBe("ops");
+    expect(def.tools.map((t) => t.spec.name)).toEqual(["create_order", "read_skill"]);
+    // the prompt is pre-composed (the DO applies it via withSystem as-is)
+    expect(def.instructions).toContain("You place orders.");
+    expect(def.instructions).toContain("- bulk_reorder: Reorder many items — when to use: restocking");
+    expect(def.channelInstructions).toEqual({ slack: "ASSIST overlay" });
+    // channels pass through UNRESOLVED — the DO resolves them with ITS env
+    expect(def.channels).toHaveLength(2);
+    expect(typeof def.channels[1]).toBe("function");
+    expect((mod as unknown as { resolved: { env?: unknown } }).resolved.env).toBeUndefined();
+  });
+
+  test("throws on a duplicate tool name, like defineAgent", () => {
+    const dup: Tool = { spec: { name: "x", description: "d", input: { type: "object", properties: {} } }, run: () => ({}) };
+    expect(() =>
+      assembleDurable({
+        config: { name: "ops" }, instructions: "i",
+        tools: [dup, { ...dup }], skills: [], channels: {}, channelInstructions: {}, connections: [],
+      }),
+    ).toThrow(/duplicate tool name "x"/);
   });
 });
 
