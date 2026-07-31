@@ -1188,3 +1188,81 @@ describe("principal gate (requiresPrincipal)", () => {
     expect(await s.result(turnId)).toMatchObject({ status: "failed", error: { message: "unknown tool get_orders" } });
   });
 });
+
+// ── per-source turn policies (#149): overlay composition modes + mechanical
+// tool denial, applied off the unforgeable event source ──────────────────────
+describe("channel policies (surface overlay modes + denyTools)", () => {
+  const probe = () => {
+    const seen: { system?: string; specs?: string[] }[] = [];
+    const model: Model = (msgs, tools, opts) => {
+      seen.push({ system: opts?.system, specs: tools.map((t) => t.name) });
+      const last = msgs[msgs.length - 1]!;
+      if (last.role === "tool") return replyStream({ text: "done", toolCalls: [] });
+      return replyStream({ text: "ok", toolCalls: [] });
+    };
+    return { seen, model };
+  };
+  const ping: Tool = { spec: { name: "ping", description: "d", input: { type: "object", properties: {} } }, run: () => ({ pong: true }) };
+  const write: Tool = { spec: { name: "write_ledger", description: "d", input: { type: "object", properties: {} } }, run: () => ({ wrote: true }) };
+  const event = (source: string) => ({ source, kind: "message", channelId: "c1" }) as never;
+
+  test("append (default): base and overlay compose; replace: the overlay IS the system prompt", async () => {
+    const { seen, model } = probe();
+    const wrapped = withSystem(model, "BASE");
+    const { store } = memStore();
+    const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), wrapped, [ping], noRuntime, {
+      web: { overlay: "WEB OVERLAY" },
+      slack: { overlay: "SLACK ONLY", overlayMode: "replace" },
+    });
+    await s.turn({ turnId: "t1", userText: "hi", event: event("web") });
+    expect(seen[0]!.system).toBe("BASE\n\nWEB OVERLAY");
+    await s.turn({ turnId: "t2", userText: "hi", event: event("slack") });
+    expect(seen[1]!.system).toBe("SLACK ONLY"); // base mechanically dropped
+    await s.turn({ turnId: "t3", userText: "hi" }); // no event → base alone
+    expect(seen[2]!.system).toBe("BASE");
+  });
+
+  test("a bare string policy stays the classic append overlay", async () => {
+    const { seen, model } = probe();
+    const { store } = memStore();
+    const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), withSystem(model, "BASE"), [], noRuntime, { web: "OLD STYLE" });
+    await s.turn({ turnId: "t1", userText: "hi", event: event("web") });
+    expect(seen[0]!.system).toBe("BASE\n\nOLD STYLE");
+  });
+
+  test("denyTools: unlisted to the model AND undispatchable — enforcement, not suggestion", async () => {
+    const seen: { specs?: string[] }[] = [];
+    const model: Model = (msgs, tools) => {
+      seen.push({ specs: tools.map((t) => t.name) });
+      const last = msgs[msgs.length - 1]!;
+      if (last.role === "tool") return replyStream({ text: JSON.stringify(last.result), toolCalls: [] });
+      // hallucinate the denied tool anyway
+      return replyStream({ text: "calling", toolCalls: [{ id: "c1", name: "write_ledger", input: {} }] });
+    };
+    const { store } = memStore();
+    const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), model, [ping, write], noRuntime, {
+      slack: { denyTools: ["write_ledger"] },
+    });
+    const { turnId } = s.start({ userText: "hi", event: event("slack") });
+    // Same failure contract as requiresPrincipal: the denied tool is UNKNOWN to
+    // this turn — the hallucinated call fails loudly and never executes.
+    expect(await s.result(turnId)).toMatchObject({ status: "failed", error: { message: "unknown tool write_ledger" } });
+    expect(seen[0]!.specs).toEqual(["ping"]); // never listed
+  });
+
+  test("denied on one source, fully available on another (per-turn, not per-agent)", async () => {
+    const seen: { specs?: string[] }[] = [];
+    const model: Model = (_msgs, tools) => {
+      seen.push({ specs: tools.map((t) => t.name) });
+      return replyStream({ text: "ok", toolCalls: [] });
+    };
+    const { store } = memStore();
+    const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), model, [ping, write], noRuntime, {
+      slack: { denyTools: ["write_ledger"] },
+    });
+    await s.turn({ turnId: "t1", userText: "hi", event: event("slack") });
+    await s.turn({ turnId: "t2", userText: "hi", event: event("crisp") });
+    expect(seen[0]!.specs).toEqual(["ping"]);
+    expect(seen[1]!.specs).toEqual(["ping", "write_ledger"]);
+  });
+});

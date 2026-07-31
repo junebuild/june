@@ -109,7 +109,20 @@ export type ModelDelta =
   | { type: "reasoning"; text: string }   // thinking tokens (when the provider streams them)
   | { type: "text"; text: string }        // answer tokens
   | { type: "done"; reply: ModelReply; finish?: ModelFinish };  // terminal: the full assembled reply + why it stopped
-export type Model = (msgs: Msg[], tools: ToolSpec[], opts?: { system?: string }) => AsyncIterable<ModelDelta>;
+export type Model = (msgs: Msg[], tools: ToolSpec[], opts?: { system?: string; systemMode?: "append" | "replace" }) => AsyncIterable<ModelDelta>;
+
+// Per-source turn policy (#149): what a channel contributes to turns arriving
+// through it, beyond transport. `overlay` is appended to the base system prompt
+// (or REPLACES it under mode "replace" — for surfaces whose behavior genuinely
+// isn't the base agent's, e.g. an operator-assist mode over a shadow judge).
+// `denyTools` removes tools from the turn MECHANICALLY: not listed to the model,
+// not dispatchable — policy the base prompt would otherwise have to beg for in
+// prose ("do NOT call X"), now unpersuadable and prompt-injection-proof.
+export type ChannelPolicy = {
+  overlay?: string;
+  overlayMode?: "append" | "replace";
+  denyTools?: string[];
+};
 
 // A one-shot model output: a single-element stream. The degenerate streaming case, for
 // scripted/test models and providers without token streaming.
@@ -123,10 +136,18 @@ export function replyStream(reply: ModelReply, finish?: ModelFinish): AsyncItera
 // runtime applies this from the agent def, so a provider model needn't bake the
 // system prompt in at construction — one model instance can serve many agents,
 // each supplying its own system per turn. A per-turn `opts.system` (e.g. a channel
-// instruction overlay derived from the inbound event's source) is APPENDED to the
-// base, not dropped — so the base instructions and the per-turn overlay compose.
+// overlay derived from the inbound event's source) is APPENDED to the base by
+// default — the base instructions and the per-turn overlay compose. Under
+// `systemMode: "replace"` the overlay IS the turn's system prompt: the base is
+// dropped mechanically instead of the overlay pleading "disregard the above".
+// systemMode is consumed here — the wrapped model only ever sees a final system.
 export function withSystem(model: Model, system: string): Model {
-  return (msgs, tools, opts) => model(msgs, tools, { ...opts, system: [system, opts?.system].filter(Boolean).join("\n\n") });
+  return (msgs, tools, opts) => {
+    const { systemMode, ...rest } = opts ?? {};
+    const finalSystem =
+      systemMode === "replace" && opts?.system ? opts.system : [system, opts?.system].filter(Boolean).join("\n\n");
+    return model(msgs, tools, { ...rest, system: finalSystem });
+  };
 }
 
 // A tool's `run` gets a context: its session-local `store` (write app state in
@@ -268,7 +289,7 @@ export class CancelSignal extends Error {
 // validate a later resume (turnId, the pending request) and replay the turn (userText/
 // overlay/event). One per session — turns serialize, and start() rejects new turns while
 // one is parked, so a single fixed key cannot be clobbered.
-type SuspendedCheckpoint = { turnId: string; callId: string; request: InputRequest; userText: string; systemOverlay?: string; event?: InboundEvent };
+type SuspendedCheckpoint = { turnId: string; callId: string; request: InputRequest; userText: string; systemOverlay?: string; systemMode?: "append" | "replace"; deniedTools?: string[]; event?: InboundEvent };
 // The proactive variant stands alone: it's the only trigger a CALLER may pass explicitly
 // (TurnInput / ChannelContext.run / receive()) — inbound is derived from the event, resume is
 // engine-internal. Narrowing the public seams to this type makes misuse (passing an inbound or
@@ -368,7 +389,7 @@ export async function runTurn(
   model: Model,
   tools: Tool[],
   opts: { turnId: string; userText: string; crash?: Crash; cancelled?: () => CancelReason | undefined },
-  env: { runtime: Runtime; agent: string; sessionId: string; event?: InboundEvent; systemOverlay?: string; trigger?: TurnTrigger },
+  env: { runtime: Runtime; agent: string; sessionId: string; event?: InboundEvent; systemOverlay?: string; systemMode?: "append" | "replace"; deniedTools?: string[]; trigger?: TurnTrigger },
 ): Promise<string> {
   // Cancellation (#129) is polled at CHECKPOINT BOUNDARIES only — before the opening
   // commits, before each model call, between model deltas, and between tool calls — so a
@@ -425,7 +446,13 @@ export async function runTurn(
   // (not at registration) because the same agent serves identified and anonymous
   // conversations; the filter is stable across a crash-replay since the principal
   // rides the persisted event.
-  const active = env.event?.principal != null ? tools : tools.filter((t) => !t.requiresPrincipal);
+  const principled = env.event?.principal != null ? tools : tools.filter((t) => !t.requiresPrincipal);
+  // Source deny gate (#149): tools the turn's channel policy removes are absent the
+  // same way — unlisted AND undispatchable — so per-surface policy is mechanical,
+  // never persuaded in prose. Stable across crash-replay/resume: the deny list is
+  // derived from the session's channel policies at start() and persisted with the
+  // suspend checkpoint, like the overlay.
+  const active = env.deniedTools?.length ? principled.filter((t) => !env.deniedTools!.includes(t.spec.name)) : principled;
   const specs = active.map((t) => t.spec);
   // Which durable step is in flight, for turn.failed attribution: set before each step
   // await, cleared on its return, so a throw OUTSIDE a step (transcript read, status
@@ -465,7 +492,7 @@ export async function runTurn(
       const why = cancelled();
       if (why) throw new CancelSignal(opts.turnId, why);
       inFlight = { phase: "model", step: `model:${msgs.length}` };
-      await modelStep(store, sink, model, specs, `model:${msgs.length}`, msgs, opts, env.systemOverlay, cancelled);
+      await modelStep(store, sink, model, specs, `model:${msgs.length}`, msgs, opts, env.systemOverlay, env.systemMode, cancelled);
       inFlight = undefined;
     }
   } catch (err) {
@@ -484,7 +511,7 @@ export async function runTurn(
       // redelivered replay of an already-parked turn re-announces WITHOUT re-inserting (putStep
       // is insert-only on the SQL stores).
       const event = env.event ? { ...env.event, raw: undefined } : undefined;
-      const checkpoint: SuspendedCheckpoint = { turnId: opts.turnId, callId: err.callId, request: err.request, userText: opts.userText, systemOverlay: env.systemOverlay, event };
+      const checkpoint: SuspendedCheckpoint = { turnId: opts.turnId, callId: err.callId, request: err.request, userText: opts.userText, systemOverlay: env.systemOverlay, systemMode: env.systemMode, deniedTools: env.deniedTools, event };
       store.tx(() => {
         if (store.getStep("suspended") === undefined) store.putStep("suspended", checkpoint);
         store.setStatus("suspended");
@@ -523,6 +550,7 @@ async function modelStep(
   msgs: Msg[],
   opts: { turnId: string; crash?: Crash },
   systemOverlay?: string,
+  systemMode?: "append" | "replace",
   cancelled?: () => CancelReason | undefined,
 ) {
   if (store.getStep(stepId) !== undefined) return; // cached: assistant already appended in the same tx
@@ -532,7 +560,7 @@ async function modelStep(
   // reply from partial text/tool deltas.
   let reply: ModelReply | undefined;
   let finish: ModelFinish | undefined;
-  for await (const d of model(msgs, specs, systemOverlay ? { system: systemOverlay } : undefined)) {
+  for await (const d of model(msgs, specs, systemOverlay ? { system: systemOverlay, ...(systemMode ? { systemMode } : {}) } : undefined)) {
     // Cancelled mid-stream: nothing persisted for this step, so throwing here (which
     // closes the provider iterator via for-await's return()) just discards the partial
     // reply — the checkpoint machine treats it like a model call that never happened.
@@ -730,11 +758,13 @@ export class AgentSession {
   private readonly model: Model;
   private readonly tools: Tool[];
   private readonly runtime: Runtime;
-  // Per-source system overlays: when a turn's InboundEvent.source matches a key, that
-  // text is appended to the system prompt for the turn (see withSystem). Lets ONE shared
-  // agent branch its behavior by real, unforgeable channel source — no userText markers.
-  private readonly channelInstructions?: Record<string, string>;
-  constructor(agent: string, id: string, store: SessionStore, sink: EventSink, model: Model, tools: Tool[], runtime: Runtime, channelInstructions?: Record<string, string>) {
+  // Per-source turn policies: when a turn's InboundEvent.source matches a key, that
+  // policy applies — an overlay appended to (or, under mode "replace", replacing) the
+  // system prompt, and/or a mechanical tool-deny list (see ChannelPolicy). A bare
+  // string is the classic overlay-only form. Lets ONE shared agent branch its
+  // behavior by real, unforgeable channel source — no userText markers.
+  private readonly channelInstructions?: Record<string, string | ChannelPolicy>;
+  constructor(agent: string, id: string, store: SessionStore, sink: EventSink, model: Model, tools: Tool[], runtime: Runtime, channelInstructions?: Record<string, string | ChannelPolicy>) {
     this.agent = agent;
     this.id = id;
     this.store = store;
@@ -770,7 +800,8 @@ export class AgentSession {
     // one — they unwind at their next checkpoint boundary, then this turn runs. Ordered
     // after the suspended check on purpose: replace never cancels a parked approval.
     if (input.replace) this.cancelPending("replaced");
-    const systemOverlay = input.event ? this.channelInstructions?.[input.event.source] : undefined;
+    const rawPolicy = input.event ? this.channelInstructions?.[input.event.source] : undefined;
+    const policy: ChannelPolicy | undefined = typeof rawPolicy === "string" ? { overlay: rawPolicy } : rawPolicy;
     const run = () => {
       // Run-time re-check of the park: the start()-time check can be stale by the time the
       // chain reaches this turn — an EARLIER queued turn may have parked meanwhile, or a
@@ -789,7 +820,7 @@ export class AgentSession {
         this.model,
         this.tools,
         { turnId, userText: input.userText, crash: input.crash, cancelled: () => this.cancelRequests.get(turnId) },
-        { runtime: this.runtime, agent: this.agent, sessionId: this.id, event: input.event, systemOverlay, trigger: input.trigger },
+        { runtime: this.runtime, agent: this.agent, sessionId: this.id, event: input.event, systemOverlay: policy?.overlay, systemMode: policy?.overlayMode, deniedTools: policy?.denyTools, trigger: input.trigger },
       );
     };
     this.track(turnId, this.chain.then(run));
@@ -885,7 +916,7 @@ export class AgentSession {
         this.model,
         this.tools,
         { turnId, userText: suspended.userText, cancelled: () => this.cancelRequests.get(turnId) },
-        { runtime: this.runtime, agent: this.agent, sessionId: this.id, event: suspended.event, systemOverlay: suspended.systemOverlay, trigger: { kind: "resume", callId: suspended.callId } },
+        { runtime: this.runtime, agent: this.agent, sessionId: this.id, event: suspended.event, systemOverlay: suspended.systemOverlay, systemMode: suspended.systemMode, deniedTools: suspended.deniedTools, trigger: { kind: "resume", callId: suspended.callId } },
       );
     this.track(turnId, this.chain.then(run));
     return { turnId };
