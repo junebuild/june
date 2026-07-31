@@ -150,11 +150,14 @@ export function createWorker(
 
   // The worker's env (D1/KV/R2 bindings) arrives per fetch and is stable across
   // requests in an isolate; we capture the latest and hand it to the env-aware
-  // provider, which memoizes the opened handles on first call. The execution
-  // context is per-invocation (waitUntil extends THAT invocation) — captured
-  // alongside, consumed by the channel surface below.
+  // provider, which memoizes the opened handles on first call. That "latest"
+  // pattern is safe ONLY for per-isolate-stable values — concurrent fetches
+  // interleave at await points, so anything per-INVOCATION (the execution
+  // context, and env used at a specific moment) must come from request-scoped
+  // storage instead: `requestLocals`, keyed by the Request identity that flows
+  // unchanged from fetch() through the pipeline to the agent surface.
   let currentEnv: unknown;
-  let currentCtx: WorkerExecutionContext | undefined;
+  const requestLocals = new WeakMap<Request, { env: unknown; ctx?: WorkerExecutionContext }>();
   const provider = manifest.resources;
 
   // App services: the build sets a raw `(env) => services` factory here; memoize it per
@@ -172,24 +175,31 @@ export function createWorker(
     manifest.agent.runtime.enabled && manifest.agentName
       ? (() => {
           const agentName = manifest.agentName;
-          const ns = () => (currentEnv as { AGENT?: DurableObjectNamespace } | undefined)?.AGENT;
-          const chat = durableAgentSurface(ns, { agentName, chatPath: manifest.agent.runtime.chat.path });
           const wantChannels = manifest.agent.runtime.channels !== false && (manifest.agentChannels?.length ?? 0) > 0;
           return async (req: Request): Promise<Response | null> => {
+            // REQUEST-scoped, not isolate-scoped: the pipeline awaits between
+            // fetch() and this call, so a concurrent fetch may have run since —
+            // a module-level "current request" variable here would hand this
+            // webhook ANOTHER request's env (wrong AGENT namespace, factories
+            // resolved against foreign secrets) and register its background
+            // work on another invocation's waitUntil. Everything below reads
+            // THIS request's locals.
+            const locals = requestLocals.get(req);
+            const ns = () => (locals?.env as { AGENT?: DurableObjectNamespace } | undefined)?.AGENT;
+            const chat = durableAgentSurface(ns, { agentName, chatPath: manifest.agent.runtime.chat.path });
             const chatRes = await chat(req);
             if (chatRes) return chatRes;
             if (!wantChannels) return null;
-            // Constructed per request — env only exists inside an invocation and
-            // waitUntil belongs to THIS invocation. Cheap by design:
-            // resolveChannel is a call, and resolveServices memoizes the app
-            // services bag per (env, agentName), exactly for this construction
-            // pattern (see durableChannelSurface's services doc).
+            // Constructed per request — cheap by design: resolveChannel is a
+            // call, and resolveServices memoizes the app services bag per
+            // (env, agentName), exactly for this construction pattern (see
+            // durableChannelSurface's services doc).
             const channels = durableChannelSurface(ns, {
               agentName,
               channels: manifest.agentChannels!,
-              env: currentEnv,
+              env: locals?.env,
               services: servicesProvider,
-              waitUntil: currentCtx?.waitUntil?.bind(currentCtx),
+              waitUntil: locals?.ctx?.waitUntil?.bind(locals.ctx),
             });
             return channels(req);
           };
@@ -262,8 +272,8 @@ export function createWorker(
 
   return {
     fetch(request, env, ctx) {
-      currentEnv = env;
-      currentCtx = ctx;
+      currentEnv = env; // per-isolate-stable consumers only (resources/services)
+      requestLocals.set(request, { env, ctx }); // per-invocation consumers (agent surface)
       return pipeline.fetch(request);
     },
   };

@@ -122,6 +122,44 @@ describe("agent channel webhooks on the worker (edge)", () => {
     expect(seen.hasWaitUntil).toBe(true); // the execution context reached the channel
   });
 
+  test("interleaved fetches keep request-scoped env and waitUntil (no cross-request bleed)", async () => {
+    // Two fetches in flight at once: A (the webhook) and B (any other request,
+    // fired synchronously after A, finishing first). The pipeline awaits between
+    // fetch entry and the agent surface, so an isolate-level "current request"
+    // variable would hand A's webhook B's env/ctx — the regression this pins.
+    const manifest = await buildManifest(FIXTURE_ROOT);
+    manifest.agentName = "ops";
+    const seen: { mark?: string }[] = [];
+    const hook = (env: unknown): Channel => ({
+      name: "hook",
+      path: "/channels/hook",
+      webhook: async (_req, ctx) => {
+        ctx.waitUntil?.(Promise.resolve()); // background work → THIS invocation's ctx
+        seen.push({ mark: (env as { MARK?: string }).MARK });
+        return Response.json({ ok: true });
+      },
+    });
+    manifest.agentChannels = [hook];
+    const worker = createWorker(manifest);
+    const { ns } = fakeAgentNS();
+    const waitedA: Promise<unknown>[] = [];
+    const waitedB: Promise<unknown>[] = [];
+
+    const a = worker.fetch(
+      new Request(ORIGIN + "/channels/hook", { method: "POST", body: "{}" }),
+      { AGENT: ns, MARK: "A" },
+      { waitUntil: (p) => void waitedA.push(p) },
+    );
+    const b = worker.fetch(new Request(ORIGIN + "/no-such-route"), { AGENT: ns, MARK: "B" }, { waitUntil: (p) => void waitedB.push(p) });
+    const [ra, rb] = await Promise.all([a, b]);
+
+    expect(ra.status).toBe(200);
+    expect(rb.status).toBe(404);
+    expect(seen[0]!.mark).toBe("A"); // the factory resolved with A's env, not B's
+    expect(waitedA.length).toBe(1); // A's background work landed on A's invocation
+    expect(waitedB.length).toBe(0);
+  });
+
   test("agent.runtime.channels: false keeps webhooks unmounted (chat unaffected)", async () => {
     const manifest = await buildManifest(FIXTURE_ROOT);
     manifest.agentName = "ops";
