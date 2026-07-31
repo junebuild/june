@@ -72,6 +72,10 @@ describe("june build with app/agent/", () => {
     // runtime module resolution.
     expect(entry).toContain(`import Anthropic from "@anthropic-ai/sdk";`);
     expect(entry).toContain("client: new Anthropic(");
+    // Channel webhooks (#139): the manifest carries the compiled channels, and
+    // the shared definition is assembled BEFORE createWorker consumes it.
+    expect(entry).toContain("agentChannels: __agentDef.channels,");
+    expect(entry.indexOf("const __agentDef = assembleDurable(__agentModule);")).toBeLessThan(entry.indexOf("const pipeline = createWorker("));
   });
 
   test("the bundled worker carries the DO class; cloudflare:workers stays external", () => {
