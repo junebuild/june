@@ -561,9 +561,19 @@ export async function juneBuild(
     // STATIC import bundles it (@junejs/core treats it as an optional peer; the
     // adapter's own lazy import can never be bundled). Fail the build with the
     // fix, never ship a worker whose first model turn dies on a bare import.
-    try {
-      Bun.resolveSync("@anthropic-ai/sdk", appRoot);
-    } catch {
+    // An explicit node_modules walk, not a resolver API: the check must behave
+    // identically on every host (Bun.resolveSync missed a symlinked scoped
+    // package on Linux CI that it found on macOS), and Rolldown does its own
+    // resolution at bundle time anyway — this is a preflight, not the resolver.
+    const sdkResolvable = (fromDir: string): boolean => {
+      for (let d = fromDir; ; ) {
+        if (existsSync(join(d, "node_modules", "@anthropic-ai", "sdk", "package.json"))) return true;
+        const parent = dirname(d);
+        if (parent === d) return false;
+        d = parent;
+      }
+    };
+    if (!sdkResolvable(appRoot)) {
       throw new Error(
         `app/${frozen.agent.runtime.dir}/ mounts a durable agent whose model is Claude — ` +
           `add the SDK to the app so it bundles for workerd: bun add @anthropic-ai/sdk`,
