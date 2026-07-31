@@ -22,6 +22,7 @@
     "agent-compile",
     "agent-edge-channels",
     "agent-preflight-resolve",
+    "cache-bun-import",
     "channel-capabilities",
     "channel-hardening",
     "channel-hooks-round2",
