@@ -233,6 +233,17 @@ describe("assembleDurable", () => {
       }),
     ).toThrow(/duplicate tool name "x"/);
   });
+
+  test("passes connection DEFINITIONS through — the DO wires them lazily", () => {
+    // The bridge a generated or hand-written shell relies on: dropping it would
+    // silently lose every outbound tool while direct-DoAgentDef tests stay green.
+    const weather = { kind: "mcp", name: "weather", url: "https://mcp.example/api" } as const;
+    const def = assembleDurable({
+      config: { name: "ops" }, instructions: "i",
+      tools: [], skills: [], channels: {}, channelInstructions: {}, connections: [weather],
+    });
+    expect(def.connections).toEqual([weather]);
+  });
 });
 
 // ── actionToTool identity bridging: ToolContext.principal → ActionContext.user ──
