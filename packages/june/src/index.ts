@@ -91,6 +91,14 @@ export {
   freezeConfig,
   type BuildResult,
 } from "./build";
+export {
+  generateAgentModule,
+  findAgentDir,
+  scanAgentDir,
+  emitAgentModule,
+  AGENT_MODULE_FILE,
+  type AgentDirScan,
+} from "./agent-compile";
 export { juneDeploy, type DeployResult } from "./deploy";
 export { migrateD1, wranglerD1, resolveD1Database, type D1Exec } from "./d1-migrate";
 export { startDevServer, type DevServer, type DevServerOptions } from "./dev";

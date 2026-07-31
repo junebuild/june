@@ -44,10 +44,17 @@ describe("discoverAgent", () => {
       "create_order", "read_skill", "slack_add_reaction", "slack_list_reactions", "slack_read_thread", "slack_resolve_user",
     ]);
     expect(agent.skills).toEqual([
-      { name: "bulk_reorder", description: "Reorder many items at once from a supplier list, checking stock first.", body: expect.stringContaining("Read the supplier list") },
+      {
+        name: "bulk_reorder",
+        description: "Reorder many items at once from a supplier list, checking stock first.",
+        whenToUse: "The user pastes a supplier list or asks to restock more than one item.",
+        body: expect.stringContaining("Read the supplier list"),
+      },
     ]);
     // channels discovered too (a plain http channel + a factory-built slack one)
     expect(agent.channels.map((c) => c.name).sort()).toEqual(["http", "slack"]);
+    // channels/slack.md rides along as the slack-source system overlay
+    expect(agent.channelInstructions).toEqual({ slack: expect.stringContaining("operator Slack channel") });
   });
 
   test("resolves a Shape-B (env)=>Channel factory channel from process.env (native)", async () => {
