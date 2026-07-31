@@ -59,6 +59,10 @@ instead of the scripted model — same loop, real tool-calling.
 
 After editing anything under `agent/`, run `june gen` (or
 `bunx june gen`) to refresh `_agent.gen.ts`; CI can enforce freshness with
-`june gen --check`. Auto-generating the DO + wrangler binding during
-`june build` (zero worker glue, as on native) is the remaining
-build-integration step.
+`june gen --check`.
+
+Note: a full June app doesn't need any of this worker glue — `june build`
+compiles `app/agent/`, exports the DO class from its generated entry, and
+emits the wrangler bindings automatically. This example is the
+**wrangler-first** pattern: a standalone worker (no June app around it)
+consuming the compiled module directly.
