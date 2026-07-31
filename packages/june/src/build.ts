@@ -555,6 +555,21 @@ export async function juneBuild(
       );
     }
   }
+  if (agentModule) {
+    // The generated DO's model is Claude, and workerd has no runtime module
+    // resolution — the SDK must be a real dependency of the app so the entry's
+    // STATIC import bundles it (@junejs/core treats it as an optional peer; the
+    // adapter's own lazy import can never be bundled). Fail the build with the
+    // fix, never ship a worker whose first model turn dies on a bare import.
+    try {
+      Bun.resolveSync("@anthropic-ai/sdk", appRoot);
+    } catch {
+      throw new Error(
+        `app/${frozen.agent.runtime.dir}/ mounts a durable agent whose model is Claude — ` +
+          `add the SDK to the app so it bundles for workerd: bun add @anthropic-ai/sdk`,
+      );
+    }
+  }
 
   // Compile the global stylesheet ONCE and content-hash it: the built worker and
   // prerendered HTML link `/global.<hash>.css`, served immutable (cache forever,
@@ -772,6 +787,10 @@ export async function juneBuild(
     imports.push(`import { anthropic } from "@junejs/core/agent-models";`);
     imports.push(`import { AgentDurableObject } from "@junejs/server/agent-durable";`);
     imports.push(`import { DurableObject } from "cloudflare:workers";`);
+    // STATIC so Rolldown bundles the SDK (the adapter's own import is a
+    // non-literal lazy specifier — deliberately unbundleable); injected via
+    // anthropic({ client }), which skips that lazy path entirely.
+    imports.push(`import Anthropic from "@anthropic-ai/sdk";`);
   }
   const agentNameField = agentModule ? `\n  agentName: __agentModule.config.name,` : "";
   const doClass = agentModule
@@ -781,12 +800,14 @@ export async function juneBuild(
 // the assembled system prompt, channel factories resolved with the DO's own
 // env, and the app's declared resources opened from THIS isolate's env (lazily,
 // at the first turn — the same ambient db a tool sees in native dev). Model:
-// Anthropic, keyed by the ANTHROPIC_API_KEY secret.
+// Anthropic over a statically bundled client (workerd cannot resolve a bare
+// import at runtime), keyed by the ANTHROPIC_API_KEY secret — a missing secret
+// surfaces as the SDK's own clear construction error on the first agent request.
 const __agentDef = assembleDurable(__agentModule);
 export class JuneAgentDO extends DurableObject {
   #agent = new AgentDurableObject(this.ctx, {
     ...__agentDef,
-    model: anthropic({ model: __agentModule.config.model, apiKey: (this.env as { ANTHROPIC_API_KEY?: string }).ANTHROPIC_API_KEY }),
+    model: anthropic({ model: __agentModule.config.model, client: new Anthropic({ apiKey: (this.env as { ANTHROPIC_API_KEY?: string }).ANTHROPIC_API_KEY }) }),
     env: this.env,${resourcesExpr ? `\n    resources: ${resourcesExpr},` : ""}${servicesModule ? "\n    services: __appServices(this.env)," : ""}
   });
   fetch(req: Request): Promise<Response> {

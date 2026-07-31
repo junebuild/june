@@ -59,6 +59,11 @@ describe("june build with app/agent/", () => {
     expect(entry).toContain("export class JuneAgentDO extends DurableObject");
     expect(entry).toContain(`import { DurableObject } from "cloudflare:workers";`);
     expect(entry).toContain("assembleDurable(__agentModule)");
+    // The SDK is imported STATICALLY and injected as anthropic({ client }) — the
+    // adapter's own lazy non-literal import can never bundle, and workerd has no
+    // runtime module resolution.
+    expect(entry).toContain(`import Anthropic from "@anthropic-ai/sdk";`);
+    expect(entry).toContain("client: new Anthropic(");
   });
 
   test("the bundled worker carries the DO class; cloudflare:workers stays external", () => {
