@@ -51,7 +51,13 @@ done
 # in the shipped dist breaks every Workers consumer at build time (#141). The
 # source guards this with a data-indirected specifier; assert tsdown didn't
 # constant-fold it back (it folded a plain `const s = "bun"; import(s)` once).
+# The smoke tarballs above are packed WITHOUT dist (publish.yml builds before
+# packing) — build core here, the same pre-pack step publish runs, so the
+# inspected artifact is the one npm consumers actually get.
 echo "→ verifying the packed core dist carries no literal runtime-only imports"
+(cd packages/core && bun run build >/dev/null 2>&1) || { echo "✘ @junejs/core build failed"; exit 1; }
+(cd packages/core && bun pm pack --quiet >/dev/null 2>&1)
+rm -f "$work"/junejs-core-*.tgz && mv packages/core/*.tgz "$work/"
 core_dist=$(tar -xzOf "$work"/junejs-core-*.tgz package/dist/cache.js) || {
   echo "✘ could not read dist/cache.js from the packed @junejs/core"
   exit 1
