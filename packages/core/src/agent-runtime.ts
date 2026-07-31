@@ -145,7 +145,9 @@ export function withSystem(model: Model, system: string): Model {
   return (msgs, tools, opts) => {
     const { systemMode, ...rest } = opts ?? {};
     const finalSystem =
-      systemMode === "replace" && opts?.system ? opts.system : [system, opts?.system].filter(Boolean).join("\n\n");
+      systemMode === "replace" && opts?.system !== undefined
+        ? opts.system // replace consumes ANY supplied overlay, empty string included
+        : [system, opts?.system].filter(Boolean).join("\n\n");
     return model(msgs, tools, { ...rest, system: finalSystem });
   };
 }
@@ -560,7 +562,7 @@ async function modelStep(
   // reply from partial text/tool deltas.
   let reply: ModelReply | undefined;
   let finish: ModelFinish | undefined;
-  for await (const d of model(msgs, specs, systemOverlay ? { system: systemOverlay, ...(systemMode ? { systemMode } : {}) } : undefined)) {
+  for await (const d of model(msgs, specs, systemOverlay !== undefined ? { system: systemOverlay, ...(systemMode ? { systemMode } : {}) } : undefined)) {
     // Cancelled mid-stream: nothing persisted for this step, so throwing here (which
     // closes the provider iterator via for-await's return()) just discards the partial
     // reply — the checkpoint machine treats it like a model call that never happened.
