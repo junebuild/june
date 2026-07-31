@@ -252,6 +252,15 @@ export function generateAgentModule(
       `[june] deprecated: channels/${o.source}.md — move it to instructions.${o.source}.md at the agent root (per-surface behavior is agent-level; see junebuild/june#149).`,
     );
   }
+  // A variant-shaped file the grammar doesn't parse yet must never be silently
+  // inert (the same failure class this whole convention exists to kill).
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    if (e.isFile() && /^instructions\..+\.md$/.test(e.name) && !/^instructions\.[a-z0-9_-]+\.md$/.test(e.name)) {
+      console.warn(
+        `[june] ${e.name}: unrecognized instructions variant — only single-segment sources (instructions.<source>.md) are parsed today; locale variants are a planned follow-up (junebuild/june#149). This file is ignored.`,
+      );
+    }
+  }
   const code = emitAgentModule(scan, { tsExtensions: opts?.tsExtensions ?? sniffTsExtensions(dir) });
   const file = join(dir, AGENT_MODULE_FILE);
   const existing = existsSync(file) ? readFileSync(file, "utf8") : null;
