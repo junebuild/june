@@ -2,9 +2,11 @@
 
 A deployable example of June's durable agent runtime on the **edge**: one Durable
 Object per session, the durable loop committing to the DO's synchronous
-`ctx.storage.sql`. It uses the real `@junejs/*` packages — the same
-`AgentDurableObject` + `durableAgentSurface` the framework build will eventually
-generate for you.
+`ctx.storage.sql`. The agent DEFINITION lives in the `agent/` directory —
+`agent.ts`, `instructions.md`, `tools/`, `channels/` — the same convention
+native discovery mounts in dev; `june gen` compiles it into
+`agent/_agent.gen.ts` (static imports, prose inlined) so it bundles for
+workerd, where fs discovery can't run.
 
 > Editor types: `cloudflare:workers` types come from `@cloudflare/workers-types`
 > — add it locally (`bun add -d @cloudflare/workers-types`) for editor
@@ -41,12 +43,22 @@ instead of the scripted model — same loop, real tool-calling.
 
 ## What's here
 
-- `worker.ts` — exports `JuneAgentDO` (the DO shell → `AgentDurableObject`) and a
-  fetch handler that routes `POST /message` to the session's DO
-  (`durableAgentSurface`). A `create_order` `defineAction` is the agent's tool.
+- `agent/` — the agent definition, as a directory: `agent.ts` (config),
+  `instructions.md`, `tools/create_order.ts` (a `defineAction`),
+  `channels/crisp.ts` (a `(env) => Channel` factory). Edit these, then
+  regenerate.
+- `agent/_agent.gen.ts` — the compiled module (`june gen`; checked in). Static
+  imports + inlined prose; skills would mount here too (`read_skill` is added
+  automatically when `skills/*.md` exist).
+- `worker.ts` — the app's genuine remainder: the `JuneAgentDO` shell wiring
+  `assembleDurable(agentModule)` + the model to `AgentDurableObject`, and the
+  fetch handler routing `POST /message` (`durableAgentSurface`) and
+  `POST /channels/crisp` (`durableChannelSurface`).
 - `wrangler.jsonc` — the `AGENT` Durable Object binding + the `new_sqlite_classes`
   migration (SQLite-backed DO).
 
-Note: this hand-written worker is the current edge pattern. Auto-generating it
-from an `agent/` directory during `june build` (so you write zero worker glue, as
-on native) is the remaining build-integration step.
+After editing anything under `agent/`, run `june gen` (or
+`bunx june gen`) to refresh `_agent.gen.ts`; CI can enforce freshness with
+`june gen --check`. Auto-generating the DO + wrangler binding during
+`june build` (zero worker glue, as on native) is the remaining
+build-integration step.
