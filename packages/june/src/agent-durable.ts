@@ -208,7 +208,11 @@ export type DoAgentDef = {
   // channel factories you mount on the worker, plus this DO's env.
   channels?: (Channel | ChannelFactory)[];
   env?: unknown;
-  resources?: Resources;
+  // A resolved bag, OR an env-driven — possibly async — provider
+  // (bindWorkerResources' shape): opening a D1 handle is async and a DO
+  // constructor cannot await, so a provider is resolved lazily at the first
+  // turn (once per DO instance) with this def's `env`.
+  resources?: Resources | ((env: unknown) => Promise<Resources> | Resources);
   services?: unknown;
   // Called on every turn.failed for this session — the app's seam for routing turn
   // failures to its own telemetry (Sentry, a ledger, …). Providing it REPLACES the
@@ -253,15 +257,25 @@ export class AgentDurableObject {
   private readonly tools: Tool[];
   private readonly channels: Channel[];
   private readonly channelInstructions?: Record<string, string>;
-  // Built from the DO's env in the constructor (this isolate), shared across turns —
-  // env is stable per isolate, like bindWorkerResources memoizes per worker isolate.
-  private readonly resources: Resources;
+  // A bag is used as-is; a provider (bindWorkerResources' shape) is resolved
+  // lazily at the first turn with the def's env — opening a D1 handle is async
+  // and this constructor cannot await. Resolved once, shared across turns (env
+  // is stable per isolate, like bindWorkerResources memoizes per worker isolate).
+  private readonly resourcesInput: DoAgentDef["resources"];
+  private resourcesOpened: Promise<Resources> | undefined;
+  private readonly doEnv: unknown;
   private readonly services: unknown;
+  private resolveResources(): Promise<Resources> {
+    return (this.resourcesOpened ??= Promise.resolve(
+      typeof this.resourcesInput === "function" ? this.resourcesInput(this.doEnv) : (this.resourcesInput ?? {}),
+    ));
+  }
   constructor(state: DurableObjectState, def: DoAgentDef) {
     assertCoreRuntimeVersion(`AgentDurableObject(${def.name ?? "agent"})`); // #94: fail power-on, not mid-turn
     const store = new DoSessionStore(state.storage);
     const model = def.instructions ? withSystem(def.model, def.instructions) : def.model;
-    this.resources = def.resources ?? {};
+    this.resourcesInput = def.resources;
+    this.doEnv = def.env;
     this.services = def.services;
     const name = def.name ?? "agent";
     // Failure observability (#76): a turn that dies after the fast-ACK has no other
@@ -368,8 +382,9 @@ export class AgentDurableObject {
   // pipeline does; without it runInScope is a pass-through and ambient reads throw.
   async turn(input: { turnId?: string; userText: string; event?: InboundEvent; trigger?: ProactiveTrigger; session?: string }): Promise<string> {
     await ensureScope();
+    const resources = await this.resolveResources();
     const session = this.resolveSession(input.session);
-    return runInScope({ resources: this.resources, services: this.services }, () => session.turn(input));
+    return runInScope({ resources, services: this.services }, () => session.turn(input));
   }
   // Fire-and-forget for custom shells (#77): resolves once the turn is durably ACCEPTED;
   // it then runs under the DO's own lifetime (a DO stays alive while it has pending
@@ -377,8 +392,9 @@ export class AgentDurableObject {
   // the default turn-failure log / onTurnError (#76).
   async start(input: { turnId?: string; userText: string; event?: InboundEvent; trigger?: ProactiveTrigger; session?: string }): Promise<{ turnId: string }> {
     await ensureScope();
+    const resources = await this.resolveResources();
     const session = this.resolveSession(input.session);
-    return runInScope({ resources: this.resources, services: this.services }, () => session.start(input));
+    return runInScope({ resources, services: this.services }, () => session.start(input));
   }
   // Session reset (#129) for custom shells — the direct sibling of the /reset route. No
   // scope needed: reset touches only the store (no tools run).
@@ -432,12 +448,14 @@ export class AgentDurableObject {
       }
       // start() schedules the turn on the chain WITHIN the scope, so it runs with ambient
       // db/services (ALS propagates to the .then continuation registered here); subscribing
-      // happens synchronously right after, before any event can emit.
+      // happens synchronously right after, before any event can emit. Resources resolve
+      // BEFORE this block — the section from start() to the subscription stays synchronous.
+      const resources = await this.resolveResources();
       let session: AgentSession;
       let started: { turnId: string };
       try {
         session = this.resolveSession(key);
-        started = runInScope({ resources: this.resources, services: this.services }, () => session.start({ userText, turnId, event, trigger, replace }));
+        started = runInScope({ resources, services: this.services }, () => session.start({ userText, turnId, event, trigger, replace }));
       } catch (err) {
         // e.g. the session is suspended awaiting input, or the key mis-matches this
         // object's identity — a client-resolvable conflict, not a crash
@@ -470,7 +488,7 @@ export class AgentDurableObject {
           const events: AsyncIterable<TurnEvent> = { [Symbol.asyncIterator]: () => it };
           const target = { channelId: event!.channelId, threadId: event!.threadId, recipientUserId: event!.user?.id, recipientTeamId: event!.teamId };
           Promise.resolve()
-            .then(() => runInScope({ resources: this.resources, services: this.services }, () => deliverChannel!.deliver!(target, events, { session: this.sessionKey })))
+            .then(() => runInScope({ resources, services: this.services }, () => deliverChannel!.deliver!(target, events, { session: this.sessionKey })))
             .catch(logRenderFailure)
             .finally(() => { void it.return?.(); });
         } catch (err) {
@@ -515,10 +533,13 @@ export class AgentDurableObject {
           );
         }
       }
+      // Same discipline as /turn: resolve resources before the synchronous
+      // resume-then-subscribe section.
+      const resources = await this.resolveResources();
       let session: AgentSession;
       try {
         session = this.resolveSession(key);
-        runInScope({ resources: this.resources, services: this.services }, () => session.resume(turnId, inputId, input, { by }));
+        runInScope({ resources, services: this.services }, () => session.resume(turnId, inputId, input, { by }));
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         // 403: the resumer may not answer; 409: not suspended / wrong turn / wrong input id / key mismatch
@@ -538,7 +559,7 @@ export class AgentDurableObject {
           const it = observeTurnEvents(session, turnId)[Symbol.asyncIterator]();
           const events: AsyncIterable<TurnEvent> = { [Symbol.asyncIterator]: () => it };
           Promise.resolve()
-            .then(() => runInScope({ resources: this.resources, services: this.services }, () => resumeChannel!.deliverResume!(target!, events, { session: this.sessionKey })))
+            .then(() => runInScope({ resources, services: this.services }, () => resumeChannel!.deliverResume!(target!, events, { session: this.sessionKey })))
             .catch(logRenderFailure)
             .finally(() => { void it.return?.(); });
         } catch (err) {
