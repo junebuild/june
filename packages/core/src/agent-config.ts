@@ -323,9 +323,10 @@ export type AgentDefinition = {
   // Per-channel-source turn policies. When a turn's InboundEvent.source (e.g. "slack")
   // matches a key, that policy applies — overlay appended to (or replacing) the system
   // prompt, denyTools removed mechanically — so ONE shared agent branches its behavior
-  // by the real, unforgeable inbound source instead of a userText marker. DERIVED from
-  // each channel's own overlay/overlayMode/denyTools declarations (#149); the map form
-  // remains as the programmatic escape hatch. Applied by the runtime (AgentSession).
+  // by the real, unforgeable inbound source instead of a userText marker. DERIVED at
+  // assembly from the AGENT-LEVEL pieces (#149): instructions.<source>.md variants +
+  // agent.ts `surfaces` mechanics (channels are pure transport and declare nothing);
+  // the map form remains as the programmatic escape hatch. Applied by AgentSession.
   channelInstructions?: Record<string, string | ChannelPolicy>;
   // report of external connections wired in (their tools are already in `tools`)
   connections: ConnectionReport[];
@@ -492,7 +493,9 @@ export type AgentModule = {
   // Agent-level surface instruction variants (#149): instructions.<source>.md
   // prose, keyed by source. Composition/deny mechanics live in
   // config.surfaces; assembly derives the per-source policies from both.
-  surfaceInstructions: Record<string, string>;
+  // OPTIONAL for source compatibility: modules generated before this field
+  // existed (and hand-authored ones) stay valid; new generations emit {}.
+  surfaceInstructions?: Record<string, string>;
   // Source-keyed policies from the LEGACY channels/<source>.md convention and
   // programmatic entries — the escape hatch; instructions.<source>.md +
   // config.surfaces are the preferred form.
