@@ -17,9 +17,18 @@ import type { DocumentConfig } from "@junejs/core/document";
 import type { I18nConfig } from "@junejs/core/i18n";
 import type { Resources } from "@junejs/core/resources";
 
+import type { Channel, ChannelFactory } from "@junejs/core/agent-config";
+
 import { createPipeline, type ExtraHandler, type LayoutComponent, type LoadingComponent, type Resolved, type ResolvedResource, type ResourceHandler } from "./pipeline";
-import { durableAgentSurface, type DurableObjectNamespace } from "./agent-durable";
+import { durableAgentSurface, durableChannelSurface, type DurableObjectNamespace } from "./agent-durable";
 import { contentTypeFor, RESERVED_PREFIX, safeRelativePath } from "./static-files";
+
+// The slice of workerd's ExecutionContext the worker threads through: webhook
+// channels ACK fast and finish their work (post the reply out-of-band) on
+// waitUntil — without it a floating promise can be killed when the isolate is
+// reclaimed. Optional end to end; a host without it (tests, other targets)
+// simply doesn't extend the invocation.
+export type WorkerExecutionContext = { waitUntil?(p: Promise<unknown>): void };
 
 export type WorkerManifest = {
   // Static paths → route definitions ("/", "/users", ...).
@@ -45,6 +54,13 @@ export type WorkerManifest = {
   // by the build when an agent/ directory exists; absent → no durable agent on
   // the edge. The DO namespace binding is `env.AGENT`.
   agentName?: string;
+  // The agent's channels (Channel or `(env) => Channel` factories, from the
+  // compiled agent module) — mounted as webhook routes on the worker via
+  // durableChannelSurface when agent.runtime.channels is on. The SAME factories
+  // are also wired into the DO (DoAgentDef.channels) by the generated entry, so
+  // capability tools and host-side delivery work; this field is the WORKER half
+  // (verify the webhook, run the turn on the DO, reply on waitUntil).
+  agentChannels?: (Channel | ChannelFactory)[];
   // Locale routing config, frozen from june.config.ts `i18n`. The locales table
   // is plain data; a `resolveLocale` hook survives the in-process freeze (parity
   // test) but not JSON codegen — worker hook support lands with the codegen pass.
@@ -111,7 +127,7 @@ function compilePattern(pattern: string): { regex: RegExp; names: string[] } {
 
 export function createWorker(
   manifest: WorkerManifest,
-): { fetch(request: Request, env?: unknown): Promise<Response> } {
+): { fetch(request: Request, env?: unknown, ctx?: WorkerExecutionContext): Promise<Response> } {
   const dynamic: Compiled[] = (manifest.dynamicRoutes ?? []).map((d) => ({
     ...compilePattern(d.pattern),
     def: d.def,
@@ -134,8 +150,11 @@ export function createWorker(
 
   // The worker's env (D1/KV/R2 bindings) arrives per fetch and is stable across
   // requests in an isolate; we capture the latest and hand it to the env-aware
-  // provider, which memoizes the opened handles on first call.
+  // provider, which memoizes the opened handles on first call. The execution
+  // context is per-invocation (waitUntil extends THAT invocation) — captured
+  // alongside, consumed by the channel surface below.
   let currentEnv: unknown;
+  let currentCtx: WorkerExecutionContext | undefined;
   const provider = manifest.resources;
 
   // App services: the build sets a raw `(env) => services` factory here; memoize it per
@@ -144,18 +163,36 @@ export function createWorker(
   const servicesProvider = manifest.services;
   let servicesCache: { v: unknown } | undefined;
 
-  // Durable agent (edge): route the chat endpoint to the per-session DO bound at
-  // env.AGENT. Built only when the app has an agent (manifest.agentName) and the
-  // runtime is enabled; the surface is inert (null → fall through) until env.AGENT
-  // is present, so a worker without the DO binding is unaffected.
+  // Durable agent (edge): route the chat endpoint — and the agent's channel
+  // webhooks — to the per-session DO bound at env.AGENT. Built only when the app
+  // has an agent (manifest.agentName) and the runtime is enabled; the surface is
+  // inert (null → fall through) until env.AGENT is present, so a worker without
+  // the DO binding is unaffected.
   const agentSurface =
     manifest.agent.runtime.enabled && manifest.agentName
       ? (() => {
-          const route = durableAgentSurface(
-            () => (currentEnv as { AGENT?: DurableObjectNamespace } | undefined)?.AGENT,
-            { agentName: manifest.agentName, chatPath: manifest.agent.runtime.chat.path },
-          );
-          return (req: Request) => route(req);
+          const agentName = manifest.agentName;
+          const ns = () => (currentEnv as { AGENT?: DurableObjectNamespace } | undefined)?.AGENT;
+          const chat = durableAgentSurface(ns, { agentName, chatPath: manifest.agent.runtime.chat.path });
+          const wantChannels = manifest.agent.runtime.channels !== false && (manifest.agentChannels?.length ?? 0) > 0;
+          return async (req: Request): Promise<Response | null> => {
+            const chatRes = await chat(req);
+            if (chatRes) return chatRes;
+            if (!wantChannels) return null;
+            // Constructed per request — env only exists inside an invocation and
+            // waitUntil belongs to THIS invocation. Cheap by design:
+            // resolveChannel is a call, and resolveServices memoizes the app
+            // services bag per (env, agentName), exactly for this construction
+            // pattern (see durableChannelSurface's services doc).
+            const channels = durableChannelSurface(ns, {
+              agentName,
+              channels: manifest.agentChannels!,
+              env: currentEnv,
+              services: servicesProvider,
+              waitUntil: currentCtx?.waitUntil?.bind(currentCtx),
+            });
+            return channels(req);
+          };
         })()
       : undefined;
 
@@ -224,8 +261,9 @@ export function createWorker(
   });
 
   return {
-    fetch(request, env) {
+    fetch(request, env, ctx) {
       currentEnv = env;
+      currentCtx = ctx;
       return pipeline.fetch(request);
     },
   };
@@ -241,16 +279,16 @@ export function createWorker(
 // dynamic routes reach the pipeline. With no ASSETS binding (no prerender), this
 // is a transparent pass-through to the pipeline.
 type AssetEnv = { ASSETS?: { fetch(request: Request): Promise<Response> } };
-type FetchPipeline = { fetch(request: Request, env?: unknown): Promise<Response> };
+type FetchPipeline = { fetch(request: Request, env?: unknown, ctx?: WorkerExecutionContext): Promise<Response> };
 
 const estimateTokens = (s: string) => String(Math.ceil(s.length / 4));
 
 export function withAssets(
   pipeline: FetchPipeline,
   opts: { link?: string | null } = {},
-): { fetch(request: Request, env?: AssetEnv): Promise<Response> } {
+): { fetch(request: Request, env?: AssetEnv, ctx?: WorkerExecutionContext): Promise<Response> } {
   return {
-    async fetch(request, env) {
+    async fetch(request, env, ctx) {
       const assets = env?.ASSETS;
       const url = new URL(request.url);
       const isPagePath = !/\.[a-z0-9]+$/i.test(url.pathname); // no file extension
@@ -296,7 +334,7 @@ export function withAssets(
 
       // 3. Dynamic routes → the render pipeline (already sets Link + negotiates).
       // Env flows through so the pipeline's resources get the D1/KV/R2 bindings.
-      return pipeline.fetch(request, env);
+      return pipeline.fetch(request, env, ctx);
     },
   };
 }
