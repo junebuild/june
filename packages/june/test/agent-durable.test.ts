@@ -435,6 +435,37 @@ describe("AgentDurableObject — DI scope (ambient db/services reach a DO tool)"
     expect(countOrders(s)).toBe(1);
   });
 
+  test("connection definitions wire lazily at the first turn; their tools dispatch in the DO (#139)", async () => {
+    // The agent-connected.test.ts MCP mock: initialize → tools/list → tools/call.
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (_url: unknown, init?: { body?: string }) => {
+      const rpc = JSON.parse(init!.body!) as { id: unknown; method: string; params?: { arguments?: { city?: string } } };
+      const reply = (result: unknown) => new Response(JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result }));
+      if (rpc.method === "initialize") return reply({ protocolVersion: "2025-06-18", capabilities: {}, serverInfo: { name: "weather", version: "1" } });
+      if (rpc.method === "tools/list")
+        return reply({ tools: [{ name: "get_weather", description: "Current weather", inputSchema: { type: "object", properties: { city: { type: "string" } }, required: ["city"] } }] });
+      if (rpc.method === "tools/call") return reply({ content: [{ type: "text", text: JSON.stringify({ city: rpc.params?.arguments?.city, tempC: 21 }) }] });
+      return reply({});
+    }) as typeof fetch;
+    try {
+      const s = await storage();
+      // Round 1 calls the CONNECTED tool; round 2 reports whether its RESULT came
+      // back — the assertion rides the final text, no DO internals.
+      const model: Model = (msgs) => {
+        const toolMsg = msgs.find((m) => m.role === "tool" && m.name === "weather__get_weather") as { result?: unknown } | undefined;
+        if (!toolMsg) return replyStream({ text: "checking", toolCalls: [{ id: "c1", name: "weather__get_weather", input: { city: "Taipei" } }] });
+        return replyStream({ text: JSON.stringify(toolMsg.result).includes("21") ? "GOT_WEATHER" : "NO_WEATHER", toolCalls: [] });
+      };
+      const agent = new AgentDurableObject(
+        { storage: s },
+        { name: "ops", model, tools: [], connections: [{ kind: "mcp", name: "weather", url: "https://mcp.example/api" }] },
+      );
+      expect(await agent.turn({ turnId: "t1", userText: "weather in Taipei?" })).toBe("GOT_WEATHER");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
   test("resources may be an async env-driven provider (bindWorkerResources' shape), opened once with the DO's env", async () => {
     const s = await storage();
     const seen: Probe[] = [];

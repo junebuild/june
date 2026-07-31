@@ -35,6 +35,7 @@ import type { Resources } from "@junejs/core/resources";
 import {
   channelDispatch,
   DeliverUnsupportedError,
+  actionToTool,
   resolveChannel,
   type AgentDefinition,
   type Channel,
@@ -42,6 +43,7 @@ import {
   type ChannelFactory,
   type ResumeDeliveryTarget,
 } from "@junejs/core/agent-config";
+import { connectAll, type Connection } from "@junejs/core/connections";
 import { ensureScope, runInScope } from "@junejs/db";
 import { isolateLocal } from "./isolate-local";
 import { assertCoreRuntimeVersion } from "./core-version";
@@ -213,6 +215,12 @@ export type DoAgentDef = {
   // constructor cannot await, so a provider is resolved lazily at the first
   // turn (once per DO instance) with this def's `env`.
   resources?: Resources | ((env: unknown) => Promise<Resources> | Resources);
+  // Outbound connection DEFINITIONS (external MCP/OpenAPI servers). Wiring them
+  // is network I/O (connectAll), which a DO constructor cannot await — resolved
+  // lazily at the first turn, their tools merged into the agent's tool set
+  // before any session is constructed. The native equivalent happens at
+  // assembly (assembleAgent → connectAll).
+  connections?: Connection[];
   services?: unknown;
   // Called on every turn.failed for this session — the app's seam for routing turn
   // failures to its own telemetry (Sentry, a ledger, …). Providing it REPLACES the
@@ -263,6 +271,8 @@ export class AgentDurableObject {
   // is stable per isolate, like bindWorkerResources memoizes per worker isolate).
   private readonly resourcesInput: DoAgentDef["resources"];
   private resourcesOpened: Promise<Resources> | undefined;
+  private readonly connectionsInput: Connection[] | undefined;
+  private connectionsOpened: Promise<void> | undefined;
   private readonly doEnv: unknown;
   private readonly services: unknown;
   private resolveResources(): Promise<Resources> {
@@ -270,11 +280,40 @@ export class AgentDurableObject {
       typeof this.resourcesInput === "function" ? this.resourcesInput(this.doEnv) : (this.resourcesInput ?? {}),
     ));
   }
+  // Wire outbound connections once (network I/O the constructor can't await):
+  // their tools merge into this.tools BEFORE any session is constructed — the
+  // ready() callers hoist this ahead of resolveSession. A failed connection is
+  // reported and skipped (connectAll never throws), matching native assembly.
+  private resolveConnections(): Promise<void> {
+    return (this.connectionsOpened ??= (async () => {
+      if (!this.connectionsInput?.length) return;
+      const { actions, report } = await connectAll(this.connectionsInput);
+      for (const r of report) {
+        if (r.error) console.error(`[june] agent "${this.name}": connection "${r.name}" (${r.url}) failed: ${r.error}`);
+      }
+      const seen = new Set(this.tools.map((t) => t.spec.name));
+      for (const a of actions) {
+        const tool = actionToTool(a);
+        if (seen.has(tool.spec.name)) {
+          throw new Error(`AgentDurableObject(${this.name}): duplicate tool name "${tool.spec.name}" from a connection — rename so dispatch is unambiguous.`);
+        }
+        seen.add(tool.spec.name);
+        this.tools.push(tool);
+      }
+    })());
+  }
+  // Everything a turn needs opened BEFORE its synchronous scope-and-subscribe
+  // section: resources (possibly an async provider) and outbound connections.
+  private async ready(): Promise<Resources> {
+    const [resources] = await Promise.all([this.resolveResources(), this.resolveConnections()]);
+    return resources;
+  }
   constructor(state: DurableObjectState, def: DoAgentDef) {
     assertCoreRuntimeVersion(`AgentDurableObject(${def.name ?? "agent"})`); // #94: fail power-on, not mid-turn
     const store = new DoSessionStore(state.storage);
     const model = def.instructions ? withSystem(def.model, def.instructions) : def.model;
     this.resourcesInput = def.resources;
+    this.connectionsInput = def.connections;
     this.doEnv = def.env;
     this.services = def.services;
     const name = def.name ?? "agent";
@@ -382,7 +421,7 @@ export class AgentDurableObject {
   // pipeline does; without it runInScope is a pass-through and ambient reads throw.
   async turn(input: { turnId?: string; userText: string; event?: InboundEvent; trigger?: ProactiveTrigger; session?: string }): Promise<string> {
     await ensureScope();
-    const resources = await this.resolveResources();
+    const resources = await this.ready();
     const session = this.resolveSession(input.session);
     return runInScope({ resources, services: this.services }, () => session.turn(input));
   }
@@ -392,7 +431,7 @@ export class AgentDurableObject {
   // the default turn-failure log / onTurnError (#76).
   async start(input: { turnId?: string; userText: string; event?: InboundEvent; trigger?: ProactiveTrigger; session?: string }): Promise<{ turnId: string }> {
     await ensureScope();
-    const resources = await this.resolveResources();
+    const resources = await this.ready();
     const session = this.resolveSession(input.session);
     return runInScope({ resources, services: this.services }, () => session.start(input));
   }
@@ -450,7 +489,7 @@ export class AgentDurableObject {
       // db/services (ALS propagates to the .then continuation registered here); subscribing
       // happens synchronously right after, before any event can emit. Resources resolve
       // BEFORE this block — the section from start() to the subscription stays synchronous.
-      const resources = await this.resolveResources();
+      const resources = await this.ready();
       let session: AgentSession;
       let started: { turnId: string };
       try {
@@ -535,7 +574,7 @@ export class AgentDurableObject {
       }
       // Same discipline as /turn: resolve resources before the synchronous
       // resume-then-subscribe section.
-      const resources = await this.resolveResources();
+      const resources = await this.ready();
       let session: AgentSession;
       try {
         session = this.resolveSession(key);
