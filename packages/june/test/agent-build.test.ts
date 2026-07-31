@@ -20,13 +20,21 @@ const FIXTURE = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "app-a
 // The fixture isn't a workspace member, so Rolldown can't resolve @junejs/*
 // from it — link the real packages in (node_modules is gitignored; create the
 // links here, idempotently) so the durable graph genuinely BUNDLES, instead of
-// falling back to unresolved-as-external.
+// falling back to unresolved-as-external. The Anthropic SDK links to a vendored
+// STUB: the build needs resolution + bundling of the entry's static import, not
+// the real transport — and installing the real SDK repo-wide would break core's
+// "helpful error without the optional peer" test.
 function linkJunejs(): void {
   const scope = join(FIXTURE, "node_modules", "@junejs");
   mkdirSync(scope, { recursive: true });
   const packages = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
   for (const [name, dir] of [["core", "core"], ["server", "june"]] as const) {
     if (!existsSync(join(scope, name))) symlinkSync(join(packages, dir), join(scope, name), "dir");
+  }
+  const anthropicScope = join(FIXTURE, "node_modules", "@anthropic-ai");
+  mkdirSync(anthropicScope, { recursive: true });
+  if (!existsSync(join(anthropicScope, "sdk"))) {
+    symlinkSync(join(FIXTURE, "vendor", "anthropic-sdk-stub"), join(anthropicScope, "sdk"), "dir");
   }
 }
 

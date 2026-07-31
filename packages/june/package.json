@@ -144,7 +144,8 @@
     "react-server-dom-webpack": "catalog:",
     "pg": "^8.0.0",
     "mysql2": "^3.0.0",
-    "@libsql/client": "^0.14.0 || ^0.15.0 || ^0.16.0 || ^0.17.0"
+    "@libsql/client": "^0.14.0 || ^0.15.0 || ^0.16.0 || ^0.17.0",
+    "@anthropic-ai/sdk": ">=0.60.0"
   },
   "peerDependenciesMeta": {
     "react-server-dom-webpack": {
@@ -157,6 +158,9 @@
       "optional": true
     },
     "@libsql/client": {
+      "optional": true
+    },
+    "@anthropic-ai/sdk": {
       "optional": true
     }
   },
