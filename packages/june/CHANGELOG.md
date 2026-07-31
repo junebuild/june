@@ -1,5 +1,13 @@
 # @junejs/server
 
+## 1.0.0-dev.17
+
+### Patch Changes
+
+- [#145](https://github.com/junebuild/june/pull/145) [`727c02d`](https://github.com/junebuild/june/commit/727c02ddbb2f1b9eb1a95907752345a93bad751a) Thanks [@linyiru](https://github.com/linyiru)! - Agent SDK preflight: explicit node_modules walk instead of Bun.resolveSync ([#139](https://github.com/junebuild/june/issues/139)).
+
+  The build preflight that verifies `@anthropic-ai/sdk` is installable before emitting the durable-agent entry relied on `Bun.resolveSync`, which missed a symlinked scoped package on Linux while finding it on macOS — the agent-build suite failed on CI and `main`'s check went red. The preflight now walks `node_modules/@anthropic-ai/sdk/package.json` upward from the app root with `existsSync`: identical behavior on every host, symlinks followed. It is a presence check, not the resolver — Rolldown still performs the real resolution at bundle time.
+
 ## 1.0.0-dev.16
 
 ### Patch Changes
