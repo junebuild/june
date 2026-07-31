@@ -86,6 +86,53 @@ export interface JuneAdapter {
   emit(ctx: AdapterEmitContext): Promise<void>;
 }
 
+// Whether an app-owned wrangler config actually BINDS the generated DO class
+// under the binding name createWorker reads (env.AGENT) — not merely mentions
+// the class (a migrations entry does that too, and a binding under another
+// name never reaches the chat route). JSONC is parsed for the real
+// durable_objects.bindings entry; TOML is scanned per
+// [[durable_objects.bindings]] table with comments stripped, so a
+// commented-out binding never counts. The TOML scan covers wrangler's
+// canonical table form; an exotic inline-table config may draw a spurious
+// (advisory) warning, never a suppressed one. Pure — unit-tested directly.
+export function hasDurableBinding(text: string, file: string, binding: string, className: string): boolean {
+  if (file.endsWith(".toml")) {
+    // Strip comments: '#' to end of line, unless inside a double-quoted string.
+    const lines = text.split("\n").map((line) => {
+      let inString = false;
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (ch === '"' && line[i - 1] !== "\\") inString = !inString;
+        else if (ch === "#" && !inString) return line.slice(0, i);
+      }
+      return line;
+    });
+    let inBindings = false;
+    let name: string | undefined;
+    let cls: string | undefined;
+    const matches = () => name === binding && cls === className;
+    for (const line of lines) {
+      const t = line.trim();
+      if (t.startsWith("[")) {
+        if (inBindings && matches()) return true; // the table that just ended bound it
+        inBindings = /^\[\[\s*durable_objects\.bindings\s*\]\]$/.test(t);
+        name = cls = undefined;
+        continue;
+      }
+      if (!inBindings) continue;
+      const kv = t.match(/^(name|class_name)\s*=\s*"([^"]*)"/);
+      if (kv) kv[1] === "name" ? (name = kv[2]) : (cls = kv[2]);
+    }
+    return inBindings && matches();
+  }
+  try {
+    const parsed = JSON.parse(stripJsonc(text)) as { durable_objects?: { bindings?: { name?: string; class_name?: string }[] } };
+    return (parsed.durable_objects?.bindings ?? []).some((b) => b.name === binding && b.class_name === className);
+  } catch {
+    return text.includes(className); // unparsable — loose fallback, never crash the build
+  }
+}
+
 // The built-in default. Reproduces exactly what build.ts emitted inline:
 // withAssets(pipeline) as the entry, and a wrangler.jsonc with the assets
 // binding (run_worker_first) + optional custom domain.
@@ -110,28 +157,15 @@ export function workers(opts?: { name?: string; domain?: string }): JuneAdapter 
     async emit({ appRoot, outDir, hasAssets, config, plan, defaultName }) {
       // An app that manages its own wrangler config wins — don't overwrite it.
       // But a durable agent NEEDS its DO binding: warn when the app-owned config
-      // doesn't BIND the generated class (a config carrying only the migration
-      // still mentions the class name — the binding is what createWorker reads),
-      // instead of silently shipping a worker whose chat surface 404s. JSONC is
-      // parsed for the actual bindings entry; TOML is matched on the
-      // `class_name = "…"` assignment, which only a [[durable_objects.bindings]]
-      // table carries (migrations use new_sqlite_classes).
+      // doesn't BIND the generated class under the name createWorker reads
+      // (hasDurableBinding above — a migrations-only mention, a binding under
+      // another name, or a commented-out table must all still warn), instead of
+      // silently shipping a worker whose chat surface 404s.
       const own = ["wrangler.toml", "wrangler.jsonc"].map((f) => join(appRoot, f)).find(existsSync);
       if (own) {
         if (plan.agent) {
           const cls = plan.agent.className;
-          const text = await readFile(own, "utf8");
-          let bound: boolean;
-          if (own.endsWith(".toml")) {
-            bound = new RegExp(`class_name\\s*=\\s*"${cls}"`).test(text);
-          } else {
-            try {
-              const parsed = JSON.parse(stripJsonc(text)) as { durable_objects?: { bindings?: { class_name?: string }[] } };
-              bound = (parsed.durable_objects?.bindings ?? []).some((b) => b.class_name === cls);
-            } catch {
-              bound = text.includes(cls); // unparsable — fall back to the loose check, never crash the build
-            }
-          }
+          const bound = hasDurableBinding(await readFile(own, "utf8"), own, plan.agent.binding, cls);
           if (!bound) {
             const snippet = own.endsWith(".toml")
               ? `[[durable_objects.bindings]]\nname = "${plan.agent.binding}"\nclass_name = "${cls}"\n\n[[migrations]]\ntag = "v1"\nnew_sqlite_classes = ["${cls}"]`

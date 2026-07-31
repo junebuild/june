@@ -6,7 +6,7 @@ import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { workers, vercel, deno } from "../src/adapter";
+import { hasDurableBinding, workers, vercel, deno } from "../src/adapter";
 
 let dir: string | undefined;
 afterEach(async () => {
@@ -80,5 +80,60 @@ describe("workers() adapter", () => {
     // The binding is fully wired; only the per-account database_id is left blank
     // (filled by `wrangler d1 create`). bindWorkerResources reads env.DB at runtime.
     expect(w.d1_databases).toEqual([{ binding: "DB", database_name: "myapp-db", database_id: "" }]);
+  });
+});
+
+// ── hasDurableBinding: does an app-owned wrangler config really bind the DO? ──
+// The warning this feeds must fire unless the class is bound UNDER THE NAME
+// createWorker reads (env.AGENT) — a migrations-only mention, a binding under
+// another name, or a commented-out table are all "not bound".
+describe("hasDurableBinding", () => {
+  const B = "AGENT";
+  const C = "JuneAgentDO";
+
+  test("jsonc: a real AGENT binding counts; comments are stripped first", () => {
+    const cfg = `{
+  // the durable agent
+  "durable_objects": { "bindings": [{ "name": "AGENT", "class_name": "JuneAgentDO" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["JuneAgentDO"] }],
+}`;
+    expect(hasDurableBinding(cfg, "wrangler.jsonc", B, C)).toBe(true);
+  });
+
+  test("jsonc: migrations-only mention of the class is NOT bound", () => {
+    const cfg = `{ "migrations": [{ "tag": "v1", "new_sqlite_classes": ["JuneAgentDO"] }] }`;
+    expect(hasDurableBinding(cfg, "wrangler.jsonc", B, C)).toBe(false);
+  });
+
+  test("jsonc: the class bound under another name is NOT the binding createWorker reads", () => {
+    const cfg = `{ "durable_objects": { "bindings": [{ "name": "OTHER", "class_name": "JuneAgentDO" }] } }`;
+    expect(hasDurableBinding(cfg, "wrangler.jsonc", B, C)).toBe(false);
+  });
+
+  test("toml: a [[durable_objects.bindings]] table with matching name + class counts", () => {
+    const cfg = `name = "app"\n\n[[durable_objects.bindings]]\nname = "AGENT"\nclass_name = "JuneAgentDO"\n\n[[migrations]]\ntag = "v1"\nnew_sqlite_classes = ["JuneAgentDO"]\n`;
+    expect(hasDurableBinding(cfg, "wrangler.toml", B, C)).toBe(true);
+  });
+
+  test("toml: a commented-out binding does not count", () => {
+    const cfg = `name = "app"\n# [[durable_objects.bindings]]\n# name = "AGENT"\n# class_name = "JuneAgentDO"\n`;
+    expect(hasDurableBinding(cfg, "wrangler.toml", B, C)).toBe(false);
+  });
+
+  test("toml: a binding under another name, or another class under AGENT, is NOT bound", () => {
+    const other = `[[durable_objects.bindings]]\nname = "OTHER"\nclass_name = "JuneAgentDO"\n`;
+    const wrongClass = `[[durable_objects.bindings]]\nname = "AGENT"\nclass_name = "SomethingElse"\n`;
+    expect(hasDurableBinding(other, "wrangler.toml", B, C)).toBe(false);
+    expect(hasDurableBinding(wrongClass, "wrangler.toml", B, C)).toBe(false);
+  });
+
+  test("toml: the matching table is found even when another bindings table precedes it", () => {
+    const cfg = `[[durable_objects.bindings]]\nname = "OTHER"\nclass_name = "X"\n\n[[durable_objects.bindings]]\nname = "AGENT"\nclass_name = "JuneAgentDO"\n\n[vars]\nFOO = "bar"\n`;
+    expect(hasDurableBinding(cfg, "wrangler.toml", B, C)).toBe(true);
+  });
+
+  test("a '#' inside a TOML string is not a comment", () => {
+    const cfg = `[[durable_objects.bindings]]\nname = "AGENT"\nclass_name = "JuneAgentDO" # bound\ndescription = "uses # in a string"\n`;
+    expect(hasDurableBinding(cfg, "wrangler.toml", B, C)).toBe(true);
   });
 });
