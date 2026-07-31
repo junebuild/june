@@ -11,6 +11,7 @@ import { cp, copyFile, mkdir, readdir, readFile, rm, writeFile } from "node:fs/p
 import { basename, dirname, join } from "node:path";
 
 import type { JuneConfig } from "@junejs/core/config";
+import { stripJsonc } from "./tsconfig-jsx";
 
 export type AdapterCapabilities = {
   runtime: "edge" | "node" | "serverless" | "native" | "static";
@@ -109,16 +110,34 @@ export function workers(opts?: { name?: string; domain?: string }): JuneAdapter 
     async emit({ appRoot, outDir, hasAssets, config, plan, defaultName }) {
       // An app that manages its own wrangler config wins — don't overwrite it.
       // But a durable agent NEEDS its DO binding: warn when the app-owned config
-      // doesn't name the generated class, instead of silently shipping a worker
-      // whose chat surface 404s (createWorker's surface is inert without env.AGENT).
+      // doesn't BIND the generated class (a config carrying only the migration
+      // still mentions the class name — the binding is what createWorker reads),
+      // instead of silently shipping a worker whose chat surface 404s. JSONC is
+      // parsed for the actual bindings entry; TOML is matched on the
+      // `class_name = "…"` assignment, which only a [[durable_objects.bindings]]
+      // table carries (migrations use new_sqlite_classes).
       const own = ["wrangler.toml", "wrangler.jsonc"].map((f) => join(appRoot, f)).find(existsSync);
       if (own) {
-        if (plan.agent && !(await readFile(own, "utf8")).includes(plan.agent.className)) {
-          console.warn(
-            `[june build] durable agent built, but ${basename(own)} doesn't bind it — add:\n` +
-              `  durable_objects.bindings: [{ name: "${plan.agent.binding}", class_name: "${plan.agent.className}" }]\n` +
-              `  migrations: [{ tag: "v1", new_sqlite_classes: ["${plan.agent.className}"] }]`,
-          );
+        if (plan.agent) {
+          const cls = plan.agent.className;
+          const text = await readFile(own, "utf8");
+          let bound: boolean;
+          if (own.endsWith(".toml")) {
+            bound = new RegExp(`class_name\\s*=\\s*"${cls}"`).test(text);
+          } else {
+            try {
+              const parsed = JSON.parse(stripJsonc(text)) as { durable_objects?: { bindings?: { class_name?: string }[] } };
+              bound = (parsed.durable_objects?.bindings ?? []).some((b) => b.class_name === cls);
+            } catch {
+              bound = text.includes(cls); // unparsable — fall back to the loose check, never crash the build
+            }
+          }
+          if (!bound) {
+            const snippet = own.endsWith(".toml")
+              ? `[[durable_objects.bindings]]\nname = "${plan.agent.binding}"\nclass_name = "${cls}"\n\n[[migrations]]\ntag = "v1"\nnew_sqlite_classes = ["${cls}"]`
+              : `"durable_objects": { "bindings": [{ "name": "${plan.agent.binding}", "class_name": "${cls}" }] },\n"migrations": [{ "tag": "v1", "new_sqlite_classes": ["${cls}"] }]`;
+            console.warn(`[june build] durable agent built, but ${basename(own)} doesn't bind it — add:\n${snippet}`);
+          }
         }
         return;
       }
