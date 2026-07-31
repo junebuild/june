@@ -139,7 +139,11 @@ export async function run(argv: string[]): Promise<number | undefined> {
       // The content/messages freeze targets a June app (it writes into app/).
       // A wrangler-first worker running `june gen` for its agent module has no
       // app/ directory — don't create one just to hold an empty _content.ts.
-      if (existsSync(join(root, "app"))) {
+      // --check is a NO-WRITE gate: those generators have no compare mode, so
+      // skip them entirely under --check rather than write during a check
+      // (their staleness stays covered by `june gen && git diff --exit-code`;
+      // a compare mode for the freeze is a separate follow-up).
+      if (!flags.check && existsSync(join(root, "app"))) {
         const cols = await generateContent(root);
         console.log(cols.length ? `generated content: ${cols.join(", ")}` : "no content/ collections");
         const { generateMessages } = await import("./messages");
