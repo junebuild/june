@@ -22,7 +22,7 @@ agent. Then the whole loop is six verbs:
 june dev          # dev server (Bun/Node host), zero config
 june build        # Workers bundle: dist/worker.js + prerendered assets
 june deploy       # build → wrangler upload → URL (--dry-run validates only)
-june gen          # freeze content/**/*.md (+ configured content.sources) → app/_content.ts
+june gen          # freeze content/**/*.md (+ content.sources) → app/_content.ts; compile agent/ → _agent.gen.ts (--check gates CI)
 june db           # database tasks: db migrate (apply) · db types (emit db/schema.d.ts)
 june info         # show routes + the agent surface
 ```
