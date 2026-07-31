@@ -17,7 +17,9 @@
 // parseSkill, so a parser improvement never requires regeneration.
 
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
+
+import { stripJsonc } from "./tsconfig-jsx";
 
 export const AGENT_MODULE_FILE = "_agent.gen.ts";
 
@@ -166,15 +168,57 @@ export function findAgentDir(root: string, dirName = "agent"): string | null {
   return null;
 }
 
-// Whether the consumer's tsconfig keeps ".ts" on import specifiers: the nearest
-// tsconfig.json walking up from the agent dir, matched textually (tsconfig is
-// JSONC; a full parse buys nothing here). Explicit opts.tsExtensions overrides.
+// Whether the consumer's tsconfig keeps ".ts" on import specifiers
+// (allowImportingTsExtensions): the nearest tsconfig.json walking up from the
+// agent dir, parsed as JSONC (same stripJsonc as tsconfig-jsx.ts — a commented-
+// out option must not count) and resolved through `extends` (relative, bare
+// package specifiers, and the TS 5 array form; own options win, later array
+// entries beat earlier ones). Explicit opts.tsExtensions overrides the sniff.
+type TsconfigLite = { extends?: string | string[]; compilerOptions?: { allowImportingTsExtensions?: boolean } };
+
+function readTsconfig(path: string): TsconfigLite | undefined {
+  try {
+    return JSON.parse(stripJsonc(readFileSync(path, "utf8"))) as TsconfigLite;
+  } catch {
+    return undefined; // absent or unparsable — treat as "not declared"
+  }
+}
+
+// Resolve an `extends` specifier from the extending config's directory: relative
+// paths directly, bare specifiers through the nearest node_modules walking up.
+// tsc appends ".json" when the target has no extension — mirror that.
+function resolveExtends(fromDir: string, spec: string): string | undefined {
+  const withJson = (p: string) => (existsSync(p) ? p : !p.endsWith(".json") && existsSync(`${p}.json`) ? `${p}.json` : undefined);
+  if (spec.startsWith(".")) return withJson(resolve(fromDir, spec));
+  for (let d = fromDir; ; ) {
+    const candidate = withJson(join(d, "node_modules", spec));
+    if (candidate) return candidate;
+    const parent = dirname(d);
+    if (parent === d) return undefined;
+    d = parent;
+  }
+}
+
+function resolveAllowTsExtensions(path: string, depth: number): boolean | undefined {
+  if (depth > 8) return undefined; // extends cycles/degenerate chains — give up
+  const tc = readTsconfig(path);
+  if (!tc) return undefined;
+  const own = tc.compilerOptions?.allowImportingTsExtensions;
+  if (own !== undefined) return own;
+  // TS extends-array semantics: later entries override earlier ones.
+  const bases = typeof tc.extends === "string" ? [tc.extends] : [...(tc.extends ?? [])].reverse();
+  for (const spec of bases) {
+    const base = resolveExtends(dirname(path), spec);
+    const inherited = base ? resolveAllowTsExtensions(base, depth + 1) : undefined;
+    if (inherited !== undefined) return inherited;
+  }
+  return undefined;
+}
+
 function sniffTsExtensions(dir: string): boolean {
   for (let d = dir; ; ) {
     const candidate = join(d, "tsconfig.json");
-    if (existsSync(candidate)) {
-      return /"allowImportingTsExtensions"\s*:\s*true/.test(readFileSync(candidate, "utf8"));
-    }
+    if (existsSync(candidate)) return resolveAllowTsExtensions(candidate, 0) ?? false;
     const parent = dirname(d);
     if (parent === d) return false;
     d = parent;

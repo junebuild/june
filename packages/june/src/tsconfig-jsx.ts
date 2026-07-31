@@ -9,8 +9,8 @@ import { join } from "node:path";
 // tsconfig.json is JSONC by convention (comments + trailing commas are idiomatic), and a strict
 // JSON.parse failure here silently degrades to "not declared" → the conflict warning reappears.
 // Strip comments (`//` only at line-start/after-whitespace so "https://…" in strings survives)
-// and trailing commas before parsing.
-const stripJsonc = (s: string): string =>
+// and trailing commas before parsing. Shared: agent-compile's tsconfig sniff parses the same way.
+export const stripJsonc = (s: string): string =>
   s
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/(^|\s)\/\/.*$/gm, "$1")
