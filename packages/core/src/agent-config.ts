@@ -8,7 +8,7 @@
 
 import type { AnyAction } from "./agent";
 import type { InboundEvent, ProactiveTrigger, Tool, ToolContext, ToolSpec, TurnEvent } from "./agent-runtime";
-import type { ConnectionReport } from "./connections";
+import { connectAll, type Connection, type ConnectionReport } from "./connections";
 
 // InboundEvent's canonical definition lives in agent-runtime (ToolContext carries it);
 // re-export from here — where Channel/ChannelContext live — so channel authors import
@@ -17,7 +17,33 @@ export type { InboundEvent } from "./agent-runtime";
 
 // A skill: a named procedure loaded on demand (progressive disclosure). The
 // system prompt lists them; the model pulls a body via the read_skill tool.
-export type Skill = { name: string; description: string; body: string };
+// `whenToUse` (frontmatter `when-to-use`) rides the index line so the model can
+// decide whether to load the body without spending a tool call to find out.
+export type Skill = { name: string; description: string; whenToUse?: string; body: string };
+
+// Parse a skill file: optional YAML-ish frontmatter (--- \n key: value \n ---)
+// then the body. Falls back to the first non-empty line (minus a leading "# ")
+// as the description. Frontmatter keys may be hyphenated ("when-to-use") —
+// authored prose follows document conventions, not identifier rules. Pure, so
+// native discovery (fs) and a compiled agent module (edge) parse identically.
+export function parseSkill(name: string, text: string): Skill {
+  if (text.startsWith("---")) {
+    const end = text.indexOf("\n---", 3);
+    if (end !== -1) {
+      const front = text.slice(3, end);
+      const body = text.slice(end + 4).replace(/^\s*\n/, "");
+      const meta: Record<string, string> = {};
+      for (const line of front.split("\n")) {
+        const m = line.match(/^\s*([\w-]+)\s*:\s*(.+?)\s*$/);
+        if (m) meta[m[1]!] = m[2]!;
+      }
+      const whenToUse = meta["when-to-use"] ?? meta.whenToUse;
+      return { name: meta.name ?? name, description: meta.description ?? "", ...(whenToUse ? { whenToUse } : {}), body };
+    }
+  }
+  const firstLine = text.split("\n").find((l) => l.trim()) ?? "";
+  return { name, description: firstLine.replace(/^#\s*/, ""), body: text };
+}
 
 // A channel is an INBOUND edge — how a message reaches the agent: an HTTP
 // endpoint, a Slack/Crisp webhook, a CLI. It maps the inbound message to a
@@ -353,11 +379,99 @@ export function channelDispatch(channels: Channel[], ctx: ChannelContext): (req:
 
 // The full system prompt = authored instructions + a one-line index of skills,
 // so the model knows what it can pull on demand. (Consumed by the model adapter.)
-export function buildSystemPrompt(agent: AgentDefinition): string {
+// Structural param: assembleDurable composes the same prompt without a full
+// AgentDefinition in hand.
+export function buildSystemPrompt(agent: Pick<AgentDefinition, "instructions" | "skills">): string {
   let prompt = agent.instructions.trim();
   if (agent.skills.length) {
     prompt += "\n\n## Available skills (call read_skill to load one)\n";
-    prompt += agent.skills.map((s) => `- ${s.name}: ${s.description}`).join("\n");
+    prompt += agent.skills.map((s) => `- ${s.name}: ${s.description}${s.whenToUse ? ` — when to use: ${s.whenToUse}` : ""}`).join("\n");
   }
   return prompt;
+}
+
+// The RAW, runtime-agnostic shape of an agent directory — what native discovery
+// (@junejs/server discoverAgent, fs) and edge compilation (a generated
+// _agent.gen.ts) both produce BEFORE assembly. Channels stay unresolved (Channel
+// or (env)=>Channel factory) because the two targets resolve env at different
+// times: native at discovery (process.env), a Durable Object per-isolate (its
+// own env). Connections stay definitions for the same reason — connectAll is
+// network I/O that must run where (and when) the agent runs.
+export type AgentModule = {
+  config: AgentConfigFile;
+  // Raw instructions markdown; empty → fall back to config.instructions.
+  instructions: string;
+  tools: (AnyAction | Tool)[];
+  skills: Skill[];
+  // Keyed by the channel file's basename — the same key a matching
+  // channelInstructions overlay uses.
+  channels: Record<string, Channel | ChannelFactory>;
+  // Source-keyed system overlays, from channels/<source>.md.
+  channelInstructions: Record<string, string>;
+  connections: Connection[];
+};
+
+// Assemble an AgentModule for a NATIVE host: resolve channel factories against
+// env (process.env on Node), wire connections (network I/O), and hand everything
+// to defineAgent. This is the single assembly path — discoverAgent (fs) and a
+// compiled _agent.gen.ts (edge/CI) both go through here, so the two runtimes
+// cannot drift on how a directory becomes an agent.
+export async function assembleAgent(mod: AgentModule, env?: unknown): Promise<AgentDefinition> {
+  const channels = Object.values(mod.channels).map((c) => resolveChannel(c, env));
+  const { actions, report } = mod.connections.length
+    ? await connectAll(mod.connections)
+    : { actions: [] as AnyAction[], report: [] as ConnectionReport[] };
+  return defineAgent({
+    name: mod.config.name,
+    model: mod.config.model,
+    description: mod.config.description,
+    instructions: mod.instructions || (mod.config.instructions ?? ""),
+    tools: [...mod.tools, ...actions],
+    skills: mod.skills,
+    channels,
+    channelInstructions: Object.keys(mod.channelInstructions).length ? mod.channelInstructions : undefined,
+    connections: report,
+  });
+}
+
+// Assemble an AgentModule for the DURABLE (edge) target: the DoAgentDef-shaped
+// pieces an app spreads into its DO shell —
+//
+//   new AgentDurableObject(this.ctx, {
+//     ...assembleDurable(agentModule),
+//     model: makeModel(this.env), env: this.env, services: makeServices(this.env),
+//   })
+//
+// The differences from assembleAgent are the edge contract, not drift: channels
+// pass through UNRESOLVED (the DO resolves them with ITS env and merges their
+// capability tools in-isolate — a tool's run closure can't cross the worker→DO
+// RPC), and connections are omitted (wiring them is I/O that belongs to the DO's
+// lifecycle, not assembly — the lazy-connect seam is a follow-up). Skills mount
+// the same way defineAgent mounts them natively: read_skill + the prompt index.
+export function assembleDurable(mod: AgentModule): {
+  name: string;
+  tools: Tool[];
+  instructions: string;
+  channelInstructions?: Record<string, string>;
+  channels: (Channel | ChannelFactory)[];
+} {
+  const tools: Tool[] = mod.tools.map((t) => (isTool(t) ? t : actionToTool(t)));
+  if (mod.skills.length) tools.push(readSkillTool(mod.skills));
+  // Same fail-fast as defineAgent: dispatch is by name, so a collision would
+  // silently bind to the first tool and make behavior order-dependent.
+  const seen = new Set<string>();
+  for (const t of tools) {
+    if (seen.has(t.spec.name)) {
+      throw new Error(`assembleDurable(${mod.config.name}): duplicate tool name "${t.spec.name}" — rename one so dispatch is unambiguous.`);
+    }
+    seen.add(t.spec.name);
+  }
+  const instructions = buildSystemPrompt({ instructions: mod.instructions || (mod.config.instructions ?? ""), skills: mod.skills });
+  return {
+    name: mod.config.name,
+    tools,
+    instructions,
+    ...(Object.keys(mod.channelInstructions).length ? { channelInstructions: mod.channelInstructions } : {}),
+    channels: Object.values(mod.channels),
+  };
 }
