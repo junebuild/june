@@ -7,8 +7,10 @@
 // this module is the pure config layer it produces.
 
 import type { AnyAction } from "./agent";
-import type { InboundEvent, ProactiveTrigger, Tool, ToolContext, ToolSpec, TurnEvent } from "./agent-runtime";
+import type { ChannelPolicy, InboundEvent, ProactiveTrigger, Tool, ToolContext, ToolSpec, TurnEvent } from "./agent-runtime";
 import { connectAll, type Connection, type ConnectionReport } from "./connections";
+
+export type { ChannelPolicy } from "./agent-runtime";
 
 // InboundEvent's canonical definition lives in agent-runtime (ToolContext carries it);
 // re-export from here — where Channel/ChannelContext live — so channel authors import
@@ -171,6 +173,10 @@ export type PostedMessage = { channelId: string; threadId?: string; ts: string }
 
 export type Channel = {
   name: string;
+  // Channels are pure TRANSPORT (#149): behavior prose ("how this agent acts when
+  // reached over Slack") is agent-level — an instructions.<source>.md variant plus
+  // agent.ts `surfaces` mechanics — never a channel property. Two agents sharing
+  // one transport carry different behavior; the transport carries none.
   // one-shot input source (e.g. cli): run once at startup
   start?: (ctx: ChannelContext) => Promise<void> | void;
   // OUTBOUND, agent-initiated delivery (§9): render a proactive turn's event stream to a
@@ -227,6 +233,67 @@ export function defineChannel(channel: Channel): Channel {
 // which is inherently untyped platform data the host just passes through.
 export type ChannelFactory = (env: any) => Channel;
 
+// Per-surface MECHANICAL policy, declared in agent.ts (typed code — the prose
+// variant stays a zero-power markdown file). `mode` controls how the surface's
+// instructions.<source>.md variant composes with the base instructions: "append"
+// (the default) adds it after the base; "replace" makes the variant the turn's
+// ENTIRE system prompt — the mechanical form of what an overlay would otherwise
+// beg for in prose ("disregard the above"). `denyTools` removes tools from the
+// surface's turns: unlisted AND undispatchable — enforcement, not suggestion.
+export type SurfaceConfig = { mode?: "append" | "replace"; denyTools?: string[] };
+
+// Derive the per-source turn policies (#149) from the agent-level pieces:
+// instructions.<source>.md variants (discovered prose) + agent.ts `surfaces`
+// mechanics + the legacy/programmatic channelInstructions map. Fail-loud edges:
+//   - surfaces.<source>.mode set but no variant file → throw (a composition mode
+//     with nothing to compose is a wiring error, not a default).
+//   - a source present in BOTH the new pieces and the legacy map → throw (one
+//     source of truth; the map is the escape hatch, not a second author).
+//   - a policy for a source no known channel emits → console.warn when
+//     channelNames are known (the silent-no-fire orphan, surfaced).
+// denyTools without a variant file is legal: policy without prose.
+export function surfacePolicies(opts: {
+  agent?: string;
+  surfaces?: Record<string, SurfaceConfig>;
+  surfaceInstructions?: Record<string, string>;
+  channelInstructions?: Record<string, string | ChannelPolicy>;
+  channelNames?: string[];
+}): Record<string, string | ChannelPolicy> | undefined {
+  const who = opts.agent ? `agent "${opts.agent}": ` : "";
+  const policies: Record<string, string | ChannelPolicy> = { ...(opts.channelInstructions ?? {}) };
+  const sources = new Set([...Object.keys(opts.surfaces ?? {}), ...Object.keys(opts.surfaceInstructions ?? {})]);
+  for (const source of sources) {
+    const variant = opts.surfaceInstructions?.[source];
+    const cfg = opts.surfaces?.[source];
+    if (cfg?.mode !== undefined && variant === undefined) {
+      throw new Error(
+        `${who}surfaces.${source} declares mode "${cfg.mode}" but instructions.${source}.md does not exist — a composition mode needs a variant to compose.`,
+      );
+    }
+    if (opts.channelInstructions && source in opts.channelInstructions) {
+      throw new Error(
+        `${who}surface "${source}" is defined by instructions.${source}.md / surfaces config AND by channelInstructions["${source}"] — one source of truth; drop the map entry (it is the legacy/escape-hatch form).`,
+      );
+    }
+    const policy: ChannelPolicy = {
+      ...(variant !== undefined ? { overlay: variant } : {}),
+      ...(cfg?.mode !== undefined ? { overlayMode: cfg.mode } : {}),
+      ...(cfg?.denyTools !== undefined ? { denyTools: cfg.denyTools } : {}),
+    };
+    if (Object.keys(policy).length) policies[source] = policy;
+  }
+  if (opts.channelNames) {
+    for (const source of Object.keys(policies)) {
+      if (!opts.channelNames.includes(source)) {
+        console.warn(
+          `[june] ${who}surface policy "${source}" matches no mounted channel (${opts.channelNames.join(", ") || "none"}) — it will never fire.`,
+        );
+      }
+    }
+  }
+  return Object.keys(policies).length ? policies : undefined;
+}
+
 // Resolve a discovered channel to a concrete Channel, calling the factory with env.
 export function resolveChannel(channel: Channel | ChannelFactory, env: unknown): Channel {
   return typeof channel === "function" ? channel(env) : channel;
@@ -239,6 +306,9 @@ export type AgentConfigFile = {
   model?: string;
   description?: string;
   instructions?: string;
+  // Per-surface mechanics (#149): keyed by inbound event source; composes with
+  // the discovered instructions.<source>.md variants. See SurfaceConfig.
+  surfaces?: Record<string, SurfaceConfig>;
 };
 
 // A fully-assembled agent, ready to mount on a runtime (tools already adapted).
@@ -250,11 +320,13 @@ export type AgentDefinition = {
   tools: Tool[];
   skills: Skill[];
   channels: Channel[];
-  // Per-channel-source system overlays. When a turn's InboundEvent.source (e.g. "slack")
-  // matches a key, that text is appended to the system prompt for that turn — so ONE
-  // shared agent can branch its behavior by the real, unforgeable inbound source instead
-  // of a userText marker. Applied by the runtime (see AgentSession/withSystem).
-  channelInstructions?: Record<string, string>;
+  // Per-channel-source turn policies. When a turn's InboundEvent.source (e.g. "slack")
+  // matches a key, that policy applies — overlay appended to (or replacing) the system
+  // prompt, denyTools removed mechanically — so ONE shared agent branches its behavior
+  // by the real, unforgeable inbound source instead of a userText marker. DERIVED from
+  // each channel's own overlay/overlayMode/denyTools declarations (#149); the map form
+  // remains as the programmatic escape hatch. Applied by the runtime (AgentSession).
+  channelInstructions?: Record<string, string | ChannelPolicy>;
   // report of external connections wired in (their tools are already in `tools`)
   connections: ConnectionReport[];
 };
@@ -313,7 +385,11 @@ export function defineAgent(config: {
   tools?: (AnyAction | Tool)[];
   skills?: Skill[];
   channels?: Channel[];
-  channelInstructions?: Record<string, string>;
+  // Per-surface mechanics + discovered instruction variants (#149); assembly
+  // derives the per-source policies from these (surfacePolicies).
+  surfaces?: Record<string, SurfaceConfig>;
+  surfaceInstructions?: Record<string, string>;
+  channelInstructions?: Record<string, string | ChannelPolicy>;
   connections?: ConnectionReport[];
 }): AgentDefinition {
   const skills = config.skills ?? [];
@@ -344,7 +420,15 @@ export function defineAgent(config: {
     tools,
     skills,
     channels,
-    channelInstructions: config.channelInstructions,
+    // Agent-level surface variants + surfaces mechanics + the explicit map
+    // (escape hatch) — one source of truth enforced, orphan keys warned.
+    channelInstructions: surfacePolicies({
+      agent: config.name,
+      surfaces: config.surfaces,
+      surfaceInstructions: config.surfaceInstructions,
+      channelInstructions: config.channelInstructions,
+      channelNames: channels.map((c) => c.name),
+    }),
     connections: config.connections ?? [],
   };
 }
@@ -403,11 +487,16 @@ export type AgentModule = {
   instructions: string;
   tools: (AnyAction | Tool)[];
   skills: Skill[];
-  // Keyed by the channel file's basename — the same key a matching
-  // channelInstructions overlay uses.
+  // Keyed by the channel file's basename.
   channels: Record<string, Channel | ChannelFactory>;
-  // Source-keyed system overlays, from channels/<source>.md.
-  channelInstructions: Record<string, string>;
+  // Agent-level surface instruction variants (#149): instructions.<source>.md
+  // prose, keyed by source. Composition/deny mechanics live in
+  // config.surfaces; assembly derives the per-source policies from both.
+  surfaceInstructions: Record<string, string>;
+  // Source-keyed policies from the LEGACY channels/<source>.md convention and
+  // programmatic entries — the escape hatch; instructions.<source>.md +
+  // config.surfaces are the preferred form.
+  channelInstructions: Record<string, string | ChannelPolicy>;
   connections: Connection[];
 };
 
@@ -429,6 +518,8 @@ export async function assembleAgent(mod: AgentModule, env?: unknown): Promise<Ag
     tools: [...mod.tools, ...actions],
     skills: mod.skills,
     channels,
+    surfaces: mod.config.surfaces,
+    surfaceInstructions: mod.surfaceInstructions,
     channelInstructions: Object.keys(mod.channelInstructions).length ? mod.channelInstructions : undefined,
     connections: report,
   });
@@ -452,7 +543,7 @@ export function assembleDurable(mod: AgentModule): {
   name: string;
   tools: Tool[];
   instructions: string;
-  channelInstructions?: Record<string, string>;
+  channelInstructions?: Record<string, string | ChannelPolicy>;
   channels: (Channel | ChannelFactory)[];
   connections: Connection[];
 } {
@@ -468,11 +559,21 @@ export function assembleDurable(mod: AgentModule): {
     seen.add(t.spec.name);
   }
   const instructions = buildSystemPrompt({ instructions: mod.instructions || (mod.config.instructions ?? ""), skills: mod.skills });
+  // Same derivation as defineAgent — the policies are agent-level data, so the
+  // DURABLE path needs no channel resolution to compute them. Orphan-key
+  // validation is skipped here (channels are unresolved factories); the DO
+  // warns after it resolves them with its env.
+  const policies = surfacePolicies({
+    agent: mod.config.name,
+    surfaces: mod.config.surfaces,
+    surfaceInstructions: mod.surfaceInstructions,
+    channelInstructions: Object.keys(mod.channelInstructions).length ? mod.channelInstructions : undefined,
+  });
   return {
     name: mod.config.name,
     tools,
     instructions,
-    ...(Object.keys(mod.channelInstructions).length ? { channelInstructions: mod.channelInstructions } : {}),
+    ...(policies ? { channelInstructions: policies } : {}),
     channels: Object.values(mod.channels),
     connections: mod.connections,
   };
