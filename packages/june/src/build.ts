@@ -726,11 +726,15 @@ export async function juneBuild(
   } else if (hasResources) {
     imports.push(`import { bindWorkerResources } from "@junejs/server/resources";`);
   }
-  const resourcesField = tursoDb
-    ? `\n  resources: memoizeResources({ db: turso() }),`
+  // One expression, TWO instances: the pipeline (createWorker) and the durable
+  // agent's DO each open their own provider — the DO is a separate isolate whose
+  // env must not be captured by the worker-side memoization.
+  const resourcesExpr = tursoDb
+    ? `memoizeResources({ db: turso() })`
     : hasResources
-      ? `\n  resources: bindWorkerResources(${JSON.stringify(resourceFlags)}),`
-      : "";
+      ? `bindWorkerResources(${JSON.stringify(resourceFlags)})`
+      : null;
+  const resourcesField = resourcesExpr ? `\n  resources: ${resourcesExpr},` : "";
 
   // Opt-in Tier-3 data layer: import its installDataLayer from the declared module
   // and call it at worker boot — the prod twin of the dev host's dataLayer.install()
@@ -775,13 +779,15 @@ export async function juneBuild(
 // The durable agent: one Durable Object per session, the compiled agent/
 // directory as its definition — adapted tools (+ read_skill when skills exist),
 // the assembled system prompt, channel factories resolved with the DO's own
-// env. Model: Anthropic, keyed by the ANTHROPIC_API_KEY secret.
+// env, and the app's declared resources opened from THIS isolate's env (lazily,
+// at the first turn — the same ambient db a tool sees in native dev). Model:
+// Anthropic, keyed by the ANTHROPIC_API_KEY secret.
 const __agentDef = assembleDurable(__agentModule);
 export class JuneAgentDO extends DurableObject {
   #agent = new AgentDurableObject(this.ctx, {
     ...__agentDef,
     model: anthropic({ model: __agentModule.config.model, apiKey: (this.env as { ANTHROPIC_API_KEY?: string }).ANTHROPIC_API_KEY }),
-    env: this.env,${servicesModule ? "\n    services: __appServices(this.env)," : ""}
+    env: this.env,${resourcesExpr ? `\n    resources: ${resourcesExpr},` : ""}${servicesModule ? "\n    services: __appServices(this.env)," : ""}
   });
   fetch(req: Request): Promise<Response> {
     return this.#agent.fetch(req);
