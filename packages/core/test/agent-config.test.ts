@@ -252,6 +252,7 @@ describe("assembleDurable", () => {
     const weather = { kind: "mcp", name: "weather", url: "https://mcp.example/api" } as const;
     const def = assembleDurable({
       config: { name: "ops" }, instructions: "i",
+      surfaceInstructions: {},
       tools: [], skills: [], channels: {}, channelInstructions: {}, connections: [weather],
     });
     expect(def.connections).toEqual([weather]);
