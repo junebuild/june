@@ -128,6 +128,57 @@ describe("generateAgentModule", () => {
   });
 });
 
+describe("tsconfig sniff (allowImportingTsExtensions)", () => {
+  // Build: <tmp>/(tsconfig.json…)/agent/instructions.md, generate, inspect the
+  // emitted config import specifier. The sniff is JSONC-parsed and extends-
+  // resolved — a textual match would get every case below wrong.
+  const gen = (files: Record<string, string>): string => {
+    const dir = mkdtempSync(join(tmpdir(), "june-agent-"));
+    try {
+      for (const [rel, content] of Object.entries(files)) {
+        mkdirSync(dirname(join(dir, rel)), { recursive: true });
+        writeFileSync(join(dir, rel), content);
+      }
+      mkdirSync(join(dir, "agent"), { recursive: true });
+      writeFileSync(join(dir, "agent", "agent.ts"), "export default { name: \"ops\" };");
+      return generateAgentModule(join(dir, "agent"))!.code;
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  test("a commented-out option does not count", () => {
+    const code = gen({
+      "tsconfig.json": `{\n  // "allowImportingTsExtensions": true,\n  "compilerOptions": {}\n}`,
+    });
+    expect(code).toContain(`from "./agent";`);
+  });
+
+  test("true inherited through extends (relative, .json omitted) is honored", () => {
+    const code = gen({
+      "tsconfig.base.json": `{ "compilerOptions": { "allowImportingTsExtensions": true } }`,
+      "tsconfig.json": `{ "extends": "./tsconfig.base" }`,
+    });
+    expect(code).toContain(`from "./agent.ts";`);
+  });
+
+  test("true inherited from a bare-specifier extends (node_modules walk-up) is honored", () => {
+    const code = gen({
+      "node_modules/@acme/tsconfig/base.json": `{ "compilerOptions": { "allowImportingTsExtensions": true } }`,
+      "tsconfig.json": `{ "extends": "@acme/tsconfig/base.json" }`,
+    });
+    expect(code).toContain(`from "./agent.ts";`);
+  });
+
+  test("the extending config's own value beats the base's", () => {
+    const code = gen({
+      "tsconfig.base.json": `{ "compilerOptions": { "allowImportingTsExtensions": true } }`,
+      "tsconfig.json": `{ "extends": "./tsconfig.base", "compilerOptions": { "allowImportingTsExtensions": false } }`,
+    });
+    expect(code).toContain(`from "./agent";`);
+  });
+});
+
 describe("findAgentDir", () => {
   test("prefers app/agent (June app), falls back to ./agent (wrangler-first)", () => {
     const dir = mkdtempSync(join(tmpdir(), "june-agent-"));
