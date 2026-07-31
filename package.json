@@ -25,7 +25,6 @@
     "version": "changeset version && bun install"
   },
   "devDependencies": {
-    "@anthropic-ai/sdk": "^0.115.0",
     "@arethetypeswrong/core": "^0.18.1",
     "@changesets/changelog-github": "^0.7.0",
     "@changesets/cli": "^2.31.0",
