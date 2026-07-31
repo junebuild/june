@@ -445,8 +445,8 @@ export async function assembleAgent(mod: AgentModule, env?: unknown): Promise<Ag
 // The differences from assembleAgent are the edge contract, not drift: channels
 // pass through UNRESOLVED (the DO resolves them with ITS env and merges their
 // capability tools in-isolate — a tool's run closure can't cross the worker→DO
-// RPC), and connections are omitted (wiring them is I/O that belongs to the DO's
-// lifecycle, not assembly — the lazy-connect seam is a follow-up). Skills mount
+// RPC), and connections pass through as DEFINITIONS (wiring them is network I/O
+// the DO does lazily at its first turn — DoAgentDef.connections). Skills mount
 // the same way defineAgent mounts them natively: read_skill + the prompt index.
 export function assembleDurable(mod: AgentModule): {
   name: string;
@@ -454,6 +454,7 @@ export function assembleDurable(mod: AgentModule): {
   instructions: string;
   channelInstructions?: Record<string, string>;
   channels: (Channel | ChannelFactory)[];
+  connections: Connection[];
 } {
   const tools: Tool[] = mod.tools.map((t) => (isTool(t) ? t : actionToTool(t)));
   if (mod.skills.length) tools.push(readSkillTool(mod.skills));
@@ -473,5 +474,6 @@ export function assembleDurable(mod: AgentModule): {
     instructions,
     ...(Object.keys(mod.channelInstructions).length ? { channelInstructions: mod.channelInstructions } : {}),
     channels: Object.values(mod.channels),
+    connections: mod.connections,
   };
 }
