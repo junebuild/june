@@ -182,6 +182,27 @@ describe("tsconfig sniff (allowImportingTsExtensions)", () => {
   });
 });
 
+describe("unrecognized instructions variants", () => {
+  test("a locale-suffixed filename warns loudly instead of sitting silently inert", () => {
+    const dir = mkdtempSync(join(tmpdir(), "june-agent-"));
+    const warns: string[] = [];
+    const orig = console.warn;
+    console.warn = (m: unknown) => void warns.push(String(m));
+    try {
+      const agentDir = join(dir, "agent");
+      mkdirSync(agentDir);
+      writeFileSync(join(agentDir, "instructions.md"), "base");
+      writeFileSync(join(agentDir, "instructions.slack.zh-TW.md"), "locale variant");
+      const r = generateAgentModule(agentDir)!;
+      expect(r.code).not.toContain("locale variant"); // ignored today…
+      expect(warns.join(" ")).toContain("instructions.slack.zh-TW.md"); // …but never silently
+    } finally {
+      console.warn = orig;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("findAgentDir", () => {
   test("prefers app/agent (June app), falls back to ./agent (wrangler-first)", () => {
     const dir = mkdtempSync(join(tmpdir(), "june-agent-"));

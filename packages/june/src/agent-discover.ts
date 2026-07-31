@@ -58,8 +58,17 @@ export async function discoverAgentModule(dir: string): Promise<AgentModule> {
   const surfaceInstructions: Record<string, string> = {};
   if (existsSync(dir)) {
     for (const e of await readdir(dir, { withFileTypes: true })) {
-      const m = e.isFile() ? e.name.match(/^instructions\.([a-z0-9_-]+)\.md$/) : null;
-      if (m) surfaceInstructions[m[1]!] = await readFile(join(dir, e.name), "utf8");
+      if (!e.isFile() || !/^instructions\..+\.md$/.test(e.name)) continue;
+      const m = e.name.match(/^instructions\.([a-z0-9_-]+)\.md$/);
+      if (m) {
+        surfaceInstructions[m[1]!] = await readFile(join(dir, e.name), "utf8");
+      } else {
+        // A variant-shaped file the grammar doesn't parse yet (e.g. a locale
+        // suffix, instructions.slack.zh-TW.md) must never be SILENTLY inert.
+        console.warn(
+          `[june] ${e.name}: unrecognized instructions variant — only single-segment sources (instructions.<source>.md) are parsed today; locale variants are a planned follow-up (junebuild/june#149). This file is ignored.`,
+        );
+      }
     }
   }
 
