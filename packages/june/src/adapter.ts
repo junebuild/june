@@ -7,7 +7,7 @@
 // `workers()` is the zero-config default (this file, no import). Other targets
 // are explicit `deploy: { adapter: vercel() }` from their own package.
 import { existsSync } from "node:fs";
-import { cp, copyFile, mkdir, readdir, rm, writeFile } from "node:fs/promises";
+import { cp, copyFile, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 
 import type { JuneConfig } from "@junejs/core/config";
@@ -20,6 +20,9 @@ export type AdapterCapabilities = {
   persistentConnections: boolean;
   // Who serves prerendered static files: the platform CDN, the server, or none.
   assets: "platform" | "server" | "none";
+  // Durable Objects (the per-session agent actor). Only workers() today; the
+  // build skips the durable-agent mount (with a notice) when absent.
+  durableObjects?: boolean;
 };
 
 // What the adapter contributes to the generated worker entry: extra imports and
@@ -37,6 +40,11 @@ export type ResourcePlan = {
   // A declared `db` → a D1 binding named `binding`. The runtime provider
   // (bindWorkerResources) reads env[binding]; keep in sync (default "DB").
   db?: { binding: string; databaseName: string };
+  // A durable agent (an app/agent directory on a DO-capable target) → the DO
+  // namespace binding createWorker reads (env.AGENT) and the class the
+  // generated entry exports. workers() emits durable_objects + the SQLite-class
+  // migration from it.
+  agent?: { binding: string; className: string };
 };
 
 export type AdapterEmitContext = {
@@ -83,7 +91,7 @@ export interface JuneAdapter {
 export function workers(opts?: { name?: string; domain?: string }): JuneAdapter {
   return {
     name: "workers",
-    capabilities: { runtime: "edge", persistentConnections: true, assets: "platform" },
+    capabilities: { runtime: "edge", persistentConnections: true, assets: "platform", durableObjects: true },
     conditions: ["source", "workerd", "edge", "import", "default"],
     // workers-og is a workerd-native WASM package: rolldown cannot bundle its
     // .wasm assets (wrangler's own bundler applies the CompiledWasm rule). Mark
@@ -100,7 +108,18 @@ export function workers(opts?: { name?: string; domain?: string }): JuneAdapter 
 
     async emit({ appRoot, outDir, hasAssets, config, plan, defaultName }) {
       // An app that manages its own wrangler config wins — don't overwrite it.
-      if (existsSync(join(appRoot, "wrangler.toml")) || existsSync(join(appRoot, "wrangler.jsonc"))) {
+      // But a durable agent NEEDS its DO binding: warn when the app-owned config
+      // doesn't name the generated class, instead of silently shipping a worker
+      // whose chat surface 404s (createWorker's surface is inert without env.AGENT).
+      const own = ["wrangler.toml", "wrangler.jsonc"].map((f) => join(appRoot, f)).find(existsSync);
+      if (own) {
+        if (plan.agent && !(await readFile(own, "utf8")).includes(plan.agent.className)) {
+          console.warn(
+            `[june build] durable agent built, but ${basename(own)} doesn't bind it — add:\n` +
+              `  durable_objects.bindings: [{ name: "${plan.agent.binding}", class_name: "${plan.agent.className}" }]\n` +
+              `  migrations: [{ tag: "v1", new_sqlite_classes: ["${plan.agent.className}"] }]`,
+          );
+        }
         return;
       }
       const deployCfg = config.deploy;
@@ -131,6 +150,15 @@ export function workers(opts?: { name?: string; domain?: string }): JuneAdapter 
                       database_id: "",
                     },
                   ],
+                }
+              : {}),
+            // The durable agent: one SQLite-backed DO class = the per-session
+            // AgentSession actor (its ctx.storage.sql is the durable loop's
+            // synchronous store). The binding name is what createWorker reads.
+            ...(plan.agent
+              ? {
+                  durable_objects: { bindings: [{ name: plan.agent.binding, class_name: plan.agent.className }] },
+                  migrations: [{ tag: "v1", new_sqlite_classes: [plan.agent.className] }],
                 }
               : {}),
             // config deploy.domain → a Workers custom domain; without it the
