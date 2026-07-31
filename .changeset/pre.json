@@ -20,6 +20,7 @@
     "adapter-conformance",
     "agent-build-automount",
     "agent-compile",
+    "agent-edge-channels",
     "agent-preflight-resolve",
     "channel-capabilities",
     "channel-hardening",
