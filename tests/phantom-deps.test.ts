@@ -27,12 +27,15 @@ function sourceFiles(dir: string): string[] {
 
 // "react-dom/client" → "react-dom"; "@junejs/core/route" → "@junejs/core"
 function packageName(specifier: string): string | null {
-  // Skip relative imports, node:/bun builtins, and June's build-time virtuals
-  // (e.g. "june:app", aliased by the RSC build) — none are npm dependencies.
+  // Skip relative imports, node:/bun builtins, workerd runtime modules
+  // ("cloudflare:workers" in the durable-agent entry codegen), and June's
+  // build-time virtuals (e.g. "june:app", aliased by the RSC build) — none are
+  // npm dependencies.
   if (
     specifier.startsWith(".") ||
     specifier.startsWith("node:") ||
     specifier.startsWith("bun") ||
+    specifier.startsWith("cloudflare:") ||
     specifier.startsWith("june:")
   )
     return null;

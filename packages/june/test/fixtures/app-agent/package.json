@@ -1,0 +1,5 @@
+{
+  "name": "app-agent-fixture",
+  "private": true,
+  "type": "module"
+}

@@ -18,7 +18,7 @@ describe("workers() adapter", () => {
   test("declares edge capabilities", () => {
     const a = workers();
     expect(a.name).toBe("workers");
-    expect(a.capabilities).toEqual({ runtime: "edge", persistentConnections: true, assets: "platform" });
+    expect(a.capabilities).toEqual({ runtime: "edge", persistentConnections: true, assets: "platform", durableObjects: true });
   });
 
   test("entry wraps the pipeline in withAssets with the frozen Link header", () => {
