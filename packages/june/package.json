@@ -36,6 +36,12 @@
       "types": "./dist/agent-discover.d.ts",
       "default": "./dist/agent-discover.js"
     },
+    "./agent-compile": {
+      "source": "./src/agent-compile.ts",
+      "bun": "./src/agent-compile.ts",
+      "types": "./dist/agent-compile.d.ts",
+      "default": "./dist/agent-compile.js"
+    },
     "./db": {
       "source": "./src/db.ts",
       "bun": "./src/db.ts",
