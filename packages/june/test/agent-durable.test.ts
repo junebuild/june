@@ -434,6 +434,38 @@ describe("AgentDurableObject — DI scope (ambient db/services reach a DO tool)"
     expect(await agent.turn({ turnId: "t1", userText: "Order 3 widgets" })).toBe("Done — order placed.");
     expect(countOrders(s)).toBe(1);
   });
+
+  test("resources may be an async env-driven provider (bindWorkerResources' shape), opened once with the DO's env", async () => {
+    const s = await storage();
+    const seen: Probe[] = [];
+    const envsSeen: unknown[] = [];
+    let opens = 0;
+    const agent = new AgentDurableObject(
+      { storage: s },
+      {
+        name: "support",
+        model: probeModel(),
+        tools: [probeTool(seen, () => seen.length + 1)],
+        env: { DB: "d1-binding" },
+        // A DO constructor can't await, so opening a D1 handle happens here —
+        // lazily, at the first turn, with THIS def's env.
+        resources: async (env) => {
+          envsSeen.push(env);
+          opens++;
+          return { db: fakeJuneDb() };
+        },
+        services: { retriever: { fetch: () => "retriever-ok" } },
+      },
+    );
+
+    expect(await agent.turn({ turnId: "t1", userText: "hi" })).toBe("done");
+    expect(await agent.turn({ turnId: "t2", userText: "again" })).toBe("done");
+
+    // ambient db reached the tool on both turns, the provider opened ONCE with the DO env
+    expect(seen.map((p) => p.db)).toEqual(["from-do-db", "from-do-db"]);
+    expect(opens).toBe(1);
+    expect(envsSeen).toEqual([{ DB: "d1-binding" }]);
+  });
 });
 
 // ── failure observability (#76): a failed turn must never be silent ───────────
