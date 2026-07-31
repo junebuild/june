@@ -43,7 +43,7 @@ Commands:
   dev      Start the dev server                 --port <n> --no-watch
   build    Build a workerd-ready bundle         --out <dir>
   deploy   Build + deploy (workers/vercel)      --dry-run --prod --skip-migrate --allow-destructive
-  gen      Freeze content/schema                --check
+  gen      Freeze content + agent module        --check
   db       Database tasks (db migrate, db types) --allow-destructive
   info     Show routes + the agent surface
   help     Show this help
@@ -135,12 +135,31 @@ export async function run(argv: string[]): Promise<number | undefined> {
       return 0;
     }
     case "gen": {
-      const { generateContent } = await import("@junejs/server");
-      const cols = await generateContent(root);
-      console.log(cols.length ? `generated content: ${cols.join(", ")}` : "no content/ collections");
-      const { generateMessages } = await import("./messages");
-      const locales = await generateMessages(root);
-      if (locales) console.log(`generated messages: ${locales.join(", ")}`);
+      const { generateContent, loadJuneConfig, generateAgentModule, findAgentDir } = await import("@junejs/server");
+      // The content/messages freeze targets a June app (it writes into app/).
+      // A wrangler-first worker running `june gen` for its agent module has no
+      // app/ directory — don't create one just to hold an empty _content.ts.
+      if (existsSync(join(root, "app"))) {
+        const cols = await generateContent(root);
+        console.log(cols.length ? `generated content: ${cols.join(", ")}` : "no content/ collections");
+        const { generateMessages } = await import("./messages");
+        const locales = await generateMessages(root);
+        if (locales) console.log(`generated messages: ${locales.join(", ")}`);
+      }
+      // Agent module: compile the agent directory (app/agent in a June app,
+      // ./agent in a wrangler-first worker) into _agent.gen.ts so the same
+      // directory convention mounts on the edge (workerd has no fs discovery).
+      const { resolveAgent } = await import("@junejs/core/config");
+      const agentCfg = resolveAgent((await loadJuneConfig(root)).agent);
+      const agentDir = agentCfg.runtime.enabled ? findAgentDir(root, agentCfg.runtime.dir) : null;
+      const agent = agentDir ? generateAgentModule(agentDir, { check: !!flags.check }) : null;
+      if (agent) {
+        if (flags.check && agent.stale) {
+          console.error(`june gen --check: ${agent.file} is stale — run \`june gen\`.`);
+          return 1;
+        }
+        console.log(agent.written ? `generated agent module: ${agent.file}` : `agent module up to date: ${agent.file}`);
+      }
       return 0;
     }
     case "db": {
