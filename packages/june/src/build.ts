@@ -566,7 +566,9 @@ export async function juneBuild(
     // package on Linux CI that it found on macOS), and Rolldown does its own
     // resolution at bundle time anyway — this is a preflight, not the resolver.
     const sdkResolvable = (fromDir: string): boolean => {
-      for (let d = fromDir; ; ) {
+      // Absolute first: with a relative root (juneBuild(".")), dirname(".") is
+      // still "." and the walk would stop before reaching a hoisted parent.
+      for (let d = resolve(fromDir); ; ) {
         if (existsSync(join(d, "node_modules", "@anthropic-ai", "sdk", "package.json"))) return true;
         const parent = dirname(d);
         if (parent === d) return false;
