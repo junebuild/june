@@ -8,6 +8,7 @@
 import { describe, expect, test } from "bun:test";
 import { fileURLToPath } from "node:url";
 
+import type { Channel } from "@junejs/core/agent-config";
 import { buildManifest } from "../src/build";
 import { createWorker } from "../src/worker";
 import type { DurableObjectNamespace } from "../src/agent-durable";
@@ -80,5 +81,59 @@ describe("durable agent surface on the worker (edge)", () => {
     const res = await worker.fetch(chat({ message: "hi" }), { AGENT: ns });
     expect(res.status).toBe(404);
     expect(addressed()).toBeUndefined(); // the DO was never addressed
+  });
+});
+
+// ── channel webhooks on the built worker (#139): manifest.agentChannels mounts
+// the compiled module's channels via durableChannelSurface — factories resolve
+// from THIS request's env, the turn runs on the session DO, and waitUntil comes
+// from the invocation's execution context so post-ACK work survives the isolate.
+describe("agent channel webhooks on the worker (edge)", () => {
+  type Seen = { env?: unknown; hasWaitUntil?: boolean; ran?: string };
+  const webhookChannel = (seen: Seen) => (env: unknown): Channel => ({
+    name: "hook",
+    path: "/channels/hook",
+    webhook: async (req, ctx) => {
+      seen.env = env;
+      seen.hasWaitUntil = typeof ctx.waitUntil === "function";
+      seen.ran = await ctx.run("from-webhook", { session: "s9" });
+      return Response.json({ ok: true });
+    },
+  });
+
+  test("a factory channel mounts at its path; env, DO routing, and waitUntil all arrive", async () => {
+    const manifest = await buildManifest(FIXTURE_ROOT);
+    manifest.agentName = "ops";
+    const seen: Seen = {};
+    manifest.agentChannels = [webhookChannel(seen)];
+    const worker = createWorker(manifest);
+    const { ns, addressed } = fakeAgentNS();
+    const waited: Promise<unknown>[] = [];
+
+    const res = await worker.fetch(
+      new Request(ORIGIN + "/channels/hook", { method: "POST", body: "{}" }),
+      { AGENT: ns, MARK: "env-1" },
+      { waitUntil: (p) => void waited.push(p) },
+    );
+    expect(await res.json()).toEqual({ ok: true });
+    expect(seen.ran).toBe("DO replied"); // ctx.run went through the session DO
+    expect(addressed()).toBe("ops:s9");
+    expect((seen.env as { MARK?: string }).MARK).toBe("env-1"); // factory resolved from THIS request's env
+    expect(seen.hasWaitUntil).toBe(true); // the execution context reached the channel
+  });
+
+  test("agent.runtime.channels: false keeps webhooks unmounted (chat unaffected)", async () => {
+    const manifest = await buildManifest(FIXTURE_ROOT);
+    manifest.agentName = "ops";
+    manifest.agent = { ...manifest.agent, runtime: { ...manifest.agent.runtime, channels: false } };
+    const seen: Seen = {};
+    manifest.agentChannels = [webhookChannel(seen)];
+    const worker = createWorker(manifest);
+    const { ns } = fakeAgentNS();
+
+    const hook = await worker.fetch(new Request(ORIGIN + "/channels/hook", { method: "POST", body: "{}" }), { AGENT: ns });
+    expect(hook.status).toBe(404); // not mounted
+    const res = await worker.fetch(chat({ message: "hi", session: "s1" }), { AGENT: ns });
+    expect(await res.json()).toEqual({ text: "DO replied" }); // the chat surface is independent
   });
 });
