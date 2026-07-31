@@ -3,13 +3,14 @@
 // An agent is a DIRECTORY, not a config object. Location determines function:
 //
 //   agent/
-//     agent.ts         → default-exports a plain config { name, model?, description? }
-//     instructions.md  → system prompt
-//     tools/*.ts       → each default-exports a defineAction (a tool)
-//     skills/*.md      → each a procedure, loaded on demand (progressive disclosure)
-//     channels/*.ts    → each default-exports a Channel (an inbound edge)
-//     channels/*.md    → source-keyed system overlay for the same-named channel
-//     connections/*.ts → each default-exports a Connection (an outbound tool source)
+//     agent.ts                  → default-exports a plain config { name, model?, surfaces? }
+//     instructions.md           → base system prompt
+//     instructions.<source>.md  → per-surface instruction variant (#149)
+//     tools/*.ts                → each default-exports a defineAction (a tool)
+//     skills/*.md               → each a procedure, loaded on demand (progressive disclosure)
+//     channels/*.ts             → each default-exports a Channel (an inbound edge — pure transport)
+//     channels/*.md             → DEPRECATED overlay location (warned; use instructions.<source>.md)
+//     connections/*.ts          → each default-exports a Connection (an outbound tool source)
 //
 // There is no central registry to keep in sync — the directory IS the manifest.
 // Because tools are `defineAction`s, the SAME directory is also an MCP server and
@@ -51,6 +52,17 @@ export async function discoverAgentModule(dir: string): Promise<AgentModule> {
   const instructionsFile = join(dir, "instructions.md");
   const instructions = existsSync(instructionsFile) ? await readFile(instructionsFile, "utf8") : "";
 
+  // instructions.<source>.md — the agent's per-surface instruction variants
+  // (#149): applied to turns arriving through that source, composed per
+  // config.surfaces (append by default, "replace" to stand alone).
+  const surfaceInstructions: Record<string, string> = {};
+  if (existsSync(dir)) {
+    for (const e of await readdir(dir, { withFileTypes: true })) {
+      const m = e.isFile() ? e.name.match(/^instructions\.([a-z0-9_-]+)\.md$/) : null;
+      if (m) surfaceInstructions[m[1]!] = await readFile(join(dir, e.name), "utf8");
+    }
+  }
+
   const tools: AnyAction[] = [];
   for (const f of await scan(join(dir, "tools"), ".ts")) {
     const mod = await import(pathToFileURL(f).href);
@@ -71,11 +83,16 @@ export async function discoverAgentModule(dir: string): Promise<AgentModule> {
     if (mod.default) channels[basename(f, ".ts")] = mod.default as Channel | ChannelFactory;
   }
 
-  // channels/<source>.md — a system overlay applied when a turn's inbound event
-  // source matches the file's basename (see AgentDefinition.channelInstructions).
+  // channels/<source>.md — the DEPRECATED overlay convention (#149): behavior
+  // prose belongs at the agent level (instructions.<source>.md), not beside
+  // transport code. Still honored for one dev-series, loudly.
   const channelInstructions: Record<string, string> = {};
   for (const f of await scan(join(dir, "channels"), ".md")) {
-    channelInstructions[basename(f, ".md")] = await readFile(f, "utf8");
+    const source = basename(f, ".md");
+    console.warn(
+      `[june] deprecated: channels/${source}.md — move it to instructions.${source}.md at the agent root (per-surface behavior is agent-level; see junebuild/june#149).`,
+    );
+    channelInstructions[source] = await readFile(f, "utf8");
   }
 
   // connections/*.ts — outbound: definitions of external MCP/OpenAPI servers;
@@ -86,7 +103,7 @@ export async function discoverAgentModule(dir: string): Promise<AgentModule> {
     if (mod.default) connections.push(mod.default as Connection);
   }
 
-  return { config, instructions, tools, skills, channels, channelInstructions, connections };
+  return { config, instructions, surfaceInstructions, tools, skills, channels, channelInstructions, connections };
 }
 
 // Discover an agent from its directory, returning the assembled AgentDefinition

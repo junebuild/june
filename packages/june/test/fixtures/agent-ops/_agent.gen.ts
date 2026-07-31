@@ -10,14 +10,15 @@ import { parseSkill, type AgentModule } from "@junejs/core/agent-config";
 export const agentModule: AgentModule = {
   config,
   instructions: "You are an operations assistant. Place orders with create_order and answer\nconcisely.\n",
+  surfaceInstructions: {
+    "slack": "# Slack overlay\n\nThis turn arrived from the operator Slack channel. Answer as an internal\nassistant: name the evidence you used and keep the reply thread-sized.\n",
+  },
   tools: [tool_create_order],
   skills: [
     parseSkill("bulk_reorder", "---\nname: bulk_reorder\ndescription: Reorder many items at once from a supplier list, checking stock first.\nwhen-to-use: The user pastes a supplier list or asks to restock more than one item.\n---\n\n1. Read the supplier list.\n2. For each item, check stock with lookup_inventory.\n3. Place an order for anything below its threshold.\n"),
   ],
   channels: { "http": channel_http, "slack": channel_slack },
-  channelInstructions: {
-    "slack": "# Slack overlay\n\nThis turn arrived from the operator Slack channel. Answer as an internal\nassistant: name the evidence you used and keep the reply thread-sized.\n",
-  },
+  channelInstructions: {},
   connections: [],
 };
 export default agentModule;

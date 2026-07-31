@@ -31,6 +31,8 @@ export type AgentDirScan = {
   name: string;
   hasConfig: boolean;
   instructions: string | null;
+  // instructions.<source>.md at the agent root — per-surface variants (#149).
+  surfaceVariants: { source: string; raw: string }[];
   tools: string[]; // relative specifiers, e.g. "./tools/create_order.ts"
   skills: { name: string; raw: string }[];
   channels: string[]; // "./channels/slack.ts"
@@ -59,6 +61,12 @@ export function scanAgentDir(dir: string): AgentDirScan | null {
     name: basename(dir),
     hasConfig: existsSync(join(dir, "agent.ts")),
     instructions: existsSync(instructionsFile) ? readFileSync(instructionsFile, "utf8") : null,
+    surfaceVariants: readdirSync(dir, { withFileTypes: true })
+      .filter((e) => e.isFile())
+      .map((e) => e.name.match(/^instructions\.([a-z0-9_-]+)\.md$/))
+      .filter((m): m is RegExpMatchArray => m !== null)
+      .sort((a, b) => a[1]!.localeCompare(b[1]!))
+      .map((m) => ({ source: m[1]!, raw: readFileSync(join(dir, m[0]!), "utf8") })),
     tools: list(join(dir, "tools"), ".ts").map((f) => `./tools/${f}`),
     skills: list(join(dir, "skills"), ".md").map((f) => ({
       name: basename(f, ".md"),
@@ -77,6 +85,7 @@ export function scanAgentDir(dir: string): AgentDirScan | null {
     !scan.tools.length &&
     !scan.skills.length &&
     !scan.channels.length &&
+    !scan.surfaceVariants.length &&
     !scan.channelOverlays.length &&
     !scan.connections.length;
   return empty ? null : scan;
@@ -139,6 +148,9 @@ export function emitAgentModule(scan: AgentDirScan, opts?: EmitOptions): string 
     "export const agentModule: AgentModule = {",
     "  config,",
     `  instructions: ${JSON.stringify(scan.instructions ?? "")},`,
+    scan.surfaceVariants.length
+      ? `  surfaceInstructions: {\n${scan.surfaceVariants.map((v) => `    ${JSON.stringify(v.source)}: ${JSON.stringify(v.raw)},`).join("\n")}\n  },`
+      : "  surfaceInstructions: {},",
     `  tools: [${toolIds.join(", ")}],`,
     scan.skills.length
       ? `  skills: [\n${scan.skills.map((s) => `    parseSkill(${JSON.stringify(s.name)}, ${JSON.stringify(s.raw)}),`).join("\n")}\n  ],`
@@ -235,6 +247,11 @@ export function generateAgentModule(
 ): { file: string; code: string; stale: boolean; written: boolean } | null {
   const scan = scanAgentDir(dir);
   if (!scan) return null;
+  for (const o of scan.channelOverlays) {
+    console.warn(
+      `[june] deprecated: channels/${o.source}.md — move it to instructions.${o.source}.md at the agent root (per-surface behavior is agent-level; see junebuild/june#149).`,
+    );
+  }
   const code = emitAgentModule(scan, { tsExtensions: opts?.tsExtensions ?? sniffTsExtensions(dir) });
   const file = join(dir, AGENT_MODULE_FILE);
   const existing = existsSync(file) ? readFileSync(file, "utf8") : null;

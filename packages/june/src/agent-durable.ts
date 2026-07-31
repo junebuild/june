@@ -19,6 +19,7 @@ import {
   AgentSession,
   ResumeAuthorizationError,
   withSystem,
+  type ChannelPolicy,
   type EventSink,
   type TurnEvent,
   type Model,
@@ -200,9 +201,12 @@ export type DoAgentDef = {
   model: Model;
   tools: Tool[];
   instructions?: string;
-  // Per-channel-source system overlays (see AgentDefinition.channelInstructions) — the
-  // shared agent branches by real inbound source, no userText marker.
-  channelInstructions?: Record<string, string>;
+  // Per-channel-source turn policies (see AgentDefinition.channelInstructions):
+  // an overlay string, or a ChannelPolicy carrying overlay/overlayMode/denyTools
+  // (#149 — derived from agent-level instructions.<source>.md + surfaces config
+  // by assembleDurable). The shared agent branches by real inbound source, no
+  // userText marker.
+  channelInstructions?: Record<string, string | ChannelPolicy>;
   // Channels whose CAPABILITY tools should be available to this session's turns. Their
   // tools are built HERE, in the DO isolate, from `env` — because a channel's tool `run`
   // is a closure (over the bot token, etc.) that can't cross the worker→DO RPC. This is
@@ -264,7 +268,7 @@ export class AgentDurableObject {
   private readonly model: Model;
   private readonly tools: Tool[];
   private readonly channels: Channel[];
-  private readonly channelInstructions?: Record<string, string>;
+  private readonly channelInstructions?: Record<string, string | ChannelPolicy>;
   // A bag is used as-is; a provider (bindWorkerResources' shape) is resolved
   // lazily at the first turn with the def's env — opening a D1 handle is async
   // and this constructor cannot await. Resolved once, shared across turns (env
@@ -374,6 +378,18 @@ export class AgentDurableObject {
     this.tools = tools;
     this.channels = channels;
     this.channelInstructions = def.channelInstructions;
+    // Orphan-policy check (#149): assembly can't validate surface keys against
+    // factory channels (they resolve only here, with env) — so warn now, once,
+    // when a policy's source matches no resolved channel. A policy that never
+    // fires is the old silent failure; a warning is its floor.
+    if (def.channelInstructions) {
+      const names = new Set(channels.map((c) => c.name));
+      for (const source of Object.keys(def.channelInstructions)) {
+        if (!names.has(source)) {
+          console.warn(`[june] agent "${name}": surface policy "${source}" matches no channel wired into this DO (${[...names].join(", ") || "none"}) — it will never fire.`);
+        }
+      }
+    }
   }
   // Resolve THE session for this DO: explicit key (from a routed request) → persisted
   // key (a prior life learned it) → "self". A key that contradicts the persisted or
