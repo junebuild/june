@@ -6,45 +6,50 @@
 // SAME pipeline as dev (pipeline.ts), so its surfaces are byte-equivalent —
 // proven by test/parity.test.ts, not hoped for.
 //
-// Two entry points:
-//   buildManifest(appRoot) → an in-process WorkerManifest (freeze only; used by
-//     the parity test and by prerender — same render path as the bundle).
-//   juneBuild(appRoot)     → the full build: content freeze + generated entry +
-//     Rolldown bundle (workerd conditions, binary externals) +
-//     prerender-through-the-worker + wrangler config.
+// The build's separable stages live in sibling modules (re-exported here so
+// consumers keep one import root):
+//   route-scan.ts     — app/ + .june/routes/ discovery and merge (scanAppRoutes)
+//   content-freeze.ts — content/ → app/_content.ts (generateContent)
+//   config-freeze.ts  — june.config.ts → serializable worker bits (freezeConfig)
+//   manifest.ts       — the in-process freeze (buildManifest; parity + prerender)
+// This file keeps the full-build orchestration: juneBuild = content freeze +
+// generated entry + Rolldown bundle (workerd conditions, binary externals) +
+// prerender-through-the-worker + wrangler config.
 //
 // REMINDER #4: nothing in the worker graph may statically import node:*. The
 // content freeze (content/*.md → app/_content.ts) is what removes fs from the
 // dynamic route's graph; the worker reads frozen data, never the filesystem.
 
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync } from "node:fs";
-import { copyFile, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
-import { pathToFileURL } from "node:url";
 
-import { findJuneConfigPath, loadJuneConfig } from "./config-loader";
-import { resolveAgent, resolveClientRouter, resolveSpeculationRules } from "@junejs/core/config";
-import type { ContentSource, JuneConfig } from "@junejs/core/config";
+import { loadJuneConfig } from "./config-loader";
 import { buildLinkHeader } from "@junejs/core/discovery";
 import { localeHref } from "@junejs/core/i18n";
-import { routeFromModule, type BrandedRoute } from "@junejs/core/route";
-import { workers, vercel, deno, staticSite, type JuneAdapter, type ResourcePlan } from "./adapter";
-import type { DocumentConfig } from "@junejs/core/document";
+import type { BrandedRoute } from "@junejs/core/route";
+import type { ResourcePlan } from "./adapter";
 import { generateAgentModule } from "./agent-compile";
-import { generateContentModule } from "./content";
-import { createWorker, type WorkerManifest } from "./worker";
+import { freezeConfig, resolveDeployAdapter, workerName } from "./config-freeze";
+import { generateContent } from "./content-freeze";
+import { createWorker } from "./worker";
+import { buildManifest, importLayout, type ImportedLayout } from "./manifest";
 import { findMiddlewareFile } from "./router";
+import { scanAppRoutes } from "./route-scan";
 import { resolveBoundary } from "./segment";
-import type { ExtraHandler, LayoutComponent, LoadingComponent, ResourceHandler } from "./pipeline";
-import { findClientEntry, bundleClientToFile, CLIENT_SCRIPT_URL } from "./client-bundle";
+import { findClientEntry, bundleClientToFile } from "./client-bundle";
 import { RESERVED_PREFIX } from "./static-files";
 import { jsxTransform } from "./tsconfig-jsx";
 import { generateIslandRegistry } from "./island-registry";
 import { buildRsc, findRscRoutes } from "./rsc-build";
-import { cssTargets, findGlobalCss, globalCssUsesTailwind, minifyCss, processCss, STYLES_URL } from "./css";
+import { cssTargets, minifyCss, processCss } from "./css";
 import { buildModuleCss, rolldownCssModulesPlugin, registerCssModules } from "./css-modules";
+
+export { scanRoutes, scanAppRoutes, type RouteEntry } from "./route-scan";
+export { generateContent } from "./content-freeze";
+export { freezeConfig, normalizeBase, resolveDeployAdapter, workerName } from "./config-freeze";
+export { buildManifest } from "./manifest";
 
 export type BuildResult = {
   outFile: string;
@@ -54,423 +59,11 @@ export type BuildResult = {
   prerendered: string[];
 };
 
-// The segment layout CHAIN root→leaf: every directory level (route groups
-// included) may contribute a layout.* that wraps routes below it.
-type RouteEntry = {
-  path: string;
-  file: string;
-  dynamic: boolean;
-  resource?: boolean; // a route.* resource route (raw-Response handler), not a page
-  layouts: string[];
-  loading?: string; // nearest loading.tsx up the tree → streaming Suspense fallback
-};
-
-const PAGE_BASENAMES = new Set(["page", "index"]);
-const ROUTE_EXTS = [".tsx", ".jsx", ".ts", ".js"];
-
-const isRouteGroup = (name: string) => /^\(.+\)$/.test(name);
-
 // Bun built-ins (`bun`, `bun:sqlite`, …) exist only at the Bun runtime and must never enter the
 // workerd graph. Marking them external keeps rolldown from constant-folding the `const x = "bun";
 // import(x)` runtime guard (in @junejs/core's cache.ts) and warning UNRESOLVED_IMPORT. Exported so
 // the build keeps externalizing them — see test/build-externals.test.ts.
 export const isBunSpecifier = (id: string): boolean => id === "bun" || id.startsWith("bun:");
-
-// Resolve the deploy adapter from config. An explicit `adapter` INSTANCE wins; otherwise the
-// `target` NAME selects the matching built-in — so a DECLARATIVE config (e.g. kura.toml, which
-// can't express a `vercel()` call) can pick any target by string, not just "static". "workers" is
-// the default. Kept in lockstep with deploy.ts's own target→deployer switch so a build for one
-// target is never deployed as another. vercel()/deno() take their opts (runtime/regions, org/app)
-// which JuneConfig.deploy doesn't carry yet, so they use defaults here.
-export function resolveDeployAdapter(deploy: JuneConfig["deploy"]): JuneAdapter {
-  if (deploy?.adapter) return deploy.adapter as JuneAdapter;
-  switch (deploy?.target) {
-    case "static":
-      return staticSite();
-    case "vercel":
-      return vercel();
-    case "deno":
-      return deno();
-    default:
-      return workers({ name: deploy?.name, domain: deploy?.domain });
-  }
-}
-
-function segmentFile(dir: string, base: string): string | undefined {
-  return ROUTE_EXTS.map((e) => join(dir, `${base}${e}`)).find(existsSync);
-}
-
-// Walk app/ for page.* files → route paths (mirrors router.ts conventions:
-// route groups vanish from URLs, `_`-prefixed entries are private), carrying the
-// layout chain accumulated from each directory level.
-export async function scanRoutes(
-  appDir: string,
-  dir = appDir,
-  layouts: string[] = [],
-  out: RouteEntry[] = [],
-  loading?: string,
-): Promise<RouteEntry[]> {
-  const ownLayout = segmentFile(dir, "layout");
-  const chain = ownLayout ? [...layouts, ownLayout] : layouts;
-  const nearestLoading = segmentFile(dir, "loading") ?? loading;
-  const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
-  for (const e of entries) {
-    if (e.name.startsWith("_") || e.name.startsWith(".")) continue;
-    const full = join(dir, e.name);
-    if (e.isDirectory()) {
-      await scanRoutes(appDir, full, chain, out, nearestLoading);
-      continue;
-    }
-    const ext = e.name.match(/\.[^.]+$/)?.[0] ?? "";
-    if (!ROUTE_EXTS.includes(ext)) continue;
-    const base = basename(e.name, ext);
-    const resource = base === "route";
-    if (!PAGE_BASENAMES.has(base) && !resource) continue;
-    const relDir = relative(appDir, dir);
-    const segments = relDir === "" ? [] : relDir.split(sep).filter((s) => !isRouteGroup(s));
-    const path = "/" + segments.join("/");
-    out.push({
-      path: path === "/" ? "/" : path,
-      file: full,
-      dynamic: /\[.+\]/.test(path),
-      resource,
-      layouts: chain,
-      loading: nearestLoading,
-    });
-  }
-  return out;
-}
-
-// content/<collection>/*.md → app/_content.ts (the build-time content manifest).
-// This is the FREEZE that removes node:fs from the worker graph: routes import
-// frozen entries from ./_content instead of reading the filesystem at request.
-//
-// Extra sources (config `content.sources`) merge dirs OUTSIDE `content/` into named
-// collections — the docs-as-code seam (a repo's own `docs/` feeds the site directly).
-// Their dirs resolve against the app root, so "../docs" reaches a sibling directory.
-//
-// Locale buckets are DECLARED, not guessed: only dirs named in config i18n
-// (defaultLocale + locales keys) split off as locale mirrors. Guessing by shape
-// (the old BCP-47 regex) silently swallowed any 2–3-letter folder — `cli/`,
-// `sdk/`, `api/`, `faq/` all read as locales and vanished from the default set.
-// No i18n config ⇒ NO buckets (an undeclared locale is not a locale). The regex
-// remains only as the fallback when the config itself cannot be loaded.
-export async function generateContent(appRoot: string): Promise<string[]> {
-  const contentDir = join(appRoot, "content");
-  // app/ is the output dir for _content.ts (and the seed). Ensure it exists so the now-always
-  // write can't throw an opaque ENOENT when called standalone (e.g. `june gen`); the full build's
-  // own "no app/ directory" check runs earlier, so this never masks that clearer error.
-  await mkdir(join(appRoot, "app"), { recursive: true });
-  const emit = async (sources: ContentSource[], knownLocales: readonly string[] | undefined): Promise<string[]> => {
-    // Emission (incl. the per-locale layout and source merging) lives in ./content so it's
-    // pure and unit-testable; this stays the thin fs wrapper.
-    const { code, names } = generateContentModule(contentDir, knownLocales, sources);
-    // Always write, even with zero collections: `code` still carries the canonical ContentEntry
-    // type, which is the single source of truth the bootstrap seed appends its stubs against (an
-    // app with no local content/ — docs-as-code — needs this valid empty module to exist).
-    await writeFile(join(appRoot, "app", "_content.ts"), code);
-    return names;
-  };
-  const resolveSources = (sources: ContentSource[]): ContentSource[] =>
-    sources.map((s) => ({ ...s, dir: resolve(appRoot, s.dir) }));
-  const declaredLocales = (config: JuneConfig): string[] =>
-    config.i18n ? [...new Set([config.i18n.defaultLocale, ...Object.keys(config.i18n.locales)])] : [];
-  // Learn sources + locales from june.config.ts — TOLERANTLY. A wrapper-generated config (e.g.
-  // Kura's) imports app/_content.ts, which does not exist before the FIRST freeze. So on a failed
-  // config load: generate a default scan to create that import's target, then re-probe the config
-  // and regenerate with the real sources/locales. Self-healing, no bootstrap flag. Content errors
-  // from emit() (slug collision, missing source dir) stay loud — only the CONFIG LOAD is tolerated.
-  let config: JuneConfig | null = null;
-  try {
-    config = await loadJuneConfig(appRoot);
-  } catch {
-    /* two-pass below */
-  }
-  if (config) return emit(resolveSources(config.content?.sources ?? []), declaredLocales(config));
-  // Pass 1 (throwaway when the probe succeeds): legacy regex locale detection, since the
-  // declared set is unknowable without the config. emit() writes app/_content.ts with the
-  // canonical ContentEntry type plus a `const` per collection FOUND — but a docs-as-code app
-  // keeps ALL content in external content.sources with NO local content/, so it finds zero
-  // collections and thus emits no EXPORTS (no `DOCS`). seedContentImports then appends stubs for
-  // the exact names the config imports (e.g. Kura's `import { DOCS }`), so the re-probe can load.
-  const names = await emit([], undefined);
-  await seedContentImports(appRoot);
-  const probed = probeConfigFresh(appRoot);
-  if (probed === null) {
-    console.warn("[june gen] june.config.ts failed to load — content.sources/i18n locales (if any) not applied");
-    return names;
-  }
-  return emit(resolveSources(probed.sources), probed.locales);
-}
-
-// Bootstrap seed: ensure app/_content.ts exports every name the config imports from it, so the
-// re-probe's config load resolves BEFORE the first real freeze. A docs-as-code app (content only
-// in external content.sources, no local content/) leaves Pass 1's default scan empty — nothing
-// seeds the collections — so here we append stubs for the EXACT named imports the config takes
-// from the app/_content module (a bare `import { DOCS }` of it → `export const DOCS = []`). The
-// caller's emit() already wrote the module's canonical ContentEntry type (even when empty), so the
-// stubs type against that single source of truth. Overwritten by the real freeze that follows a
-// successful probe; a no-op once content exists.
-async function seedContentImports(appRoot: string): Promise<void> {
-  const cfgPath = findJuneConfigPath(appRoot);
-  if (!cfgPath) return;
-  const contentFile = join(appRoot, "app", "_content.ts");
-  const current = existsSync(contentFile) ? await readFile(contentFile, "utf8") : "";
-  const cfgSrc = await readFile(cfgPath, "utf8");
-  // Only stub valid JS identifiers — a name carrying comments/other tokens (rare, but valid TS)
-  // must never reach `new RegExp(...)` (would throw) or the emitted stub (would be invalid TS).
-  const isIdent = (s: string): boolean => /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(s);
-  // A Set so a name matched more than once (e.g. a comment mentioning the import + the real one)
-  // yields ONE stub — a duplicate `export const <name>` would be invalid TS. Also skip names the
-  // module already exports.
-  const seen = new Set<string>();
-  const stubs: string[] = [];
-  // Each named `import { A, B as C }` the config takes from the app/_content module → stub each.
-  // The `(?:\.\w+)?` tolerates an explicit extension (`app/_content.ts`/`.js`/`.mjs`), which
-  // NodeNext / verbatimModuleSyntax configs require — else the import goes undetected and unstubbed.
-  for (const m of cfgSrc.matchAll(/import\s*(?:type\s+)?\{([^}]*)\}\s*from\s*["'][^"']*app\/_content(?:\.\w+)?["']/g)) {
-    // Strip block + line comments from the specifier list BEFORE splitting: a valid
-    // `{ DOCS /* keep */ }` must still yield the identifier `DOCS` (not be dropped), and a comment
-    // could otherwise carry a `,` that breaks the split. Then drop `type` markers per specifier.
-    const inner = (m[1] ?? "").replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
-    for (const part of inner.split(",")) {
-      const name = part.replace(/\btype\b/g, "").split(/\s+as\s+/).pop()?.trim();
-      if (!name || !isIdent(name) || seen.has(name)) continue;
-      seen.add(name);
-      // Escape before interpolating: a valid identifier may contain `$`, a regex metachar (an
-      // anchor), which would corrupt the already-exported check. The stub below uses the raw name.
-      const reName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      if (!new RegExp(`export (?:const|function|type) ${reName}\\b`).test(current)) {
-        stubs.push(`export const ${name}: ContentEntry[] = [];`);
-      }
-    }
-  }
-  if (stubs.length) await writeFile(contentFile, current + stubs.join("\n") + "\n");
-}
-
-// Re-probe ONLY the content-relevant config (sources + declared i18n locales) in a FRESH
-// subprocess. The bootstrap retry can't re-import in-process: a failed ESM load is cached as
-// errored, and Bun also caches the failed RESOLUTION of the config's own imports — so a
-// same-process retry (even cache-busted) re-rejects after the missing app/_content.ts appears.
-// A child process has a clean module map, and both fields are plain JSON, so they survive the
-// pipe. Returns null when the config is genuinely broken.
-function probeConfigFresh(appRoot: string): { sources: ContentSource[]; locales: string[] } | null {
-  const path = findJuneConfigPath(appRoot);
-  if (!path) return { sources: [], locales: [] };
-  // Markers isolate the JSON from anything the config prints at import time. `.then` (not TLA)
-  // so the eval works as CJS under both `bun -e` and `node -e`; execArgv carries loader flags
-  // (e.g. --experimental-strip-types) so the child can read the same TS config the parent does.
-  const code =
-    `import(${JSON.stringify(pathToFileURL(path).href)}).then(` +
-    `(m) => { const c = m.default ?? {}; process.stdout.write("\\n__JUNE_CONTENT__" + JSON.stringify({ ` +
-    `sources: c.content?.sources ?? [], ` +
-    `locales: c.i18n ? [...new Set([c.i18n.defaultLocale, ...Object.keys(c.i18n.locales ?? {})])] : [] ` +
-    `}) + "__END__"); }, () => process.exit(42));`;
-  try {
-    const out = execFileSync(process.execPath, [...process.execArgv, "-e", code], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    const m = out.match(/__JUNE_CONTENT__(.*?)__END__/s);
-    return m ? (JSON.parse(m[1]!) as { sources: ContentSource[]; locales: string[] }) : null;
-  } catch {
-    return null;
-  }
-}
-
-// Freeze june.config.ts → the serializable bits the worker inlines.
-export async function freezeConfig(appRoot: string): Promise<{
-  document: DocumentConfig;
-  agent: WorkerManifest["agent"];
-  i18n: WorkerManifest["i18n"];
-  earlyHints: string[];
-  buildExternal: string[];
-}> {
-  const cfg = await loadJuneConfig(appRoot);
-  // An app with a client entry gets the islands runtime URL frozen into its
-  // document. Detected HERE (not just in juneBuild) so the prerender path —
-  // which re-freezes through buildManifest — sets the SAME clientScript, keeping
-  // prerendered pages byte-equivalent to the live worker (parity).
-  // Client entry: app/_client.* wins; fall back to .june/routes/_client.* (framework slot).
-  const hasClient =
-    findClientEntry(join(appRoot, "app")) !== undefined ||
-    findClientEntry(join(appRoot, ".june", "routes")) !== undefined;
-  const hasCss = findGlobalCss(join(appRoot, "app")) !== null;
-  return {
-    document: {
-      site: cfg.site ?? {},
-      speculationRules: resolveSpeculationRules(cfg.speculation ?? undefined),
-      speculationDelivery: "inline",
-      viewTransitions: cfg.viewTransitions ?? true,
-      // Default the baseline reset OFF when the app uses Tailwind (its Preflight is the reset).
-      cssReset: cfg.cssReset ?? !globalCssUsesTailwind(join(appRoot, "app")),
-      clientRouter: resolveClientRouter(cfg.clientRouter),
-      clientScript: hasClient ? CLIENT_SCRIPT_URL : null,
-      styles: hasCss ? STYLES_URL : null,
-      // Deploy subpath (JuneConfig.basePath). Frozen so the document prefixes its
-      // asset URLs; the prerender path re-freezes through buildManifest and gets the
-      // same value, keeping static pages' asset links correct under the subpath.
-      basePath: normalizeBase(cfg.basePath),
-    },
-    agent: resolveAgent(cfg.agent),
-    // Pass i18n through as-is: the in-process buildManifest keeps a resolveLocale
-    // hook (parity test), and the codegen JSON.stringify below drops the function
-    // (worker hook support is the codegen pass — see the manifest field comment).
-    i18n: cfg.i18n,
-    earlyHints: cfg.earlyHints ?? [],
-    buildExternal: cfg.build?.external ?? [],
-  };
-}
-
-// A deploy basePath is stored with a leading slash and no trailing slash; empty
-// ("" — the default) means a root deploy. So "/openab/docs/" → "/openab/docs",
-// "openab" → "/openab", undefined → "".
-export function normalizeBase(base?: string): string {
-  if (!base) return "";
-  const b = base.startsWith("/") ? base : `/${base}`;
-  return b.endsWith("/") ? b.slice(0, -1) : b;
-}
-
-type ImportedLayout = { component: LayoutComponent; boundary: boolean };
-async function importLayout(file: string): Promise<ImportedLayout | null> {
-  const mod = (await import(pathToFileURL(file).href)) as {
-    default?: LayoutComponent;
-    segmentBoundary?: unknown;
-  };
-  return typeof mod.default === "function"
-    ? { component: mod.default, boundary: mod.segmentBoundary === true }
-    : null;
-}
-
-// A wrangler-valid worker name from a package name or directory name. Wrangler requires lowercase
-// [a-z0-9-] not starting/ending with a dash — so a SCOPED package name (`@scope/pkg`) must lose its
-// scope (else the `@` sanitizes to a leading dash and wrangler rejects the config). Drop the scope,
-// lowercase, collapse non-alphanumerics to single dashes, trim edge dashes; fall back to "app" if
-// nothing survives (e.g. an all-punctuation name). Exported for tests.
-export function workerName(raw: string): string {
-  return (
-    raw
-      .replace(/^@[^/]+\//, "")
-      .toLowerCase()
-      .replace(/[^a-z0-9-]+/g, "-")
-      .replace(/^-+|-+$/g, "") || "app"
-  );
-}
-
-// The FREEZE, in-process: import route modules + layouts, build the manifest a
-// createWorker() can run immediately. Used by prerender and by the parity test
-// (its render path is identical to the Rolldown-bundled worker).
-export async function buildManifest(appRoot: string): Promise<WorkerManifest> {
-  const appDir = join(appRoot, "app");
-  const juneRoutesDir = join(appRoot, ".june", "routes");
-  const frozen = await freezeConfig(appRoot);
-
-  // Merge routes: app/ takes priority over .june/routes/ (app/ is the escape hatch).
-  // .june/routes/ is the convention slot for framework-generated routes (e.g. kura
-  // writes its docs/search/og routes there so the user never manages boilerplate).
-  const appRoutes = await scanRoutes(appDir);
-  const frameworkRoutes = existsSync(juneRoutesDir) ? await scanRoutes(juneRoutesDir) : [];
-  const appPaths = new Set(appRoutes.map((r) => r.path));
-  const scanned = [
-    ...appRoutes,
-    ...frameworkRoutes.filter((r) => !appPaths.has(r.path)),
-  ].sort((a, b) => a.path.localeCompare(b.path));
-
-  const layoutCache = new Map<string, ImportedLayout | null>();
-  const loadCached = async (f: string): Promise<ImportedLayout | null> => {
-    if (!layoutCache.has(f)) layoutCache.set(f, await importLayout(f));
-    return layoutCache.get(f) ?? null;
-  };
-  // The chain (root→leaf) + boundary index + shell key, via the SHARED resolver
-  // (the one place the deepest-wins rule lives), so the frozen manifest and the
-  // dev resolver can't drift — the parity contract.
-  const componentsFor = async (
-    files: string[],
-  ): Promise<{ chain: LayoutComponent[]; boundaryIndex: number | null; key: string | null }> => {
-    const items = [];
-    for (const f of files) {
-      const c = await loadCached(f);
-      items.push({ file: f, entry: c?.component ?? null, boundary: !!c?.boundary });
-    }
-    return resolveBoundary(items);
-  };
-
-  const loadingCache = new Map<string, LoadingComponent | null>();
-  const loadingFor = async (file?: string): Promise<LoadingComponent | undefined> => {
-    if (!file) return undefined;
-    if (!loadingCache.has(file)) {
-      const loaded = await importLayout(file);
-      loadingCache.set(file, loaded ? (loaded.component as LoadingComponent) : null);
-    }
-    return loadingCache.get(file) ?? undefined;
-  };
-
-  const routes: Record<string, BrandedRoute> = {};
-  const dynamicRoutes: Array<{ pattern: string; def: BrandedRoute }> = [];
-  const resourceRoutes: Array<{ pattern: string; handler: ResourceHandler }> = [];
-  const layoutChains: Record<string, LayoutComponent[]> = {};
-  const layoutBoundaries: Record<string, { index: number; key: string }> = {};
-  const loadings: Record<string, LoadingComponent> = {};
-
-  for (const r of scanned) {
-    const mod = await import(pathToFileURL(r.file).href);
-    // Resource route (route.*): the default export is the Response handler.
-    if (r.resource) {
-      const handler = (mod as { default?: unknown }).default;
-      if (typeof handler === "function") resourceRoutes.push({ pattern: r.path, handler: handler as ResourceHandler });
-      continue;
-    }
-    const def = routeFromModule(mod);
-    if (!def) continue;
-    const { chain, boundaryIndex, key } = await componentsFor(r.layouts);
-    const loading = await loadingFor(r.loading);
-    if (r.dynamic) {
-      dynamicRoutes.push({ pattern: r.path, def });
-      layoutChains[r.path] = chain;
-    } else {
-      routes[r.path] = def;
-      layoutChains[r.path] = chain;
-    }
-    if (boundaryIndex !== null && key !== null) layoutBoundaries[r.path] = { index: boundaryIndex, key };
-    if (loading) loadings[r.path] = loading;
-  }
-
-  let extra: ExtraHandler | undefined;
-  const extraFile = findMiddlewareFile(appDir);
-  if (extraFile) {
-    const mod = (await import(pathToFileURL(extraFile).href)) as { default?: unknown };
-    if (typeof mod.default === "function") extra = mod.default as ExtraHandler;
-  }
-
-  // The durable agent's DO address (createWorker routes the chat endpoint by
-  // it). Set whenever an agent/ directory exists — the surface is inert without
-  // an env.AGENT binding, so in-process consumers (prerender, the parity test)
-  // are unaffected.
-  let agentName: string | undefined;
-  const agentDir = join(appDir, frozen.agent.runtime.dir);
-  if (frozen.agent.runtime.enabled && existsSync(agentDir)) {
-    const cfgFile = join(agentDir, "agent.ts");
-    const cfg = existsSync(cfgFile)
-      ? ((await import(pathToFileURL(cfgFile).href)).default as { name?: string } | undefined)
-      : undefined;
-    agentName = cfg?.name ?? basename(agentDir);
-  }
-
-  return {
-    routes,
-    dynamicRoutes,
-    resourceRoutes,
-    layoutChains,
-    layoutBoundaries,
-    loadings,
-    document: frozen.document,
-    agent: frozen.agent,
-    agentName,
-    i18n: frozen.i18n,
-    earlyHints: frozen.earlyHints,
-    extra,
-  };
-}
 
 function importPath(fromDir: string, file: string): string {
   const p = relative(fromDir, file).split(sep).join("/").replace(/\.[^.]+$/, "");
@@ -503,14 +96,7 @@ export async function juneBuild(
 
   const contentCollections = await generateContent(appRoot);
   // Same merge as buildManifest: app/ takes priority over .june/routes/.
-  const juneRoutesDir2 = join(appRoot, ".june", "routes");
-  const appRoutes2 = await scanRoutes(appDir);
-  const frameworkRoutes2 = existsSync(juneRoutesDir2) ? await scanRoutes(juneRoutesDir2) : [];
-  const appPaths2 = new Set(appRoutes2.map((r) => r.path));
-  const routes = [
-    ...appRoutes2,
-    ...frameworkRoutes2.filter((r) => !appPaths2.has(r.path)),
-  ].sort((a, b) => a.path.localeCompare(b.path));
+  const routes = await scanAppRoutes(appRoot);
   if (routes.length === 0) throw new Error(`no page.* routes found under ${appDir} or .june/routes/`);
 
   const frozen = await freezeConfig(appRoot);
