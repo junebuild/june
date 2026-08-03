@@ -30,6 +30,10 @@ describe("export surface parity", () => {
     // All backends re-export from ./fonts — one memory cache, one loader.
     expect(edge.loadGoogleFont).toBe(node.loadGoogleFont);
     expect(workerd.loadGoogleFont).toBe(node.loadGoogleFont);
+    expect(edge.loadDefaultFonts).toBe(node.loadDefaultFonts);
+    expect(workerd.loadDefaultFonts).toBe(node.loadDefaultFonts);
+    expect(edge.hasCJK).toBe(node.hasCJK);
+    expect(workerd.hasCJK).toBe(node.hasCJK);
     expect(edge.OG_HEADERS).toBe(node.OG_HEADERS);
     expect(workerd.OG_HEADERS).toBe(node.OG_HEADERS);
   });
