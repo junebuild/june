@@ -59,7 +59,13 @@ async function _fetchFont(cssUrl: string, family: string, cache?: Cache): Promis
   return buf;
 }
 
-/** True when the string contains CJK characters (Chinese, Japanese, Korean). */
+/**
+ * True when the string contains CJK ideographs or kana (Chinese, Japanese).
+ * Korean Hangul (U+AC00–U+D7AF) is NOT detected — loadDefaultFonts ships
+ * Noto Sans TC, which has no Hangul glyphs, so detecting Korean here would
+ * swap a readable Inter fallback for tofu. Proper Korean support means a
+ * Noto Sans KR branch; until then this stays honestly Chinese/Japanese.
+ */
 export const hasCJK = (s: string): boolean => /[　-鿿豈-﫿]/.test(s);
 
 /**

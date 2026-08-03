@@ -96,6 +96,13 @@ describe("hasCJK", () => {
     expect(hasCJK("タイトル")).toBe(true);
     expect(hasCJK("mixed 標題")).toBe(true);
   });
+
+  test("Hangul is a documented gap — Korean must NOT trigger the TC font", () => {
+    // Noto Sans TC has no Hangul glyphs: detecting Korean would replace the
+    // readable Inter fallback with tofu. Pinned until a Noto Sans KR branch
+    // exists (see hasCJK's doc comment in src/fonts.ts).
+    expect(hasCJK("\uD55C\uAE00 \uC81C\uBAA9")).toBe(false);
+  });
 });
 
 describe("OG_HEADERS", () => {
