@@ -24,7 +24,7 @@ const ROUTE_EXTS = [".tsx", ".jsx", ".ts", ".js"];
 
 const isRouteGroup = (name: string) => /^\(.+\)$/.test(name);
 
-export function segmentFile(dir: string, base: string): string | undefined {
+function segmentFile(dir: string, base: string): string | undefined {
   return ROUTE_EXTS.map((e) => join(dir, `${base}${e}`)).find(existsSync);
 }
 
