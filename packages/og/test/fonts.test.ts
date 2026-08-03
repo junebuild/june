@@ -68,7 +68,7 @@ describe("loadGoogleFont", () => {
 
   test("css without a src url fails loudly, naming the family", async () => {
     globalThis.fetch = (async () => new Response("/* no faces */")) as unknown as typeof fetch;
-    expect(loadGoogleFont("Test Broken", 600, "x")).rejects.toThrow(
+    await expect(loadGoogleFont("Test Broken", 600, "x")).rejects.toThrow(
       'could not extract font URL for "Test Broken"',
     );
   });
