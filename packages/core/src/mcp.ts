@@ -14,6 +14,15 @@ import type { ActionContext } from "./context";
 
 const PROTOCOL_VERSION = "2025-06-18";
 
+// Warn at most once per process when the tool surface is empty (see tools/list).
+let warnedEmptyTools = false;
+
+// Test-only: the guard above is a process-wide singleton, so a test asserting the
+// warning would otherwise be order-dependent across the whole monorepo run. Reset it.
+export function __resetEmptyToolsWarning(): void {
+  warnedEmptyTools = false;
+}
+
 type Rpc = {
   jsonrpc: "2.0";
   id?: string | number | null;
@@ -59,8 +68,21 @@ async function handle(message: Rpc, ctx: ActionContext): Promise<object | null> 
       });
     case "ping":
       return ok(id, {});
-    case "tools/list":
-      return ok(id, { tools: mcpTools() });
+    case "tools/list": {
+      const tools = mcpTools();
+      if (tools.length === 0 && !warnedEmptyTools) {
+        // Reaching this handler means /mcp is mounted (enabled) yet the surface
+        // is empty — the exact silent no-op where a defineAction() sits in a
+        // file the app graph never imports. Warn once, pointing to the fix.
+        warnedEmptyTools = true;
+        console.warn(
+          "[june] /mcp exposes no tools — no defineAction() with a description is registered. " +
+            "Agent tools live in agent/tools/*.ts (each default-exports a defineAction); " +
+            "a standalone app/actions.ts is not auto-loaded into the app graph.",
+        );
+      }
+      return ok(id, { tools });
+    }
     case "tools/call": {
       const name = params?.name as string | undefined;
       const args = (params?.arguments as Record<string, unknown>) ?? {};
