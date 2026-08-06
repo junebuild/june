@@ -55,6 +55,15 @@ function appRoot(positional: string[]): string {
   return positional[0] ? resolve(positional[0]) : process.cwd();
 }
 
+// A valid TCP port, else the fallback. Rejects booleans (`--port` with no value
+// parses to `true`, and `Number(true)` is 1 — binding port 1 is never intended)
+// and out-of-range / non-integer values (`PORT=abc`, `PORT=`). Exported for tests.
+export function coercePort(value: unknown, fallback: number): number {
+  if (typeof value === "boolean") return fallback;
+  const n = Number(value);
+  return Number.isInteger(n) && n > 0 && n < 65536 ? n : fallback;
+}
+
 async function info(root: string): Promise<number> {
   const { createApp, loadJuneConfig } = await import("@junejs/server");
   const { resolveAgent } = await import("@junejs/core/config");
@@ -84,6 +93,14 @@ async function info(root: string): Promise<number> {
 // ones (dev) so the bin does NOT call process.exit and the server stays alive.
 export async function run(argv: string[]): Promise<number | undefined> {
   const { verb, positional, flags } = parse(argv);
+  // `--help` in any position (e.g. `june dev --help`) prints help with no side
+  // effect. The switch still handles help in VERB position (`june help`,
+  // `june --help`); this covers `<verb> --help`, which the parser attaches to
+  // the verb as a flag and would otherwise run the command.
+  if (flags.help) {
+    console.log(HELP);
+    return 0;
+  }
   const root = appRoot(positional);
 
   switch (verb) {
@@ -110,7 +127,9 @@ export async function run(argv: string[]): Promise<number | undefined> {
       const { startDevServer } = await import("@junejs/server");
       await startDevServer({
         appDir: join(root, "app"),
-        port: flags.port ? Number(flags.port) : 3000,
+        // Precedence: --port > PORT env > 3000 (an explicit flag beats the env,
+        // the platform convention beats the default). coercePort rejects junk.
+        port: coercePort(flags.port, coercePort(process.env.PORT, 3000)),
       });
       return undefined; // server keeps the process alive
     }
