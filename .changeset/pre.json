@@ -34,6 +34,7 @@
     "crisp-event-guard",
     "crisp-event-normalization",
     "crisp-identity-principal",
+    "crisp-private-notes",
     "crisp-website-hooks-auth",
     "delivered-inbound-turns",
     "delivered-resume",
