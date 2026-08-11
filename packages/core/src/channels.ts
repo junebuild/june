@@ -844,6 +844,9 @@ export function slackChannel(opts: {
     async post(target, content) {
       const text = typeof content === "string" ? content : content.text ?? "";
       const blocks = typeof content === "string" ? undefined : content.blocks;
+      // fail closed on `note`: Slack has no private-note concept, and downgrading an
+      // operator-only note to a public message would leak it to the end user.
+      if (typeof content !== "string" && content.note) throw new Error("slack: note posts are not supported (private notes are a Crisp concept)");
       // fail fast, client-side: an empty post would round-trip to Slack's no_text error
       if (!text.trim() && !blocks?.length) throw new Error("slack: post needs text or non-empty blocks");
       const payload: Record<string, unknown> = { channel: target.channelId, thread_ts: target.threadId, text };
@@ -1250,6 +1253,20 @@ function slackTools(get: SlackCall, post: SlackCall): Tool[] {
 // Only visitor ("user") text triggers a turn by default; operator messages are our own
 // replies. `respondTo` widens that (a rating or a resolve can drive a follow-up turn).
 //
+// Beyond visitor-visible replies, the channel speaks Crisp's PRIVATE NOTES — the same
+// message endpoint with type "note", rendered in the operator inbox only (the visitor
+// never sees one). Three seams, one per authorship:
+//   - the agent, mid-turn: the crisp_send_note tool hands context / findings / a
+//     preliminary assessment to the human team even when the agent shouldn't (or
+//     can't) answer the visitor;
+//   - the channel, per reply: replyAs: "note" turns the ENTIRE reply path into
+//     operator-only drafts — the not-yet-trusted-to-speak mode: turns run normally,
+//     humans read the agent's answer in-conversation, the visitor sees nothing.
+//     Flip back to "message" (default) to go live;
+//   - the app, deterministically: post(target, { text, note: true }) lands an
+//     app-authored note (e.g. a mirror-mode shadow turn's output) — no LLM choice
+//     in the loop.
+//
 // Symmetric with slack: the visitor message becomes a normalized InboundEvent
 // (channelId = website, threadId = conversation session, user = the visitor), and the
 // channel exposes crisp_read_conversation so the agent can pull earlier messages in the
@@ -1506,6 +1523,13 @@ export function crispChannel(opts: CrispAuthOpts & {
   // "rating"] lets a bad score drive a follow-up turn (userText is a synthesized note,
   // like Slack reaction turns).
   respondTo?: CrispEventKind[];
+  // How the reply path DELIVERS a turn's reply: "message" (default) is the visitor-
+  // visible operator message; "note" lands it as a PRIVATE note only human operators
+  // see (same endpoint, type "note"). The supervised rollout mode — the agent runs
+  // real turns and its answers sit in the operator inbox as suggestions, but it is
+  // not yet allowed to speak to the visitor. Orthogonal to respondTo (which kinds
+  // turn) and to the crisp_send_note tool (agent-authored notes mid-turn, any mode).
+  replyAs?: "message" | "note";
   // Per-kind observers: `on[kind]` fires (background) only for that kind, only when a
   // normalized event exists (post loop guards) — no onEvent-style demux. A kind present
   // here is auto-subscribed (see the `events` derivation). onEvent stays the raw
@@ -1523,12 +1547,17 @@ export function crispChannel(opts: CrispAuthOpts & {
   const respondTo: string[] = opts.mode === "observe" ? [] : (opts.respondTo ?? events);
   const auth = () => `Basic ${btoa(`${opts.identifier}:${opts.key}`)}`;
   const tier = opts.tier ?? "plugin";
-  async function sendMessage(websiteId: string, sessionId: string, content: string) {
-    await fetch(`${api}/website/${websiteId}/conversation/${sessionId}/message`, {
+  const replyAs: "message" | "note" = opts.replyAs ?? "message";
+  // The one outbound message call — text messages and private notes are the same
+  // endpoint, differing only in `type`. Returns Crisp's envelope so callers pick
+  // their own strictness: the reply path stays best-effort, post/tool check it.
+  async function postMessage(websiteId: string, sessionId: string, content: string, type: "text" | "note") {
+    const res = await fetch(`${api}/website/${websiteId}/conversation/${sessionId}/message`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: auth(), "X-Crisp-Tier": tier },
-      body: JSON.stringify({ type: "text", from: "operator", origin: "chat", content }),
+      body: JSON.stringify({ type, from: "operator", origin: "chat", content }),
     });
+    return (await res.json().catch(() => ({}))) as { error?: boolean; reason?: string; data?: { fingerprint?: number } };
   }
   async function crispGet<T = CrispResponse>(path: string): Promise<T> {
     const res = await fetch(`${api}${path}`, { headers: { authorization: auth(), "X-Crisp-Tier": tier } });
@@ -1559,21 +1588,19 @@ export function crispChannel(opts: CrispAuthOpts & {
   return {
     name: "crisp",
     path: opts.path ?? "/channels/crisp",
-    tools: () => crispTools(crispGet),
-    // Deterministic outbound post (#89), the crisp dual: an operator text message into a
+    tools: () => crispTools(crispGet, postMessage),
+    // Deterministic outbound post (#89), the crisp dual: an operator message into a
     // conversation, returning its fingerprint as the identity `ts`. Requires the
     // conversation session as target.threadId (crisp has no channel-only target), and
-    // text content (no block concept). Throws loudly on a platform error, unlike the
+    // text content (no block concept); `note: true` lands it as a PRIVATE operator-only
+    // note (same endpoint, type "note"). Throws loudly on a platform error, unlike the
     // best-effort reply path.
     async post(target, content) {
       if (!target.threadId) throw new Error("crisp: post needs target.threadId (the conversation session id)");
       const text = typeof content === "string" ? content : content.text;
       if (!text?.trim()) throw new Error("crisp: post needs text content (blocks have no crisp mapping)");
-      const r = (await (await fetch(`${api}/website/${target.channelId}/conversation/${target.threadId}/message`, {
-        method: "POST",
-        headers: { "content-type": "application/json", authorization: auth(), "X-Crisp-Tier": "plugin" },
-        body: JSON.stringify({ type: "text", from: "operator", origin: "chat", content: text }),
-      })).json().catch(() => ({}))) as { error?: boolean; reason?: string; data?: { fingerprint?: number } };
+      const asNote = typeof content !== "string" && content.note === true;
+      const r = await postMessage(target.channelId, target.threadId, text, asNote ? "note" : "text");
       if (r.error !== false || r.data?.fingerprint === undefined) throw new Error(`crisp: message send failed (${r.reason ?? "no response"})`);
       return { channelId: target.channelId, threadId: target.threadId, ts: String(r.data.fingerprint) };
     },
@@ -1632,12 +1659,14 @@ export function crispChannel(opts: CrispAuthOpts & {
       }
 
       // respond: only kinds in respondTo drive a turn + reply (a rating can stay observe-only).
+      // replyAs decides how the reply lands: the visitor-visible message (default) or a
+      // private operator-only note (the supervised rollout mode — see the opt).
       if (norm && respondTo.includes(norm.event.kind)) {
         const { event, session, userText } = norm;
         runBackground(ctx, async () => {
           await identityReady;
           const reply = await ctx.run(userText, { session, event });
-          if (reply && reply.trim()) await sendMessage(event.channelId, event.threadId!, reply); // skip empty (tool-only turn)
+          if (reply && reply.trim()) await postMessage(event.channelId, event.threadId!, reply, replyAs === "note" ? "note" : "text"); // skip empty (tool-only turn)
         }, opts.onError);
       }
       return new Response("", { status: 200 }); // fast ACK
@@ -1654,9 +1683,19 @@ type CrispResponse = {
 };
 
 // The Crisp capability toolset — symmetric with slackTools. crisp_read_conversation
-// pulls the message history of a conversation, defaulting website/session from the
-// current turn's event (channelId/threadId).
-function crispTools(get: (path: string) => Promise<CrispResponse>): Tool[] {
+// pulls the message history of a conversation; crisp_send_note leaves a PRIVATE
+// operator-only note in it (the agent's channel to the human team — the visitor never
+// sees a note, so it is safe in any mode, including before the agent is trusted to
+// speak). Both default website/session from the current turn's event
+// (channelId/threadId).
+function crispTools(
+  get: (path: string) => Promise<CrispResponse>,
+  sendMessage: (websiteId: string, sessionId: string, content: string, type: "text" | "note") => Promise<{ error?: boolean; reason?: string; data?: { fingerprint?: number } }>,
+): Tool[] {
+  const noConversation = { error: "no conversation in context — pass websiteId and sessionId (this turn has no Crisp event)" };
+  // gate on source: in a multi-channel agent these tools are available during a Slack
+  // turn too; only default from a genuine Crisp event (see slackTools for the why).
+  const crispEv = (ctx: ToolContext) => (ctx.event?.source === "crisp" ? ctx.event : undefined);
   return [
     {
       spec: {
@@ -1671,15 +1710,39 @@ function crispTools(get: (path: string) => Promise<CrispResponse>): Tool[] {
         },
       },
       run: async (input: { websiteId?: string; sessionId?: string }, ctx: ToolContext) => {
-        // gate on source: in a multi-channel agent this tool is available during a Slack
-        // turn too; only default from a genuine Crisp event (see slackTools for the why).
-        const ev = ctx.event?.source === "crisp" ? ctx.event : undefined;
+        const ev = crispEv(ctx);
         const website = input.websiteId ?? ev?.channelId;
         const session = input.sessionId ?? ev?.threadId;
-        if (!website || !session) return { error: "no conversation in context — pass websiteId and sessionId (this turn has no Crisp event)" };
+        if (!website || !session) return noConversation;
         const r = await get(`/website/${website}/conversation/${session}/messages`);
         if (r.error) return { error: r.reason ?? "crisp error" };
         return { messages: (r.data ?? []).map((m) => ({ from: m.from, type: m.type, content: m.content, nickname: m.user?.nickname })) };
+      },
+    },
+    {
+      spec: {
+        name: "crisp_send_note",
+        description: "Leave a PRIVATE note on this Crisp conversation (defaults to the current one). Notes are visible to human operators only — the visitor never sees them. Use it to hand the human team reference context, findings, or your preliminary assessment, especially when you should not (or cannot) reply to the visitor directly.",
+        input: {
+          type: "object",
+          properties: {
+            content: { type: "string", description: "The note text for the human operators" },
+            websiteId: { type: "string", description: "Website id; defaults to the current one" },
+            sessionId: { type: "string", description: "Conversation session id; defaults to the current one" },
+          },
+          required: ["content"],
+        },
+      },
+      run: async (input: { content: string; websiteId?: string; sessionId?: string }, ctx: ToolContext) => {
+        const ev = crispEv(ctx);
+        const website = input.websiteId ?? ev?.channelId;
+        const session = input.sessionId ?? ev?.threadId;
+        if (!website || !session) return noConversation;
+        if (!input.content?.trim()) return { error: "note content is empty" };
+        const r = await sendMessage(website, session, input.content, "note");
+        if (r.error !== false) return { error: r.reason ?? "crisp error" };
+        // fingerprint = the note's message identity, so the agent can reference it later
+        return { ok: true, fingerprint: r.data?.fingerprint };
       },
     },
   ];
