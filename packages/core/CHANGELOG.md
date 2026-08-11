@@ -1,5 +1,11 @@
 # @junejs/core
 
+## 0.2.0-dev.37
+
+### Patch Changes
+
+- [#158](https://github.com/junebuild/june/pull/158) [`ffdb05c`](https://github.com/junebuild/june/commit/ffdb05c83400632cde32abd59b86bb8186a48b6a) Thanks [@linyiru](https://github.com/linyiru)! - crispChannel speaks Crisp's PRIVATE NOTES — the agent's channel to the human operators (same message endpoint, `type: "note"`; the visitor never sees one). Three seams, one per authorship: the `crisp_send_note` tool lets the agent hand reference context / findings / a preliminary assessment to the human team mid-turn, even when it shouldn't (or can't) answer the visitor; `replyAs: "note"` turns the ENTIRE reply path into operator-only drafts — the supervised-rollout mode where turns run normally but the agent isn't yet trusted to speak (flip back to `"message"` to go live); and `post(target, { text, note: true })` lands an app-authored note deterministically (e.g. a mirror-mode shadow turn's output). Slack's `post` fails closed on `note: true` — it has no private-note concept, and downgrading operator-only content to a public message would leak it. Also fixes `post()` hardcoding `X-Crisp-Tier: "plugin"` — the `tier` option's contract is that it rides on every outbound call. Model-supplied `websiteId`/`sessionId` (tool arguments) are hardened before they reach a REST path: each id is encoded as a single path segment and exact dot-segments (`.`/`..`) are rejected, since `encodeURIComponent` leaves `.` unescaped and URL normalization would otherwise let a `..` id retarget the authenticated call.
+
 ## 0.2.0-dev.36
 
 ### Patch Changes
