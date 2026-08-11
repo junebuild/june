@@ -1601,6 +1601,12 @@ describe("channel.post + onInteraction + onRejected", () => {
     // slack has no private-note concept — downgrading to a public message would LEAK it
     const slack = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test" });
     await expect(slack.post!({ channelId: "C1" }, { text: "operator-only", note: true })).rejects.toThrow(/note posts are not supported/);
+    // `note` is a confidentiality marker: an untyped { note: "true" } must fail closed
+    // on BOTH channels, never fall through to the visitor/user-visible branch
+    const sent = calls.length;
+    await expect(crisp.post!({ channelId: "w1", threadId: "s1" }, { text: "x", note: "true" as unknown as boolean })).rejects.toThrow(/note must be a boolean/);
+    await expect(slack.post!({ channelId: "C1" }, { text: "x", note: "" as unknown as boolean })).rejects.toThrow(/note must be a boolean/);
+    expect(calls).toHaveLength(sent); // nothing left the process, publicly or otherwise
   });
 
   test("crisp post rides the configured tier — the hardcoded X-Crisp-Tier regression stays dead", async () => {

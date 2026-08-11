@@ -845,8 +845,12 @@ export function slackChannel(opts: {
       const text = typeof content === "string" ? content : content.text ?? "";
       const blocks = typeof content === "string" ? undefined : content.blocks;
       // fail closed on `note`: Slack has no private-note concept, and downgrading an
-      // operator-only note to a public message would leak it to the end user.
-      if (typeof content !== "string" && content.note) throw new Error("slack: note posts are not supported (private notes are a Crisp concept)");
+      // operator-only note to a public message would leak it to the end user. A
+      // non-boolean value is a confused caller — same loud rejection (crisp's dual).
+      const note = typeof content === "string" ? undefined : content.note;
+      if (note !== undefined && typeof note !== "boolean")
+        throw new Error(`slack: post note must be a boolean (got ${JSON.stringify(note)})`);
+      if (note) throw new Error("slack: note posts are not supported (private notes are a Crisp concept)");
       // fail fast, client-side: an empty post would round-trip to Slack's no_text error
       if (!text.trim() && !blocks?.length) throw new Error("slack: post needs text or non-empty blocks");
       const payload: Record<string, unknown> = { channel: target.channelId, thread_ts: target.threadId, text };
@@ -1604,8 +1608,13 @@ export function crispChannel(opts: CrispAuthOpts & {
       if (!target.threadId) throw new Error("crisp: post needs target.threadId (the conversation session id)");
       const text = typeof content === "string" ? content : content.text;
       if (!text?.trim()) throw new Error("crisp: post needs text content (blocks have no crisp mapping)");
-      const asNote = typeof content !== "string" && content.note === true;
-      const r = await postMessage(target.channelId, target.threadId, text, asNote ? "note" : "text");
+      // `note` is a confidentiality marker — an untyped caller's { note: "true" } must
+      // not fall through to the visitor-visible branch. Anything but a boolean (or
+      // absent) fails closed, the post() dual of the replyAs construction guard.
+      const note = typeof content === "string" ? undefined : content.note;
+      if (note !== undefined && typeof note !== "boolean")
+        throw new Error(`crisp: post note must be a boolean (got ${JSON.stringify(note)})`);
+      const r = await postMessage(target.channelId, target.threadId, text, note ? "note" : "text");
       if (r.error !== false || r.data?.fingerprint === undefined) throw new Error(`crisp: message send failed (${r.reason ?? "no response"})`);
       return { channelId: target.channelId, threadId: target.threadId, ts: String(r.data.fingerprint) };
     },
