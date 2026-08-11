@@ -1319,6 +1319,15 @@ type CrispAuthOpts =
   | { auth: CrispWebhookAuth; signingSecret?: never }
   | { auth?: never; signingSecret: string };
 
+// Crisp REST paths interpolate website/session ids the tools accept as MODEL-SUPPLIED
+// arguments — raw interpolation would let reserved characters or ".." segments retarget
+// the authenticated call. Encode every id as a single path segment; a blank id has no
+// valid target either, so it fails the same way.
+function crispPathSegment(id: string): string {
+  if (!id.trim()) throw new Error("crisp: empty id in REST path");
+  return encodeURIComponent(id);
+}
+
 // ── crisp typed payloads + normalization ──────────────────────────────────────
 // Curated `data` shapes for the dashboard-subscribable events an agent app actually
 // consumes — typed so an onEvent consumer gets autocomplete and typo-checking instead
@@ -1553,15 +1562,17 @@ export function crispChannel(opts: CrispAuthOpts & {
   const tier = opts.tier ?? "plugin";
   // replyAs is a CONFIDENTIALITY boundary: a plain-JS typo ("notes") falling through
   // to the visitor-visible branch would make a supervised deployment public. Fail at
-  // construction, like the auth-mode check — a backstop for untyped callers.
-  const replyAs: "message" | "note" = opts.replyAs ?? "message";
+  // construction, like the auth-mode check — a backstop for untyped callers. Default
+  // ONLY on a genuinely absent option (undefined): an explicit null/garbage value is
+  // a confused caller, not a request for the public default.
+  const replyAs: "message" | "note" = opts.replyAs === undefined ? "message" : opts.replyAs;
   if (replyAs !== "message" && replyAs !== "note")
     throw new Error(`crispChannel: replyAs must be "message" or "note" (got ${JSON.stringify(opts.replyAs)})`);
   // The one outbound message call — text messages and private notes are the same
   // endpoint, differing only in `type`. Returns Crisp's envelope so callers pick
   // their own strictness: the reply path stays best-effort, post/tool check it.
   async function postMessage(websiteId: string, sessionId: string, content: string, type: "text" | "note") {
-    const res = await fetch(`${api}/website/${websiteId}/conversation/${sessionId}/message`, {
+    const res = await fetch(`${api}/website/${crispPathSegment(websiteId)}/conversation/${crispPathSegment(sessionId)}/message`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: auth(), "X-Crisp-Tier": tier },
       body: JSON.stringify({ type, from: "operator", origin: "chat", content }),
@@ -1578,7 +1589,7 @@ export function crispChannel(opts: CrispAuthOpts & {
   async function fetchIdentity(websiteId: string, sessionId: string): Promise<CrispIdentity> {
     try {
       const r = await crispGet<{ error?: boolean; data?: { verifications?: CrispVerification[] | null; meta?: CrispIdentity["meta"] | null } }>(
-        `/website/${websiteId}/conversation/${sessionId}`,
+        `/website/${crispPathSegment(websiteId)}/conversation/${crispPathSegment(sessionId)}`,
       );
       if (r.error || !r.data) return deriveCrispIdentity(undefined, { websiteId, sessionId, fetched: false });
       return deriveCrispIdentity(r.data, { websiteId, sessionId });
@@ -1710,6 +1721,15 @@ function crispTools(
   // gate on source: in a multi-channel agent these tools are available during a Slack
   // turn too; only default from a genuine Crisp event (see slackTools for the why).
   const crispEv = (ctx: ToolContext) => (ctx.event?.source === "crisp" ? ctx.event : undefined);
+  // MODEL-SUPPLIED ids resolve here: a blank id has no target (model-readable error, not
+  // a throw), and crispPathSegment at the call sites below encodes what passes — a "../"
+  // or reserved character must not retarget the authenticated call.
+  const target = (input: { websiteId?: string; sessionId?: string }, ctx: ToolContext) => {
+    const ev = crispEv(ctx);
+    const website = input.websiteId ?? ev?.channelId;
+    const session = input.sessionId ?? ev?.threadId;
+    return website?.trim() && session?.trim() ? { website, session } : undefined;
+  };
   return [
     {
       spec: {
@@ -1724,11 +1744,9 @@ function crispTools(
         },
       },
       run: async (input: { websiteId?: string; sessionId?: string }, ctx: ToolContext) => {
-        const ev = crispEv(ctx);
-        const website = input.websiteId ?? ev?.channelId;
-        const session = input.sessionId ?? ev?.threadId;
-        if (!website || !session) return noConversation;
-        const r = await get(`/website/${website}/conversation/${session}/messages`);
+        const t = target(input, ctx);
+        if (!t) return noConversation;
+        const r = await get(`/website/${crispPathSegment(t.website)}/conversation/${crispPathSegment(t.session)}/messages`);
         if (r.error) return { error: r.reason ?? "crisp error" };
         return { messages: (r.data ?? []).map((m) => ({ from: m.from, type: m.type, content: m.content, nickname: m.user?.nickname })) };
       },
@@ -1748,12 +1766,10 @@ function crispTools(
         },
       },
       run: async (input: { content: string; websiteId?: string; sessionId?: string }, ctx: ToolContext) => {
-        const ev = crispEv(ctx);
-        const website = input.websiteId ?? ev?.channelId;
-        const session = input.sessionId ?? ev?.threadId;
-        if (!website || !session) return noConversation;
+        const t = target(input, ctx);
+        if (!t) return noConversation;
         if (!input.content?.trim()) return { error: "note content is empty" };
-        const r = await sendMessage(website, session, input.content, "note");
+        const r = await sendMessage(t.website, t.session, input.content, "note");
         // a success without a fingerprint is a malformed envelope — report it honestly
         // instead of promising an identity the note doesn't have (post() does the same)
         if (r.error !== false || r.data?.fingerprint === undefined) return { error: r.reason ?? "crisp error" };

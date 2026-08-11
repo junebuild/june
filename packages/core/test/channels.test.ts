@@ -1443,6 +1443,32 @@ describe("crispChannel", () => {
   test('replyAs is a confidentiality boundary: an untyped typo fails at construction, not open to the visitor', () => {
     expect(() => crispChannel({ signingSecret: secret, identifier: "id", key: "key", replyAs: "notes" as "note" }))
       .toThrow(/replyAs must be "message" or "note"/);
+    // an explicit null is a confused caller, not a request for the PUBLIC default —
+    // it must not slide through ?? into the visitor-visible branch
+    expect(() => crispChannel({ signingSecret: secret, identifier: "id", key: "key", replyAs: null as unknown as "note" }))
+      .toThrow(/replyAs must be "message" or "note"/);
+  });
+
+  test("model-supplied ids are encoded as path segments — no retargeting the authenticated call", async () => {
+    calls = [];
+    globalThis.fetch = (async (url: unknown, init?: { body?: string }) => {
+      calls.push({ url: String(url), body: init?.body ? JSON.parse(init.body) : undefined });
+      return String(url).endsWith("/messages")
+        ? Response.json({ error: false, data: [] })
+        : Response.json({ error: false, reason: "dispatched", data: { fingerprint: 1 } });
+    }) as typeof fetch;
+    const sendNote = ch.tools!().find((t) => t.spec.name === "crisp_send_note")!;
+    const readConvo = ch.tools!().find((t) => t.spec.name === "crisp_read_conversation")!;
+    const ctx = { event: { source: "crisp", kind: "message", channelId: "w1", threadId: "s1", ts: "1", raw: {} } } as unknown as ToolContext;
+    // a traversal-shaped session id stays ONE segment (encoded), never a path rewrite
+    await sendNote.run({ content: "x", sessionId: "../../plugin/evil" }, ctx);
+    expect(calls[0]!.url).toBe(`https://crisp.test/website/w1/conversation/${encodeURIComponent("../../plugin/evil")}/message`);
+    await readConvo.run({ websiteId: "w?x=1#f" }, ctx);
+    expect(calls[1]!.url).toBe(`https://crisp.test/website/${encodeURIComponent("w?x=1#f")}/conversation/s1/messages`);
+    // blank ids have no target — model-readable error, nothing sent
+    const sent = calls.length;
+    expect(await sendNote.run({ content: "x", sessionId: "   " }, ctx)).toMatchObject({ error: expect.stringContaining("pass websiteId and sessionId") });
+    expect(calls).toHaveLength(sent);
   });
 
   test('replyAs: "note" delivers the turn reply as an operator-only note (supervised rollout)', async () => {
