@@ -164,8 +164,11 @@ export type ResumeDeliveryTarget = { channelId: string; threadId?: string; messa
 
 // What channel.post sends (#89): plain text, or the object form carrying platform
 // blocks (Slack Block Kit) with a `text` notification fallback. Channels without a
-// block concept (Crisp) accept the object form but require `text`.
-export type PostContent = string | { text?: string; blocks?: unknown[] };
+// block concept (Crisp) accept the object form but require `text`. `note: true` marks
+// the post as a PRIVATE, operator-only note where the platform has the concept (Crisp);
+// a channel without it (Slack) fails closed — silently posting operator-only content
+// where the end user can read it would leak it.
+export type PostContent = string | { text?: string; blocks?: unknown[]; note?: boolean };
 // The sent message's identity — enough to index it (record a (channel, ts) →
 // judgment row) and to resolve later interactions/reactions back to it. `ts` is the
 // platform's message key: Slack's message ts, Crisp's fingerprint (stringified).

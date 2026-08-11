@@ -1386,7 +1386,7 @@ describe("crispChannel", () => {
   test("crisp_read_conversation defaults website/session from the event and normalizes", async () => {
     const tools = ch.tools!();
     const readConvo = tools.find((t) => t.spec.name === "crisp_read_conversation")!;
-    expect(tools.map((t) => t.spec.name)).toEqual(["crisp_read_conversation"]);
+    expect(tools.map((t) => t.spec.name)).toEqual(["crisp_read_conversation", "crisp_send_note"]);
     let seenUrl = "";
     globalThis.fetch = (async (url: unknown) => {
       seenUrl = String(url);
@@ -1402,6 +1402,51 @@ describe("crispChannel", () => {
       { from: "user", type: "text", content: "hi", nickname: "Ada" },
       { from: "operator", type: "text", content: "hello", nickname: undefined },
     ] });
+  });
+
+  // ── private notes: the agent's channel to the HUMAN operators. A note rides the
+  // same message endpoint with type "note" and is never shown to the visitor — the
+  // vehicle for reference context / a preliminary assessment while the agent is
+  // mirrored or not yet trusted to answer the visitor itself.
+  test("crisp_send_note posts a PRIVATE note (type note) defaulting website/session from the event", async () => {
+    calls = [];
+    globalThis.fetch = (async (url: unknown, init?: { body?: string }) => {
+      calls.push({ url: String(url), body: init?.body ? JSON.parse(init.body) : undefined });
+      return Response.json({ error: false, reason: "dispatched", data: { fingerprint: 4242 } });
+    }) as typeof fetch;
+    const sendNote = ch.tools!().find((t) => t.spec.name === "crisp_send_note")!;
+    const ctx = { event: { source: "crisp", kind: "message", channelId: "w1", threadId: "s1", ts: "1", raw: {} } } as unknown as ToolContext;
+    const out = await sendNote.run({ content: "Visitor is on the Pro plan; refund likely warranted — recommend approving." }, ctx);
+    expect(calls[0]!.url).toBe("https://crisp.test/website/w1/conversation/s1/message");
+    expect(calls[0]!.body).toMatchObject({ type: "note", from: "operator", origin: "chat", content: "Visitor is on the Pro plan; refund likely warranted — recommend approving." });
+    expect(out).toEqual({ ok: true, fingerprint: 4242 });
+  });
+
+  test("crisp_send_note guards: no crisp event in context, empty content, crisp error envelope", async () => {
+    const sendNote = ch.tools!().find((t) => t.spec.name === "crisp_send_note")!;
+    // a Slack turn must not default the target from ITS event — explicit ids required
+    const slackCtx = { event: { source: "slack", kind: "message", channelId: "C1", threadId: "111.1", ts: "1", raw: {} } } as unknown as ToolContext;
+    expect(await sendNote.run({ content: "x" }, slackCtx)).toEqual({ error: "no conversation in context — pass websiteId and sessionId (this turn has no Crisp event)" });
+    // blank content is caught client-side, no round-trip
+    const crispCtx = { event: { source: "crisp", kind: "message", channelId: "w1", threadId: "s1", ts: "1", raw: {} } } as unknown as ToolContext;
+    captureFetch();
+    expect(await sendNote.run({ content: "   " }, crispCtx)).toEqual({ error: "note content is empty" });
+    expect(calls).toHaveLength(0);
+    // a crisp error envelope surfaces its reason to the model, not a throw
+    globalThis.fetch = (async () => Response.json({ error: true, reason: "session_not_found" })) as unknown as typeof fetch;
+    expect(await sendNote.run({ content: "ctx" }, crispCtx)).toEqual({ error: "session_not_found" });
+  });
+
+  test('replyAs: "note" delivers the turn reply as an operator-only note (supervised rollout)', async () => {
+    captureFetch();
+    const supervised = crispChannel({ signingSecret: secret, identifier: "id", key: "key", apiUrl: "https://crisp.test", replyAs: "note" });
+    const body = JSON.stringify({ event: "message:send", data: { from: "user", type: "text", content: "can I get a refund?", website_id: "w1", session_id: "s1" } });
+    await supervised.webhook!(await signed(body), ctxWith(async (m) => `suggested reply: ${m}`));
+    await flush();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe("https://crisp.test/website/w1/conversation/s1/message");
+    // the reply LANDS, but as a private note — the visitor sees nothing
+    expect(calls[0]!.body).toMatchObject({ type: "note", from: "operator", content: "suggested reply: can I get a refund?" });
   });
 });
 
@@ -1532,6 +1577,22 @@ describe("channel.post + onInteraction + onRejected", () => {
     await expect(ch.post!({ channelId: "w1" }, "no thread")).rejects.toThrow(/threadId/);
     await expect(ch.post!({ channelId: "w1", threadId: "s1" }, { blocks: [] })).rejects.toThrow(/text content/);
     await expect(ch.post!({ channelId: "w1", threadId: "s1" }, "   ")).rejects.toThrow(/text content/); // blank = empty, like every other outgoing path
+  });
+
+  test("crisp post: note: true lands a PRIVATE operator-only note; slack fails closed on it", async () => {
+    calls = [];
+    globalThis.fetch = (async (url: unknown, init?: { body?: string }) => {
+      calls.push({ url: String(url), body: init?.body ? JSON.parse(init.body) : undefined });
+      return Response.json({ error: false, reason: "dispatched", data: { fingerprint: 777 } });
+    }) as typeof fetch;
+    const crisp = crispChannel({ signingSecret: secret, identifier: "id", key: "key", apiUrl: "https://crisp.test" });
+    // e.g. a mirror-mode app posting its shadow turn's assessment for the human team
+    const posted = await crisp.post!({ channelId: "w1", threadId: "s1" }, { text: "shadow assessment: refund warranted", note: true });
+    expect(calls[0]!.body).toMatchObject({ type: "note", from: "operator", content: "shadow assessment: refund warranted" });
+    expect(posted).toEqual({ channelId: "w1", threadId: "s1", ts: "777" });
+    // slack has no private-note concept — downgrading to a public message would LEAK it
+    const slack = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test" });
+    await expect(slack.post!({ channelId: "C1" }, { text: "operator-only", note: true })).rejects.toThrow(/note posts are not supported/);
   });
 
   test("onInteraction: an unclaimed action_id reaches the app; june_feedback stays routed (#88)", async () => {
