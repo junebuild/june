@@ -1435,6 +1435,14 @@ describe("crispChannel", () => {
     // a crisp error envelope surfaces its reason to the model, not a throw
     globalThis.fetch = (async () => Response.json({ error: true, reason: "session_not_found" })) as unknown as typeof fetch;
     expect(await sendNote.run({ content: "ctx" }, crispCtx)).toEqual({ error: "session_not_found" });
+    // a "success" without a fingerprint is a malformed envelope — never a false ok
+    globalThis.fetch = (async () => Response.json({ error: false, data: {} })) as unknown as typeof fetch;
+    expect(await sendNote.run({ content: "ctx" }, crispCtx)).toEqual({ error: "crisp error" });
+  });
+
+  test('replyAs is a confidentiality boundary: an untyped typo fails at construction, not open to the visitor', () => {
+    expect(() => crispChannel({ signingSecret: secret, identifier: "id", key: "key", replyAs: "notes" as "note" }))
+      .toThrow(/replyAs must be "message" or "note"/);
   });
 
   test('replyAs: "note" delivers the turn reply as an operator-only note (supervised rollout)', async () => {
@@ -1593,6 +1601,18 @@ describe("channel.post + onInteraction + onRejected", () => {
     // slack has no private-note concept — downgrading to a public message would LEAK it
     const slack = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test" });
     await expect(slack.post!({ channelId: "C1" }, { text: "operator-only", note: true })).rejects.toThrow(/note posts are not supported/);
+  });
+
+  test("crisp post rides the configured tier — the hardcoded X-Crisp-Tier regression stays dead", async () => {
+    const headers: Record<string, string>[] = [];
+    globalThis.fetch = (async (_url: unknown, init?: { headers?: Record<string, string> }) => {
+      headers.push(init?.headers ?? {});
+      return Response.json({ error: false, reason: "dispatched", data: { fingerprint: 1 } });
+    }) as typeof fetch;
+    const website = crispChannel({ signingSecret: secret, identifier: "id", key: "key", apiUrl: "https://crisp.test", tier: "website" });
+    await website.post!({ channelId: "w1", threadId: "s1" }, "hi");
+    await website.post!({ channelId: "w1", threadId: "s1" }, { text: "fyi", note: true });
+    expect(headers.map((h) => h["X-Crisp-Tier"])).toEqual(["website", "website"]); // used to be hardcoded "plugin"
   });
 
   test("onInteraction: an unclaimed action_id reaches the app; june_feedback stays routed (#88)", async () => {

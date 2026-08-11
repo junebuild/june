@@ -1547,7 +1547,12 @@ export function crispChannel(opts: CrispAuthOpts & {
   const respondTo: string[] = opts.mode === "observe" ? [] : (opts.respondTo ?? events);
   const auth = () => `Basic ${btoa(`${opts.identifier}:${opts.key}`)}`;
   const tier = opts.tier ?? "plugin";
+  // replyAs is a CONFIDENTIALITY boundary: a plain-JS typo ("notes") falling through
+  // to the visitor-visible branch would make a supervised deployment public. Fail at
+  // construction, like the auth-mode check — a backstop for untyped callers.
   const replyAs: "message" | "note" = opts.replyAs ?? "message";
+  if (replyAs !== "message" && replyAs !== "note")
+    throw new Error(`crispChannel: replyAs must be "message" or "note" (got ${JSON.stringify(opts.replyAs)})`);
   // The one outbound message call — text messages and private notes are the same
   // endpoint, differing only in `type`. Returns Crisp's envelope so callers pick
   // their own strictness: the reply path stays best-effort, post/tool check it.
@@ -1740,9 +1745,11 @@ function crispTools(
         if (!website || !session) return noConversation;
         if (!input.content?.trim()) return { error: "note content is empty" };
         const r = await sendMessage(website, session, input.content, "note");
-        if (r.error !== false) return { error: r.reason ?? "crisp error" };
+        // a success without a fingerprint is a malformed envelope — report it honestly
+        // instead of promising an identity the note doesn't have (post() does the same)
+        if (r.error !== false || r.data?.fingerprint === undefined) return { error: r.reason ?? "crisp error" };
         // fingerprint = the note's message identity, so the agent can reference it later
-        return { ok: true, fingerprint: r.data?.fingerprint };
+        return { ok: true, fingerprint: r.data.fingerprint };
       },
     },
   ];
