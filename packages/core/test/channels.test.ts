@@ -1465,9 +1465,20 @@ describe("crispChannel", () => {
     expect(calls[0]!.url).toBe(`https://crisp.test/website/w1/conversation/${encodeURIComponent("../../plugin/evil")}/message`);
     await readConvo.run({ websiteId: "w?x=1#f" }, ctx);
     expect(calls[1]!.url).toBe(`https://crisp.test/website/${encodeURIComponent("w?x=1#f")}/conversation/s1/messages`);
-    // blank ids have no target — model-readable error, nothing sent
+    // blank ids have no target — model-readable error, nothing sent. (Read `.error` and
+    // assert on the string rather than `toMatchObject` + `expect.stringContaining`: the
+    // no-target result is a SHARED module constant returned by reference, and an asymmetric
+    // matcher inside toMatchObject mutates that shared object, poisoning later assertions.)
     const sent = calls.length;
-    expect(await sendNote.run({ content: "x", sessionId: "   " }, ctx)).toMatchObject({ error: expect.stringContaining("pass websiteId and sessionId") });
+    expect(((await sendNote.run({ content: "x", sessionId: "   " }, ctx)) as { error?: string }).error).toContain("pass websiteId and sessionId");
+    expect(calls).toHaveLength(sent);
+    // exact dot-segments survive encodeURIComponent ("." / ".." are left unescaped) and
+    // URL parsing would normalize them away, rewriting the authenticated path — reject them
+    // the same way as blanks: model-readable error, nothing sent
+    for (const bad of [".", ".."]) {
+      expect(((await sendNote.run({ content: "x", sessionId: bad }, ctx)) as { error?: string }).error).toContain("pass websiteId and sessionId");
+      expect(((await readConvo.run({ websiteId: bad }, ctx)) as { error?: string }).error).toContain("pass websiteId and sessionId");
+    }
     expect(calls).toHaveLength(sent);
   });
 
