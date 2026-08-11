@@ -1320,12 +1320,16 @@ type CrispAuthOpts =
   | { auth?: never; signingSecret: string };
 
 // Crisp REST paths interpolate website/session ids the tools accept as MODEL-SUPPLIED
-// arguments — raw interpolation would let reserved characters or ".." segments retarget
-// the authenticated call. Encode every id as a single path segment; a blank id has no
-// valid target either, so it fails the same way.
+// arguments — raw interpolation would let reserved characters or dot segments retarget
+// the authenticated call. encodeURIComponent alone is NOT enough: it leaves "." unescaped,
+// so a "." / ".." id survives encoding and URL parsing then normalizes the segment away
+// (/conversation/../message → /message). Reject exact dot-segments outright, then encode;
+// a blank id has no valid target either, so it fails the same way.
 function crispPathSegment(id: string): string {
-  if (!id.trim()) throw new Error("crisp: empty id in REST path");
-  return encodeURIComponent(id);
+  const trimmed = id.trim();
+  if (!trimmed) throw new Error("crisp: empty id in REST path");
+  if (trimmed === "." || trimmed === "..") throw new Error(`crisp: invalid id in REST path (${JSON.stringify(id)})`);
+  return encodeURIComponent(trimmed);
 }
 
 // ── crisp typed payloads + normalization ──────────────────────────────────────
@@ -1728,7 +1732,10 @@ function crispTools(
     const ev = crispEv(ctx);
     const website = input.websiteId ?? ev?.channelId;
     const session = input.sessionId ?? ev?.threadId;
-    return website?.trim() && session?.trim() ? { website, session } : undefined;
+    // a valid id must survive crispPathSegment: non-blank and not a "."/".." dot-segment
+    // that URL normalization would collapse away — otherwise there is no real target.
+    const usable = (id?: string) => !!id && id.trim() !== "" && id.trim() !== "." && id.trim() !== "..";
+    return usable(website) && usable(session) ? { website: website!, session: session! } : undefined;
   };
   return [
     {
