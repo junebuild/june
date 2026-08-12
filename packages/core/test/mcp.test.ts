@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { ACTION_REGISTRY, defineAction } from "@junejs/core/agent";
-import { mcpHandler } from "@junejs/core/mcp";
+import { __resetEmptyToolsWarning, mcpHandler } from "@junejs/core/mcp";
 
 // Empty registry per test, restored after — see discovery.test.ts: a cleared
 // registry cannot be repopulated by re-import (module cache), which breaks
@@ -52,6 +52,24 @@ describe("mcpHandler()", () => {
       name: "createUser",
       description: "Create a user",
     });
+  });
+
+  test("tools/list on an empty surface warns once, pointing to agent/tools", async () => {
+    // No action registered (beforeEach clears the registry) — an enabled /mcp
+    // with zero tools is the silent no-op this warning targets. Reset the
+    // process-wide once-guard so the assertion doesn't depend on test order.
+    __resetEmptyToolsWarning();
+    const origWarn = console.warn;
+    const warnings: string[] = [];
+    console.warn = (...a: unknown[]) => warnings.push(a.join(" "));
+    try {
+      const res = await mcpHandler(rpc({ jsonrpc: "2.0", id: 6, method: "tools/list" }));
+      const json = (await res.json()) as any;
+      expect(json.result.tools).toHaveLength(0);
+    } finally {
+      console.warn = origWarn;
+    }
+    expect(warnings.join("\n")).toContain("agent/tools/*.ts");
   });
 
   test("tools/call runs the action under the injected ctx (scoped principal)", async () => {
