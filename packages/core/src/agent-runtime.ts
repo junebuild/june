@@ -706,6 +706,71 @@ export function foldTranscript(msgs: Msg[]): Turn[] {
   return order.map((id) => byId.get(id)!);
 }
 
+// ── turn record (pure; the self-contained export of ONE turn) ─────────────────
+// The durable log already IS a complete account of a turn — opening, every model
+// reply, every tool call with its frozen result, usage, durations — but it is stored
+// as interleaved Msg rows. foldTurnRecord assembles ONE turn's rows into a
+// self-contained record: the atom for a trace exporter (fold on turn-terminal, ship
+// one document) and for an eval dataset (curate records from production, replay them
+// with substitutions — the frozen tool results are already here). Pure over Msg[],
+// like foldTranscript; anything not in the log (live-only failures/cancellations,
+// the system prompt) is deliberately absent rather than guessed.
+export type TurnRecordStep =
+  // one model call: what it said, what it asked to run, what it cost
+  | { kind: "model"; text: string; toolCalls: ToolCall[]; usage?: ModelUsage; durationMs?: number }
+  // one tool result: input recovered from the requesting model step, so the record
+  // stands alone (a replay needs no join back to the assistant row)
+  | { kind: "tool"; callId: string; name: string; input: unknown; result: unknown; durationMs?: number };
+export type TurnRecord = {
+  turnId: string;
+  // who opened the turn: a user message, or a proactive trigger attributed to `by`
+  opening: { role: "user" | "trigger"; text: string; by?: string };
+  steps: TurnRecordStep[];
+  // "completed" iff the last model step has no tool calls — the SAME terminal condition
+  // the live engine uses. "incomplete" covers everything the log cannot distinguish:
+  // in-flight, failed, cancelled, suspended (those outcomes are live-only events).
+  status: "completed" | "incomplete";
+  text?: string; // the final assistant text, when completed
+  // aggregate across the model steps that claimed usage (absent when none did) — a
+  // partial sum is still honest per-step; the aggregate only exists when every model
+  // step reported, so a cost report can't silently undercount.
+  usage?: { inputTokens: number; outputTokens: number };
+};
+export function foldTurnRecord(msgs: Msg[], turnId: string): TurnRecord | undefined {
+  const rows = msgs.filter((m) => m.turnId === turnId);
+  if (rows.length === 0) return undefined;
+  const calls = new Map<string, ToolCall>();
+  let opening: TurnRecord["opening"] | undefined;
+  const steps: TurnRecordStep[] = [];
+  for (const m of rows) {
+    if (m.role === "user") opening ??= { role: "user", text: m.text };
+    else if (m.role === "trigger") opening ??= { role: "trigger", text: m.text, by: m.by };
+    else if (m.role === "assistant") {
+      for (const call of m.toolCalls) calls.set(call.id, call);
+      steps.push({ kind: "model", text: m.text, toolCalls: m.toolCalls, ...(m.usage ? { usage: m.usage } : {}), ...(m.durationMs !== undefined ? { durationMs: m.durationMs } : {}) });
+    } else {
+      steps.push({ kind: "tool", callId: m.toolCallId, name: m.name, input: calls.get(m.toolCallId)?.input, result: m.result, ...(m.durationMs !== undefined ? { durationMs: m.durationMs } : {}) });
+    }
+  }
+  // A resumed/replayed turn re-appends nothing, but a turn CAN lack an opening row in a
+  // pathological log; refuse to invent one — the record must never claim what the log doesn't.
+  if (!opening) return undefined;
+  const models = steps.filter((s): s is Extract<TurnRecordStep, { kind: "model" }> => s.kind === "model");
+  const lastModel = models[models.length - 1];
+  const completed = lastModel !== undefined && lastModel.toolCalls.length === 0;
+  const usage = models.length > 0 && models.every((s) => s.usage)
+    ? models.reduce((acc, s) => ({ inputTokens: acc.inputTokens + s.usage!.inputTokens, outputTokens: acc.outputTokens + s.usage!.outputTokens }), { inputTokens: 0, outputTokens: 0 })
+    : undefined;
+  return {
+    turnId,
+    opening,
+    steps,
+    status: completed ? "completed" : "incomplete",
+    ...(completed ? { text: lastModel.text } : {}),
+    ...(usage ? { usage } : {}),
+  };
+}
+
 // ── turn id minting (#95) ─────────────────────────────────────────────────────
 // Globally unique, lexically time-sortable: `t_` + a monotonic ULID (48-bit ms
 // timestamp + 80-bit randomness, Crockford base32). Replaces the per-actor
@@ -1025,6 +1090,9 @@ export class AgentSession {
 
   transcript(): Turn[] { return foldTranscript(this.store.messages()); }
   snapshot() { return { transcript: this.transcript(), status: this.store.getStatus() }; }
+  // The self-contained export of one turn from the durable log (see foldTurnRecord):
+  // the atom a trace exporter ships on turn-terminal and an eval dataset curates.
+  record(turnId: string): TurnRecord | undefined { return foldTurnRecord(this.store.messages(), turnId); }
 }
 
 // Address space: a runtime resolves a session actor by (agentName, id). Native =

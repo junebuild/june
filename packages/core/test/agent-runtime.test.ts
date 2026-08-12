@@ -21,6 +21,7 @@ import {
   type ModelFinish,
   type SessionStore,
   type Tool,
+  type TurnRecord,
 } from "@junejs/core/agent-runtime";
 
 // ── an in-memory SessionStore (pure). `app` is the side-effect target a local
@@ -1316,5 +1317,58 @@ describe("execution metadata (usage + durationMs)", () => {
     expect(tools).toHaveLength(2);
     expect(typeof tools[0]!.durationMs).toBe("number"); // c1 actually ran
     expect("durationMs" in tools[1]!).toBe(false);      // c2 is the synthetic cancelled result
+  });
+});
+
+describe("foldTurnRecord (the self-contained turn export)", () => {
+  test("a completed tool-loop turn folds into one record: opening, steps, final text, aggregate usage", async () => {
+    const { store } = memStore();
+    const u1 = { inputTokens: 10, outputTokens: 20 };
+    const u2 = { inputTokens: 30, outputTokens: 5 };
+    const model: Model = (msgs) => {
+      const i = msgs.filter((m) => m.role === "assistant").length;
+      return replyStream(ORDER_SCRIPT[Math.min(i, 1)]!, undefined, i === 0 ? u1 : u2);
+    };
+    const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), model, [createOrderTool()], noRuntime);
+    await s.turn({ turnId: "t1", userText: "Order 3 widgets" });
+
+    const r = s.record("t1")!;
+    expect(r.turnId).toBe("t1");
+    expect(r.opening).toEqual({ role: "user", text: "Order 3 widgets" });
+    expect(r.status).toBe("completed");
+    expect(r.text).toBe("Done — order placed.");
+    expect(r.usage).toEqual({ inputTokens: 40, outputTokens: 25 });
+    expect(r.steps.map((x) => x.kind)).toEqual(["model", "tool", "model"]);
+    // the tool step stands alone: input recovered from the requesting model step
+    const tool = r.steps[1]! as Extract<TurnRecord["steps"][number], { kind: "tool" }>;
+    expect(tool.name).toBe("create_order");
+    expect(tool.input).toEqual({ item: "widget", qty: 3 });
+    expect(tool.result).toEqual({ orderId: 1, item: "widget", qty: 3 });
+  });
+
+  test("a turn whose last model step still has tool calls is incomplete; a model step without usage drops the aggregate", async () => {
+    // one reply requesting a tool, then a crash before the tool commits — the log ends mid-turn
+    const { store } = memStore();
+    const model = scriptedModel(ORDER_SCRIPT);
+    const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), model, [createOrderTool()], noRuntime);
+    await expect(
+      s.turn({ turnId: "t1", userText: "Order 3 widgets", crash: { at: "before-tool-commit", step: "tool:c1" } }),
+    ).rejects.toThrow(/CRASH/);
+
+    const r = s.record("t1")!;
+    expect(r.status).toBe("incomplete");
+    expect("text" in r).toBe(false);
+    expect("usage" in r).toBe(false); // scriptedModel makes no usage claim
+  });
+
+  test("an unknown turnId yields undefined; a proactive turn's opening is attributed", async () => {
+    const { store } = memStore();
+    const model = scriptedModel([{ text: "summarized", toolCalls: [] }]);
+    const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), model, [], noRuntime);
+    const { turnId } = s.start({ userText: "Summarize today.", trigger: { kind: "proactive", by: "cron:daily" } });
+    await s.result(turnId);
+
+    expect(s.record("nope")).toBeUndefined();
+    expect(s.record(turnId)!.opening).toEqual({ role: "trigger", text: "Summarize today.", by: "cron:daily" });
   });
 });
