@@ -170,21 +170,21 @@ export function defineAction<const S extends JsonSchema, O>(def: {
   }
   ACTION_REGISTRY.set(def.id, action as unknown as AnyAction);
   // Flight/server-reference dispatch invokes the REGISTERED function directly —
-  // it never passes through invokeAction — so the wrapper resolves the action
-  // from ACTION_REGISTRY at call time and enforces the gate off the LIVE action:
-  //   • an action removed from the registry (e.g. a failed connection rolled
-  //     back by connectAll) has an INERT reference — a forged Flight dispatch for
-  //     its id fails closed, so deleting the map entry is sufficient;
-  //   • a `requiresPrincipal` action never runs without an ActionContext.user,
-  //     even on this dispatch path the module doesn't own.
+  // it never passes through invokeAction. The wrapper is bound to THIS EXACT
+  // action: it only runs when the registry still maps this id to this very
+  // action. So a rolled-back action (deleted) OR an id later overwritten by a
+  // DIFFERENT action both make this reference inert — a stale/forged Flight
+  // dispatch can never invoke a replacement's run with this reference's id, and
+  // the identity gate reflects this action's own requiresPrincipal.
   const flightRun = (...args: unknown[]) => {
-    const current = ACTION_REGISTRY.get(def.id);
-    if (!current) throw new Error(`Action "${def.id}" is not registered`);
-    if (current.requiresPrincipal) {
+    if (ACTION_REGISTRY.get(def.id) !== action) {
+      throw new Error(`Action "${def.id}" is not the currently registered action (rolled back or replaced)`);
+    }
+    if (action.requiresPrincipal) {
       const ctx = args[1] as ActionContext | undefined;
       if (!ctx?.user) throw new Error(`Action "${def.id}" requires an authenticated principal (ctx.user)`);
     }
-    return (current.run as (...a: unknown[]) => unknown)(...args);
+    return (action.run as (...a: unknown[]) => unknown)(...args);
   };
   serverReferenceRegistrar?.(flightRun, def.id);
   return action;

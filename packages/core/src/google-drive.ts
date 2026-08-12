@@ -204,11 +204,16 @@ function makeClient(config: GoogleDriveConfig) {
     return (await res.json()) as DriveFile;
   }
 
-  // Download a file's textual content. Google-native docs are exported; anything
-  // else is fetched with alt=media.
+  // Download a file's textual content. Google-native docs are EXPORTED to a
+  // supported text type; a non-exportable native resource (folder, shortcut,
+  // form, …) has no content to read, so reject it clearly rather than firing a
+  // bogus export request. Everything else is fetched with alt=media.
   async function downloadContent(file: DriveFile, ctx?: ActionContext): Promise<string> {
     if (file.mimeType.startsWith("application/vnd.google-apps.")) {
-      const exportMime = EXPORT_MIME[file.mimeType] ?? "text/plain";
+      const exportMime = EXPORT_MIME[file.mimeType];
+      if (!exportMime) {
+        throw new Error(`Cannot read content of "${file.name}" — ${file.mimeType} is a Google-native resource with no text export (e.g. a folder or shortcut).`);
+      }
       const search = new URLSearchParams({ mimeType: exportMime });
       const res = await request(`${api}/files/${encodeURIComponent(file.id)}/export?${search}`, { method: "GET" }, ctx);
       return res.text();

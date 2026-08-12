@@ -212,6 +212,13 @@ describe("googleDriveTools", () => {
     expect(read.content).toBe("EXPORTED:body"); // went through the export endpoint
   });
 
+  test("read_file rejects a non-exportable Google-native resource (e.g. a folder) with a clear error", async () => {
+    const drive = makeFakeDrive();
+    const folder = drive.addFolder("JustAFolder"); // mimeType application/vnd.google-apps.folder
+    const t = toolsById(googleDriveTools({ auth: () => ({ token: "t" }), fetch: drive.fetch }));
+    await expect(t.gdrive__read_file!.run({ fileId: folder }, {})).rejects.toThrow(/no text export/);
+  });
+
   test("list_files scopes to a folder's children", async () => {
     const drive = makeFakeDrive();
     const folder = drive.addFolder("Inbox");

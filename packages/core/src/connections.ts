@@ -243,24 +243,46 @@ function reportUrl(c: Connection): string {
 // after registering some tools, or the provider gate-check rejecting an ungated
 // tool — those already-registered actions would otherwise linger in
 // ACTION_REGISTRY and stay reachable via /mcp and invokeAction even though the
-// connection was "skipped". So we snapshot the registry per connection and roll
-// back everything it added on failure. (The Flight server reference resolves
-// through ACTION_REGISTRY at call time — see agent.ts — so removing the map entry
-// makes that path inert too.)
-export async function connectAll(connections: Connection[]): Promise<{ actions: AnyAction[]; report: ConnectionReport[] }> {
+// connection was "skipped". So each connection runs against an ENTRY snapshot and
+// on failure we (a) delete the ids it added and (b) RESTORE any pre-existing
+// entry it overwrote — so a failed connection that clobbered an existing id
+// doesn't leave its action reachable under that id. (The Flight server reference
+// is bound to its exact action — see agent.ts — so delete/restore both make the
+// failed connection's reference inert while reviving the original's.)
+//
+// connectAll is SERIALIZED globally (per isolate): the ACTION_REGISTRY is shared,
+// so two overlapping connectAll/agent-assembly runs could otherwise interleave
+// registrations and a later failure's snapshot-diff would delete the OTHER run's
+// tools. Serializing the (boot-time / first-turn) wiring makes each run's
+// snapshot a faithful baseline. This is cheap: it's not a hot path, and separate
+// isolates (Durable Objects) have separate registries anyway.
+let connectAllQueue: Promise<unknown> = Promise.resolve();
+
+export function connectAll(connections: Connection[]): Promise<{ actions: AnyAction[]; report: ConnectionReport[] }> {
+  const run = () => connectAllImpl(connections);
+  const result = connectAllQueue.then(run, run); // chain regardless of the prior run's outcome
+  connectAllQueue = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
+}
+
+async function connectAllImpl(connections: Connection[]): Promise<{ actions: AnyAction[]; report: ConnectionReport[] }> {
   const actions: AnyAction[] = [];
   const report: ConnectionReport[] = [];
   for (const c of connections) {
     const url = reportUrl(c);
-    const before = new Set(ACTION_REGISTRY.keys());
+    const before = new Map(ACTION_REGISTRY); // entry snapshot (ids AND their prior actions)
     try {
       const a = c.kind === "mcp" ? await connectMcp(c) : c.kind === "openapi" ? await connectOpenapi(c) : await connectProvider(c);
       actions.push(...a);
       report.push({ name: c.name, kind: c.kind, url, tools: a.map((x) => x.id) });
     } catch (e) {
-      // Roll back any tools this failed connection registered — a partial or
-      // rejected connection must leave NOTHING reachable in the global registry.
-      for (const key of ACTION_REGISTRY.keys()) if (!before.has(key)) ACTION_REGISTRY.delete(key);
+      // Revert exactly this connection's registry changes: delete ids it added,
+      // then restore any pre-existing entries it overwrote.
+      for (const id of [...ACTION_REGISTRY.keys()]) if (!before.has(id)) ACTION_REGISTRY.delete(id);
+      for (const [id, prev] of before) if (ACTION_REGISTRY.get(id) !== prev) ACTION_REGISTRY.set(id, prev);
       report.push({ name: c.name, kind: c.kind, url, tools: [], error: String(e) });
     }
   }

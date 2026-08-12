@@ -155,7 +155,7 @@ describe("serverReferenceRegistrar identity gate", () => {
     }
   });
 
-  test("a Flight reference is INERT once its action is removed from the registry (rollback is sufficient)", async () => {
+  test("a Flight reference is INERT once its action is removed OR its id is overwritten", async () => {
     const registered = new Map<string, (...args: unknown[]) => unknown>();
     setServerReferenceRegistrar((fn, id) => { registered.set(id, fn); });
     try {
@@ -164,7 +164,17 @@ describe("serverReferenceRegistrar identity gate", () => {
       expect(ref({})).toBe("live"); // registered ⇒ runs
       // Simulate connectAll rolling a failed connection's action back out.
       ACTION_REGISTRY.delete("flight_rollback");
-      expect(() => ref({})).toThrow(/is not registered/); // forged Flight dispatch can't reach it
+      expect(() => ref({})).toThrow(/not the currently registered action/); // forged Flight dispatch can't reach it
+
+      // Overwrite the same id with a DIFFERENT action; the first reference must
+      // not alias onto the replacement (it would run the wrong semantics).
+      defineAction({ id: "aliased", description: "first", input: { type: "object", properties: {} }, run: () => "first" });
+      const firstRef = registered.get("aliased")!;
+      expect(firstRef({})).toBe("first");
+      defineAction({ id: "aliased", description: "second", input: { type: "object", properties: {} }, run: () => "second" });
+      const secondRef = registered.get("aliased")!;
+      expect(secondRef({})).toBe("second"); // the live action runs
+      expect(() => firstRef({})).toThrow(/not the currently registered action/); // stale ref is inert
     } finally {
       setServerReferenceRegistrar(() => undefined);
     }

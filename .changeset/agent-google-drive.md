@@ -24,7 +24,8 @@ Google Drive access for agents — as a new `provider` connection kind.
   Identity mirrors connections: the OAuth2 access token is resolved per call,
   server-side via `auth(ctx)` (never reaches the model), so a multi-tenant app
   mints the caller's short-lived token. Read/list/find carry `readOnlyHint`,
-  `save_file` carries `idempotentHint`, `delete_file` carries `destructiveHint`.
+  `delete_file` carries `destructiveHint` (`save_file` intentionally has no
+  `idempotentHint` — its upsert is a non-atomic find-then-create).
 - A `tools/*.ts` file may now default-export one tool OR an array of tools;
   `defineAgent`/`assembleDurable` flatten arrays (native discovery and the
   edge-compiled module both).

@@ -11,8 +11,11 @@ server-side and never reaches the model.
   account tokens live) and it returns a `ConnectionAuth` — `auth(ctx)` that mints
   the CALLER's token. FAIL CLOSED: a missing principal or an unlinked account
   throws (together with the connection's `requiresPrincipal`, the capability is
-  unreachable without a real credential). Reusable across every connection kind,
-  not just Google Drive.
+  unreachable without a real credential). Reusable across connections whose
+  `auth` is resolved PER CALL with the caller's identity (provider connections
+  like Drive). NOT for MCP/OpenAPI remotes that authenticate discovery — those
+  call `auth(undefined)` at initialize/tools-list, which this fail-closed helper
+  rejects (they need a discovery-scoped credential instead).
 - `betterAuthAccessToken(auth, { providerId })` / `betterAuthAccountTokenStore(auth)`:
   the blessed Better Auth convenience. STRUCTURAL (`BetterAuthLike`), so wiring it
   adds NO `better-auth` dependency and stays fully overridable — a Service Account
