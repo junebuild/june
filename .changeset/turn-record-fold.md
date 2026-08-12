@@ -1,0 +1,5 @@
+---
+"@junejs/core": minor
+---
+
+`foldTurnRecord(msgs, turnId)` + `AgentSession.turnRecord(turnId)` — the self-contained export of ONE turn from the durable log. The log already holds a complete account of a turn (opening, every model reply, every tool call with its frozen result, usage, durations) as interleaved Msg rows; the fold assembles them into one document: `{ turnId, opening (user text or attributed proactive trigger), steps (model steps with usage/durationMs; tool steps with input recovered from the requesting model step, so no join back), status, text?, usage? }`. `status` is `"completed"` iff the last model step has no tool calls — the same terminal condition the live engine uses; everything the log cannot distinguish (in-flight, failed, cancelled, suspended — live-only outcomes) is `"incomplete"`, never guessed. The aggregate `usage` exists only when every model step claimed usage, so a cost report can't silently undercount. This record is the atom for a trace exporter (fold on turn-terminal, ship one document) and for eval datasets (curate records from production, replay against the frozen tool results). Pure over `Msg[]`, like `foldTranscript`.

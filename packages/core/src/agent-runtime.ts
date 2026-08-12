@@ -37,6 +37,31 @@ export const RUNTIME_API_VERSION = 1;
 // inside `id` — leaking it into every ledger keyed by callId and breaking on any
 // id normalization.
 export type ToolCall = { id: string; name: string; input: unknown; providerState?: string };
+// Token usage for ONE model call, normalized across providers (both major APIs report
+// it on every response; adapters that don't see it simply omit the claim). Persisted on
+// the assistant Msg — the durable log is the ONLY place a fold/export can read it back
+// from (step checkpoints are presence-checked, never enumerated) — so cost/latency
+// accounting needs no side table.
+//
+// THE SEMANTIC CONTRACT (pinned here because persisted rows outlive code): `inputTokens`
+// is the TOTAL input the call consumed, cache reads and writes INCLUDED. Providers
+// disagree on what their headline field means — OpenAI's prompt_tokens and Gemini's
+// promptTokenCount already include cached tokens, Anthropic's input_tokens EXCLUDES its
+// separately-reported cache fields — so every adapter must normalize to the total, or
+// cross-provider sums silently undercount cache-heavy turns. The optional cache fields
+// break the total down where the provider reports them (cache reads bill ~10%, cache
+// writes ~125% — a cost report needs the split, not just the sum):
+// `cachedInputTokens` = input served from cache (a subset of inputTokens);
+// `cacheCreationInputTokens` = input written to cache this call (also in inputTokens).
+// `raw` preserves the provider's own usage object for diagnostics, mirroring
+// ModelFinish.raw — never the primary carrier of cost data.
+export type ModelUsage = {
+  inputTokens: number;
+  outputTokens: number;
+  cachedInputTokens?: number;
+  cacheCreationInputTokens?: number;
+  raw?: unknown;
+};
 export type Msg =
   | { role: "user"; turnId: string; text: string }
   // A proactive turn's opening message (§9): a schedule / another channel / the agent itself
@@ -44,8 +69,15 @@ export type Msg =
   // transcript honestly attributes who initiated it (`by`); the model adapter maps it to a
   // user/system message (providers needn't support a new role). See RFC decision #6.
   | { role: "trigger"; turnId: string; text: string; by: string }
-  | { role: "assistant"; turnId: string; text: string; toolCalls: ToolCall[] }
-  | { role: "tool"; turnId: string; toolCallId: string; name: string; result: unknown };
+  // `usage`/`durationMs` are execution metadata recorded at commit time (absent on
+  // legacy rows): what THIS model call cost and how long it streamed. On a crash-replay
+  // the cached step skips, so the values honestly describe the run that actually paid.
+  | { role: "assistant"; turnId: string; text: string; toolCalls: ToolCall[]; usage?: ModelUsage; durationMs?: number }
+  // `durationMs` is how long an ASYNC (remote) tool ran. Absent for sync local tools —
+  // they do no I/O, and workerd's request-frozen clock advances only on I/O, so any
+  // measurement would read 0 on the edge; recording nothing beats recording a lie —
+  // and for legacy rows and the synthetic results a cancelled batch commits.
+  | { role: "tool"; turnId: string; toolCallId: string; name: string; result: unknown; durationMs?: number };
 export type ModelReply = { text: string; toolCalls: ToolCall[] };
 export type ToolSpec = { name: string; description: string; input: unknown };
 
@@ -108,7 +140,7 @@ export type ModelFinish = {
 export type ModelDelta =
   | { type: "reasoning"; text: string }   // thinking tokens (when the provider streams them)
   | { type: "text"; text: string }        // answer tokens
-  | { type: "done"; reply: ModelReply; finish?: ModelFinish };  // terminal: the full assembled reply + why it stopped
+  | { type: "done"; reply: ModelReply; finish?: ModelFinish; usage?: ModelUsage };  // terminal: the full assembled reply + why it stopped + what it cost
 export type Model = (msgs: Msg[], tools: ToolSpec[], opts?: { system?: string; systemMode?: "append" | "replace" }) => AsyncIterable<ModelDelta>;
 
 // Per-source turn policy (#149): what a channel contributes to turns arriving
@@ -126,10 +158,10 @@ export type ChannelPolicy = {
 
 // A one-shot model output: a single-element stream. The degenerate streaming case, for
 // scripted/test models and providers without token streaming.
-export function replyStream(reply: ModelReply, finish?: ModelFinish): AsyncIterable<ModelDelta> {
+export function replyStream(reply: ModelReply, finish?: ModelFinish, usage?: ModelUsage): AsyncIterable<ModelDelta> {
   // Spread, don't assign: a no-claim call must not add an own `finish: undefined` property —
   // the pre-finish delta shape stays byte-identical for presence checks and deep equality.
-  return (async function* () { yield { type: "done", reply, ...(finish ? { finish } : {}) }; })();
+  return (async function* () { yield { type: "done", reply, ...(finish ? { finish } : {}), ...(usage ? { usage } : {}) }; })();
 }
 
 // Wrap a Model so every call carries `system` (the agent's instructions). The
@@ -562,6 +594,8 @@ async function modelStep(
   // reply from partial text/tool deltas.
   let reply: ModelReply | undefined;
   let finish: ModelFinish | undefined;
+  let usage: ModelUsage | undefined;
+  const startedAt = Date.now();
   for await (const d of model(msgs, specs, systemOverlay !== undefined ? { system: systemOverlay, ...(systemMode ? { systemMode } : {}) } : undefined)) {
     // Cancelled mid-stream: nothing persisted for this step, so throwing here (which
     // closes the provider iterator via for-await's return()) just discards the partial
@@ -572,9 +606,12 @@ async function modelStep(
     if (why) throw new CancelSignal(opts.turnId, why);
     if (d.type === "reasoning") sink.emit({ type: "reasoning.delta", turnId: opts.turnId, text: d.text });
     else if (d.type === "text") sink.emit({ type: "message.delta", turnId: opts.turnId, text: d.text });
-    else { reply = d.reply; finish = d.finish; break; } // `done` is terminal: `break` cancels the iterator (return()) so
+    else { reply = d.reply; finish = d.finish; usage = d.usage; break; } // `done` is terminal: `break` cancels the iterator (return()) so
     // extra deltas / a throw AFTER the authoritative reply can't turn a completed turn into a failure
   }
+  // Wall-clock of the model call itself (first request byte → the authoritative done),
+  // measured before the commit so the persisted number never includes storage time.
+  const durationMs = Date.now() - startedAt;
   if (!reply) throw new Error("model stream ended without a `done` event");
   // An ABNORMAL stop with an EMPTY reply fails the step instead of committing: providers
   // signal truncation/filtering via the finish reason, and both major APIs document that
@@ -597,7 +634,8 @@ async function modelStep(
   assertCrash(opts.crash, "before-model-commit", stepId); // nothing persisted → replay re-asks the model
   store.tx(() => {
     store.putStep(stepId, reply);
-    store.appendMessage({ role: "assistant", turnId: opts.turnId, text: reply.text, toolCalls: reply.toolCalls });
+    // usage is spread (absent when the adapter made no claim); durationMs is always known here.
+    store.appendMessage({ role: "assistant", turnId: opts.turnId, text: reply.text, toolCalls: reply.toolCalls, ...(usage ? { usage } : {}), durationMs });
   });
   assertCrash(opts.crash, "after-model-commit", stepId); // committed → replay skips (exactly-once append)
   // an assistant message finalized (text when present) + one action.requested per tool call
@@ -635,14 +673,20 @@ async function toolStep(
   };
 
   assertCrash(opts.crash, "before-tool-commit", stepId); // nothing done → safe clean re-run
-  const toolMsg = (result: unknown): Msg => ({ role: "tool", turnId: opts.turnId, toolCallId: call.id, name: call.name, result });
+  // durationMs = how long tool.run itself took (excludes the commit), recorded on the
+  // tool Msg so the durable log carries per-step latency without a side table. REMOTE
+  // tools only: a sync local tool does no I/O, and workerd's request-frozen clock only
+  // advances on I/O — the measurement would read 0 on the edge, so it isn't taken.
+  const toolMsg = (result: unknown, durationMs?: number): Msg => ({ role: "tool", turnId: opts.turnId, toolCallId: call.id, name: call.name, result, ...(durationMs !== undefined ? { durationMs } : {}) });
 
   let out: unknown;
   if (remote) {
     // network / subagent side effect: at-least-once (can't 2PC with local storage;
     // a subagent is itself durable, and its child turnId makes replay idempotent)
+    const startedAt = Date.now();
     out = await tool.run(call.input, ctx);
-    store.tx(() => { store.putStep(stepId, out); store.appendMessage(toolMsg(out)); });
+    const durationMs = Date.now() - startedAt;
+    store.tx(() => { store.putStep(stepId, out); store.appendMessage(toolMsg(out, durationMs)); });
   } else {
     // local side effect: exactly-once (side effect + checkpoint + append in ONE tx)
     store.tx(() => {
@@ -680,6 +724,73 @@ export function foldTranscript(msgs: Msg[]): Turn[] {
     }
   }
   return order.map((id) => byId.get(id)!);
+}
+
+// ── turn record (pure; the self-contained export of ONE turn) ─────────────────
+// The durable log already IS a complete account of a turn — opening, every model
+// reply, every tool call with its frozen result, usage, durations — but it is stored
+// as interleaved Msg rows. foldTurnRecord assembles ONE turn's rows into a
+// self-contained record: the atom for a trace exporter (fold on turn-terminal, ship
+// one document) and for an eval dataset (curate records from production, replay them
+// with substitutions — the frozen tool results are already here). Pure over Msg[],
+// like foldTranscript; anything not in the log (live-only failures/cancellations,
+// the system prompt) is deliberately absent rather than guessed. Distinct from `Turn`
+// on purpose: Turn is the lossy fold a live UI renders, TurnRecord is the lossless
+// self-contained export — they serve different consumers and evolve independently.
+export type TurnRecordStep =
+  // one model call: what it said, what it asked to run, what it cost
+  | { kind: "model"; text: string; toolCalls: ToolCall[]; usage?: ModelUsage; durationMs?: number }
+  // one tool result: input recovered from the requesting model step, so the record
+  // stands alone (a replay needs no join back to the assistant row)
+  | { kind: "tool"; callId: string; name: string; input: unknown; result: unknown; durationMs?: number };
+export type TurnRecord = {
+  turnId: string;
+  // who opened the turn: a user message, or a proactive trigger attributed to `by`
+  opening: { role: "user" | "trigger"; text: string; by?: string };
+  steps: TurnRecordStep[];
+  // "completed" iff the last model step has no tool calls — the SAME terminal condition
+  // the live engine uses. "incomplete" covers everything the log cannot distinguish:
+  // in-flight, failed, cancelled, suspended (those outcomes are live-only events).
+  status: "completed" | "incomplete";
+  text?: string; // the final assistant text, when completed
+  // aggregate across the model steps that claimed usage (absent when none did) — a
+  // partial sum is still honest per-step; the aggregate only exists when every model
+  // step reported, so a cost report can't silently undercount.
+  usage?: { inputTokens: number; outputTokens: number };
+};
+export function foldTurnRecord(msgs: Msg[], turnId: string): TurnRecord | undefined {
+  const rows = msgs.filter((m) => m.turnId === turnId);
+  if (rows.length === 0) return undefined;
+  const calls = new Map<string, ToolCall>();
+  let opening: TurnRecord["opening"] | undefined;
+  const steps: TurnRecordStep[] = [];
+  for (const m of rows) {
+    if (m.role === "user") opening ??= { role: "user", text: m.text };
+    else if (m.role === "trigger") opening ??= { role: "trigger", text: m.text, by: m.by };
+    else if (m.role === "assistant") {
+      for (const call of m.toolCalls) calls.set(call.id, call);
+      steps.push({ kind: "model", text: m.text, toolCalls: m.toolCalls, ...(m.usage ? { usage: m.usage } : {}), ...(m.durationMs !== undefined ? { durationMs: m.durationMs } : {}) });
+    } else {
+      steps.push({ kind: "tool", callId: m.toolCallId, name: m.name, input: calls.get(m.toolCallId)?.input, result: m.result, ...(m.durationMs !== undefined ? { durationMs: m.durationMs } : {}) });
+    }
+  }
+  // A resumed/replayed turn re-appends nothing, but a turn CAN lack an opening row in a
+  // pathological log; refuse to invent one — the record must never claim what the log doesn't.
+  if (!opening) return undefined;
+  const models = steps.filter((s): s is Extract<TurnRecordStep, { kind: "model" }> => s.kind === "model");
+  const lastModel = models[models.length - 1];
+  const completed = lastModel !== undefined && lastModel.toolCalls.length === 0;
+  const usage = models.length > 0 && models.every((s) => s.usage)
+    ? models.reduce((acc, s) => ({ inputTokens: acc.inputTokens + s.usage!.inputTokens, outputTokens: acc.outputTokens + s.usage!.outputTokens }), { inputTokens: 0, outputTokens: 0 })
+    : undefined;
+  return {
+    turnId,
+    opening,
+    steps,
+    status: completed ? "completed" : "incomplete",
+    ...(completed ? { text: lastModel.text } : {}),
+    ...(usage ? { usage } : {}),
+  };
 }
 
 // ── turn id minting (#95) ─────────────────────────────────────────────────────
@@ -1001,6 +1112,11 @@ export class AgentSession {
 
   transcript(): Turn[] { return foldTranscript(this.store.messages()); }
   snapshot() { return { transcript: this.transcript(), status: this.store.getStatus() }; }
+  // The self-contained export of one turn from the durable log (see foldTurnRecord):
+  // the atom a trace exporter ships on turn-terminal and an eval dataset curates.
+  // A noun getter like transcript()/snapshot() — deliberately NOT `record`, which reads
+  // as a write verb (and channels already use feedback.record for one).
+  turnRecord(turnId: string): TurnRecord | undefined { return foldTurnRecord(this.store.messages(), turnId); }
 }
 
 // Address space: a runtime resolves a session actor by (agentName, id). Native =
