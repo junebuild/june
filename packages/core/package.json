@@ -150,6 +150,12 @@
       "types": "./dist/connections.d.ts",
       "default": "./dist/connections.js"
     },
+    "./google-drive": {
+      "source": "./src/google-drive.ts",
+      "bun": "./src/google-drive.ts",
+      "types": "./dist/google-drive.d.ts",
+      "default": "./dist/google-drive.js"
+    },
     "./mcp": {
       "source": "./src/mcp.ts",
       "bun": "./src/mcp.ts",

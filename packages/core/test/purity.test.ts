@@ -55,6 +55,7 @@ describe("package resolution (reminder #1: real names + subpath exports)", () =>
     "@junejs/core/discovery",
     "@junejs/core/cache",
     "@junejs/core/instrumentation",
+    "@junejs/core/google-drive",
   ];
 
   for (const spec of subpaths) {

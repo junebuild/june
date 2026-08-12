@@ -6,7 +6,9 @@
 //     agent.ts                  → default-exports a plain config { name, model?, surfaces? }
 //     instructions.md           → base system prompt
 //     instructions.<source>.md  → per-surface instruction variant (#149)
-//     tools/*.ts                → each default-exports a defineAction (a tool)
+//     tools/*.ts                → each default-exports a defineAction (a tool),
+//                                 OR an array of defineActions (an integration
+//                                 shipping several tools, e.g. googleDriveTools())
 //     skills/*.md               → each a procedure, loaded on demand (progressive disclosure)
 //     channels/*.ts             → each default-exports a Channel (an inbound edge — pure transport)
 //     channels/*.md             → DEPRECATED overlay location (warned; use instructions.<source>.md)
@@ -24,8 +26,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import type { AnyAction } from "@junejs/core/agent";
-import { assembleAgent, parseSkill, type AgentConfigFile, type AgentDefinition, type AgentModule, type Channel, type ChannelFactory, type Skill } from "@junejs/core/agent-config";
+import { assembleAgent, parseSkill, type AgentConfigFile, type AgentDefinition, type AgentModule, type Channel, type ChannelFactory, type Skill, type ToolEntry } from "@junejs/core/agent-config";
 import type { Connection } from "@junejs/core/connections";
 
 // `_`-prefixed files are private by convention (mirrors the app/ router) — most
@@ -72,10 +73,12 @@ export async function discoverAgentModule(dir: string): Promise<AgentModule> {
     }
   }
 
-  const tools: AnyAction[] = [];
+  // A tool file default-exports one tool OR an array of tools (an integration
+  // like googleDriveTools()); assembly flattens arrays.
+  const tools: ToolEntry[] = [];
   for (const f of await scan(join(dir, "tools"), ".ts")) {
     const mod = await import(pathToFileURL(f).href);
-    if (mod.default) tools.push(mod.default as AnyAction);
+    if (mod.default) tools.push(mod.default as ToolEntry);
   }
 
   const skills: Skill[] = [];
