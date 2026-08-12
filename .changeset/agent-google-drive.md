@@ -7,7 +7,8 @@ Google Drive access for agents — as a new `provider` connection kind.
 
 - `connections` gains a third kind alongside `mcp` and `openapi`:
   `defineProviderConnection({ name, connect, requiresPrincipal? })`. A provider
-  brings its OWN transport — `connect(ctx?)` returns the provider's tools as
+  brings its OWN transport — `connect({ requiresPrincipal })` returns the
+  provider's tools as
   `defineAction`s — for remotes the generic mcp/openapi clients can't express
   (multipart uploads, `alt=media` downloads, compound path→id operations). It
   still joins the connection lifecycle: `connectAll` reports it (kind

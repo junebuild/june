@@ -170,18 +170,22 @@ export function defineAction<const S extends JsonSchema, O>(def: {
   }
   ACTION_REGISTRY.set(def.id, action as unknown as AnyAction);
   // Flight/server-reference dispatch invokes the REGISTERED function directly —
-  // it never passes through invokeAction — so what we register for a gated
-  // action is a fail-closed wrapper, not the raw run: unless the RSC runtime
-  // hands an ActionContext with a user as the second argument, the reference
-  // throws. An identity-gated action can therefore never run identity-less,
-  // even on dispatch paths this module doesn't own.
-  const flightRun = def.requiresPrincipal
-    ? (...args: unknown[]) => {
-        const ctx = args[1] as ActionContext | undefined;
-        if (!ctx?.user) throw new Error(`Action "${def.id}" requires an authenticated principal (ctx.user)`);
-        return (def.run as (...a: unknown[]) => unknown)(...args);
-      }
-    : (def.run as (...args: unknown[]) => unknown);
+  // it never passes through invokeAction — so the wrapper resolves the action
+  // from ACTION_REGISTRY at call time and enforces the gate off the LIVE action:
+  //   • an action removed from the registry (e.g. a failed connection rolled
+  //     back by connectAll) has an INERT reference — a forged Flight dispatch for
+  //     its id fails closed, so deleting the map entry is sufficient;
+  //   • a `requiresPrincipal` action never runs without an ActionContext.user,
+  //     even on this dispatch path the module doesn't own.
+  const flightRun = (...args: unknown[]) => {
+    const current = ACTION_REGISTRY.get(def.id);
+    if (!current) throw new Error(`Action "${def.id}" is not registered`);
+    if (current.requiresPrincipal) {
+      const ctx = args[1] as ActionContext | undefined;
+      if (!ctx?.user) throw new Error(`Action "${def.id}" requires an authenticated principal (ctx.user)`);
+    }
+    return (current.run as (...a: unknown[]) => unknown)(...args);
+  };
   serverReferenceRegistrar?.(flightRun, def.id);
   return action;
 }

@@ -42,7 +42,7 @@ the tools are then hidden from anonymous turns entirely.
 | id                      | what it does                                                        |
 | ----------------------- | ------------------------------------------------------------------- |
 | `gdrive__list_files`    | List/search files & folders (Drive query syntax, or a `folderId`).  |
-| `gdrive__find_file`     | Resolve a slash path (`A/B/file.txt`) → metadata, or `null`.        |
+| `gdrive__find_file`     | Resolve a slash path (`A/B/file.txt`) → `{ found, file }` (file is null when absent). |
 | `gdrive__read_file`     | Read text by `fileId` **or** `path`; native docs auto-exported.     |
 | `gdrive__create_file`   | Create a file with content under a `folderId`/`folderPath`.         |
 | `gdrive__update_file`   | Overwrite an existing file's content by `fileId`.                   |
@@ -87,7 +87,7 @@ import { googleDriveConnection, googleDriveTools } from "@junejs/core/google-dri
 const mod = {
   config: { name: "archivist" },
   instructions: "Save your outputs to Drive and read reference docs from it.",
-  tools: [], skills: [], channels: {}, channelInstructions: {},
+  tools: [], skills: [], channels: {}, channelInstructions: {}, surfaceInstructions: {},
   connections: [googleDriveConnection({ auth: () => ({ token: process.env.GOOGLE_DRIVE_TOKEN! }) })],
 };
 const agent = await assembleAgent(mod);
@@ -138,7 +138,17 @@ Google Drive API** (APIs & Services → Enable APIs).
   Admin → Service Accounts → create → **Keys → Add key → JSON**. Then **share the
   target folder (or Shared Drive) with the service account's email**. A library
   (`google-auth-library`) turns the JSON key into tokens automatically — no
-  refresh dance, no consent screen.
+  refresh dance, no consent screen. Because a service account has ~no personal
+  Drive, set **`rootFolderId`** to that shared folder / Shared Drive id so
+  `save_file` / `find_file` / path reads resolve there instead of the (empty,
+  unwritable) service-account root:
+
+  ```ts
+  googleDriveConnection({
+    rootFolderId: process.env.DRIVE_SHARED_FOLDER_ID, // the shared folder / Shared Drive
+    auth: async () => ({ token: await mintServiceAccountToken(saKey) }),
+  });
+  ```
 - **Production multi-user — your own OAuth client.** Credentials → **Create OAuth
   client ID** → get `client_id`/`client_secret`, run the redirect flow, and store
   each user's `refresh_token`. This is where June's web nature pays off ↓.
