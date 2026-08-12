@@ -1,5 +1,70 @@
 # @junejs/server
 
+## 1.0.0-dev.20
+
+### Minor Changes
+
+- [#160](https://github.com/junebuild/june/pull/160) [`500687e`](https://github.com/junebuild/june/commit/500687ebfec102e8da94610edcc1c525bdf4f2e5) Thanks [@linyiru](https://github.com/linyiru)! - Connection auth helpers — turn an authenticated principal into a per-call bearer
+  token for an outbound connection (provider/mcp/openapi), so the token is resolved
+  server-side and never reaches the model.
+
+  - `linkedAccountAuth({ providerId, store })`: the generic, auth-library-agnostic
+    core. Inject a `store` (an `AccountTokenStore` — where the caller's OAuth
+    account tokens live) and it returns a `ConnectionAuth` — `auth(ctx)` that mints
+    the CALLER's token. FAIL CLOSED: a missing principal or an unlinked account
+    throws (together with the connection's `requiresPrincipal`, the capability is
+    unreachable without a real credential). Reusable across connections whose
+    `auth` is resolved PER CALL with the caller's identity (provider connections
+    like Drive). NOT for MCP/OpenAPI remotes that authenticate discovery — those
+    call `auth(undefined)` at initialize/tools-list, which this fail-closed helper
+    rejects (they need a discovery-scoped credential instead).
+  - `betterAuthAccessToken(auth, { providerId })` / `betterAuthAccountTokenStore(auth)`:
+    the blessed Better Auth convenience. STRUCTURAL (`BetterAuthLike`), so wiring it
+    adds NO `better-auth` dependency and stays fully overridable — a Service Account
+    or custom-store user pays nothing (pure opt-in exports, tree-shaken away).
+
+  Lives in the host layer by design (the auth integration is not `@junejs/core`'s
+  job); pure logic, no `node:*`. Example:
+
+  ```ts
+  googleDriveConnection({
+    requiresPrincipal: true,
+    auth: betterAuthAccessToken(auth, { providerId: "google" }),
+  });
+  ```
+
+### Patch Changes
+
+- [#160](https://github.com/junebuild/june/pull/160) [`80576b2`](https://github.com/junebuild/june/commit/80576b274d7cb1be57875476b77b7b416d974d96) Thanks [@linyiru](https://github.com/linyiru)! - Google Drive access for agents — as a new `provider` connection kind.
+
+  - `connections` gains a third kind alongside `mcp` and `openapi`:
+    `defineProviderConnection({ name, connect, requiresPrincipal? })`. A provider
+    brings its OWN transport — `connect({ requiresPrincipal })` returns the
+    provider's tools as
+    `defineAction`s — for remotes the generic mcp/openapi clients can't express
+    (multipart uploads, `alt=media` downloads, compound path→id operations). It
+    still joins the connection lifecycle: `connectAll` reports it (kind
+    `"provider"`), isolates its failures (a broken provider never takes the agent
+    down), the durable/edge target wires it lazily, and `requiresPrincipal` stamps
+    every tool it exposes.
+  - `@junejs/core/google-drive`: `googleDriveConnection(config)` is the first
+    provider — Google Drive read/write for an agent (`list_files`, `find_file`,
+    `read_file`, `create_file`, `update_file`, `save_file` upsert-by-path,
+    `create_folder`, `delete_file`). Drop it in `connections/google-drive.ts`.
+    `googleDriveTools(config)` is also exported for spreading the raw actions into a
+    programmatic `defineAgent`. Pure + `fetch`-only (edge-safe, no `node:*`).
+    Identity mirrors connections: the OAuth2 access token is resolved per call,
+    server-side via `auth(ctx)` (never reaches the model), so a multi-tenant app
+    mints the caller's short-lived token. Read/list/find carry `readOnlyHint`,
+    `delete_file` carries `destructiveHint` (`save_file` intentionally has no
+    `idempotentHint` — its upsert is a non-atomic find-then-create).
+  - A `tools/*.ts` file may now default-export one tool OR an array of tools;
+    `defineAgent`/`assembleDurable` flatten arrays (native discovery and the
+    edge-compiled module both).
+
+- Updated dependencies [[`80576b2`](https://github.com/junebuild/june/commit/80576b274d7cb1be57875476b77b7b416d974d96)]:
+  - @junejs/core@0.2.0-dev.38
+
 ## 1.0.0-dev.19
 
 ### Patch Changes
