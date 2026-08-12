@@ -5,7 +5,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { Msg } from "@junejs/core/agent-runtime";
-import { anthropic, finishFromStopReason, fromAnthropicContent, toAnthropicMessages } from "@junejs/core/agent-models";
+import { anthropic, finishFromStopReason, fromAnthropicContent, toAnthropicMessages, usageFromAnthropic } from "@junejs/core/agent-models";
 
 describe("toAnthropicMessages", () => {
   test("a user message becomes plain text content", () => {
@@ -85,6 +85,20 @@ describe("finishFromStopReason", () => {
   });
 });
 
+describe("usageFromAnthropic", () => {
+  test("maps a full claim to the normalized ModelUsage, provider object preserved as raw", () => {
+    const u = { input_tokens: 12, output_tokens: 34, cache_read_input_tokens: 5 };
+    expect(usageFromAnthropic(u)).toEqual({ inputTokens: 12, outputTokens: 34, raw: u });
+  });
+
+  test("a partial or absent claim is dropped whole — no half-truth for a cost report to trust", () => {
+    expect(usageFromAnthropic({ input_tokens: 12 })).toBeUndefined();
+    expect(usageFromAnthropic({ output_tokens: 34 })).toBeUndefined();
+    expect(usageFromAnthropic({})).toBeUndefined();
+    expect(usageFromAnthropic(undefined)).toBeUndefined();
+  });
+});
+
 describe("anthropic()", () => {
   test("returns a Model function", () => {
     expect(typeof anthropic({ model: "claude-opus-4-8" })).toBe("function");
@@ -104,6 +118,24 @@ describe("anthropic()", () => {
     for await (const d of model([{ role: "user", turnId: "t1", text: "hi" }], [])) deltas.push(d);
     expect(deltas).toEqual([
       { type: "done", reply: { text: "", toolCalls: [] }, finish: { reason: "max_tokens", raw: "max_tokens" } },
+    ]);
+  });
+
+  test("the done delta carries the finalMessage's usage, normalized", async () => {
+    const usage = { input_tokens: 7, output_tokens: 21 };
+    const client = {
+      messages: {
+        stream: () =>
+          Object.assign((async function* () {})(), {
+            finalMessage: async () => ({ content: [{ type: "text", text: "hi there" }], stop_reason: "end_turn", usage }),
+          }),
+      },
+    };
+    const model = anthropic({ client, apiKey: "unused" });
+    const deltas = [];
+    for await (const d of model([{ role: "user", turnId: "t1", text: "hi" }], [])) deltas.push(d);
+    expect(deltas).toEqual([
+      { type: "done", reply: { text: "hi there", toolCalls: [] }, finish: { reason: "stop", raw: "end_turn" }, usage: { inputTokens: 7, outputTokens: 21, raw: usage } },
     ]);
   });
 

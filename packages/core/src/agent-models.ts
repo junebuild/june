@@ -9,7 +9,7 @@
 // native AND edge (a Durable Object) — pass `apiKey` explicitly on edge, where
 // there is no process.env.
 
-import type { Model, ModelDelta, ModelFinish, ModelReply, Msg, ToolSpec } from "./agent-runtime";
+import type { Model, ModelDelta, ModelFinish, ModelReply, ModelUsage, Msg, ToolSpec } from "./agent-runtime";
 
 // Structural subset of the Anthropic Messages shapes we emit/read — no
 // `@anthropic-ai/sdk` type import, so core typechecks without the optional dep.
@@ -88,7 +88,11 @@ export type AnthropicRequest = {
 // tool_use / pause_turn / refusal / model_context_window_exceeded / null) — optional
 // here so a minimal fake transport stays assignable.
 export type AnthropicStreamEvent = { type: string; delta?: { type?: string; text?: string; thinking?: string } };
-export type AnthropicStream = AsyncIterable<AnthropicStreamEvent> & { finalMessage(): Promise<{ content: AnthropicResponseBlock[]; stop_reason?: string | null }> };
+// `usage` is the Messages API's per-response token accounting (input_tokens/output_tokens,
+// plus cache fields we pass through raw) — optional here, like stop_reason, so a minimal
+// fake transport stays assignable.
+export type AnthropicUsage = { input_tokens?: number; output_tokens?: number };
+export type AnthropicStream = AsyncIterable<AnthropicStreamEvent> & { finalMessage(): Promise<{ content: AnthropicResponseBlock[]; stop_reason?: string | null; usage?: AnthropicUsage }> };
 export type AnthropicClient = {
   messages: { stream(body: AnthropicRequest): AnthropicStream };
 };
@@ -148,10 +152,11 @@ export function anthropic(opts: AnthropicOptions = {}): Model {
         else if (ev.delta.type === "thinking_delta" && ev.delta.thinking) yield { type: "reasoning", text: ev.delta.thinking };
       }
       const message = await stream.finalMessage();
-      // Spread, don't assign: a transport that omits stop_reason must yield the same delta
-      // shape as before this field existed (no own `finish: undefined` property).
+      // Spread, don't assign: a transport that omits stop_reason/usage must yield the same
+      // delta shape as before these fields existed (no own `finish: undefined` property).
       const finish = finishFromStopReason(message.stop_reason);
-      yield { type: "done", reply: fromAnthropicContent(message.content), ...(finish ? { finish } : {}) };
+      const usage = usageFromAnthropic(message.usage);
+      yield { type: "done", reply: fromAnthropicContent(message.content), ...(finish ? { finish } : {}), ...(usage ? { usage } : {}) };
     })();
 }
 
@@ -163,6 +168,15 @@ export function anthropic(opts: AnthropicOptions = {}): Model {
 // pause_turn (server-tool loop parked — this adapter runs no server tools) and any
 // future value fall to `other` with the provider's own string preserved in `raw`.
 // Exported for tests.
+// Messages API usage → the engine's normalized ModelUsage. Partial claims are dropped
+// whole (no claim beats a half-truth a cost report would then trust); the provider's own
+// object rides along as `raw` so cache-token fields survive without normalization.
+// Exported for tests.
+export function usageFromAnthropic(u: AnthropicUsage | undefined): ModelUsage | undefined {
+  if (!u || typeof u.input_tokens !== "number" || typeof u.output_tokens !== "number") return undefined;
+  return { inputTokens: u.input_tokens, outputTokens: u.output_tokens, raw: u };
+}
+
 export function finishFromStopReason(stopReason: string | null | undefined): ModelFinish | undefined {
   if (stopReason == null) return undefined; // e.g. a minimal fake transport — no claim, engine keeps legacy behavior
   switch (stopReason) {

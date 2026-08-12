@@ -1276,3 +1276,45 @@ describe("channel policies (surface overlay modes + denyTools)", () => {
     expect(seen[1]!.specs).toEqual(["ping", "write_ledger"]);
   });
 });
+
+describe("execution metadata (usage + durationMs)", () => {
+  test("the adapter's usage claim and each step's wall-clock land on the durable log", async () => {
+    const { store } = memStore();
+    const usage = { inputTokens: 12, outputTokens: 34, raw: { input_tokens: 12, output_tokens: 34 } };
+    // first call claims usage, second makes no claim — both shapes must persist honestly
+    const model: Model = (msgs) => {
+      const i = msgs.filter((m) => m.role === "assistant").length;
+      return i === 0 ? replyStream(ORDER_SCRIPT[0]!, undefined, usage) : replyStream(ORDER_SCRIPT[1]!);
+    };
+    const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), model, [createOrderTool()], noRuntime);
+    await s.turn({ turnId: "t1", userText: "Order 3 widgets" });
+
+    const msgs = store.messages();
+    const assistants = msgs.filter((m): m is Extract<Msg, { role: "assistant" }> => m.role === "assistant");
+    expect(assistants[0]!.usage).toEqual(usage);
+    expect(typeof assistants[0]!.durationMs).toBe("number");
+    // no claim ⇒ no own `usage` property (spread, never assigned undefined)
+    expect("usage" in assistants[1]!).toBe(false);
+    const toolMsg = msgs.find((m): m is Extract<Msg, { role: "tool" }> => m.role === "tool")!;
+    expect(typeof toolMsg.durationMs).toBe("number");
+  });
+
+  test("a cancelled batch's synthetic tool results carry no durationMs — nothing ran", async () => {
+    const { store } = memStore();
+    // one model reply with two calls; the first tool cancels the turn mid-batch
+    const model = scriptedModel([{ text: "", toolCalls: [{ id: "c1", name: "slow", input: {} }, { id: "c2", name: "slow", input: {} }] }]);
+    let session: AgentSession;
+    const slow: Tool = {
+      spec: { name: "slow", description: "", input: {} },
+      run: async () => { session.cancel("t1"); return { ok: true }; },
+    };
+    session = new AgentSession("ops", "s1", store, new MemBroadcaster(), model, [slow], noRuntime);
+    const r = session.start({ turnId: "t1", userText: "go" });
+    expect((await session.result(r.turnId)).status).toBe("cancelled");
+
+    const tools = store.messages().filter((m): m is Extract<Msg, { role: "tool" }> => m.role === "tool");
+    expect(tools).toHaveLength(2);
+    expect(typeof tools[0]!.durationMs).toBe("number"); // c1 actually ran
+    expect("durationMs" in tools[1]!).toBe(false);      // c2 is the synthetic cancelled result
+  });
+});

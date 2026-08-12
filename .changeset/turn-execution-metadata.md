@@ -1,0 +1,5 @@
+---
+"@junejs/core": patch
+---
+
+Execution metadata on the durable log — token usage and step wall-clock, recorded where a fold/export can read them back. `ModelDelta`'s terminal `done` gains `usage?: ModelUsage` (`{ inputTokens, outputTokens, raw? }` — normalized across providers, the provider's own usage object preserved as `raw`); the engine persists it on the assistant Msg at commit time alongside a new `durationMs` (model-call wall-clock, measured before the commit so storage time never inflates it), and every executed tool Msg carries its own `durationMs` (a cancelled batch's synthetic results carry none — nothing ran). The anthropic adapter now claims usage from `finalMessage().usage` (`usageFromAnthropic` exported, mirroring `finishFromStopReason`; a transport that omits usage yields the byte-identical delta shape as before). `replyStream` accepts an optional third `usage` argument for scripted/test models. Previously the adapter discarded the SDK's usage on the floor, so per-turn cost accounting was impossible without a proxy in front of the provider.

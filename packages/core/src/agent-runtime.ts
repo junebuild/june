@@ -37,6 +37,13 @@ export const RUNTIME_API_VERSION = 1;
 // inside `id` — leaking it into every ledger keyed by callId and breaking on any
 // id normalization.
 export type ToolCall = { id: string; name: string; input: unknown; providerState?: string };
+// Token usage for ONE model call, normalized across providers (both major APIs report
+// it on every response; adapters that don't see it simply omit the claim). Persisted on
+// the assistant Msg — the durable log is the ONLY place a fold/export can read it back
+// from (step checkpoints are presence-checked, never enumerated) — so cost/latency
+// accounting needs no side table. `raw` preserves the provider's own usage object
+// (cache tokens, tier fields, …) for diagnostics, mirroring ModelFinish.raw.
+export type ModelUsage = { inputTokens: number; outputTokens: number; raw?: unknown };
 export type Msg =
   | { role: "user"; turnId: string; text: string }
   // A proactive turn's opening message (§9): a schedule / another channel / the agent itself
@@ -44,8 +51,13 @@ export type Msg =
   // transcript honestly attributes who initiated it (`by`); the model adapter maps it to a
   // user/system message (providers needn't support a new role). See RFC decision #6.
   | { role: "trigger"; turnId: string; text: string; by: string }
-  | { role: "assistant"; turnId: string; text: string; toolCalls: ToolCall[] }
-  | { role: "tool"; turnId: string; toolCallId: string; name: string; result: unknown };
+  // `usage`/`durationMs` are execution metadata recorded at commit time (absent on
+  // legacy rows): what THIS model call cost and how long it streamed. On a crash-replay
+  // the cached step skips, so the values honestly describe the run that actually paid.
+  | { role: "assistant"; turnId: string; text: string; toolCalls: ToolCall[]; usage?: ModelUsage; durationMs?: number }
+  // `durationMs` is how long the tool ran; absent when nothing ran (legacy rows and the
+  // synthetic results a cancelled batch commits).
+  | { role: "tool"; turnId: string; toolCallId: string; name: string; result: unknown; durationMs?: number };
 export type ModelReply = { text: string; toolCalls: ToolCall[] };
 export type ToolSpec = { name: string; description: string; input: unknown };
 
@@ -108,7 +120,7 @@ export type ModelFinish = {
 export type ModelDelta =
   | { type: "reasoning"; text: string }   // thinking tokens (when the provider streams them)
   | { type: "text"; text: string }        // answer tokens
-  | { type: "done"; reply: ModelReply; finish?: ModelFinish };  // terminal: the full assembled reply + why it stopped
+  | { type: "done"; reply: ModelReply; finish?: ModelFinish; usage?: ModelUsage };  // terminal: the full assembled reply + why it stopped + what it cost
 export type Model = (msgs: Msg[], tools: ToolSpec[], opts?: { system?: string; systemMode?: "append" | "replace" }) => AsyncIterable<ModelDelta>;
 
 // Per-source turn policy (#149): what a channel contributes to turns arriving
@@ -126,10 +138,10 @@ export type ChannelPolicy = {
 
 // A one-shot model output: a single-element stream. The degenerate streaming case, for
 // scripted/test models and providers without token streaming.
-export function replyStream(reply: ModelReply, finish?: ModelFinish): AsyncIterable<ModelDelta> {
+export function replyStream(reply: ModelReply, finish?: ModelFinish, usage?: ModelUsage): AsyncIterable<ModelDelta> {
   // Spread, don't assign: a no-claim call must not add an own `finish: undefined` property —
   // the pre-finish delta shape stays byte-identical for presence checks and deep equality.
-  return (async function* () { yield { type: "done", reply, ...(finish ? { finish } : {}) }; })();
+  return (async function* () { yield { type: "done", reply, ...(finish ? { finish } : {}), ...(usage ? { usage } : {}) }; })();
 }
 
 // Wrap a Model so every call carries `system` (the agent's instructions). The
@@ -562,6 +574,8 @@ async function modelStep(
   // reply from partial text/tool deltas.
   let reply: ModelReply | undefined;
   let finish: ModelFinish | undefined;
+  let usage: ModelUsage | undefined;
+  const startedAt = Date.now();
   for await (const d of model(msgs, specs, systemOverlay !== undefined ? { system: systemOverlay, ...(systemMode ? { systemMode } : {}) } : undefined)) {
     // Cancelled mid-stream: nothing persisted for this step, so throwing here (which
     // closes the provider iterator via for-await's return()) just discards the partial
@@ -572,9 +586,12 @@ async function modelStep(
     if (why) throw new CancelSignal(opts.turnId, why);
     if (d.type === "reasoning") sink.emit({ type: "reasoning.delta", turnId: opts.turnId, text: d.text });
     else if (d.type === "text") sink.emit({ type: "message.delta", turnId: opts.turnId, text: d.text });
-    else { reply = d.reply; finish = d.finish; break; } // `done` is terminal: `break` cancels the iterator (return()) so
+    else { reply = d.reply; finish = d.finish; usage = d.usage; break; } // `done` is terminal: `break` cancels the iterator (return()) so
     // extra deltas / a throw AFTER the authoritative reply can't turn a completed turn into a failure
   }
+  // Wall-clock of the model call itself (first request byte → the authoritative done),
+  // measured before the commit so the persisted number never includes storage time.
+  const durationMs = Date.now() - startedAt;
   if (!reply) throw new Error("model stream ended without a `done` event");
   // An ABNORMAL stop with an EMPTY reply fails the step instead of committing: providers
   // signal truncation/filtering via the finish reason, and both major APIs document that
@@ -597,7 +614,8 @@ async function modelStep(
   assertCrash(opts.crash, "before-model-commit", stepId); // nothing persisted → replay re-asks the model
   store.tx(() => {
     store.putStep(stepId, reply);
-    store.appendMessage({ role: "assistant", turnId: opts.turnId, text: reply.text, toolCalls: reply.toolCalls });
+    // usage is spread (absent when the adapter made no claim); durationMs is always known here.
+    store.appendMessage({ role: "assistant", turnId: opts.turnId, text: reply.text, toolCalls: reply.toolCalls, ...(usage ? { usage } : {}), durationMs });
   });
   assertCrash(opts.crash, "after-model-commit", stepId); // committed → replay skips (exactly-once append)
   // an assistant message finalized (text when present) + one action.requested per tool call
@@ -635,20 +653,26 @@ async function toolStep(
   };
 
   assertCrash(opts.crash, "before-tool-commit", stepId); // nothing done → safe clean re-run
-  const toolMsg = (result: unknown): Msg => ({ role: "tool", turnId: opts.turnId, toolCallId: call.id, name: call.name, result });
+  // durationMs = how long tool.run itself took (excludes the commit) — recorded on the
+  // tool Msg so the durable log carries per-step latency without a side table.
+  const toolMsg = (result: unknown, durationMs: number): Msg => ({ role: "tool", turnId: opts.turnId, toolCallId: call.id, name: call.name, result, durationMs });
 
   let out: unknown;
   if (remote) {
     // network / subagent side effect: at-least-once (can't 2PC with local storage;
     // a subagent is itself durable, and its child turnId makes replay idempotent)
+    const startedAt = Date.now();
     out = await tool.run(call.input, ctx);
-    store.tx(() => { store.putStep(stepId, out); store.appendMessage(toolMsg(out)); });
+    const durationMs = Date.now() - startedAt;
+    store.tx(() => { store.putStep(stepId, out); store.appendMessage(toolMsg(out, durationMs)); });
   } else {
     // local side effect: exactly-once (side effect + checkpoint + append in ONE tx)
     store.tx(() => {
+      const startedAt = Date.now();
       out = tool.run(call.input, ctx);
+      const durationMs = Date.now() - startedAt;
       store.putStep(stepId, out);
-      store.appendMessage(toolMsg(out));
+      store.appendMessage(toolMsg(out, durationMs));
     });
   }
   assertCrash(opts.crash, "after-tool-commit", stepId); // committed → replay skips (no duplicate side effect)
