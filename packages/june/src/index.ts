@@ -81,6 +81,20 @@ export {
   type Resolved,
   type LayoutComponent,
 } from "./pipeline";
+// Connection auth helpers — turn an authenticated principal into a per-call
+// bearer token for an outbound connection (provider/mcp/openapi). The auth
+// INTEGRATION lives in the host layer by design, so these sit here (not in pure
+// @junejs/core). Generic + overridable; the Better Auth variant is structural
+// (adds no dependency).
+export {
+  linkedAccountAuth,
+  betterAuthAccessToken,
+  betterAuthAccountTokenStore,
+  type AccountTokenStore,
+  type LinkedAccountAuthOptions,
+  type ConnectionAuth,
+  type BetterAuthLike,
+} from "./connection-auth";
 export { createApp, type JuneApp, type CreateAppOptions } from "./app";
 export { createWorker, type WorkerManifest } from "./worker";
 export {

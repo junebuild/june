@@ -153,31 +153,44 @@ routes, `/mcp`, and a resolved request principal via `createPipeline({ identity 
 So the blessed recipe is to let the **Better Auth** integration
 ([docs/auth-integration.md](./auth-integration.md)) run the Google OAuth provider:
 it hosts consent + callback and stores each account's access/refresh tokens. Then
-`auth(ctx)` just reads the caller's Google token for `ctx.user`:
+a **shipped host-layer helper** reads the caller's Google token for `ctx.user`:
 
 ```ts
 // connections/google-drive.ts
+import { googleDriveConnection } from "@junejs/core/google-drive";
+import { betterAuthAccessToken } from "@junejs/server";
+
 export default googleDriveConnection({
   requiresPrincipal: true, // no principal ⇒ tools hidden (fail closed)
-  auth: async (ctx) => {
-    // Better Auth stores the linked Google account's tokens and refreshes them.
-    const { accessToken } = await auth.api.getAccessToken({ providerId: "google", userId: ctx!.user!.id });
-    return { token: accessToken };
-  },
+  // Reads the caller's linked Google account token via Better Auth (refreshes on
+  // expiry); throws if the user hasn't linked Google. Structural — no better-auth
+  // dependency is forced on you.
+  auth: betterAuthAccessToken(auth, { providerId: "google" }),
 });
 ```
 
 The end user never touches a key — they just "Sign in with Google" (granting the
 Drive scope); the developer configures the OAuth client once.
 
-### Where a helper belongs (design note)
+### The helper, and its layering
 
-The `auth` seam stays the source of truth and is always overridable (Service
-Account, raw token, any IdP). The Better-Auth recipe above is common and fiddly
-(expiry, account lookup, scope), so it is a candidate for a **blessed, overridable
-helper** — but at the **host layer** (`@junejs/server`), never in the pure
-`@junejs/core` (which must not depend on Better Auth). Such a helper should be
-**connection-agnostic** ("get the caller's linked-account token"), reusable across
-Drive and any future provider/mcp/openapi connection, and **fail closed** when no
-account is linked.
+`@junejs/server` ships these (the auth integration is a host-layer concern, never
+pure `@junejs/core`):
+
+- **`linkedAccountAuth({ providerId, store })`** — the generic core. Inject a
+  `store` (where the caller's OAuth account tokens live) and get a fail-closed
+  `auth(ctx)`. **Connection-agnostic** — reuse it for any provider/mcp/openapi
+  connection (Notion, Slack, GitHub…), not just Drive.
+- **`betterAuthAccessToken(auth, { providerId })`** / **`betterAuthAccountTokenStore(auth)`**
+  — the Better Auth convenience, **structural** (`BetterAuthLike`) so it adds no
+  `better-auth` dependency.
+
+The `auth` seam stays the source of truth and is always overridable. A **Service
+Account** (or raw-token) user pays nothing for any of this — they just return a
+token and never import the helpers:
+
+```ts
+googleDriveConnection({ auth: async () => ({ token: await mintServiceAccountToken(saKey) }) });
+```
+
 
