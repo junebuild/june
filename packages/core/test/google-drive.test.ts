@@ -7,7 +7,8 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { ACTION_REGISTRY } from "@junejs/core/agent";
-import { googleDriveTools } from "@junejs/core/google-drive";
+import { connectAll } from "@junejs/core/connections";
+import { googleDriveConnection, googleDriveTools } from "@junejs/core/google-drive";
 
 // googleDriveTools registers defineActions in the global registry — isolate.
 let preexisting = new Map(ACTION_REGISTRY);
@@ -232,6 +233,48 @@ describe("googleDriveTools", () => {
     expect(drive.files.has(created.id)).toBe(false);
   });
 
+  test("create_file with folderPath creates intermediate folders and places the file there", async () => {
+    const drive = makeFakeDrive();
+    const t = toolsById(googleDriveTools({ auth: () => ({ token: "t" }), fetch: drive.fetch }));
+    const created = (await t.gdrive__create_file!.run({ name: "n.txt", content: "c", folderPath: "A/B" }, {})) as { id: string; parents: string[] };
+    const folders = [...drive.files.values()].filter((f) => f.mimeType.endsWith("folder")).map((f) => f.name).sort();
+    expect(folders).toEqual(["A", "B"]);
+    const b = [...drive.files.values()].find((f) => f.name === "B")!;
+    expect(created.parents).toEqual([b.id]); // placed inside B
+  });
+
+  test("update_file overwrites an existing file's content by id", async () => {
+    const drive = makeFakeDrive();
+    const t = toolsById(googleDriveTools({ auth: () => ({ token: "t" }), fetch: drive.fetch }));
+    const created = (await t.gdrive__create_file!.run({ name: "u.txt", content: "old" }, {})) as { id: string };
+    await t.gdrive__update_file!.run({ fileId: created.id, content: "new" }, {});
+    const read = (await t.gdrive__read_file!.run({ fileId: created.id }, {})) as { content: string };
+    expect(read.content).toBe("new");
+  });
+
+  test("create_folder with parentPath nests under a created path", async () => {
+    const drive = makeFakeDrive();
+    const t = toolsById(googleDriveTools({ auth: () => ({ token: "t" }), fetch: drive.fetch }));
+    const folder = (await t.gdrive__create_folder!.run({ name: "leaf", parentPath: "X/Y" }, {})) as { id: string; name: string; parents: string[] };
+    expect(folder.name).toBe("leaf");
+    const y = [...drive.files.values()].find((f) => f.name === "Y")!;
+    expect(folder.parents).toEqual([y.id]);
+  });
+
+  test("read_file requires either fileId or path", async () => {
+    const drive = makeFakeDrive();
+    const t = toolsById(googleDriveTools({ auth: () => ({ token: "t" }), fetch: drive.fetch }));
+    await expect(t.gdrive__read_file!.run({}, {})).rejects.toThrow(/fileId or path/);
+  });
+
+  test("a non-JSON error body still surfaces (falls back to text)", async () => {
+    // A fetch that returns a plaintext 500 — exercises the text fallback in the
+    // error surface (Drive normally returns JSON, but proxies/gateways may not).
+    const textErrorFetch = (async () => new Response("upstream exploded", { status: 502 })) as unknown as typeof globalThis.fetch;
+    const t = toolsById(googleDriveTools({ auth: () => ({ token: "t" }), fetch: textErrorFetch }));
+    await expect(t.gdrive__list_files!.run({}, {})).rejects.toThrow(/upstream exploded/);
+  });
+
   test("the bearer token is resolved server-side per call and never appears in tool input", async () => {
     const drive = makeFakeDrive();
     const authCtxs: unknown[] = [];
@@ -270,5 +313,60 @@ describe("googleDriveTools", () => {
     const drive = makeFakeDrive();
     const t = toolsById(googleDriveTools({ auth: () => ({ token: "t" }), fetch: drive.fetch }));
     await expect(t.gdrive__read_file!.run({ fileId: "does-not-exist" }, {})).rejects.toThrow("File not found");
+  });
+});
+
+// ── Drive as a PROVIDER connection: the connections-family entry point ──
+describe("googleDriveConnection", () => {
+  test("returns a provider connection labeled with the API base", () => {
+    const drive = makeFakeDrive();
+    const conn = googleDriveConnection({ auth: () => ({ token: "t" }), fetch: drive.fetch });
+    expect(conn.kind).toBe("provider");
+    expect(conn.name).toBe("gdrive");
+    expect(conn.url).toBe(API);
+  });
+
+  test("connectAll wires it: gdrive__ tools + a provider report entry", async () => {
+    const drive = makeFakeDrive();
+    const { actions, report } = await connectAll([googleDriveConnection({ auth: () => ({ token: "t" }), fetch: drive.fetch })]);
+    expect(actions.map((a) => a.id)).toContain("gdrive__save_file");
+    expect(report[0]).toMatchObject({ name: "gdrive", kind: "provider", url: API });
+    expect(report[0]!.tools).toContain("gdrive__read_file");
+  });
+
+  test("a tool obtained THROUGH the connection performs real Drive I/O (save then read)", async () => {
+    const drive = makeFakeDrive();
+    const { actions } = await connectAll([googleDriveConnection({ auth: () => ({ token: "t" }), fetch: drive.fetch })]);
+    const byId = Object.fromEntries(actions.map((a) => [a.id, a]));
+
+    await byId.gdrive__save_file!.run({ path: "Out/report.md", content: "hello" }, {});
+    const read = (await byId.gdrive__read_file!.run({ path: "Out/report.md" }, {})) as { content: string };
+    expect(read.content).toBe("hello");
+  });
+
+  test("a custom name flows through to the connection and its tool ids", async () => {
+    const drive = makeFakeDrive();
+    const { actions, report } = await connectAll([googleDriveConnection({ name: "team", auth: () => ({ token: "t" }), fetch: drive.fetch })]);
+    expect(report[0]!.name).toBe("team");
+    expect(actions.every((a) => a.id.startsWith("team__"))).toBe(true);
+  });
+
+  test("requiresPrincipal flows connection → every wired tool", async () => {
+    const drive = makeFakeDrive();
+    const { actions } = await connectAll([googleDriveConnection({ auth: () => ({ token: "t" }), requiresPrincipal: true, fetch: drive.fetch })]);
+    expect(actions.every((a) => a.requiresPrincipal === true)).toBe(true);
+  });
+
+  test("auth still resolves the CALLER's token per call when invoked via the connection", async () => {
+    const drive = makeFakeDrive();
+    const { actions } = await connectAll([
+      googleDriveConnection({
+        auth: (ctx) => ({ token: (ctx as { user?: { id?: string } } | undefined)?.user?.id ? `tenant-${(ctx as { user: { id: string } }).user.id}` : "svc" }),
+        fetch: drive.fetch,
+      }),
+    ]);
+    const byId = Object.fromEntries(actions.map((a) => [a.id, a]));
+    await byId.gdrive__create_file!.run({ name: "a.txt", content: "x" }, { user: { id: "acme" } });
+    expect(drive.authSeen.some((h) => h === "Bearer tenant-acme")).toBe(true);
   });
 });

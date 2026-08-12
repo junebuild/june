@@ -22,6 +22,7 @@
 // Drive access on the native host and on the edge (a Durable Object) alike.
 
 import { defineAction, type AnyAction, type JsonSchema } from "./agent";
+import { defineProviderConnection, type ProviderConnection } from "./connections";
 import type { ActionContext } from "./context";
 
 // Resolved per call, server-side — the token never reaches the model. Called
@@ -473,6 +474,27 @@ export function googleDriveTools(config: GoogleDriveConfig): AnyAction[] {
   });
 
   return [listFiles, findFile, readFile, createFile, updateFile, saveFile, createFolder, deleteFile];
+}
+
+// The connections-family entry point: Google Drive as a PROVIDER connection, so
+// it lives beside every other outbound edge (`connections/google-drive.ts`) and
+// joins the connection lifecycle — connectAll reports it, isolates its failures,
+// and the durable/edge target wires it lazily. Under the hood it's the same
+// googleDriveTools client; a ProviderConnection is the seam that lets a remote
+// bring its own transport (Drive's multipart/alt=media/path-resolution) while
+// still being "a connection". Drop it in a directory:
+//
+//   // agent/connections/google-drive.ts
+//   export default googleDriveConnection({ auth: (ctx) => ({ token: ... }) });
+export function googleDriveConnection(config: GoogleDriveConfig): ProviderConnection {
+  return defineProviderConnection({
+    name: config.name ?? "gdrive",
+    url: config.apiBaseUrl ?? DEFAULT_API,
+    ...(config.requiresPrincipal ? { requiresPrincipal: true } : {}),
+    // Static build — Drive's tool set is known; no discovery I/O. The tools each
+    // resolve the caller's token per call via config.auth, server-side.
+    connect: () => googleDriveTools(config),
+  });
 }
 
 // The JsonSchema type is re-exported for callers assembling custom Drive tools.

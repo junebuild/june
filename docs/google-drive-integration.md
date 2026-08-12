@@ -1,26 +1,32 @@
 # Google Drive — giving an agent read/write access to Drive
 
-> A first-class **outbound integration**: a June agent can read files from Google
-> Drive and write files back to it (create, overwrite, upsert-by-path). Ships as a
-> set of `defineAction` tools, so — like everything in June — the same capability
-> is simultaneously an agent tool, a UI server action, and an `/mcp` tool.
+> A first-class **outbound connection**: a June agent can read files from Google
+> Drive and write files back to it (create, overwrite, upsert-by-path). It ships
+> as a **provider connection** (`connections/google-drive.ts`) whose operations
+> are `defineAction`s, so — like everything in June — each capability is
+> simultaneously an agent tool, a UI server action, and an `/mcp` tool.
 
-## Why it isn't just a connection
+## Why it's a connection (and a new connection kind)
 
-`connections.ts` wires a **generic** remote — any MCP server or OpenAPI document —
-and turns each operation into a `<connection>__<tool>` action. Google Drive's REST
-API has quirks the generic OpenAPI client can't honor:
+`connections.ts` is the family of an agent's **outbound edges**. Its two original
+kinds — `mcp` and `openapi` — wire a *generic* remote. Google Drive's REST API
+has quirks neither can express:
 
-- **content upload is multipart** (`uploadType=multipart`, a metadata part + a
-  media part), not a JSON body;
+- **content upload is multipart** (`uploadType=multipart`), not a JSON body;
 - **downloads use `alt=media`**, and **Google-native docs** (Docs/Sheets/Slides)
   must be **exported** to text, not downloaded;
 - **Drive has no real paths** — a path like `Reports/2024/summary.md` is a chain
-  of `name = '…' and '<parent>' in parents` lookups.
+  of `name = '…' and '<parent>' in parents` lookups, and `save_file` is a
+  compound resolve→find→create/update, not a single REST op.
 
-So Drive is its own small, hand-written client (`@junejs/core/google-drive`,
-pure + `fetch`-only, edge-safe) — but it lands in the **same** place every other
-capability does: `defineAction`s in the unified registry. Nothing new to wire.
+So Drive is a **provider connection** — a third `kind` (`defineProviderConnection`)
+that brings its own transport: `connect()` returns the provider's tools as
+`defineAction`s. It still joins the connection lifecycle: `connectAll` reports it,
+isolates its failures (a broken provider never takes the agent down), the
+durable/edge target wires it lazily, and `requiresPrincipal` stamps every tool it
+exposes. This is the honest seam — Drive keeps its bespoke client but lives beside
+every other outbound edge, and future providers (Notion, S3, Dropbox) reuse the
+same pattern.
 
 ## Identity: the token never reaches the model
 
@@ -48,16 +54,15 @@ Read/list/find carry `readOnlyHint`; `save_file` carries `idempotentHint`;
 `delete_file` carries `destructiveHint` — so MCP clients can drive permission UX.
 Pass `name` to change the `gdrive` prefix (e.g. two Drives on one agent).
 
-## Usage — the directory convention
+## Usage — the directory convention (a connection)
 
-A tool file may default-export **one** tool or an **array** of tools, so the whole
-integration drops into `agent/tools/` as a single file:
+Drop it in `connections/` — where outbound edges live:
 
 ```ts
-// agent/tools/google-drive.ts
-import { googleDriveTools } from "@junejs/core/google-drive";
+// agent/connections/google-drive.ts
+import { googleDriveConnection } from "@junejs/core/google-drive";
 
-export default googleDriveTools({
+export default googleDriveConnection({
   // Resolve the caller's OAuth2 access token server-side. Wire this to your auth
   // (e.g. Better Auth account tokens) so it mints the CALLER's token.
   auth: async (ctx) => ({ token: await accessTokenFor(ctx?.user) }),
@@ -65,21 +70,32 @@ export default googleDriveTools({
 });
 ```
 
-`june gen` compiles the directory (arrays are flattened at assembly, on both the
-native host and the edge/Durable-Object target).
+`june gen` compiles the directory; `connectAll` wires the connection where the
+agent actually runs (native at assembly, a Durable Object lazily at its first
+turn), and the tools appear in `AgentDefinition.connections` like any other edge.
 
 ## Usage — programmatic
 
+Mount the connection, or spread the raw tools:
+
 ```ts
 import { defineAgent } from "@junejs/core/agent-config";
-import { googleDriveTools } from "@junejs/core/google-drive";
+import { assembleAgent } from "@junejs/core/agent-config";
+import { googleDriveConnection, googleDriveTools } from "@junejs/core/google-drive";
 
-const agent = defineAgent({
-  name: "archivist",
+// As a connection (goes through connectAll → report + error isolation):
+const mod = {
+  config: { name: "archivist" },
   instructions: "Save your outputs to Drive and read reference docs from it.",
-  tools: [
-    ...googleDriveTools({ auth: () => ({ token: process.env.GOOGLE_DRIVE_TOKEN! }) }),
-  ],
+  tools: [], skills: [], channels: {}, channelInstructions: {},
+  connections: [googleDriveConnection({ auth: () => ({ token: process.env.GOOGLE_DRIVE_TOKEN! }) })],
+};
+const agent = await assembleAgent(mod);
+
+// …or spread the tools directly into a programmatic agent:
+const inline = defineAgent({
+  name: "archivist",
+  tools: [...googleDriveTools({ auth: () => ({ token: process.env.GOOGLE_DRIVE_TOKEN! }) })],
 });
 ```
 
