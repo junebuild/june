@@ -43,7 +43,25 @@ export type OpenapiConnection = {
   auth?: Auth;
   requiresPrincipal?: boolean;
 };
-export type Connection = McpConnection | OpenapiConnection;
+// A PROVIDER connection is the escape hatch for a remote whose transport the
+// generic mcp/openapi clients can't express (multipart uploads, alt=media
+// downloads, compound path→id operations — Google Drive is the first). It brings
+// its OWN client: `connect()` returns the provider's tools as defineActions
+// (usually `<name>__<tool>`-prefixed, and resolving their credential per call,
+// server-side — the same identity discipline mcp/openapi auth follows). It still
+// joins the connection lifecycle: connectAll reports it, isolates its failures,
+// and `requiresPrincipal` stamps every tool it exposes.
+export type ProviderConnection = {
+  kind: "provider";
+  name: string;
+  // Build the provider's tools. `ctx` is undefined at discovery time (parity
+  // with mcp/openapi discovery); most providers build statically and ignore it.
+  connect: (ctx?: ActionContext) => AnyAction[] | Promise<AnyAction[]>;
+  // Human-readable label for the ConnectionReport (e.g. the provider's API base).
+  url?: string;
+  requiresPrincipal?: boolean;
+};
+export type Connection = McpConnection | OpenapiConnection | ProviderConnection;
 
 export function defineMcpConnection(c: Omit<McpConnection, "kind">): McpConnection {
   return { kind: "mcp", ...c };
@@ -51,10 +69,13 @@ export function defineMcpConnection(c: Omit<McpConnection, "kind">): McpConnecti
 export function defineOpenapiConnection(c: Omit<OpenapiConnection, "kind">): OpenapiConnection {
   return { kind: "openapi", ...c };
 }
+export function defineProviderConnection(c: Omit<ProviderConnection, "kind">): ProviderConnection {
+  return { kind: "provider", ...c };
+}
 
 export type ConnectionReport = { name: string; kind: string; url: string; tools: string[]; error?: string };
 
-async function resolveHeaders(c: Connection, ctx?: ActionContext): Promise<Headers> {
+async function resolveHeaders(c: McpConnection | OpenapiConnection, ctx?: ActionContext): Promise<Headers> {
   const h: Headers = { "content-type": "application/json", ...(c.headers ?? {}) };
   if (c.auth) {
     const { token } = await c.auth(ctx);
@@ -169,7 +190,25 @@ async function connectOpenapi(c: OpenapiConnection): Promise<AnyAction[]> {
   return actions;
 }
 
+// --- provider client (bring-your-own-transport) -------------------------------
+
+async function connectProvider(c: ProviderConnection): Promise<AnyAction[]> {
+  // No ctx at discovery — parity with mcp/openapi discovery (initialize /
+  // tools/list / doc fetch also run before any turn).
+  const actions = await c.connect();
+  // Uniform gate: `requiresPrincipal` on the connection stamps every exposed
+  // action — the same guarantee connectMcp/connectOpenapi give. Idempotent if a
+  // provider already stamped its own actions.
+  if (c.requiresPrincipal) for (const a of actions) a.requiresPrincipal = true;
+  return actions;
+}
+
 // --- discover all -------------------------------------------------------------
+
+// A stable, human-readable URL label for the report — providers may omit `url`.
+function reportUrl(c: Connection): string {
+  return c.kind === "provider" ? (c.url ?? `provider:${c.name}`) : c.url;
+}
 
 // Connect every connection, collecting their tools. A down connection is
 // reported with an `error` but never throws — one bad remote must not take the
@@ -178,12 +217,13 @@ export async function connectAll(connections: Connection[]): Promise<{ actions: 
   const actions: AnyAction[] = [];
   const report: ConnectionReport[] = [];
   for (const c of connections) {
+    const url = reportUrl(c);
     try {
-      const a = c.kind === "mcp" ? await connectMcp(c) : await connectOpenapi(c);
+      const a = c.kind === "mcp" ? await connectMcp(c) : c.kind === "openapi" ? await connectOpenapi(c) : await connectProvider(c);
       actions.push(...a);
-      report.push({ name: c.name, kind: c.kind, url: c.url, tools: a.map((x) => x.id) });
+      report.push({ name: c.name, kind: c.kind, url, tools: a.map((x) => x.id) });
     } catch (e) {
-      report.push({ name: c.name, kind: c.kind, url: c.url, tools: [], error: String(e) });
+      report.push({ name: c.name, kind: c.kind, url, tools: [], error: String(e) });
     }
   }
   return { actions, report };

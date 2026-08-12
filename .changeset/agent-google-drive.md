@@ -3,24 +3,27 @@
 "@junejs/server": patch
 ---
 
-Google Drive access for agents — a first-class outbound integration.
+Google Drive access for agents — as a new `provider` connection kind.
 
-- `@junejs/core/google-drive`: `googleDriveTools(config)` returns a set of
-  `defineAction`s that give an agent read/write access to Google Drive —
-  `list_files`, `find_file`, `read_file`, `create_file`, `update_file`,
-  `save_file` (upsert by path), `create_folder`, `delete_file`. Because they are
-  ordinary actions, each is simultaneously an agent tool, a UI server action, and
-  an `/mcp` tool. Pure + `fetch`-only (edge-safe, no `node:*`), so an agent can
-  hold Drive access on the native host and in a Durable Object alike.
-- Identity mirrors connections: the OAuth2 access token is resolved **per call,
-  server-side** via `auth(ctx)` (it never reaches the model), so a multi-tenant
-  app mints the caller's short-lived token. `requiresPrincipal` hides every tool
-  from anonymous turns. Read/list/find carry `readOnlyHint`, `save_file` carries
-  `idempotentHint`, and `delete_file` carries `destructiveHint` for MCP
-  permission UX. Drive's quirks are handled honestly: multipart content upload,
-  `alt=media` downloads, `export` for Google-native docs, and slash-path
-  resolution over the folder graph (with `mkdir -p` on save).
-- A `tools/*.ts` file may now default-export **one** tool **or** an array of
-  tools; `defineAgent`/`assembleDurable` flatten arrays (native discovery and the
-  edge-compiled module both). So the whole integration drops into `agent/tools/`
-  as a single `export default googleDriveTools({ … })`.
+- `connections` gains a third kind alongside `mcp` and `openapi`:
+  `defineProviderConnection({ name, connect, requiresPrincipal? })`. A provider
+  brings its OWN transport — `connect(ctx?)` returns the provider's tools as
+  `defineAction`s — for remotes the generic mcp/openapi clients can't express
+  (multipart uploads, `alt=media` downloads, compound path→id operations). It
+  still joins the connection lifecycle: `connectAll` reports it (kind
+  `"provider"`), isolates its failures (a broken provider never takes the agent
+  down), the durable/edge target wires it lazily, and `requiresPrincipal` stamps
+  every tool it exposes.
+- `@junejs/core/google-drive`: `googleDriveConnection(config)` is the first
+  provider — Google Drive read/write for an agent (`list_files`, `find_file`,
+  `read_file`, `create_file`, `update_file`, `save_file` upsert-by-path,
+  `create_folder`, `delete_file`). Drop it in `connections/google-drive.ts`.
+  `googleDriveTools(config)` is also exported for spreading the raw actions into a
+  programmatic `defineAgent`. Pure + `fetch`-only (edge-safe, no `node:*`).
+  Identity mirrors connections: the OAuth2 access token is resolved per call,
+  server-side via `auth(ctx)` (never reaches the model), so a multi-tenant app
+  mints the caller's short-lived token. Read/list/find carry `readOnlyHint`,
+  `save_file` carries `idempotentHint`, `delete_file` carries `destructiveHint`.
+- A `tools/*.ts` file may now default-export one tool OR an array of tools;
+  `defineAgent`/`assembleDurable` flatten arrays (native discovery and the
+  edge-compiled module both).

@@ -5,8 +5,8 @@
 // thrown).
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { ACTION_REGISTRY } from "@junejs/core/agent";
-import { connectAll, defineMcpConnection, defineOpenapiConnection } from "@junejs/core/connections";
+import { ACTION_REGISTRY, defineAction } from "@junejs/core/agent";
+import { connectAll, defineMcpConnection, defineOpenapiConnection, defineProviderConnection } from "@junejs/core/connections";
 
 // connectAll registers tools as defineActions (global registry) — isolate.
 let preexisting = new Map(ACTION_REGISTRY);
@@ -133,5 +133,65 @@ describe("connection identity + annotations", () => {
     mockRemotes();
     const { actions } = await connectAll([defineMcpConnection({ name: "weather", url: "http://x/mcp" })]);
     expect(actions[0]!.annotations).toEqual({ readOnlyHint: true });
+  });
+});
+
+// ── provider connections: bring-your-own-transport, still in the lifecycle ──
+describe("provider connections", () => {
+  // A tiny provider that builds two tools (one sync, one async) so we can assert
+  // shape without any network.
+  const twoTools = (name = "prov") => [
+    defineAction({ id: `${name}__ping`, description: "ping", input: { type: "object", properties: {} } as const, run: () => ({ pong: true }) }),
+    defineAction({ id: `${name}__echo`, description: "echo", input: { type: "object", properties: { v: { type: "string" } } } as const, run: async (i) => ({ v: i.v }) }),
+  ];
+
+  test("a provider connection contributes its tools and reports kind:provider", async () => {
+    const { actions, report } = await connectAll([
+      defineProviderConnection({ name: "prov", url: "https://api.example.com", connect: () => twoTools() }),
+    ]);
+    expect(actions.map((a) => a.id)).toEqual(["prov__ping", "prov__echo"]);
+    expect(report).toEqual([{ name: "prov", kind: "provider", url: "https://api.example.com", tools: ["prov__ping", "prov__echo"] }]);
+    // The produced tools are runnable through the same registry.
+    expect(await actions[0]!.run({}, {} as never)).toEqual({ pong: true });
+  });
+
+  test("connect() may be async, and receives no ctx at discovery (parity with mcp/openapi)", async () => {
+    const seen: unknown[] = [];
+    const { actions } = await connectAll([
+      defineProviderConnection({ name: "prov", connect: async (ctx) => { seen.push(ctx); return twoTools(); } }),
+    ]);
+    expect(seen).toEqual([undefined]); // discovery ran without identity
+    expect(actions).toHaveLength(2);
+  });
+
+  test("a provider with no url gets a synthetic report url", async () => {
+    const { report } = await connectAll([defineProviderConnection({ name: "prov", connect: () => twoTools() })]);
+    expect(report[0]).toMatchObject({ name: "prov", kind: "provider", url: "provider:prov" });
+  });
+
+  test("a throwing provider is reported with an error and does not take others down", async () => {
+    const { actions, report } = await connectAll([
+      defineProviderConnection({ name: "good", connect: () => twoTools("good") }),
+      defineProviderConnection({ name: "bad", connect: () => { throw new Error("provider boom"); } }),
+    ]);
+    expect(actions.map((a) => a.id)).toEqual(["good__ping", "good__echo"]); // the good one still connected
+    expect(report.find((r) => r.name === "bad")).toMatchObject({ tools: [], error: expect.stringContaining("provider boom") });
+  });
+
+  test("requiresPrincipal on the connection stamps every exposed provider tool", async () => {
+    const { actions } = await connectAll([
+      defineProviderConnection({ name: "prov", requiresPrincipal: true, connect: () => twoTools() }),
+    ]);
+    expect(actions.every((a) => a.requiresPrincipal === true)).toBe(true);
+  });
+
+  test("mixed kinds connect together into one report", async () => {
+    mockRemotes();
+    const { actions, report } = await connectAll([
+      defineMcpConnection({ name: "weather", url: "http://x/mcp" }),
+      defineProviderConnection({ name: "prov", connect: () => twoTools() }),
+    ]);
+    expect(actions.map((a) => a.id)).toEqual(["weather__get_weather", "prov__ping", "prov__echo"]);
+    expect(report.map((r) => r.kind)).toEqual(["mcp", "provider"]);
   });
 });
