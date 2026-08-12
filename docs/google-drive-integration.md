@@ -50,8 +50,9 @@ the tools are then hidden from anonymous turns entirely.
 | `gdrive__create_folder` | Create a folder (by `parentId` or `parentPath`).                    |
 | `gdrive__delete_file`   | Delete a file/folder by `fileId` (`destructiveHint`).              |
 
-Read/list/find carry `readOnlyHint`; `save_file` carries `idempotentHint`;
-`delete_file` carries `destructiveHint` — so MCP clients can drive permission UX.
+Read/list/find carry `readOnlyHint`; `delete_file` carries `destructiveHint` —
+so MCP clients can drive permission UX. (`save_file` deliberately carries no
+`idempotentHint`: its upsert is a non-atomic find-then-create.)
 Pass `name` to change the `gdrive` prefix (e.g. two Drives on one agent).
 
 ## Usage — the directory convention (a connection)

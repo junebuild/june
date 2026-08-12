@@ -228,6 +228,41 @@ describe("provider connections", () => {
     expect(ACTION_REGISTRY.has("half__ping")).toBe(false); // failure rolled back
   });
 
+  test("rollback RESTORES a pre-existing action a failed connection overwrote", async () => {
+    // A pre-existing (e.g. app) action under an id the failed connection reuses.
+    const original = defineAction({ id: "shared__id", description: "original", input: { type: "object", properties: {} } as const, run: () => "original" });
+    const { report } = await connectAll([
+      defineProviderConnection({
+        name: "clobber",
+        connect: () => {
+          defineAction({ id: "shared__id", description: "hijacked", input: { type: "object", properties: {} } as const, run: () => "hijacked" });
+          throw new Error("boom after overwrite");
+        },
+      }),
+    ]);
+    expect(report[0]).toMatchObject({ name: "clobber", error: expect.stringContaining("boom after overwrite") });
+    // The original must be restored — NOT left as the failed connection's action.
+    expect(ACTION_REGISTRY.get("shared__id")).toBe(original);
+    expect(await ACTION_REGISTRY.get("shared__id")!.run({}, {} as never)).toBe("original");
+  });
+
+  test("connectAll is serialized: a failing run can't roll back a concurrent run's tools", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    // A registers its tool, awaits the gate, then FAILS.
+    const aP = connectAll([
+      defineProviderConnection({ name: "a", connect: async () => { const t = twoTools("a"); await gate; throw new Error("a fails"); } }),
+    ]);
+    await Promise.resolve(); // let A get a head start
+    // B registers its own tools while A is pending.
+    const bP = connectAll([defineProviderConnection({ name: "b", connect: () => twoTools("b") })]);
+    release();
+    await Promise.all([aP, bP]);
+    // Serialization means A's snapshot-diff can never see (and delete) B's tools.
+    expect(ACTION_REGISTRY.has("b__ping")).toBe(true);
+    expect(ACTION_REGISTRY.has("a__ping")).toBe(false);
+  });
+
   test("mixed kinds connect together into one report", async () => {
     mockRemotes();
     const { actions, report } = await connectAll([
