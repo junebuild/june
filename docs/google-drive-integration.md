@@ -179,8 +179,12 @@ pure `@junejs/core`):
 
 - **`linkedAccountAuth({ providerId, store })`** — the generic core. Inject a
   `store` (where the caller's OAuth account tokens live) and get a fail-closed
-  `auth(ctx)`. **Connection-agnostic** — reuse it for any provider/mcp/openapi
-  connection (Notion, Slack, GitHub…), not just Drive.
+  `auth(ctx)`. Reusable across any connection whose `auth` is resolved **per call
+  with the caller's identity** — provider connections (Drive, and future Notion /
+  Slack / GitHub providers). ⚠️ Not for MCP/OpenAPI connections that authenticate
+  **discovery**: those call `auth(undefined)` at initialize/tools-list time, which
+  this fail-closed helper rejects — give them a discovery-scoped credential
+  instead.
 - **`betterAuthAccessToken(auth, { providerId })`** / **`betterAuthAccountTokenStore(auth)`**
   — the Better Auth convenience, **structural** (`BetterAuthLike`) so it adds no
   `better-auth` dependency.

@@ -51,10 +51,11 @@ describe("linkedAccountAuth", () => {
 });
 
 describe("betterAuthAccountTokenStore / betterAuthAccessToken (structural adapter)", () => {
-  // A fake Better-Auth-shaped instance — no `better-auth` package involved.
+  // A fake Better-Auth-shaped instance — no `better-auth` package involved. The
+  // real server API takes `{ body: { providerId, userId } }`.
   const fakeAuth = (byUser: Record<string, string>, key: "accessToken" | "token" = "accessToken"): BetterAuthLike => ({
     api: {
-      getAccessToken: async ({ userId }) => (byUser[userId] ? { [key]: byUser[userId] } : null),
+      getAccessToken: async ({ body }) => (body.userId && byUser[body.userId] ? { [key]: byUser[body.userId] } : null),
     },
   });
 
@@ -67,6 +68,13 @@ describe("betterAuthAccountTokenStore / betterAuthAccessToken (structural adapte
   test("accepts the `token` reply key too (version drift)", async () => {
     const store = betterAuthAccountTokenStore(fakeAuth({ acme: "t-acme" }, "token"));
     expect(await store({ userId: "acme", providerId: "google" })).toEqual({ accessToken: "t-acme" });
+  });
+
+  test("calls getAccessToken with the endpoint body shape { body: { providerId, userId } }", async () => {
+    const calls: unknown[] = [];
+    const auth: BetterAuthLike = { api: { getAccessToken: async (input) => { calls.push(input); return { accessToken: "x" }; } } };
+    await betterAuthAccountTokenStore(auth)({ userId: "u1", providerId: "google" });
+    expect(calls).toEqual([{ body: { providerId: "google", userId: "u1" } }]);
   });
 
   test("betterAuthAccessToken is a fail-closed auth(ctx) in one call", async () => {

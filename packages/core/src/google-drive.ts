@@ -150,14 +150,11 @@ function makeClient(config: GoogleDriveConfig) {
     return files[0] ?? null;
   }
 
-  // Resolve a slash path of FOLDER segments to a folder id, starting at "root"
-  // (or a supplied startId). With create=true, missing folders are created —
-  // the mkdir -p a save needs.
-  async function resolveFolderPath(
-    segments: string[],
-    opts: { create?: boolean; startId?: string } = {},
-    ctx?: ActionContext,
-  ): Promise<string> {
+  // Resolve a slash path of FOLDER segments to a folder id (mkdir -p), starting
+  // at "root" (or a supplied startId): missing folders are created. Used by the
+  // write paths (create/save/create_folder); reads walk with findChild instead
+  // so an absent folder is a genuine null, never an accidental create.
+  async function resolveFolderPath(segments: string[], opts: { startId?: string } = {}, ctx?: ActionContext): Promise<string> {
     let parent = opts.startId ?? "root";
     for (const segment of segments) {
       if (!segment || segment === ".") continue;
@@ -166,25 +163,25 @@ function makeClient(config: GoogleDriveConfig) {
         parent = existing.id;
         continue;
       }
-      if (!opts.create) throw new Error(`Folder not found: "${segment}" (in path)`);
       const created = await createMetadata({ name: segment, mimeType: FOLDER_MIME, parents: [parent] }, ctx);
       parent = created.id;
     }
     return parent;
   }
 
-  // Resolve a full "Folder/Sub/file.txt" path to its file resource, or null.
+  // Resolve a full "Folder/Sub/file.txt" path to its file resource, or null when
+  // the path genuinely doesn't exist. Walks with findChild directly so that only
+  // an ABSENT segment yields null — a real failure (401/403/429/5xx) propagates
+  // from `request`, instead of being masked as "not found".
   async function resolvePathToFile(path: string, ctx?: ActionContext): Promise<DriveFile | null> {
     const segments = path.split("/").filter((s) => s && s !== ".");
     if (segments.length === 0) throw new Error("Empty path");
     const name = segments[segments.length - 1]!;
     let parent = "root";
-    if (segments.length > 1) {
-      try {
-        parent = await resolveFolderPath(segments.slice(0, -1), { create: false }, ctx);
-      } catch {
-        return null; // an intermediate folder doesn't exist ⇒ the file can't
-      }
+    for (const folderName of segments.slice(0, -1)) {
+      const folder = await findChild(parent, folderName, { folderOnly: true }, ctx);
+      if (!folder) return null; // an intermediate folder is absent ⇒ the file can't exist
+      parent = folder.id;
     }
     return findChild(parent, name, {}, ctx);
   }
@@ -383,7 +380,7 @@ export function googleDriveTools(config: GoogleDriveConfig): AnyAction[] {
       const mimeType = input.mimeType ?? "text/plain";
       let parentId = input.folderId;
       if (!parentId && input.folderPath) {
-        parentId = await client.resolveFolderPath(input.folderPath.split("/"), { create: true }, ctx);
+        parentId = await client.resolveFolderPath(input.folderPath.split("/"), {}, ctx);
       }
       const metadata = { name: input.name, mimeType, ...(parentId ? { parents: [parentId] } : {}) };
       return client.uploadFile(metadata, input.content ?? "", mimeType, ctx);
@@ -427,7 +424,7 @@ export function googleDriveTools(config: GoogleDriveConfig): AnyAction[] {
       const segments = input.path.split("/").filter((s) => s && s !== ".");
       if (segments.length === 0) throw new Error("Empty path");
       const fileName = segments[segments.length - 1]!;
-      const parentId = await client.resolveFolderPath(segments.slice(0, -1), { create: true }, ctx);
+      const parentId = await client.resolveFolderPath(segments.slice(0, -1), {}, ctx);
       const existing = await client.findChild(parentId, fileName, {}, ctx);
       if (existing) {
         const updated = await client.updateContent(existing.id, input.content, mimeType, ctx);
@@ -455,7 +452,7 @@ export function googleDriveTools(config: GoogleDriveConfig): AnyAction[] {
     run: async (input, ctx) => {
       let parentId = input.parentId;
       if (!parentId && input.parentPath) {
-        parentId = await client.resolveFolderPath(input.parentPath.split("/"), { create: true }, ctx);
+        parentId = await client.resolveFolderPath(input.parentPath.split("/"), {}, ctx);
       }
       return client.createMetadata({ name: input.name, mimeType: FOLDER_MIME, ...(parentId ? { parents: [parentId] } : {}) }, ctx);
     },
@@ -492,8 +489,13 @@ export function googleDriveConnection(config: GoogleDriveConfig): ProviderConnec
     url: config.apiBaseUrl ?? DEFAULT_API,
     ...(config.requiresPrincipal ? { requiresPrincipal: true } : {}),
     // Static build — Drive's tool set is known; no discovery I/O. The tools each
-    // resolve the caller's token per call via config.auth, server-side.
-    connect: () => googleDriveTools(config),
+    // resolve the caller's token per call via config.auth, server-side. The
+    // connection's requiresPrincipal is threaded into every tool's defineAction
+    // (via googleDriveTools' config) so the gate is applied at REGISTRATION —
+    // making the Flight server reference fail closed too, not just the turn/mcp
+    // paths. (An explicit config.requiresPrincipal still wins if set.)
+    connect: ({ requiresPrincipal }) =>
+      googleDriveTools({ ...config, requiresPrincipal: config.requiresPrincipal ?? requiresPrincipal }),
   });
 }
 

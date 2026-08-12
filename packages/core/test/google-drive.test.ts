@@ -314,6 +314,15 @@ describe("googleDriveTools", () => {
     const t = toolsById(googleDriveTools({ auth: () => ({ token: "t" }), fetch: drive.fetch }));
     await expect(t.gdrive__read_file!.run({ fileId: "does-not-exist" }, {})).rejects.toThrow("File not found");
   });
+
+  test("an HTTP error while resolving a PATH propagates (not masked as not-found)", async () => {
+    // 403 on the list/search call — path resolution must surface it, not report
+    // { found: false } / a misleading missing-file error.
+    const denyFetch = (async () => new Response(JSON.stringify({ error: { message: "Insufficient permissions" } }), { status: 403, headers: { "content-type": "application/json" } })) as unknown as typeof globalThis.fetch;
+    const t = toolsById(googleDriveTools({ auth: () => ({ token: "t" }), fetch: denyFetch }));
+    await expect(t.gdrive__find_file!.run({ path: "A/B/c.txt" }, {})).rejects.toThrow(/Insufficient permissions|403/);
+    await expect(t.gdrive__read_file!.run({ path: "A/B/c.txt" }, {})).rejects.toThrow(/Insufficient permissions|403/);
+  });
 });
 
 // ── Drive as a PROVIDER connection: the connections-family entry point ──

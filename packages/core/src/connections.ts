@@ -49,14 +49,28 @@ export type OpenapiConnection = {
 // its OWN client: `connect()` returns the provider's tools as defineActions
 // (usually `<name>__<tool>`-prefixed, and resolving their credential per call,
 // server-side — the same identity discipline mcp/openapi auth follows). It still
-// joins the connection lifecycle: connectAll reports it, isolates its failures,
-// and `requiresPrincipal` stamps every tool it exposes.
+// joins the connection lifecycle: connectAll reports it and isolates its failures.
+//
+// Identity gate: because the FRAMEWORK does not build a provider's actions (the
+// provider does, via defineAction), the gate must be applied WHERE the action is
+// registered — otherwise the Flight/server-reference wrapper is snapshotted
+// ungated (see agent.ts). So `requiresPrincipal` is passed INTO `connect` as an
+// option; the provider must thread it into its defineActions. connectAll then
+// fail-fast VERIFIES every returned tool is gated — it never retro-mutates
+// (which would leave the Flight path open).
+export type ProviderConnectOptions = {
+  // When true, the provider MUST build every tool with `requiresPrincipal` so it
+  // is gated at registration time (agent turns, /mcp, UI POST, AND the Flight
+  // server reference). connectAll enforces this.
+  requiresPrincipal?: boolean;
+};
 export type ProviderConnection = {
   kind: "provider";
   name: string;
-  // Build the provider's tools. `ctx` is undefined at discovery time (parity
-  // with mcp/openapi discovery); most providers build statically and ignore it.
-  connect: (ctx?: ActionContext) => AnyAction[] | Promise<AnyAction[]>;
+  // Build the provider's tools. Static by nature (no per-call ctx — each tool's
+  // own run(input, ctx) carries identity); `opts.requiresPrincipal` must be
+  // threaded into the tools' defineAction calls.
+  connect: (opts: ProviderConnectOptions) => AnyAction[] | Promise<AnyAction[]>;
   // Human-readable label for the ConnectionReport (e.g. the provider's API base).
   url?: string;
   requiresPrincipal?: boolean;
@@ -193,13 +207,22 @@ async function connectOpenapi(c: OpenapiConnection): Promise<AnyAction[]> {
 // --- provider client (bring-your-own-transport) -------------------------------
 
 async function connectProvider(c: ProviderConnection): Promise<AnyAction[]> {
-  // No ctx at discovery — parity with mcp/openapi discovery (initialize /
-  // tools/list / doc fetch also run before any turn).
-  const actions = await c.connect();
-  // Uniform gate: `requiresPrincipal` on the connection stamps every exposed
-  // action — the same guarantee connectMcp/connectOpenapi give. Idempotent if a
-  // provider already stamped its own actions.
-  if (c.requiresPrincipal) for (const a of actions) a.requiresPrincipal = true;
+  // Pass the gate INTO connect so the provider builds gated actions at
+  // registration time (defineAction) — the only place that makes the Flight
+  // server-reference fail closed too.
+  const actions = await c.connect({ requiresPrincipal: c.requiresPrincipal });
+  // Fail fast (never retro-mutate): if the connection demands a principal, every
+  // tool must already be gated. A non-compliant provider is a bug, and mutating
+  // here would leave the Flight path ungated while looking safe.
+  if (c.requiresPrincipal) {
+    for (const a of actions) {
+      if (!a.requiresPrincipal) {
+        throw new Error(
+          `provider connection "${c.name}": requiresPrincipal is set but tool "${a.id}" was not built gated — thread the connect({ requiresPrincipal }) option into the tool's defineAction so it is gated at registration.`,
+        );
+      }
+    }
+  }
   return actions;
 }
 
