@@ -138,11 +138,13 @@ describe("connection identity + annotations", () => {
 
 // ── provider connections: bring-your-own-transport, still in the lifecycle ──
 describe("provider connections", () => {
-  // A tiny provider that builds two tools (one sync, one async) so we can assert
-  // shape without any network.
-  const twoTools = (name = "prov") => [
-    defineAction({ id: `${name}__ping`, description: "ping", input: { type: "object", properties: {} } as const, run: () => ({ pong: true }) }),
-    defineAction({ id: `${name}__echo`, description: "echo", input: { type: "object", properties: { v: { type: "string" } } } as const, run: async (i) => ({ v: i.v }) }),
+  // A tiny provider that builds two tools (one sync, one async). It threads the
+  // connect({ requiresPrincipal }) option into its defineActions — the gate must
+  // be applied at REGISTRATION (so the Flight server reference is fail-closed too),
+  // never retro-mutated by connectAll.
+  const twoTools = (name = "prov", requiresPrincipal = false) => [
+    defineAction({ id: `${name}__ping`, description: "ping", input: { type: "object", properties: {} } as const, ...(requiresPrincipal ? { requiresPrincipal } : {}), run: () => ({ pong: true }) }),
+    defineAction({ id: `${name}__echo`, description: "echo", input: { type: "object", properties: { v: { type: "string" } } } as const, ...(requiresPrincipal ? { requiresPrincipal } : {}), run: async (i) => ({ v: i.v }) }),
   ];
 
   test("a provider connection contributes its tools and reports kind:provider", async () => {
@@ -155,12 +157,12 @@ describe("provider connections", () => {
     expect(await actions[0]!.run({}, {} as never)).toEqual({ pong: true });
   });
 
-  test("connect() may be async, and receives no ctx at discovery (parity with mcp/openapi)", async () => {
+  test("connect() may be async and receives the requiresPrincipal option (not identity)", async () => {
     const seen: unknown[] = [];
     const { actions } = await connectAll([
-      defineProviderConnection({ name: "prov", connect: async (ctx) => { seen.push(ctx); return twoTools(); } }),
+      defineProviderConnection({ name: "prov", connect: async (opts) => { seen.push(opts); return twoTools(); } }),
     ]);
-    expect(seen).toEqual([undefined]); // discovery ran without identity
+    expect(seen).toEqual([{ requiresPrincipal: undefined }]); // discovery: the gate option, no principal
     expect(actions).toHaveLength(2);
   });
 
@@ -178,11 +180,22 @@ describe("provider connections", () => {
     expect(report.find((r) => r.name === "bad")).toMatchObject({ tools: [], error: expect.stringContaining("provider boom") });
   });
 
-  test("requiresPrincipal on the connection stamps every exposed provider tool", async () => {
+  test("requiresPrincipal is passed into connect so the provider gates its tools at registration", async () => {
     const { actions } = await connectAll([
-      defineProviderConnection({ name: "prov", requiresPrincipal: true, connect: () => twoTools() }),
+      defineProviderConnection({ name: "prov", requiresPrincipal: true, connect: (opts) => twoTools("prov", opts.requiresPrincipal) }),
     ]);
     expect(actions.every((a) => a.requiresPrincipal === true)).toBe(true);
+  });
+
+  test("a non-compliant provider (ignores the gate) fails fast — not silently ungated", async () => {
+    // The provider ignores opts.requiresPrincipal, so its tools are NOT gated.
+    // connectAll must reject (reported error), never retro-mutate the flag —
+    // which would leave the Flight server-reference path open.
+    const { actions, report } = await connectAll([
+      defineProviderConnection({ name: "leaky", requiresPrincipal: true, connect: () => twoTools("leaky", false) }),
+    ]);
+    expect(actions).toHaveLength(0);
+    expect(report[0]).toMatchObject({ name: "leaky", tools: [], error: expect.stringContaining("was not built gated") });
   });
 
   test("mixed kinds connect together into one report", async () => {

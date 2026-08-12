@@ -6,10 +6,17 @@
 // CALLER's linked OAuth account" — look up the principal's stored token for a
 // provider, fail closed when it isn't there. This module standardizes that:
 //
-//   • linkedAccountAuth — the generic, auth-library-agnostic core. You inject a
-//     `store` (where account tokens live); it handles the ctx→userId extraction
-//     and the fail-closed contract. Reusable across EVERY connection kind, not
-//     just Google Drive.
+//   • linkedAccountAuth — the generic core. You inject a `store` (where account
+//     tokens live); it handles the ctx→userId extraction and the fail-closed
+//     contract. Reusable across connections whose `auth` is resolved PER CALL
+//     with the caller's identity — i.e. PROVIDER connections (Google Drive), and
+//     MCP/OpenAPI remotes that don't authenticate discovery.
+//
+//     ⚠️ Not for MCP/OpenAPI connections that DO require auth for discovery:
+//     connectMcp/connectOpenapi call `auth(undefined)` at initialize/tools-list/
+//     schema-fetch time (before any turn), and this helper fails closed on a
+//     missing principal — so discovery would report zero tools. Those need a
+//     discovery-scoped credential, not a per-caller one.
 //   • betterAuthAccountTokenStore / betterAuthAccessToken — the blessed Better
 //     Auth convenience. Kept STRUCTURAL (no `better-auth` import), so wiring it
 //     adds no dependency and stays fully overridable — swap the store for a
@@ -62,22 +69,25 @@ export function linkedAccountAuth(opts: LinkedAccountAuthOptions): ConnectionAut
 }
 
 // The minimal Better-Auth surface this reads — STRUCTURAL, so importing the
-// helper doesn't drag in `better-auth`. A real Better Auth instance satisfies it
-// (its `getAccessToken` refreshes the stored token when expired). The reply key
-// differs across versions (accessToken vs token), so both are accepted.
+// helper doesn't drag in `better-auth`. A real Better Auth server instance
+// satisfies it: `auth.api.getAccessToken` takes an ENDPOINT INPUT shaped as
+// `{ body: { providerId, userId, accountId? }, headers? }` and refreshes the
+// stored token when expired. The reply key differs across versions (accessToken
+// vs token), so both are accepted.
 export type BetterAuthLike = {
   api: {
-    getAccessToken: (args: {
-      providerId: string;
-      userId: string;
+    getAccessToken: (input: {
+      body: { providerId: string; userId?: string; accountId?: string };
+      headers?: HeadersInit;
     }) => Promise<{ accessToken?: string; token?: string } | null | undefined>;
   };
 };
 
-// Adapt a Better-Auth-shaped instance into an AccountTokenStore.
+// Adapt a Better-Auth-shaped instance into an AccountTokenStore. Passes `userId`
+// in the endpoint `body` (server-side lookup — no request session needed).
 export function betterAuthAccountTokenStore(auth: BetterAuthLike): AccountTokenStore {
   return async ({ userId, providerId }) => {
-    const res = await auth.api.getAccessToken({ providerId, userId });
+    const res = await auth.api.getAccessToken({ body: { providerId, userId } });
     const accessToken = res?.accessToken ?? res?.token;
     return accessToken ? { accessToken } : null;
   };
