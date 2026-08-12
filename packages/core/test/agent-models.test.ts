@@ -86,9 +86,23 @@ describe("finishFromStopReason", () => {
 });
 
 describe("usageFromAnthropic", () => {
-  test("maps a full claim to the normalized ModelUsage, provider object preserved as raw", () => {
-    const u = { input_tokens: 12, output_tokens: 34, cache_read_input_tokens: 5 };
-    expect(usageFromAnthropic(u)).toEqual({ inputTokens: 12, outputTokens: 34, raw: u });
+  test("a cache-less claim maps 1:1, provider object preserved as raw, no cache fields invented", () => {
+    const u = { input_tokens: 12, output_tokens: 34 };
+    const out = usageFromAnthropic(u)!;
+    expect(out).toEqual({ inputTokens: 12, outputTokens: 34, raw: u });
+    expect("cachedInputTokens" in out).toBe(false);
+  });
+
+  test("cache reads/writes are summed back into inputTokens (the contract: TOTAL input) and surfaced as the split", () => {
+    // Anthropic's input_tokens EXCLUDES the cache fields; ModelUsage.inputTokens must not.
+    const u = { input_tokens: 12, output_tokens: 34, cache_read_input_tokens: 100, cache_creation_input_tokens: 8 };
+    expect(usageFromAnthropic(u)).toEqual({
+      inputTokens: 120, // 12 + 100 + 8
+      outputTokens: 34,
+      cachedInputTokens: 100,
+      cacheCreationInputTokens: 8,
+      raw: u,
+    });
   });
 
   test("a partial or absent claim is dropped whole — no half-truth for a cost report to trust", () => {
@@ -96,6 +110,9 @@ describe("usageFromAnthropic", () => {
     expect(usageFromAnthropic({ output_tokens: 34 })).toBeUndefined();
     expect(usageFromAnthropic({})).toBeUndefined();
     expect(usageFromAnthropic(undefined)).toBeUndefined();
+    // null cache fields (the SDK's idle shape) don't poison the total
+    const u = { input_tokens: 5, output_tokens: 6, cache_read_input_tokens: null, cache_creation_input_tokens: null };
+    expect(usageFromAnthropic(u)).toEqual({ inputTokens: 5, outputTokens: 6, raw: u });
   });
 });
 

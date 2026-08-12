@@ -1279,7 +1279,7 @@ describe("channel policies (surface overlay modes + denyTools)", () => {
 });
 
 describe("execution metadata (usage + durationMs)", () => {
-  test("the adapter's usage claim and each step's wall-clock land on the durable log", async () => {
+  test("the adapter's usage claim and the model wall-clock land on the durable log; a sync local tool records no duration", async () => {
     const { store } = memStore();
     const usage = { inputTokens: 12, outputTokens: 34, raw: { input_tokens: 12, output_tokens: 34 } };
     // first call claims usage, second makes no claim — both shapes must persist honestly
@@ -1296,8 +1296,10 @@ describe("execution metadata (usage + durationMs)", () => {
     expect(typeof assistants[0]!.durationMs).toBe("number");
     // no claim ⇒ no own `usage` property (spread, never assigned undefined)
     expect("usage" in assistants[1]!).toBe(false);
+    // a sync local tool does no I/O — no durationMs is taken (workerd's frozen clock
+    // would read 0; recording nothing beats recording a lie)
     const toolMsg = msgs.find((m): m is Extract<Msg, { role: "tool" }> => m.role === "tool")!;
-    expect(typeof toolMsg.durationMs).toBe("number");
+    expect("durationMs" in toolMsg).toBe(false);
   });
 
   test("a cancelled batch's synthetic tool results carry no durationMs — nothing ran", async () => {
@@ -1332,7 +1334,7 @@ describe("foldTurnRecord (the self-contained turn export)", () => {
     const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), model, [createOrderTool()], noRuntime);
     await s.turn({ turnId: "t1", userText: "Order 3 widgets" });
 
-    const r = s.record("t1")!;
+    const r = s.turnRecord("t1")!;
     expect(r.turnId).toBe("t1");
     expect(r.opening).toEqual({ role: "user", text: "Order 3 widgets" });
     expect(r.status).toBe("completed");
@@ -1355,10 +1357,29 @@ describe("foldTurnRecord (the self-contained turn export)", () => {
       s.turn({ turnId: "t1", userText: "Order 3 widgets", crash: { at: "before-tool-commit", step: "tool:c1" } }),
     ).rejects.toThrow(/CRASH/);
 
-    const r = s.record("t1")!;
+    const r = s.turnRecord("t1")!;
     expect(r.status).toBe("incomplete");
     expect("text" in r).toBe(false);
     expect("usage" in r).toBe(false); // scriptedModel makes no usage claim
+  });
+
+  test("one model step without a usage claim drops the AGGREGATE — per-step stays honest", async () => {
+    // round 1 claims usage, round 2 doesn't: a cost report must not silently undercount
+    const { store } = memStore();
+    const u1 = { inputTokens: 10, outputTokens: 20 };
+    const model: Model = (msgs) => {
+      const i = msgs.filter((m) => m.role === "assistant").length;
+      return i === 0 ? replyStream(ORDER_SCRIPT[0]!, undefined, u1) : replyStream(ORDER_SCRIPT[1]!);
+    };
+    const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), model, [createOrderTool()], noRuntime);
+    await s.turn({ turnId: "t1", userText: "Order 3 widgets" });
+
+    const r = s.turnRecord("t1")!;
+    expect(r.status).toBe("completed");
+    expect("usage" in r).toBe(false); // aggregate refuses a partial sum
+    const models = r.steps.filter((x): x is Extract<TurnRecord["steps"][number], { kind: "model" }> => x.kind === "model");
+    expect(models[0]!.usage).toEqual(u1); // the step that claimed still carries it
+    expect("usage" in models[1]!).toBe(false);
   });
 
   test("an unknown turnId yields undefined; a proactive turn's opening is attributed", async () => {
@@ -1368,7 +1389,7 @@ describe("foldTurnRecord (the self-contained turn export)", () => {
     const { turnId } = s.start({ userText: "Summarize today.", trigger: { kind: "proactive", by: "cron:daily" } });
     await s.result(turnId);
 
-    expect(s.record("nope")).toBeUndefined();
-    expect(s.record(turnId)!.opening).toEqual({ role: "trigger", text: "Summarize today.", by: "cron:daily" });
+    expect(s.turnRecord("nope")).toBeUndefined();
+    expect(s.turnRecord(turnId)!.opening).toEqual({ role: "trigger", text: "Summarize today.", by: "cron:daily" });
   });
 });

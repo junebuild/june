@@ -88,10 +88,12 @@ export type AnthropicRequest = {
 // tool_use / pause_turn / refusal / model_context_window_exceeded / null) — optional
 // here so a minimal fake transport stays assignable.
 export type AnthropicStreamEvent = { type: string; delta?: { type?: string; text?: string; thinking?: string } };
-// `usage` is the Messages API's per-response token accounting (input_tokens/output_tokens,
-// plus cache fields we pass through raw) — optional here, like stop_reason, so a minimal
-// fake transport stays assignable.
-export type AnthropicUsage = { input_tokens?: number; output_tokens?: number };
+// `usage` is the Messages API's per-response token accounting — optional here, like
+// stop_reason, so a minimal fake transport stays assignable. NOTE the Anthropic quirk
+// usageFromAnthropic exists to normalize: `input_tokens` EXCLUDES the two cache fields
+// (they are reported separately), unlike OpenAI/Gemini whose headline input counts
+// include cached tokens.
+export type AnthropicUsage = { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null };
 export type AnthropicStream = AsyncIterable<AnthropicStreamEvent> & { finalMessage(): Promise<{ content: AnthropicResponseBlock[]; stop_reason?: string | null; usage?: AnthropicUsage }> };
 export type AnthropicClient = {
   messages: { stream(body: AnthropicRequest): AnthropicStream };
@@ -169,12 +171,22 @@ export function anthropic(opts: AnthropicOptions = {}): Model {
 // future value fall to `other` with the provider's own string preserved in `raw`.
 // Exported for tests.
 // Messages API usage → the engine's normalized ModelUsage. Partial claims are dropped
-// whole (no claim beats a half-truth a cost report would then trust); the provider's own
-// object rides along as `raw` so cache-token fields survive without normalization.
-// Exported for tests.
+// whole (no claim beats a half-truth a cost report would then trust). Anthropic's
+// input_tokens EXCLUDES cache reads/writes (reported as separate fields), but the
+// ModelUsage contract pins inputTokens as the TOTAL input consumed — so the adapter
+// sums them back in and surfaces the split via the normalized cache fields. The
+// provider's own object rides along as `raw` for diagnostics. Exported for tests.
 export function usageFromAnthropic(u: AnthropicUsage | undefined): ModelUsage | undefined {
   if (!u || typeof u.input_tokens !== "number" || typeof u.output_tokens !== "number") return undefined;
-  return { inputTokens: u.input_tokens, outputTokens: u.output_tokens, raw: u };
+  const cached = typeof u.cache_read_input_tokens === "number" ? u.cache_read_input_tokens : undefined;
+  const creation = typeof u.cache_creation_input_tokens === "number" ? u.cache_creation_input_tokens : undefined;
+  return {
+    inputTokens: u.input_tokens + (cached ?? 0) + (creation ?? 0),
+    outputTokens: u.output_tokens,
+    ...(cached !== undefined ? { cachedInputTokens: cached } : {}),
+    ...(creation !== undefined ? { cacheCreationInputTokens: creation } : {}),
+    raw: u,
+  };
 }
 
 export function finishFromStopReason(stopReason: string | null | undefined): ModelFinish | undefined {

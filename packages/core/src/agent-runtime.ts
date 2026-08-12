@@ -41,9 +41,27 @@ export type ToolCall = { id: string; name: string; input: unknown; providerState
 // it on every response; adapters that don't see it simply omit the claim). Persisted on
 // the assistant Msg — the durable log is the ONLY place a fold/export can read it back
 // from (step checkpoints are presence-checked, never enumerated) — so cost/latency
-// accounting needs no side table. `raw` preserves the provider's own usage object
-// (cache tokens, tier fields, …) for diagnostics, mirroring ModelFinish.raw.
-export type ModelUsage = { inputTokens: number; outputTokens: number; raw?: unknown };
+// accounting needs no side table.
+//
+// THE SEMANTIC CONTRACT (pinned here because persisted rows outlive code): `inputTokens`
+// is the TOTAL input the call consumed, cache reads and writes INCLUDED. Providers
+// disagree on what their headline field means — OpenAI's prompt_tokens and Gemini's
+// promptTokenCount already include cached tokens, Anthropic's input_tokens EXCLUDES its
+// separately-reported cache fields — so every adapter must normalize to the total, or
+// cross-provider sums silently undercount cache-heavy turns. The optional cache fields
+// break the total down where the provider reports them (cache reads bill ~10%, cache
+// writes ~125% — a cost report needs the split, not just the sum):
+// `cachedInputTokens` = input served from cache (a subset of inputTokens);
+// `cacheCreationInputTokens` = input written to cache this call (also in inputTokens).
+// `raw` preserves the provider's own usage object for diagnostics, mirroring
+// ModelFinish.raw — never the primary carrier of cost data.
+export type ModelUsage = {
+  inputTokens: number;
+  outputTokens: number;
+  cachedInputTokens?: number;
+  cacheCreationInputTokens?: number;
+  raw?: unknown;
+};
 export type Msg =
   | { role: "user"; turnId: string; text: string }
   // A proactive turn's opening message (§9): a schedule / another channel / the agent itself
@@ -55,8 +73,10 @@ export type Msg =
   // legacy rows): what THIS model call cost and how long it streamed. On a crash-replay
   // the cached step skips, so the values honestly describe the run that actually paid.
   | { role: "assistant"; turnId: string; text: string; toolCalls: ToolCall[]; usage?: ModelUsage; durationMs?: number }
-  // `durationMs` is how long the tool ran; absent when nothing ran (legacy rows and the
-  // synthetic results a cancelled batch commits).
+  // `durationMs` is how long an ASYNC (remote) tool ran. Absent for sync local tools —
+  // they do no I/O, and workerd's request-frozen clock advances only on I/O, so any
+  // measurement would read 0 on the edge; recording nothing beats recording a lie —
+  // and for legacy rows and the synthetic results a cancelled batch commits.
   | { role: "tool"; turnId: string; toolCallId: string; name: string; result: unknown; durationMs?: number };
 export type ModelReply = { text: string; toolCalls: ToolCall[] };
 export type ToolSpec = { name: string; description: string; input: unknown };
@@ -653,9 +673,11 @@ async function toolStep(
   };
 
   assertCrash(opts.crash, "before-tool-commit", stepId); // nothing done → safe clean re-run
-  // durationMs = how long tool.run itself took (excludes the commit) — recorded on the
-  // tool Msg so the durable log carries per-step latency without a side table.
-  const toolMsg = (result: unknown, durationMs: number): Msg => ({ role: "tool", turnId: opts.turnId, toolCallId: call.id, name: call.name, result, durationMs });
+  // durationMs = how long tool.run itself took (excludes the commit), recorded on the
+  // tool Msg so the durable log carries per-step latency without a side table. REMOTE
+  // tools only: a sync local tool does no I/O, and workerd's request-frozen clock only
+  // advances on I/O — the measurement would read 0 on the edge, so it isn't taken.
+  const toolMsg = (result: unknown, durationMs?: number): Msg => ({ role: "tool", turnId: opts.turnId, toolCallId: call.id, name: call.name, result, ...(durationMs !== undefined ? { durationMs } : {}) });
 
   let out: unknown;
   if (remote) {
@@ -668,11 +690,9 @@ async function toolStep(
   } else {
     // local side effect: exactly-once (side effect + checkpoint + append in ONE tx)
     store.tx(() => {
-      const startedAt = Date.now();
       out = tool.run(call.input, ctx);
-      const durationMs = Date.now() - startedAt;
       store.putStep(stepId, out);
-      store.appendMessage(toolMsg(out, durationMs));
+      store.appendMessage(toolMsg(out));
     });
   }
   assertCrash(opts.crash, "after-tool-commit", stepId); // committed → replay skips (no duplicate side effect)
@@ -714,7 +734,9 @@ export function foldTranscript(msgs: Msg[]): Turn[] {
 // one document) and for an eval dataset (curate records from production, replay them
 // with substitutions — the frozen tool results are already here). Pure over Msg[],
 // like foldTranscript; anything not in the log (live-only failures/cancellations,
-// the system prompt) is deliberately absent rather than guessed.
+// the system prompt) is deliberately absent rather than guessed. Distinct from `Turn`
+// on purpose: Turn is the lossy fold a live UI renders, TurnRecord is the lossless
+// self-contained export — they serve different consumers and evolve independently.
 export type TurnRecordStep =
   // one model call: what it said, what it asked to run, what it cost
   | { kind: "model"; text: string; toolCalls: ToolCall[]; usage?: ModelUsage; durationMs?: number }
@@ -1092,7 +1114,9 @@ export class AgentSession {
   snapshot() { return { transcript: this.transcript(), status: this.store.getStatus() }; }
   // The self-contained export of one turn from the durable log (see foldTurnRecord):
   // the atom a trace exporter ships on turn-terminal and an eval dataset curates.
-  record(turnId: string): TurnRecord | undefined { return foldTurnRecord(this.store.messages(), turnId); }
+  // A noun getter like transcript()/snapshot() — deliberately NOT `record`, which reads
+  // as a write verb (and channels already use feedback.record for one).
+  turnRecord(turnId: string): TurnRecord | undefined { return foldTurnRecord(this.store.messages(), turnId); }
 }
 
 // Address space: a runtime resolves a session actor by (agentName, id). Native =
