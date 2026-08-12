@@ -108,6 +108,15 @@ describe("defineAgent", () => {
     expect(agent.instructions).toBe("");
   });
 
+  test("flattens an array tool entry (an integration shipping several tools from one file)", () => {
+    const a = defineAction({ id: "gd_read", description: "read", input: { type: "object", properties: {} } as const, run: () => ({}) });
+    const b = defineAction({ id: "gd_save", description: "save", input: { type: "object", properties: {} } as const, run: () => ({}) });
+    const single = defineAction({ id: "solo", description: "solo", input: { type: "object", properties: {} } as const, run: () => ({}) });
+    // `[a, b]` mirrors a tools/*.ts file default-exporting googleDriveTools().
+    const agent = defineAgent({ name: "ops", tools: [single, [a, b]] });
+    expect(agent.tools.map((t) => t.spec.name)).toEqual(["solo", "gd_read", "gd_save"]);
+  });
+
   test("read_skill returns a known skill's body and errors on an unknown one", async () => {
     const tool = readSkillTool([{ name: "bulk_reorder", description: "d", body: "the steps" }]);
     expect(await tool.run({ name: "bulk_reorder" }, {} as never)).toEqual({ name: "bulk_reorder", body: "the steps" });

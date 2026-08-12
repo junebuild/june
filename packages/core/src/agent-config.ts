@@ -359,6 +359,21 @@ function isTool(x: AnyAction | Tool): x is Tool {
   return "spec" in x;
 }
 
+// A tool module may default-export ONE tool (the common case) OR an ARRAY of
+// tools (an integration that ships several capabilities from one file — e.g.
+// googleDriveTools()). Flatten one level so both forms work identically through
+// native discovery and the edge-compiled module, without the emitter needing to
+// know which shape a file exports.
+export type ToolEntry = AnyAction | Tool | (AnyAction | Tool)[];
+function flattenTools(tools: ToolEntry[] | undefined): (AnyAction | Tool)[] {
+  const out: (AnyAction | Tool)[] = [];
+  for (const t of tools ?? []) {
+    if (Array.isArray(t)) out.push(...t);
+    else out.push(t);
+  }
+  return out;
+}
+
 // A built-in tool that pulls a skill's full text on demand (the progressive-
 // disclosure pattern). Kept a plain Tool, not a registered defineAction, so many
 // agents don't collide on one "read_skill" id in the global ACTION_REGISTRY.
@@ -386,7 +401,7 @@ export function defineAgent(config: {
   model?: string;
   description?: string;
   instructions?: string;
-  tools?: (AnyAction | Tool)[];
+  tools?: ToolEntry[];
   skills?: Skill[];
   channels?: Channel[];
   // Per-surface mechanics + discovered instruction variants (#149); assembly
@@ -398,7 +413,7 @@ export function defineAgent(config: {
 }): AgentDefinition {
   const skills = config.skills ?? [];
   const channels = config.channels ?? [];
-  const tools: Tool[] = (config.tools ?? []).map((t) => (isTool(t) ? t : actionToTool(t)));
+  const tools: Tool[] = flattenTools(config.tools).map((t) => (isTool(t) ? t : actionToTool(t)));
   // Merge each channel's OUTBOUND capabilities (see Channel.tools) into the agent's
   // tools — so mounting the Slack channel also gives the agent slack_read_thread /
   // slack_list_reactions / … with no separate wiring. Added before read_skill so the
@@ -489,7 +504,10 @@ export type AgentModule = {
   config: AgentConfigFile;
   // Raw instructions markdown; empty → fall back to config.instructions.
   instructions: string;
-  tools: (AnyAction | Tool)[];
+  // A tool file may default-export one tool OR an array of tools (an
+  // integration shipping several capabilities from one file, e.g.
+  // googleDriveTools()). defineAgent/assembleDurable flatten arrays.
+  tools: ToolEntry[];
   skills: Skill[];
   // Keyed by the channel file's basename.
   channels: Record<string, Channel | ChannelFactory>;
@@ -553,7 +571,7 @@ export function assembleDurable(mod: AgentModule): {
   channels: (Channel | ChannelFactory)[];
   connections: Connection[];
 } {
-  const tools: Tool[] = mod.tools.map((t) => (isTool(t) ? t : actionToTool(t)));
+  const tools: Tool[] = flattenTools(mod.tools).map((t) => (isTool(t) ? t : actionToTool(t)));
   if (mod.skills.length) tools.push(readSkillTool(mod.skills));
   // Same fail-fast as defineAgent: dispatch is by name, so a collision would
   // silently bind to the first tool and make behavior order-dependent.
