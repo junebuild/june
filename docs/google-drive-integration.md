@@ -107,9 +107,77 @@ const inline = defineAgent({
 - **Read a reference:** `gdrive__read_file({ path: "Specs/api.md" })` — resolves
   the path and returns `{ id, name, mimeType, content }`.
 
-## Scopes
+## Authorization — how the token is obtained
 
-The token needs the Drive scope your operations require —
-`https://www.googleapis.com/auth/drive.file` (files the app created/opened) or
-`https://www.googleapis.com/auth/drive` (full access). June never sees the OAuth
-consent flow; it only consumes the access token your `auth` returns.
+June's `auth` seam is deliberately agnostic: it wants a bearer token and doesn't
+care how you got one. There are two standard models behind it.
+
+### OAuth 2.0 (act as a user) vs Service Account (act as a robot)
+
+| | **OAuth 2.0 (user)** | **Service Account** |
+| --- | --- | --- |
+| Acts as | a real end user, on **their** Drive | a robot identity with its own credentials |
+| Consent | user approves once (consent screen) | none (server-to-server JWT) |
+| Best for | multi-tenant SaaS — each user's own files | a central Drive the app owns; Workspace orgs |
+| Storage caveat | — | a service account has ~no personal Drive; share a folder or use a **Shared Drive** |
+| Maps to | `auth(ctx)` mints the **caller's** token from a stored refresh token | `auth()` mints a token from the JSON key (optionally impersonating a user via domain-wide delegation) |
+
+Prefer the least-privilege scope: `…/auth/drive.file` (only files the app
+created/opened) over the full, Google-**restricted** `…/auth/drive`.
+
+### Getting the credentials (simplest first)
+
+All paths start the same: create a **Google Cloud project** and **enable the
+Google Drive API** (APIs & Services → Enable APIs).
+
+- **Fastest for dev / a throwaway token — OAuth 2.0 Playground.** Configure the
+  consent screen, open [the Playground](https://developers.google.com/oauthplayground),
+  pick a Drive scope, authorize, and exchange for an `access_token` (+
+  `refresh_token`). Zero code — paste it straight into `auth: () => ({ token })`.
+- **Simplest to operate for one shared account — a Service Account key.** IAM &
+  Admin → Service Accounts → create → **Keys → Add key → JSON**. Then **share the
+  target folder (or Shared Drive) with the service account's email**. A library
+  (`google-auth-library`) turns the JSON key into tokens automatically — no
+  refresh dance, no consent screen.
+- **Production multi-user — your own OAuth client.** Credentials → **Create OAuth
+  client ID** → get `client_id`/`client_secret`, run the redirect flow, and store
+  each user's `refresh_token`. This is where June's web nature pays off ↓.
+
+### The web-native path: let June (via Better Auth) own the OAuth flow
+
+The awkward part of multi-user OAuth is the **redirect dance** — consent → callback
+→ exchange code → store tokens → refresh on expiry. A headless agent runtime has
+to bolt on a web server for this; **June already is one** (`Request → Response`,
+routes, `/mcp`, and a resolved request principal via `createPipeline({ identity })`).
+
+So the blessed recipe is to let the **Better Auth** integration
+([docs/auth-integration.md](./auth-integration.md)) run the Google OAuth provider:
+it hosts consent + callback and stores each account's access/refresh tokens. Then
+`auth(ctx)` just reads the caller's Google token for `ctx.user`:
+
+```ts
+// connections/google-drive.ts
+export default googleDriveConnection({
+  requiresPrincipal: true, // no principal ⇒ tools hidden (fail closed)
+  auth: async (ctx) => {
+    // Better Auth stores the linked Google account's tokens and refreshes them.
+    const { accessToken } = await auth.api.getAccessToken({ providerId: "google", userId: ctx!.user!.id });
+    return { token: accessToken };
+  },
+});
+```
+
+The end user never touches a key — they just "Sign in with Google" (granting the
+Drive scope); the developer configures the OAuth client once.
+
+### Where a helper belongs (design note)
+
+The `auth` seam stays the source of truth and is always overridable (Service
+Account, raw token, any IdP). The Better-Auth recipe above is common and fiddly
+(expiry, account lookup, scope), so it is a candidate for a **blessed, overridable
+helper** — but at the **host layer** (`@junejs/server`), never in the pure
+`@junejs/core` (which must not depend on Better Auth). Such a helper should be
+**connection-agnostic** ("get the caller's linked-account token"), reusable across
+Drive and any future provider/mcp/openapi connection, and **fail closed** when no
+account is linked.
+
