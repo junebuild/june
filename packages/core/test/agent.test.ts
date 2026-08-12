@@ -154,4 +154,19 @@ describe("serverReferenceRegistrar identity gate", () => {
       setServerReferenceRegistrar(() => undefined);
     }
   });
+
+  test("a Flight reference is INERT once its action is removed from the registry (rollback is sufficient)", async () => {
+    const registered = new Map<string, (...args: unknown[]) => unknown>();
+    setServerReferenceRegistrar((fn, id) => { registered.set(id, fn); });
+    try {
+      defineAction({ id: "flight_rollback", description: "x", input: { type: "object", properties: {} }, run: () => "live" });
+      const ref = registered.get("flight_rollback")!;
+      expect(ref({})).toBe("live"); // registered ⇒ runs
+      // Simulate connectAll rolling a failed connection's action back out.
+      ACTION_REGISTRY.delete("flight_rollback");
+      expect(() => ref({})).toThrow(/is not registered/); // forged Flight dispatch can't reach it
+    } finally {
+      setServerReferenceRegistrar(() => undefined);
+    }
+  });
 });

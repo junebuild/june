@@ -275,6 +275,46 @@ describe("googleDriveTools", () => {
     await expect(t.gdrive__list_files!.run({}, {})).rejects.toThrow(/upstream exploded/);
   });
 
+  test("rootFolderId scopes path operations to a configured base folder (service-account setup)", async () => {
+    const drive = makeFakeDrive();
+    const base = drive.addFolder("SharedBase"); // stands in for a shared folder / Shared Drive
+    const t = toolsById(googleDriveTools({ auth: () => ({ token: "t" }), rootFolderId: base, fetch: drive.fetch }));
+
+    await t.gdrive__save_file!.run({ path: "reports/r.md", content: "hi" }, {});
+    // The "reports" folder was created UNDER the configured base, not Drive root.
+    const reports = [...drive.files.values()].find((f) => f.name === "reports")!;
+    expect(reports.parents).toEqual([base]);
+    // And it reads back through the same base.
+    const read = (await t.gdrive__read_file!.run({ path: "reports/r.md" }, {})) as { content: string };
+    expect(read.content).toBe("hi");
+  });
+
+  test("create_file with no folder defaults its parent to the configured root", async () => {
+    const drive = makeFakeDrive();
+    const base = drive.addFolder("Base");
+    const t = toolsById(googleDriveTools({ auth: () => ({ token: "t" }), rootFolderId: base, fetch: drive.fetch }));
+    const created = (await t.gdrive__create_file!.run({ name: "top.txt", content: "x" }, {})) as { parents: string[] };
+    expect(created.parents).toEqual([base]);
+  });
+
+  test("an ambiguous duplicate name fails instead of silently overwriting one", async () => {
+    const drive = makeFakeDrive();
+    // Two files with the same name in root — a real Drive possibility.
+    drive.files.set("d1", { id: "d1", name: "dup.txt", mimeType: "text/plain", parents: ["root"], content: "a", trashed: false });
+    drive.files.set("d2", { id: "d2", name: "dup.txt", mimeType: "text/plain", parents: ["root"], content: "b", trashed: false });
+    const t = toolsById(googleDriveTools({ auth: () => ({ token: "t" }), fetch: drive.fetch }));
+
+    await expect(t.gdrive__find_file!.run({ path: "dup.txt" }, {})).rejects.toThrow(/Ambiguous name "dup.txt"/);
+    // save_file must NOT pick one arbitrarily and overwrite it.
+    await expect(t.gdrive__save_file!.run({ path: "dup.txt", content: "c" }, {})).rejects.toThrow(/Ambiguous/);
+  });
+
+  test("save_file no longer advertises idempotentHint (non-atomic upsert)", () => {
+    const drive = makeFakeDrive();
+    const t = toolsById(googleDriveTools({ auth: () => ({ token: "t" }), fetch: drive.fetch }));
+    expect(t.gdrive__save_file!.annotations?.idempotentHint).toBeUndefined();
+  });
+
   test("the bearer token is resolved server-side per call and never appears in tool input", async () => {
     const drive = makeFakeDrive();
     const authCtxs: unknown[] = [];

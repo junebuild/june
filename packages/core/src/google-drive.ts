@@ -40,6 +40,12 @@ export type GoogleDriveConfig = {
   auth: GoogleDriveAuth;
   // Hide every tool from turns without a resolved principal (see connections.ts).
   requiresPrincipal?: boolean;
+  // The base folder every PATH operation is relative to (path walkers start here,
+  // and `create_file`/`create_folder` default their parent to it). Defaults to
+  // Drive's "root" (My Drive). Set this to a shared folder id or a Shared Drive
+  // id for the service-account setup — where the target location is NOT the
+  // service account's own My Drive root.
+  rootFolderId?: string;
   // Overridable for testing / private deployments. Defaults target the public API.
   apiBaseUrl?: string; // default https://www.googleapis.com/drive/v3
   uploadBaseUrl?: string; // default https://www.googleapis.com/upload/drive/v3
@@ -89,6 +95,7 @@ function makeClient(config: GoogleDriveConfig) {
   const api = (config.apiBaseUrl ?? DEFAULT_API).replace(/\/$/, "");
   const upload = (config.uploadBaseUrl ?? DEFAULT_UPLOAD).replace(/\/$/, "");
   const doFetch = config.fetch ?? globalThis.fetch;
+  const rootId = config.rootFolderId ?? "root";
 
   async function authHeader(ctx?: ActionContext): Promise<string> {
     const { token } = await config.auth(ctx);
@@ -137,7 +144,9 @@ function makeClient(config: GoogleDriveConfig) {
   }
 
   // Find one direct child of `parentId` by exact name; folderOnly narrows to
-  // subfolders (used while walking a path).
+  // subfolders (used while walking a path). Drive permits multiple siblings with
+  // the same name, so we fetch two and FAIL on ambiguity rather than silently
+  // picking one — otherwise save_file could overwrite an unrelated duplicate.
   async function findChild(
     parentId: string,
     name: string,
@@ -146,16 +155,19 @@ function makeClient(config: GoogleDriveConfig) {
   ): Promise<DriveFile | null> {
     const clauses = [`name = '${escapeQ(name)}'`, `'${escapeQ(parentId)}' in parents`, "trashed = false"];
     if (opts.folderOnly) clauses.push(`mimeType = '${FOLDER_MIME}'`);
-    const { files } = await listFiles({ q: clauses.join(" and "), pageSize: 1 }, ctx);
+    const { files } = await listFiles({ q: clauses.join(" and "), pageSize: 2 }, ctx);
+    if (files.length > 1) {
+      throw new Error(`Ambiguous name "${name}"${opts.folderOnly ? " (folder)" : ""}: ${files.length} matches in the same parent — resolve by fileId instead of path.`);
+    }
     return files[0] ?? null;
   }
 
   // Resolve a slash path of FOLDER segments to a folder id (mkdir -p), starting
-  // at "root" (or a supplied startId): missing folders are created. Used by the
-  // write paths (create/save/create_folder); reads walk with findChild instead
-  // so an absent folder is a genuine null, never an accidental create.
+  // at the configured root (or a supplied startId): missing folders are created.
+  // Used by the write paths (create/save/create_folder); reads walk with
+  // findChild instead so an absent folder is a genuine null, never a create.
   async function resolveFolderPath(segments: string[], opts: { startId?: string } = {}, ctx?: ActionContext): Promise<string> {
-    let parent = opts.startId ?? "root";
+    let parent = opts.startId ?? rootId;
     for (const segment of segments) {
       if (!segment || segment === ".") continue;
       const existing = await findChild(parent, segment, { folderOnly: true }, ctx);
@@ -177,7 +189,7 @@ function makeClient(config: GoogleDriveConfig) {
     const segments = path.split("/").filter((s) => s && s !== ".");
     if (segments.length === 0) throw new Error("Empty path");
     const name = segments[segments.length - 1]!;
-    let parent = "root";
+    let parent = rootId;
     for (const folderName of segments.slice(0, -1)) {
       const folder = await findChild(parent, folderName, { folderOnly: true }, ctx);
       if (!folder) return null; // an intermediate folder is absent ⇒ the file can't exist
@@ -206,6 +218,13 @@ function makeClient(config: GoogleDriveConfig) {
     return res.text();
   }
 
+  // Default a create's parent to the configured root when the caller didn't pin
+  // one — so create_file/create_folder land in the shared folder / Shared Drive
+  // (service-account setup), not the token's My Drive root.
+  function withParent(metadata: { name: string; mimeType?: string; parents?: string[] }) {
+    return metadata.parents?.length ? metadata : { ...metadata, parents: [rootId] };
+  }
+
   // Metadata-only create (folders, or empty files). Content-bearing creates go
   // through uploadFile (multipart).
   async function createMetadata(
@@ -215,7 +234,7 @@ function makeClient(config: GoogleDriveConfig) {
     const search = new URLSearchParams({ fields: FILE_FIELDS, supportsAllDrives: "true" });
     const res = await request(
       `${api}/files?${search}`,
-      { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(metadata) },
+      { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(withParent(metadata)) },
       ctx,
     );
     return (await res.json()) as DriveFile;
@@ -233,7 +252,7 @@ function makeClient(config: GoogleDriveConfig) {
     const body =
       `--${b}\r\n` +
       `Content-Type: application/json; charset=UTF-8\r\n\r\n` +
-      `${JSON.stringify(metadata)}\r\n` +
+      `${JSON.stringify(withParent(metadata))}\r\n` +
       `--${b}\r\n` +
       `Content-Type: ${contentType}\r\n\r\n` +
       `${content}\r\n` +
@@ -321,7 +340,7 @@ export function googleDriveTools(config: GoogleDriveConfig): AnyAction[] {
   const findFile = defineAction({
     id: `${name}__find_file`,
     description:
-      "Find a file or folder by its slash-separated path from the Drive root, e.g. 'Reports/2024/summary.txt'. Returns the file's metadata (id, name, mimeType, ...) or null when it does not exist.",
+      "Find a file or folder by its slash-separated path from the Drive root, e.g. 'Reports/2024/summary.txt'. Returns { found: boolean, file: metadata | null } — `found` is false and `file` is null when nothing exists at that path.",
     input: {
       type: "object",
       properties: { path: stringProp("Slash-separated path from the Drive root, e.g. 'Projects/spec.md'.") },
@@ -417,7 +436,10 @@ export function googleDriveTools(config: GoogleDriveConfig): AnyAction[] {
       },
       required: ["path", "content"],
     },
-    annotations: { title: "Save Drive file (upsert)", idempotentHint: true },
+    // No idempotentHint: the upsert is a non-atomic find-then-create/update, so
+    // two concurrent identical saves can race into duplicate files (Drive does
+    // not enforce unique sibling names). Don't advertise safe-to-retry.
+    annotations: { title: "Save Drive file (upsert)" },
     ...gate,
     run: async (input, ctx) => {
       const mimeType = input.mimeType ?? "text/plain";

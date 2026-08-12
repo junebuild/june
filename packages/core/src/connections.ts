@@ -15,7 +15,7 @@
 // Web-standard (fetch + JSON-RPC + a minimal OpenAPI subset, zero node:*), so an
 // agent can hold connections on native and on edge alike.
 
-import { defineAction, type AnyAction, type JsonSchema, type ToolAnnotations } from "./agent";
+import { ACTION_REGISTRY, defineAction, type AnyAction, type JsonSchema, type ToolAnnotations } from "./agent";
 import type { ActionContext } from "./context";
 
 // Resolved per call, server-side — the token never reaches the model. The ctx
@@ -236,16 +236,31 @@ function reportUrl(c: Connection): string {
 // Connect every connection, collecting their tools. A down connection is
 // reported with an `error` but never throws — one bad remote must not take the
 // whole agent down.
+//
+// TRANSACTIONAL registration: connectMcp/connectOpenapi/connectProvider all
+// register their tools GLOBALLY via defineAction (that is how June re-serves them
+// from its own /mcp). If a connection fails partway — a provider that throws
+// after registering some tools, or the provider gate-check rejecting an ungated
+// tool — those already-registered actions would otherwise linger in
+// ACTION_REGISTRY and stay reachable via /mcp and invokeAction even though the
+// connection was "skipped". So we snapshot the registry per connection and roll
+// back everything it added on failure. (The Flight server reference resolves
+// through ACTION_REGISTRY at call time — see agent.ts — so removing the map entry
+// makes that path inert too.)
 export async function connectAll(connections: Connection[]): Promise<{ actions: AnyAction[]; report: ConnectionReport[] }> {
   const actions: AnyAction[] = [];
   const report: ConnectionReport[] = [];
   for (const c of connections) {
     const url = reportUrl(c);
+    const before = new Set(ACTION_REGISTRY.keys());
     try {
       const a = c.kind === "mcp" ? await connectMcp(c) : c.kind === "openapi" ? await connectOpenapi(c) : await connectProvider(c);
       actions.push(...a);
       report.push({ name: c.name, kind: c.kind, url, tools: a.map((x) => x.id) });
     } catch (e) {
+      // Roll back any tools this failed connection registered — a partial or
+      // rejected connection must leave NOTHING reachable in the global registry.
+      for (const key of ACTION_REGISTRY.keys()) if (!before.has(key)) ACTION_REGISTRY.delete(key);
       report.push({ name: c.name, kind: c.kind, url, tools: [], error: String(e) });
     }
   }

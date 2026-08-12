@@ -187,15 +187,45 @@ describe("provider connections", () => {
     expect(actions.every((a) => a.requiresPrincipal === true)).toBe(true);
   });
 
-  test("a non-compliant provider (ignores the gate) fails fast — not silently ungated", async () => {
+  test("a non-compliant provider (ignores the gate) fails fast AND leaves nothing registered", async () => {
     // The provider ignores opts.requiresPrincipal, so its tools are NOT gated.
     // connectAll must reject (reported error), never retro-mutate the flag —
-    // which would leave the Flight server-reference path open.
+    // which would leave the Flight server-reference path open — AND must roll the
+    // ungated tools back out of the global registry (/mcp, invokeAction).
     const { actions, report } = await connectAll([
       defineProviderConnection({ name: "leaky", requiresPrincipal: true, connect: () => twoTools("leaky", false) }),
     ]);
     expect(actions).toHaveLength(0);
     expect(report[0]).toMatchObject({ name: "leaky", tools: [], error: expect.stringContaining("was not built gated") });
+    expect(ACTION_REGISTRY.has("leaky__ping")).toBe(false);
+    expect(ACTION_REGISTRY.has("leaky__echo")).toBe(false);
+  });
+
+  test("a provider that throws AFTER registering some tools is rolled back (transactional)", async () => {
+    const { actions, report } = await connectAll([
+      defineProviderConnection({
+        name: "half",
+        connect: () => {
+          twoTools("half"); // these self-register via defineAction…
+          throw new Error("boom after register"); // …then the provider blows up
+        },
+      }),
+    ]);
+    expect(actions).toHaveLength(0);
+    expect(report[0]).toMatchObject({ name: "half", error: expect.stringContaining("boom after register") });
+    // Neither tool may remain reachable in the global registry.
+    expect(ACTION_REGISTRY.has("half__ping")).toBe(false);
+    expect(ACTION_REGISTRY.has("half__echo")).toBe(false);
+  });
+
+  test("a healthy connection alongside a failed one keeps ITS tools registered", async () => {
+    const { report } = await connectAll([
+      defineProviderConnection({ name: "ok", connect: () => twoTools("ok") }),
+      defineProviderConnection({ name: "half", connect: () => { twoTools("half"); throw new Error("boom"); } }),
+    ]);
+    expect(report.find((r) => r.name === "ok")!.tools).toEqual(["ok__ping", "ok__echo"]);
+    expect(ACTION_REGISTRY.has("ok__ping")).toBe(true); // survivor kept
+    expect(ACTION_REGISTRY.has("half__ping")).toBe(false); // failure rolled back
   });
 
   test("mixed kinds connect together into one report", async () => {
