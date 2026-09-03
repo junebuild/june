@@ -182,6 +182,20 @@ describe("fragment navigation and the client router", () => {
     expect(scrolledTo).toEqual([]);
   });
 
+  test("invalid UTF-8 in the escapes decodes to U+FFFD, keeping the valid bytes", async () => {
+    // %41 is "A"; %C0 can't start a UTF-8 sequence. A hard load percent-decodes
+    // to bytes and UTF-8-decodes non-fatally → "A�". decodeURIComponent
+    // would throw and lose the "A" too.
+    document.body.innerHTML = root('<main><a href="/utf8#%41%C0">utf8</a></main>');
+    serve('<main data-page="utf8"><h2 id="A�">target</h2></main>');
+
+    clickLink("/utf8#%41%C0");
+    await flush();
+
+    expect(scrolledInto).toEqual(["A�"]);
+    expect(scrolledTo).toEqual([]);
+  });
+
   test("the name fallback matches only <a>, not a same-named form control", async () => {
     document.body.innerHTML = root('<main><a href="/legacy#sec">legacy</a></main>');
     serve('<main data-page="legacy"><input name="sec"><a name="sec">anchor</a></main>');
