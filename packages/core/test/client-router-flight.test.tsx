@@ -189,4 +189,25 @@ describe("startFlightRouter", () => {
     expect(document.getElementById("ssr")).not.toBeNull();
     expect(location.pathname).toBe("/");
   });
+
+  test("a traversal between /about and /about/ is a navigation, not a hash change", async () => {
+    const { calls } = setup({
+      decode: async () => <p>page</p>,
+      response: () => new Response("<flight bytes>", { headers: { "content-type": FLIGHT_ACCEPT } }),
+    });
+
+    await act(async () => {
+      clickLink(); // → /about
+      await flush();
+    });
+    expect(calls.map((c) => c.url)).toEqual([`${origin}/about`]);
+
+    // June serves the slash variants verbatim, so this must fetch again.
+    await act(async () => {
+      history.replaceState(null, "", `${origin}/about/`);
+      window.dispatchEvent(new Event("popstate"));
+      await flush();
+    });
+    expect(calls.map((c) => c.url)).toEqual([`${origin}/about`, `${origin}/about/`]);
+  });
 });
