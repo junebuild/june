@@ -241,7 +241,16 @@ export function startClientRouter(rehydrate: Rehydrate): void {
   window.addEventListener("popstate", () => {
     // Same page, different (or same) hash → a fragment navigation. The browser
     // owns those: it scrolled to the anchor already and the document is current.
-    if (pageKey() === lastPage) return;
+    if (pageKey() === lastPage) {
+      // …but a cross-page navigation may still be in flight: back to B, then
+      // forward to here before B's fragment arrived. The document already shows
+      // this page, so that response must never land — supersede and abort it,
+      // exactly as a navigate() to this page would have.
+      ++token;
+      inflight?.abort();
+      inflight = null;
+      return;
+    }
     navigate(location.pathname + location.search + location.hash, false);
   });
 }
