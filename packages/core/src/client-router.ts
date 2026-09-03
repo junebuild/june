@@ -72,6 +72,31 @@ function isHardNav(url: URL): boolean {
   return /\.(md|json|txt|xml)$/.test(url.pathname) || url.pathname === "/mcp";
 }
 
+// The part of the URL a soft-nav is keyed on: path + query, never the hash. Two
+// URLs with the same key are the same document; only the browser's own fragment
+// scrolling differs between them.
+const pageKey = (): string => location.pathname + location.search;
+
+// Where a freshly swapped-in page lands: the element a `#fragment` names (id, or
+// a named anchor — the same lookup the browser does on a hard load), else the
+// top. Runs AFTER morph so the new content is what gets measured.
+function landOn(hash: string): void {
+  if (hash.length > 1) {
+    let id = hash.slice(1);
+    try {
+      id = decodeURIComponent(id);
+    } catch {
+      /* keep the raw id — a malformed escape can't name an element anyway */
+    }
+    const el = document.getElementById(id) ?? document.getElementsByName(id)[0];
+    if (el) {
+      el.scrollIntoView?.();
+      return;
+    }
+  }
+  window.scrollTo?.(0, 0);
+}
+
 export function startClientRouter(rehydrate: Rehydrate): void {
   // Idempotent: the bundle may call this on every full-document hydrate, but the
   // listeners must be attached exactly once.
@@ -86,6 +111,14 @@ export function startClientRouter(rehydrate: Rehydrate): void {
   // aborted so the superseded fetch doesn't even finish.
   let token = 0;
   let inflight: AbortController | null = null;
+
+  // The page (path + query) the document currently shows. popstate compares
+  // against it to tell a real history traversal from a fragment change: the
+  // browser fires popstate for `#hash` navigations too (a ToC click, a pasted
+  // same-page deep link, back/forward between two anchors), and those must NOT
+  // re-fetch and re-land the page — the browser already scrolled to the anchor,
+  // and a soft-nav on top of it would drag the reader back to the top.
+  let lastPage = pageKey();
 
   async function navigate(href: string, push: boolean): Promise<void> {
     const mine = ++token;
@@ -161,6 +194,8 @@ export function startClientRouter(rehydrate: Rehydrate): void {
     // active-link hook reads it (popstate already has it updated). Whole-chain
     // morph doesn't read location, so this reorder is invisible there.
     if (push) history.pushState({ june: true }, "", href);
+    lastPage = pageKey();
+    const hash = new URL(href, location.href).hash;
 
     const apply = () => {
       // startViewTransition runs this callback ASYNCHRONOUSLY (after capture) —
@@ -179,7 +214,7 @@ export function startClientRouter(rehydrate: Rehydrate): void {
       executeScripts(current);
       rehydrate(current); // hydrate the new island markers (idempotent — skips live ones)
       updateActiveLinks(); // segment mode: move the shell's aria-current (no-op otherwise)
-      window.scrollTo?.(0, 0);
+      landOn(hash); // `/page#section` lands on the section, like a hard load would
     };
     // View Transitions give the cross-fade for free where supported; elsewhere
     // (and in test DOMs) apply directly.
@@ -204,6 +239,9 @@ export function startClientRouter(rehydrate: Rehydrate): void {
   });
 
   window.addEventListener("popstate", () => {
+    // Same page, different (or same) hash → a fragment navigation. The browser
+    // owns those: it scrolled to the anchor already and the document is current.
+    if (pageKey() === lastPage) return;
     navigate(location.pathname + location.search + location.hash, false);
   });
 }

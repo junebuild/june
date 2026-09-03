@@ -65,6 +65,10 @@ function isHardNav(url: URL): boolean {
 }
 
 let started = false;
+// Owns the document/window listeners so the test seam can detach a router
+// instead of leaving it live behind the next one (a stale router would still
+// answer popstate for a page it thinks it is on).
+let listeners: AbortController | null = null;
 
 export function startFlightRouter(options: FlightRouterOptions = {}): void {
   // Idempotent: islands-client may call this on every full-document hydrate.
@@ -72,12 +76,20 @@ export function startFlightRouter(options: FlightRouterOptions = {}): void {
   const rootEl = document.querySelector("[data-june-root]");
   if (!rootEl) return;
   started = true;
+  listeners = new AbortController();
+  const signal = listeners.signal;
   const decode = options.decode ?? defaultDecode;
 
   // Persistent root: created on the first soft nav (it replaces the SSR markup
   // once), reused after so React reconciles each subsequent page against the
   // previous one — that reconcile is what preserves client state.
   let root: Root | null = null;
+
+  // The page (path + query) the document currently shows — see the popstate
+  // handler: the browser fires popstate for `#hash` changes too, and those must
+  // not re-render (and re-scroll to the top of) the page the reader is on.
+  const pageKey = (): string => trimSlash(location.pathname) + location.search;
+  let lastPage = pageKey();
 
   function hard(href: string): void {
     location.href = href;
@@ -101,32 +113,49 @@ export function startFlightRouter(options: FlightRouterOptions = {}): void {
       const title = decodeTitle(res.headers.get(TITLE_HEADER));
       if (title) document.title = title;
       if (push) history.pushState(null, "", url.href);
+      lastPage = pageKey();
       window.scrollTo(0, 0);
     } catch {
       hard(url.href);
     }
   }
 
-  document.addEventListener("click", (e) => {
-    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) {
-      return;
-    }
-    const a = (e.target as Element | null)?.closest?.("a[href]") as HTMLAnchorElement | null;
-    if (!a || a.target === "_blank" || a.hasAttribute("download")) return;
-    const url = new URL(a.href, location.href);
-    if (url.origin !== location.origin || isHardNav(url)) return;
-    // Same page (ignoring a trailing slash) → let the browser handle the hash.
-    if (trimSlash(url.pathname) === trimSlash(location.pathname) && url.search === location.search) {
-      return;
-    }
-    e.preventDefault();
-    void navigate(url.href, true);
-  });
+  document.addEventListener(
+    "click",
+    (e) => {
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) {
+        return;
+      }
+      const a = (e.target as Element | null)?.closest?.("a[href]") as HTMLAnchorElement | null;
+      if (!a || a.target === "_blank" || a.hasAttribute("download")) return;
+      const url = new URL(a.href, location.href);
+      if (url.origin !== location.origin || isHardNav(url)) return;
+      // Same page (ignoring a trailing slash) → let the browser handle the hash.
+      if (trimSlash(url.pathname) === trimSlash(location.pathname) && url.search === location.search) {
+        return;
+      }
+      e.preventDefault();
+      void navigate(url.href, true);
+    },
+    { signal },
+  );
 
-  window.addEventListener("popstate", () => void navigate(location.href, false));
+  window.addEventListener(
+    "popstate",
+    () => {
+      // Same page, only the hash moved → a fragment navigation the browser owns
+      // (it already scrolled to the anchor); re-rendering would undo that.
+      if (pageKey() === lastPage) return;
+      void navigate(location.href, false);
+    },
+    { signal },
+  );
 }
 
-// Test seam: reset the module-level guard so a test can start a fresh router.
+// Test seam: detach the live router (its listeners included) so a test can start
+// a fresh one against a new document state.
 export function __resetFlightRouterForTest(): void {
+  listeners?.abort();
+  listeners = null;
   started = false;
 }
