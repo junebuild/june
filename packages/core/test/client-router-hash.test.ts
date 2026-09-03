@@ -114,16 +114,23 @@ describe("fragment navigation and the client router", () => {
   });
 
   test("after a soft-nav, a hash-only popstate on the NEW page is still ignored", async () => {
-    // The previous test soft-navigated to /other; the router must key its
-    // "same page?" check on where the LAST navigation landed, not where it booted.
-    document.body.innerHTML = root('<main data-page="other"><h2 id="sec">S</h2></main>');
+    // Soft-navigate somewhere unique first: the router must key its "same
+    // page?" check on where the LAST navigation landed, not where it booted.
+    document.body.innerHTML = root('<main data-page="docs">d</main>');
+    serve('<main data-page="primed"><h2 id="sec">S</h2></main>');
+    popstate("/primed");
+    await flush();
+    expect(fetched).toEqual(["/primed"]);
+    fetched = [];
+    scrolledTo = [];
     serve('<main data-page="refetched">x</main>');
 
-    popstate("/other#sec");
+    popstate("/primed#sec");
     await flush();
 
     expect(fetched).toEqual([]);
-    expect(document.querySelector('[data-page="other"]')).not.toBeNull();
+    expect(scrolledTo).toEqual([]);
+    expect(document.querySelector('[data-page="primed"]')).not.toBeNull();
   });
 
   test("a cross-page link with a hash lands on the section, not the top", async () => {
