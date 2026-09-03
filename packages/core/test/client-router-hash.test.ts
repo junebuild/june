@@ -60,7 +60,8 @@ beforeAll(() => {
   };
   (HTMLElement.prototype as unknown as { scrollIntoView: () => void }).scrollIntoView =
     function (this: HTMLElement) {
-      scrolledInto.push(this.id);
+      // Landed elements are logged by id, or `tag[name=…]` for a named anchor.
+      scrolledInto.push(this.id || `${this.localName}[name=${this.getAttribute("name")}]`);
     };
   delete (globalThis as { __juneRouter?: boolean }).__juneRouter;
   startClientRouter(() => {});
@@ -147,6 +148,41 @@ describe("fragment navigation and the client router", () => {
     await flush();
 
     expect(scrolledInto).toEqual(["訂閱"]);
+    expect(scrolledTo).toEqual([]);
+  });
+
+  test("the raw fragment is tried before its decoded form (spec order)", async () => {
+    // An id that literally contains percent escapes wins over the decoded id
+    // when both exist — the browser's fragment lookup tries raw first.
+    document.body.innerHTML = root('<main><a href="/raw#%E8%A8%82">raw</a></main>');
+    serve('<main data-page="raw"><h2 id="訂">decoded</h2><h2 id="%E8%A8%82">raw</h2></main>');
+
+    clickLink("/raw#%E8%A8%82");
+    await flush();
+
+    expect(scrolledInto).toEqual(["%E8%A8%82"]);
+  });
+
+  test("a malformed escape does not discard the well-formed ones (forgiving decode)", async () => {
+    // decodeURIComponent("a%20b%ZZ") throws; the browser resolves it to "a b%ZZ".
+    document.body.innerHTML = root('<main><a href="/mixed#a%20b%ZZ">mixed</a></main>');
+    serve('<main data-page="mixed"><h2 id="a b%ZZ">target</h2></main>');
+
+    clickLink("/mixed#a%20b%ZZ");
+    await flush();
+
+    expect(scrolledInto).toEqual(["a b%ZZ"]);
+    expect(scrolledTo).toEqual([]);
+  });
+
+  test("the name fallback matches only <a>, not a same-named form control", async () => {
+    document.body.innerHTML = root('<main><a href="/legacy#sec">legacy</a></main>');
+    serve('<main data-page="legacy"><input name="sec"><a name="sec">anchor</a></main>');
+
+    clickLink("/legacy#sec");
+    await flush();
+
+    expect(scrolledInto).toEqual(["a[name=sec]"]);
     expect(scrolledTo).toEqual([]);
   });
 
