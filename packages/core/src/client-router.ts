@@ -77,18 +77,29 @@ function isHardNav(url: URL): boolean {
 // scrolling differs between them.
 const pageKey = (): string => location.pathname + location.search;
 
-// Forgiving percent-decoding, the way the URL spec's percent-decode treats a
-// fragment: each run of well-formed `%XX` escapes decodes on its own, a
-// malformed escape (or an invalid UTF-8 run) stays as written, and one bad
-// escape never discards the good ones — unlike all-or-nothing decodeURIComponent.
+const isHex = (c: number): boolean =>
+  (c >= 0x30 && c <= 0x39) || (c >= 0x41 && c <= 0x46) || (c >= 0x61 && c <= 0x66);
+
+// The URL spec's percent-decode followed by a non-fatal UTF-8 decode — what a
+// hard load does to a fragment before looking it up. Byte-level: each
+// well-formed `%XX` becomes one byte, anything else passes through unchanged,
+// and an invalid UTF-8 sequence decodes to U+FFFD rather than failing. Both are
+// where decodeURIComponent differs: it is all-or-nothing on a malformed escape
+// AND on invalid UTF-8, so `%41%C0` would throw instead of yielding "A�".
 function percentDecode(s: string): string {
-  return s.replace(/(?:%[0-9A-Fa-f]{2})+/g, (run) => {
-    try {
-      return decodeURIComponent(run);
-    } catch {
-      return run;
+  if (!/%[0-9A-Fa-f]{2}/.test(s)) return s;
+  const src = new TextEncoder().encode(s);
+  const out: number[] = [];
+  for (let i = 0; i < src.length; i++) {
+    const b = src[i]!;
+    if (b === 0x25 /* % */ && i + 2 < src.length && isHex(src[i + 1]!) && isHex(src[i + 2]!)) {
+      out.push(parseInt(String.fromCharCode(src[i + 1]!, src[i + 2]!), 16));
+      i += 2;
+    } else {
+      out.push(b);
     }
-  });
+  }
+  return new TextDecoder().decode(new Uint8Array(out));
 }
 
 // The HTML spec's "find a potential indicated element", as a hard load does it:
