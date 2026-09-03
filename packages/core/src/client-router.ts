@@ -213,7 +213,6 @@ export function startClientRouter(rehydrate: Rehydrate): void {
     // active-link hook reads it (popstate already has it updated). Whole-chain
     // morph doesn't read location, so this reorder is invisible there.
     if (push) history.pushState({ june: true }, "", href);
-    lastPage = pageKey();
     const hash = new URL(href, location.href).hash;
 
     const apply = () => {
@@ -223,6 +222,12 @@ export function startClientRouter(rehydrate: Rehydrate): void {
       // execute that page's scripts into the newer navigation's document.
       if (mine !== token) return;
       morph(current, next);
+      // Only NOW is this page the one on screen. Recording it any earlier (at
+      // pushState, say) would let a same-page popstate in the view-transition
+      // gap dismiss this very apply as "already shown" — stranding the old DOM
+      // under the new URL for good. Until here the old page stays the answer,
+      // so such a popstate simply navigates again, which is correct.
+      lastPage = pageKey();
       // Title BEFORE scripts: on a hard load the <head> title is parsed before
       // any body script runs, so activated scripts that read document.title
       // (analytics) must see the NEW page's value.
