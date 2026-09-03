@@ -103,12 +103,17 @@ export function startFlightRouter(options: FlightRouterOptions = {}): void {
     location.href = href;
   }
 
+  // A navigation is stale once a newer generation started, or once this whole
+  // router was detached (the test seam) — a detached router's pending work must
+  // not render, retitle, or push history into whatever replaced it.
+  const stale = (mine: number): boolean => mine !== gen || signal.aborted;
+
   async function navigate(href: string, push: boolean): Promise<void> {
     const mine = ++gen;
     const url = new URL(href, location.href);
     try {
-      const res = await fetch(url.href, { headers: { accept: FLIGHT_ACCEPT } });
-      if (mine !== gen) return; // superseded while fetching
+      const res = await fetch(url.href, { headers: { accept: FLIGHT_ACCEPT }, signal });
+      if (stale(mine)) return; // superseded while fetching
       // No flight projection (server can't answer yet) → hard navigate. We treat
       // a non-flight content-type as "not available" so a server that ignores the
       // Accept and returns HTML doesn't get mis-parsed as Flight.
@@ -116,7 +121,7 @@ export function startFlightRouter(options: FlightRouterOptions = {}): void {
       if (!res.ok || !res.body || !ct.includes(FLIGHT_ACCEPT)) return hard(url.href);
 
       const node = await decode(res.body);
-      if (mine !== gen) return; // superseded while decoding
+      if (stale(mine)) return; // superseded while decoding
       root ??= createRoot(rootEl as Element);
       root.render(React.createElement(React.Fragment, null, node));
 
@@ -127,7 +132,7 @@ export function startFlightRouter(options: FlightRouterOptions = {}): void {
       lastPage = pageKey();
       window.scrollTo(0, 0);
     } catch {
-      if (mine !== gen) return; // a superseded failure is nobody's page
+      if (stale(mine)) return; // a superseded (or detached) failure is nobody's page
       hard(url.href);
     }
   }
@@ -169,8 +174,9 @@ export function startFlightRouter(options: FlightRouterOptions = {}): void {
   );
 }
 
-// Test seam: detach the live router (its listeners included) so a test can start
-// a fresh one against a new document state.
+// Test seam: detach the live router — its listeners AND any navigation still
+// awaiting fetch/decode (they share the signal) — so a test can start a fresh one
+// against a new document state without the old one's work landing in it.
 export function __resetFlightRouterForTest(): void {
   listeners?.abort();
   listeners = null;

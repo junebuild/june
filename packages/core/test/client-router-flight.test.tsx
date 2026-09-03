@@ -190,6 +190,43 @@ describe("startFlightRouter", () => {
     expect(location.pathname).toBe("/");
   });
 
+  test("resetting the router also cancels a navigation still in flight", async () => {
+    let decoded = 0;
+    let release!: (r: Response) => void;
+    const { calls } = setup({
+      decode: async () => {
+        decoded++;
+        return <p id="late">late</p>;
+      },
+      response: () => new Promise<Response>((r) => (release = r)) as unknown as Response,
+    });
+
+    await act(async () => {
+      clickLink(); // → /about, response pending (history moves only on landing)
+      await flush();
+    });
+    expect(calls).toHaveLength(1);
+
+    // Detach (what the next test's setup does), then let the old response land:
+    // the detached router must not render, retitle, or move history.
+    __resetFlightRouterForTest();
+    document.title = "next test";
+    release(
+      new Response("<flight bytes>", {
+        headers: { "content-type": FLIGHT_ACCEPT, [TITLE_HEADER]: "stale title" },
+      }),
+    );
+    await act(async () => {
+      await flush();
+    });
+
+    expect(decoded).toBe(0);
+    expect(document.getElementById("late")).toBeNull();
+    expect(document.getElementById("ssr")).not.toBeNull();
+    expect(document.title).toBe("next test");
+    expect(location.pathname).toBe("/");
+  });
+
   test("a traversal between /about and /about/ is a navigation, not a hash change", async () => {
     const { calls } = setup({
       decode: async () => <p>page</p>,
