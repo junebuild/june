@@ -161,4 +161,43 @@ describe("fragment navigation and the client router", () => {
     expect(scrolledInto).toEqual([]);
     expect(scrolledTo).toEqual([[0, 0]]);
   });
+
+  test("back to B then forward to the shown page before B arrives: B never lands", async () => {
+    // Land somewhere known first (the router keys "same page?" on its last landing).
+    document.body.innerHTML = root('<main data-page="faq">f</main>');
+    serve('<main data-page="home">h</main>');
+    popstate("/home");
+    await flush();
+    expect(document.querySelector('[data-page="home"]')).not.toBeNull();
+    fetched = [];
+
+    // Back to B: its fragment is slow. Capture the signal the router hands fetch.
+    let release!: (r: Response) => void;
+    let signal: AbortSignal | undefined;
+    globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
+      fetched.push(typeof input === "string" ? input : input.toString());
+      signal = init?.signal ?? undefined;
+      return new Promise<Response>((r) => {
+        release = r;
+      });
+    }) as unknown as typeof fetch;
+    popstate("/b");
+    await flush();
+    expect(fetched).toEqual(["/b"]);
+    expect(signal?.aborted).toBe(false);
+
+    // Forward to the page still on screen: a fragment-class popstate, but the
+    // pending B fetch must be superseded — otherwise B would morph in under
+    // /home's URL once it resolved.
+    popstate("/home");
+    await flush();
+    expect(signal?.aborted).toBe(true);
+
+    release(new Response('<main data-page="b">b</main>'));
+    await flush();
+    expect(document.querySelector('[data-page="home"]')).not.toBeNull();
+    expect(document.querySelector('[data-page="b"]')).toBeNull();
+    expect(fetched).toEqual(["/b"]); // and the shown page was not re-fetched either
+    expect(location.pathname).toBe("/home");
+  });
 });
