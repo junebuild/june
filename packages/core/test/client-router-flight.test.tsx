@@ -112,4 +112,42 @@ describe("startFlightRouter", () => {
     expect(decoded).toBe(0);
     expect(document.getElementById("ssr")).not.toBeNull();
   });
+
+  test("a hash-only popstate (fragment navigation) does not re-fetch or re-render", async () => {
+    let decoded = 0;
+    const { calls } = setup({
+      decode: async () => {
+        decoded++;
+        return <p>should not happen</p>;
+      },
+      response: () => new Response("<flight bytes>", { headers: { "content-type": FLIGHT_ACCEPT } }),
+    });
+    let scrolled = 0;
+    (window as unknown as { scrollTo: () => void }).scrollTo = () => {
+      scrolled++;
+    };
+
+    // The browser fires popstate for a `#hash` change on the SAME page (a ToC
+    // click, a pasted deep link, back/forward between anchors) — it already
+    // scrolled to the anchor; the router must not undo that.
+    await act(async () => {
+      history.replaceState(null, "", `${origin}/#section`);
+      window.dispatchEvent(new Event("popstate"));
+      await flush();
+    });
+
+    expect(calls).toHaveLength(0);
+    expect(decoded).toBe(0);
+    expect(scrolled).toBe(0);
+    expect(document.getElementById("ssr")).not.toBeNull();
+
+    // A traversal to a DIFFERENT page still soft-navigates.
+    await act(async () => {
+      history.replaceState(null, "", `${origin}/about`);
+      window.dispatchEvent(new Event("popstate"));
+      await flush();
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe(`${origin}/about`);
+  });
 });

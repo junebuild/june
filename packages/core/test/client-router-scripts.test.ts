@@ -232,6 +232,9 @@ describe("soft-nav executes the fragment's scripts", () => {
     globalThis.fetch = fragment(
       '<nav><a href="/pop">P</a></nav><main>pop</main><script>window.__popRuns++</script>',
     );
+    // A real traversal lands on a DIFFERENT page before popstate fires; a popstate
+    // on the same path is a fragment change, which the router leaves alone.
+    history.replaceState({}, "", "/pop");
     window.dispatchEvent(new window.Event("popstate"));
     await flush();
     expect(w.__popRuns).toBe(1);
