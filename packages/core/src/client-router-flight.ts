@@ -91,14 +91,22 @@ export function startFlightRouter(options: FlightRouterOptions = {}): void {
   const pageKey = (): string => trimSlash(location.pathname) + location.search;
   let lastPage = pageKey();
 
+  // Navigation generation. Every navigation (and every same-page popstate that
+  // dismisses one) bumps it; a fetch or decode that resolves after a newer
+  // generation started is stale and must not render — otherwise a slow page B
+  // could land under the URL of the page the reader has since gone back to.
+  let gen = 0;
+
   function hard(href: string): void {
     location.href = href;
   }
 
   async function navigate(href: string, push: boolean): Promise<void> {
+    const mine = ++gen;
     const url = new URL(href, location.href);
     try {
       const res = await fetch(url.href, { headers: { accept: FLIGHT_ACCEPT } });
+      if (mine !== gen) return; // superseded while fetching
       // No flight projection (server can't answer yet) → hard navigate. We treat
       // a non-flight content-type as "not available" so a server that ignores the
       // Accept and returns HTML doesn't get mis-parsed as Flight.
@@ -106,6 +114,7 @@ export function startFlightRouter(options: FlightRouterOptions = {}): void {
       if (!res.ok || !res.body || !ct.includes(FLIGHT_ACCEPT)) return hard(url.href);
 
       const node = await decode(res.body);
+      if (mine !== gen) return; // superseded while decoding
       root ??= createRoot(rootEl as Element);
       root.render(React.createElement(React.Fragment, null, node));
 
@@ -116,6 +125,7 @@ export function startFlightRouter(options: FlightRouterOptions = {}): void {
       lastPage = pageKey();
       window.scrollTo(0, 0);
     } catch {
+      if (mine !== gen) return; // a superseded failure is nobody's page
       hard(url.href);
     }
   }
@@ -144,8 +154,13 @@ export function startFlightRouter(options: FlightRouterOptions = {}): void {
     "popstate",
     () => {
       // Same page, only the hash moved → a fragment navigation the browser owns
-      // (it already scrolled to the anchor); re-rendering would undo that.
-      if (pageKey() === lastPage) return;
+      // (it already scrolled to the anchor); re-rendering would undo that. A
+      // cross-page navigation still in flight (back to B, forward to here) is
+      // dismissed: the document already shows this page.
+      if (pageKey() === lastPage) {
+        ++gen;
+        return;
+      }
       void navigate(location.href, false);
     },
     { signal },

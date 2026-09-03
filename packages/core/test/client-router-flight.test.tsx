@@ -150,4 +150,43 @@ describe("startFlightRouter", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]!.url).toBe(`${origin}/about`);
   });
+
+  test("back to B then forward to the shown page before B arrives: B never renders", async () => {
+    let decoded = 0;
+    let release!: (r: Response) => void;
+    const { calls } = setup({
+      decode: async () => {
+        decoded++;
+        return <p id="b">flight-rendered B</p>;
+      },
+      // B's flight bytes are slow: the promise resolves only when the test says so.
+      response: () => new Promise<Response>((r) => (release = r)) as unknown as Response,
+    });
+
+    // Back to B — its fetch is now pending.
+    await act(async () => {
+      history.replaceState(null, "", `${origin}/about`);
+      window.dispatchEvent(new Event("popstate"));
+      await flush();
+    });
+    expect(calls).toHaveLength(1);
+
+    // Forward to the page still on screen: same-page popstate, no new fetch —
+    // but B is superseded, so its bytes must not render under this URL.
+    await act(async () => {
+      history.replaceState(null, "", `${origin}/`);
+      window.dispatchEvent(new Event("popstate"));
+      await flush();
+    });
+    expect(calls).toHaveLength(1);
+
+    release(new Response("<flight bytes>", { headers: { "content-type": FLIGHT_ACCEPT } }));
+    await act(async () => {
+      await flush();
+    });
+    expect(decoded).toBe(0);
+    expect(document.getElementById("b")).toBeNull();
+    expect(document.getElementById("ssr")).not.toBeNull();
+    expect(location.pathname).toBe("/");
+  });
 });
