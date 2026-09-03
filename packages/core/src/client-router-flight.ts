@@ -87,8 +87,10 @@ export function startFlightRouter(options: FlightRouterOptions = {}): void {
 
   // The page (path + query) the document currently shows — see the popstate
   // handler: the browser fires popstate for `#hash` changes too, and those must
-  // not re-render (and re-scroll to the top of) the page the reader is on.
-  const pageKey = (): string => trimSlash(location.pathname) + location.search;
+  // not re-render (and re-scroll to the top of) the page the reader is on. The
+  // pathname is compared verbatim: June serves `/guide` and `/guide/` as they
+  // come, so a traversal between them is a real navigation, not a hash change.
+  const pageKey = (): string => location.pathname + location.search;
   let lastPage = pageKey();
 
   // Navigation generation. Every navigation (and every same-page popstate that
