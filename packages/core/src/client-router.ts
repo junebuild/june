@@ -99,7 +99,9 @@ function percentDecode(s: string): string {
       out.push(b);
     }
   }
-  return new TextDecoder().decode(new Uint8Array(out));
+  // "UTF-8 decode without BOM": a leading U+FEFF is part of the id, not a
+  // byte-order mark to strip (TextDecoder strips it unless told otherwise).
+  return new TextDecoder("utf-8", { ignoreBOM: true }).decode(new Uint8Array(out));
 }
 
 // The HTML spec's "find a potential indicated element", as a hard load does it:

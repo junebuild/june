@@ -196,6 +196,18 @@ describe("fragment navigation and the client router", () => {
     expect(scrolledTo).toEqual([]);
   });
 
+  test("a leading %EF%BB%BF is part of the id, not a BOM to strip", async () => {
+    // The spec decodes the fragment with "UTF-8 decode without BOM", so the
+    // element whose id starts with U+FEFF is the target — not a plain "foo".
+    document.body.innerHTML = root('<main><a href="/bom#%EF%BB%BFfoo">bom</a></main>');
+    serve('<main data-page="bom"><h2 id="foo">plain</h2><h2 id="﻿foo">bom</h2></main>');
+
+    clickLink("/bom#%EF%BB%BFfoo");
+    await flush();
+
+    expect(scrolledInto).toEqual(["﻿foo"]);
+  });
+
   test("the name fallback matches only <a>, not a same-named form control", async () => {
     document.body.innerHTML = root('<main><a href="/legacy#sec">legacy</a></main>');
     serve('<main data-page="legacy"><input name="sec"><a name="sec">anchor</a></main>');
