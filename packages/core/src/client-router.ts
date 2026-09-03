@@ -77,24 +77,43 @@ function isHardNav(url: URL): boolean {
 // scrolling differs between them.
 const pageKey = (): string => location.pathname + location.search;
 
-// Where a freshly swapped-in page lands: the element a `#fragment` names (id, or
-// a named anchor — the same lookup the browser does on a hard load), else the
-// top. Runs AFTER morph so the new content is what gets measured.
-function landOn(hash: string): void {
-  if (hash.length > 1) {
-    let id = hash.slice(1);
+// Forgiving percent-decoding, the way the URL spec's percent-decode treats a
+// fragment: each run of well-formed `%XX` escapes decodes on its own, a
+// malformed escape (or an invalid UTF-8 run) stays as written, and one bad
+// escape never discards the good ones — unlike all-or-nothing decodeURIComponent.
+function percentDecode(s: string): string {
+  return s.replace(/(?:%[0-9A-Fa-f]{2})+/g, (run) => {
     try {
-      id = decodeURIComponent(id);
+      return decodeURIComponent(run);
     } catch {
-      /* keep the raw id — a malformed escape can't name an element anyway */
+      return run;
     }
-    const el = document.getElementById(id) ?? document.getElementsByName(id)[0];
-    if (el) {
-      el.scrollIntoView?.();
-      return;
+  });
+}
+
+// The HTML spec's "find a potential indicated element", as a hard load does it:
+// the RAW fragment first, then its percent-decoded form; each tried as an id,
+// then as the name of an <a> (only anchors — a same-named <input> or <form>
+// does not count). Null when nothing matches.
+function indicatedElement(fragment: string): Element | null {
+  const decoded = percentDecode(fragment);
+  const candidates = decoded === fragment ? [fragment] : [fragment, decoded];
+  for (const id of candidates) {
+    const byId = document.getElementById(id);
+    if (byId) return byId;
+    for (const el of Array.from(document.getElementsByName(id))) {
+      if (el.localName === "a") return el;
     }
   }
-  window.scrollTo?.(0, 0);
+  return null;
+}
+
+// Where a freshly swapped-in page lands: the element its `#fragment` indicates,
+// else the top. Runs AFTER morph so the new content is what gets measured.
+function landOn(hash: string): void {
+  const el = hash.length > 1 ? indicatedElement(hash.slice(1)) : null;
+  if (el) el.scrollIntoView?.();
+  else window.scrollTo?.(0, 0);
 }
 
 export function startClientRouter(rehydrate: Rehydrate): void {
