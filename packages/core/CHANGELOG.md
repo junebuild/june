@@ -1,5 +1,13 @@
 # @junejs/core
 
+## 0.2.0-dev.39
+
+### Patch Changes
+
+- [#163](https://github.com/junebuild/june/pull/163) [`8f26396`](https://github.com/junebuild/june/commit/8f2639650be7a6c5baba8f2042d9173c4115d829) Thanks [@linyiru](https://github.com/linyiru)! - The client router no longer hijacks fragment navigations. Browsers fire `popstate` for a `#hash` change too — a table-of-contents click, a pasted same-page deep link, back/forward between two anchors — and both routers (morph and Flight) treated every `popstate` as a history traversal: they re-fetched the page the reader was already on, re-applied it, and scrolled to `(0, 0)`. The visible symptom was an anchor jump that "worked" for half a second and then snapped back to the top of the page.
+
+  Each router now remembers the page (path + query) it last landed on and ignores a `popstate` that lands on the same page; the browser's own fragment scrolling is left intact. As the other half of the same contract, a soft-navigated link that carries a hash (`/guide#install`) now lands on that element after the morph — matching a hard load — and only falls back to the top when the hash names nothing on the new page. (The Flight router keeps landing at the top: its React render is asynchronous, so the target element does not exist yet when it would scroll.)
+
 ## 0.2.0-dev.38
 
 ### Minor Changes

@@ -31,6 +31,7 @@
     "channel-observe",
     "channel-post-interaction",
     "channel-turn-control",
+    "client-router-hash-popstate",
     "connection-auth-helpers",
     "core-peer-dep",
     "crisp-event-guard",
