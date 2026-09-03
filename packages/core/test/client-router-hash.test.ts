@@ -198,6 +198,45 @@ describe("fragment navigation and the client router", () => {
     expect(scrolledTo).toEqual([[0, 0]]);
   });
 
+  test("a same-page popstate in the view-transition gap does not strand the old DOM", async () => {
+    // Prime a known page (the router keys "same page?" on its last landing).
+    document.body.innerHTML = root('<main data-page="vt-home">h</main>');
+    serve('<main data-page="vt-home"><a href="/vt-next">next</a></main>');
+    popstate("/vt-home");
+    await flush();
+
+    // startViewTransition defers apply: history already says /vt-next while the
+    // old DOM is still on screen.
+    const captured: Array<() => void> = [];
+    (document as { startViewTransition?: (cb: () => void) => void }).startViewTransition = (
+      cb,
+    ) => {
+      captured.push(cb);
+    };
+    try {
+      serve('<main data-page="vt-next"><h2 id="sec">s</h2></main>');
+      clickLink("/vt-next");
+      await flush();
+      expect(location.pathname).toBe("/vt-next");
+      expect(captured.length).toBe(1); // apply captured, not yet run
+      expect(document.querySelector('[data-page="vt-home"]')).not.toBeNull();
+
+      // A fragment navigation in that gap resolves against the NEW url. The
+      // router must not treat /vt-next as already shown and dismiss its own
+      // pending apply — that would leave the old page under the new URL.
+      popstate("/vt-next#sec");
+      await flush();
+      for (const cb of captured) cb();
+      await flush();
+
+      expect(document.querySelector('[data-page="vt-next"]')).not.toBeNull();
+      expect(document.querySelector('[data-page="vt-home"]')).toBeNull();
+      expect(location.pathname).toBe("/vt-next");
+    } finally {
+      delete (document as { startViewTransition?: unknown }).startViewTransition;
+    }
+  });
+
   test("back to B then forward to the shown page before B arrives: B never lands", async () => {
     // Land somewhere known first (the router keys "same page?" on its last landing).
     document.body.innerHTML = root('<main data-page="faq">f</main>');
