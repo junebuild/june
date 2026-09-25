@@ -171,6 +171,8 @@ export type SlackDiagnosis = {
     // appHandled = delivered to onInteraction; unrouted = nobody took it (a rejection)
     interactions: { claimed: number; appHandled: number; unrouted: number };
     rejections: Record<ChannelRejection["kind"], number>;
+    // redeliveries of an event_id already handled here (#170) — ACKed and dropped
+    duplicates: number;
   };
   hints: string[];
 };
@@ -182,7 +184,7 @@ const slackCounterRegistry = new Map<string, SlackDiagnosis["counters"]>();
 function slackCountersFor(path: string): SlackDiagnosis["counters"] {
   let c = slackCounterRegistry.get(path);
   if (!c) {
-    c = { since: Date.now(), eventsReceived: {}, interactions: { claimed: 0, appHandled: 0, unrouted: 0 }, rejections: { bad_signature: 0, malformed_body: 0, unrouted_interaction: 0 } };
+    c = { since: Date.now(), eventsReceived: {}, interactions: { claimed: 0, appHandled: 0, unrouted: 0 }, rejections: { bad_signature: 0, malformed_body: 0, unrouted_interaction: 0 }, duplicates: 0 };
     slackCounterRegistry.set(path, c);
   }
   return c;
@@ -190,8 +192,35 @@ function slackCountersFor(path: string): SlackDiagnosis["counters"] {
 // Test seam: isolate suites from each other's counts (a fresh workerd isolate does
 // this for free; a long-lived test process needs it explicitly).
 export function resetSlackCounters(path?: string): void {
-  if (path === undefined) slackCounterRegistry.clear();
-  else slackCounterRegistry.delete(path);
+  if (path === undefined) { slackCounterRegistry.clear(); slackSeenRegistry.clear(); }
+  else { slackCounterRegistry.delete(path); slackSeenRegistry.delete(path); }
+}
+
+// Event ids already handled (#170), per mount path like the counters. Slack redelivers an
+// Events API event (x-slack-retry-num 1..3, over ~5 minutes) with the SAME envelope event_id
+// when a delivery didn't get a 2xx within 3 s — a slow ACK, an error response, or a
+// connection/TLS failure; handling the redelivery again ran a second turn and posted a
+// duplicate answer. An id is recorded only once the delivery is ACKed (see the webhook), so
+// a delivery that failed before its ACK is retried and handled, never dropped. Per isolate,
+// so best effort on the edge (a retry landing on a different isolate isn't caught); bounded
+// by a TTL past Slack's retry window and a size cap (Map order = insertion order, oldest
+// evicted first).
+const SLACK_SEEN_TTL_MS = 10 * 60_000;
+const SLACK_SEEN_MAX = 5_000;
+const slackSeenRegistry = new Map<string, Map<string, number>>();
+function slackSeen(path: string, eventId: string, now = Date.now()): boolean {
+  const at = slackSeenRegistry.get(path)?.get(eventId);
+  return at !== undefined && now - at < SLACK_SEEN_TTL_MS;
+}
+function slackRemember(path: string, eventId: string, now = Date.now()): void {
+  let seen = slackSeenRegistry.get(path);
+  if (!seen) slackSeenRegistry.set(path, (seen = new Map()));
+  seen.delete(eventId); // re-insert at the tail when an expired id comes back
+  seen.set(eventId, now);
+  for (const [id, t] of seen) {
+    if (seen.size <= SLACK_SEEN_MAX && now - t < SLACK_SEEN_TTL_MS) break;
+    seen.delete(id);
+  }
 }
 
 // Guarded call: a broken app-supplied onRejected must never destabilize the
@@ -905,6 +934,12 @@ export function slackChannel(opts: {
       if (counters.rejections.bad_signature > 0) {
         hints.push(`${counters.rejections.bad_signature} delivery(ies) failed signature verification — signing secret mismatch between Slack and this deployment?`);
       }
+      if (counters.duplicates > 0) {
+        // Only ACKed deliveries are recorded, so each duplicate is one this deployment answered
+        // 200 that Slack still didn't see succeed within 3 s — the ACK was slow, or the response
+        // was lost or replaced on the way back.
+        hints.push(`${counters.duplicates} Slack redelivery(ies) dropped as duplicates — this deployment ACKed them, but Slack didn't get a 2xx within 3 s: check ACK latency (cold start, a blocked event loop) and the path back to Slack (a proxy or load balancer returning errors or timing out, connection/TLS failures)`);
+      }
       return {
         auth,
         scopes: { granted, missing },
@@ -941,11 +976,23 @@ export function slackChannel(opts: {
         return new Response("", { status: 200 }); // fast ACK
       }
 
-      const payload = tryParseJson<{ type?: string; challenge?: string; event?: SlackEvent; team_id?: string }>(body);
+      const payload = tryParseJson<{ type?: string; challenge?: string; event?: SlackEvent; team_id?: string; event_id?: string }>(body);
       if (!payload) { turnAway(req, { kind: "malformed_body" }); return new Response("", { status: 200 }); } // signed but unparseable → ACK, don't retry
       if (payload.type === "url_verification") return Response.json({ challenge: payload.challenge });
 
       if (payload.type === "event_callback") {
+        // A redelivery of an event already handled here (#170): ACK and drop it before
+        // anything runs — observers included, so nothing fires twice for one event.
+        const seenPath = opts.path ?? "/channels/slack";
+        if (payload.event_id && slackSeen(seenPath, payload.event_id)) {
+          counters.duplicates++;
+          return new Response("", { status: 200 });
+        }
+        // Recorded only on the way to the ACK: if anything below throws first (an app's
+        // accept() callback, say), the delivery gets an error response, Slack retries it,
+        // and the retry must be handled — not dropped as a duplicate of an event that never
+        // ran. Check and record stay atomic: nothing between them awaits.
+        const handled = () => { if (payload.event_id) slackRemember(seenPath, payload.event_id); };
         // Count ARRIVAL first, before the accept gate and normalization: "arriving but
         // filtered (accept/loop-guard/kind)" and "never arriving" must read differently
         // in diagnose(), and a verified delivery has arrived regardless of what the app
@@ -953,7 +1000,7 @@ export function slackChannel(opts: {
         const preNorm = normalizeSlackEvent(payload.event ?? {}, events, opts.botUserId, payload.team_id);
         const countKey = preNorm?.event.kind ?? payload.event?.type ?? "unknown";
         counters.eventsReceived[countKey] = (counters.eventsReceived[countKey] ?? 0) + 1;
-        if (opts.accept && !opts.accept(payload)) return new Response("", { status: 200 }); // gated out
+        if (opts.accept && !opts.accept(payload)) { handled(); return new Response("", { status: 200 }); } // gated out
         const norm = preNorm;
         // identity: when the seam is configured, resolve WHO IS SPEAKING once per
         // normalized event and pin it on event.principal BEFORE any consumer runs —
@@ -1033,6 +1080,7 @@ export function slackChannel(opts: {
             }
           }, opts.onError);
         }
+        handled(); // everything is dispatched — this delivery is ACKed below
       }
       return new Response("", { status: 200 }); // fast ACK
     },

@@ -3,7 +3,7 @@
 // run the turn in the background, and post the reply back out — asserted via a
 // captured global fetch. Loop guards (self-messages) must NOT trigger a reply.
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setSystemTime, test } from "bun:test";
 import { channelFetch, defineChannel, DeliverUnsupportedError, resolveChannel, type AgentDefinition, type Channel, type ChannelContext } from "@junejs/core/agent-config";
 import type { InboundEvent, ToolContext, TurnEvent } from "@junejs/core/agent-runtime";
 import { crispChannel, deriveCrispIdentity, httpChannel, slackChannel, receive, verifySlackSignature, verifyCrispSignature, verifyCrispUrlKey, tryParseJson, timestampFresh, normalizeSlackEvent, normalizeCrispEvent, isCrispEvent, feedbackBlocks, resetSlackCounters, type ChannelRejection, type CrispIdentity, type CrispWebhookEnvelope, type SlackIdentity } from "@junejs/core/channels";
@@ -1775,6 +1775,103 @@ describe("slackChannel.diagnose", () => {
     expect(missing["reactions:read"]).toContain("reaction events"); // feature + tool merged into ONE entry
     expect(missing["reactions:read"]).toContain("slack_list_reactions");
     expect(d.hints.some((h) => h.includes('missing scope "assistant:write"'))).toBe(true);
+  });
+
+  test("a Slack redelivery of the same event_id runs one turn, is ACKed, and is counted (#170)", async () => {
+    captureFetch();
+    const turns: string[] = [];
+    const observed: unknown[] = [];
+    const ctx = ctxWith(async (m) => { turns.push(m); return "answer"; });
+    const ch = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", onEvent: (e) => { observed.push(e); } });
+    const body = JSON.stringify({ type: "event_callback", event_id: "Ev1", event: { type: "message", text: "hi", channel: "C1", ts: "1.1", user: "U1" } });
+    const first = await ch.webhook!(await slackSigned(body), ctx);
+    const retry = await slackSigned(body);
+    retry.headers.set("x-slack-retry-num", "1");
+    retry.headers.set("x-slack-retry-reason", "http_timeout");
+    // a fresh construction, as the edge mount does per request — the registry still catches it
+    const second = await slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", onEvent: (e) => { observed.push(e); } }).webhook!(retry, ctx);
+    // a different event is not a duplicate
+    await ch.webhook!(await slackSigned(body.replace("Ev1", "Ev2").replace('"1.1"', '"1.2"')), ctx);
+    await flush();
+
+    expect([first.status, second.status]).toEqual([200, 200]);
+    expect(turns).toEqual(["hi", "hi"]); // Ev1 once, Ev2 once
+    expect(observed).toHaveLength(2); // observers don't fire for the redelivery either
+    expect(calls.filter((c) => c.url.endsWith("/chat.postMessage"))).toHaveLength(2);
+
+    globalThis.fetch = authTestFetch("chat:write,channels:history,app_mentions:read");
+    const d = await ch.diagnose();
+    expect(d.counters.duplicates).toBe(1);
+    expect(d.counters.eventsReceived).toMatchObject({ message: 2 }); // unique arrivals only
+    expect(d.hints.some((h) => h.includes("dropped as duplicates"))).toBe(true);
+  });
+
+  test("dedupe is per mount path: the same event_id on another slack mount still runs (#170)", async () => {
+    captureFetch();
+    const turns: string[] = [];
+    const ctx = ctxWith(async (m) => { turns.push(m); return "answer"; });
+    const a = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", path: "/a" });
+    const b = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", path: "/b" });
+    const body = JSON.stringify({ type: "event_callback", event_id: "Ev1", event: { type: "message", text: "hi", channel: "C1", ts: "1.1", user: "U1" } });
+    await a.webhook!(await slackSigned(body), ctx);
+    await b.webhook!(await slackSigned(body), ctx);
+    await flush();
+    expect(turns).toHaveLength(2);
+  });
+
+  const messageEvent = (eventId: string, ts = "1.1") =>
+    JSON.stringify({ type: "event_callback", event_id: eventId, event: { type: "message", text: "hi", channel: "C1", ts, user: "U1" } });
+
+  test("a delivery that fails before its ACK is not recorded: Slack's retry of it is handled (#170)", async () => {
+    captureFetch();
+    const turns: string[] = [];
+    const ctx = ctxWith(async (m) => { turns.push(m); return "answer"; });
+    let failAccept = true;
+    const ch = slackChannel({
+      signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test",
+      accept: () => { if (failAccept) throw new Error("accept blew up"); return true; },
+    });
+    await expect(ch.webhook!(await slackSigned(messageEvent("Ev1")), ctx)).rejects.toThrow("accept blew up"); // no ACK
+    failAccept = false;
+    const retry = await slackSigned(messageEvent("Ev1"));
+    retry.headers.set("x-slack-retry-num", "1");
+    expect((await ch.webhook!(retry, ctx)).status).toBe(200);
+    await flush();
+    expect(turns).toEqual(["hi"]); // the retry ran the turn — it was not taken for a duplicate
+  });
+
+  test("an event_id is forgotten after the 10-minute TTL (#170)", async () => {
+    captureFetch();
+    const turns: string[] = [];
+    const ctx = ctxWith(async (m) => { turns.push(m); return "answer"; });
+    const ch = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test" });
+    const t0 = Date.now();
+    try {
+      setSystemTime(t0);
+      await ch.webhook!(await slackSigned(messageEvent("Ev1")), ctx);
+      setSystemTime(t0 + 10 * 60_000 - 1); // still inside the window: a duplicate
+      await ch.webhook!(await slackSigned(messageEvent("Ev1")), ctx);
+      setSystemTime(t0 + 2 * 10 * 60_000); // past it: handled again
+      await ch.webhook!(await slackSigned(messageEvent("Ev1")), ctx);
+    } finally {
+      setSystemTime(); // back to the real clock
+    }
+    await flush();
+    expect(turns).toHaveLength(2);
+  });
+
+  test("the registry holds at most 5,000 ids per path, evicting the oldest first (#170)", async () => {
+    captureFetch();
+    const received: string[] = [];
+    // respond to nothing: no turn runs, only the registry (and the observer) is exercised
+    const ch = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", respondTo: [], onEvent: (e) => { received.push((e.raw as { event_id: string }).event_id); } });
+    const ctx = ctxWith(async () => "unused");
+    for (let i = 0; i <= 5_000; i++) await ch.webhook!(await slackSigned(messageEvent(`Ev${i}`)), ctx); // 5,001 ids
+    await ch.webhook!(await slackSigned(messageEvent("Ev0")), ctx); // evicted by the 5,001st → handled again
+    await ch.webhook!(await slackSigned(messageEvent("Ev5000")), ctx); // newest → still a duplicate
+    await flush();
+    expect(received).toHaveLength(5_002);
+    expect(received.at(-1)).toBe("Ev0");
   });
 
   test("counters: received kinds, unnormalized raw types, claimed/unrouted interactions, rejections", async () => {
