@@ -1,5 +1,11 @@
 # @junejs/server
 
+## 1.0.0-dev.21
+
+### Patch Changes
+
+- [#178](https://github.com/junebuild/june/pull/178) [`4a491da`](https://github.com/junebuild/june/commit/4a491da1b57a990b9ef93e66abab9ecac6ed3ba7) Thanks [@linyiru](https://github.com/linyiru)! - The native agent store indexes `agent_messages(session_id, seq)` ([#168](https://github.com/junebuild/june/issues/168)). Every store read is scoped to one session, but with no index each one scanned the messages of every session in the file, so per-turn cost grew with the whole database. The index is created with `IF NOT EXISTS` at runtime construction, so existing files gain it on the next start. `hasOpeningMessage` (asked once per turn start) now probes for the single row instead of parsing the whole transcript.
+
 ## 1.0.0-dev.20
 
 ### Minor Changes
