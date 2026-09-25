@@ -171,3 +171,49 @@ describe("agent-native (native SessionStore seam)", () => {
     expect(await rt.session("ops", "alice").turn({ turnId: "t2", userText: "Order 3 widgets" })).toBe("Done — order placed.");
   });
 });
+
+describe("NativeRuntime session eviction (#174)", () => {
+  const answer: Model = () => replyStream({ text: "ok", toolCalls: [] });
+
+  test("past maxSessions, least recently used idle actors are dropped and rebuilt from SQLite on next use", async () => {
+    const rt = await createNativeRuntime({ ops: { model: answer, tools: [] } }, ":memory:", { maxSessions: 2 });
+    const a = rt.session("ops", "a");
+    await a.turn({ turnId: "t1", userText: "hi" });
+    await rt.session("ops", "b").turn({ turnId: "t1", userText: "hi" });
+    rt.session("ops", "a"); // touch: b is now the least recently used
+    await rt.session("ops", "c").turn({ turnId: "t1", userText: "hi" });
+
+    expect(rt.sessionCount).toBe(2);
+    expect(rt.session("ops", "a")).toBe(a); // kept (recently used)
+    const b = rt.session("ops", "b"); // evicted → rebuilt: a new actor over the same rows
+    expect(b.transcript().map((t) => t.text)).toEqual(["ok"]);
+    await b.turn({ turnId: "t2", userText: "again" });
+    expect(b.transcript()).toHaveLength(2);
+  });
+
+  test("a session with a turn in flight or a live subscriber is never evicted", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const slow: Model = (msgs) => (async function* () {
+      if (msgs.some((m) => m.role === "user" && m.text === "slow")) await gate;
+      yield { type: "done", reply: { text: "ok", toolCalls: [] } } as const;
+    })();
+    const rt = await createNativeRuntime({ ops: { model: slow, tools: [] } }, ":memory:", { maxSessions: 1 });
+
+    const busy = rt.session("ops", "busy");
+    const { turnId } = busy.start({ userText: "slow" });
+    const watched = rt.session("ops", "watched");
+    const unwatch = watched.observe(() => {});
+    rt.session("ops", "third");
+
+    expect(rt.sessionCount).toBe(3); // over the soft cap: nothing was safe to drop
+    expect(rt.session("ops", "busy")).toBe(busy);
+    expect(rt.session("ops", "watched")).toBe(watched);
+
+    release();
+    await busy.result(turnId);
+    unwatch();
+    rt.session("ops", "fourth"); // now all three older ones are idle and unobserved
+    expect(rt.sessionCount).toBe(1);
+  });
+});

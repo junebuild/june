@@ -1062,6 +1062,14 @@ export class AgentSession {
 
   transcript(): Turn[] { return foldTranscript(this.store.messages()); }
   snapshot() { return { transcript: this.transcript(), status: this.store.getStatus() }; }
+
+  // True when no in-memory state of this actor matters any more: no turn running or
+  // queued, no reset pending. Everything else (transcript, steps, a suspended park) is in
+  // the store, so a host may drop an idle actor and rebuild it on the next use (#174).
+  // Live subscribers are held by the host's sink, not here — the host checks those.
+  idle(): boolean {
+    return this.running.size === 0 && !this.pendingReset;
+  }
 }
 
 // Address space: a runtime resolves a session actor by (agentName, id). Native =
