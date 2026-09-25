@@ -339,8 +339,8 @@ export function slackChannel(opts: {
   resolveIdentity?: (identity: SlackIdentity, ctx: ChannelContext) => Promise<Principal | null | undefined> | Principal | null | undefined;
   // Render the turn LIVE: post a "Thinking…" message, then edit it in place as the turn's
   // events arrive (tool status, then the final answer) instead of posting once at the end.
-  // Requires the host to supply ctx.runStream (the edge Durable Object does); falls back to
-  // post-once when it's absent.
+  // Requires the host to supply ctx.runStream (the edge Durable Object and the native
+  // mountAgent both do); falls back to post-once when it's absent.
   stream?: boolean;
   // The agent-era "typing indicator": while a turn runs, show this presence line (e.g.
   // "is thinking…") under the composer via assistant.threads.setStatus. Slack clears it
@@ -1044,14 +1044,14 @@ export function slackChannel(opts: {
 // (a schedule, another channel, the agent itself), `seed` is the opening instruction the turn
 // acts on, and `target` is the thread the reply lands in. A schedule (e.g. a cron), another
 // channel handing off, or a tool calls this. Requires a streaming host (ctx.runStream) and a
-// channel that renders outbound (channel.deliver) — both present on the edge surface; a missing
-// one throws clearly rather than silently dropping a scheduled nudge.
+// channel that renders outbound (channel.deliver) — the edge and native hosts both provide
+// runStream; a missing one throws clearly rather than silently dropping a scheduled nudge.
 export async function receive(
   channel: Channel,
   ctx: ChannelContext,
   opts: { seed: string; target: DeliveryTarget; trigger: ProactiveTrigger; session: string; turnId?: string },
 ): Promise<void> {
-  if (!ctx.runStream) throw new Error("receive: the host provides no runStream — proactive delivery needs a streaming target (the edge Durable Object)");
+  if (!ctx.runStream) throw new Error("receive: the host provides no runStream — proactive delivery needs a streaming host (the edge Durable Object or the native mountAgent)");
   if (!channel.deliver) throw new Error(`receive: channel "${channel.name}" has no deliver() — it can't render an agent-initiated turn`);
   const events = ctx.runStream(opts.seed, { session: opts.session, turnId: opts.turnId, trigger: opts.trigger });
   await channel.deliver(opts.target, events, { session: opts.session });

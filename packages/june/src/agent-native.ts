@@ -21,6 +21,7 @@ import {
 import { channelFetch, type AgentDefinition, type ChannelContext } from "@junejs/core/agent-config";
 import { openLocalSqliteSync, type SyncSqlite } from "./sqlite-driver";
 import { assertCoreRuntimeVersion } from "./core-version";
+import { observeTurnEvents } from "./turn-events";
 
 function initSchema(db: SyncSqlite) {
   db.exec(`CREATE TABLE IF NOT EXISTS agent_sessions (session_id TEXT PRIMARY KEY, status TEXT)`);
@@ -231,8 +232,11 @@ export async function createAgentRuntime(
   throw new Error("backend 'durable' is the Cloudflare Durable Object target — construct AgentDurableObject in your worker, not via createAgentRuntime");
 }
 
-// Mount a discovered agent on a runtime. Builds the ChannelContext whose `run`
-// bridges to a durable turn, and exposes:
+// Mount a discovered agent on a runtime. Builds the ChannelContext the channels drive
+// turns through — run, runDetached, runStream, resumeStream and resetSession, each over
+// the runtime's in-process session. Not provided: runDelivered/resumeDelivered, which
+// exist to escape the edge waitUntil ceiling (a native host has none; channels fall back
+// to runStream/resumeStream without them). Exposes:
 //   • surface(req) — the composable agent surface for June's router: a framework
 //     chat endpoint at `chatPath` (POST {message, session?} → a turn) PLUS the
 //     discovered channels; returns null when the request isn't an agent route.
@@ -260,6 +264,22 @@ export function mountAgent(
     // written against ctx.runDetached behaves identically on both targets.
     runDetached: async (message, o) =>
       runtime.session(agent.name, o?.session ?? "default").start({ turnId: o?.turnId, userText: message, event: o?.event, trigger: o?.trigger, replace: o?.replace }),
+    // LIVE (#169): the turn's event stream, so a channel renders as the turn runs —
+    // slackChannel({ stream: true }) edits in place here exactly as on the edge, instead of
+    // silently degrading to one post at the end. Lazy like the DO's (the turn starts on the
+    // first pull); start()/resume() and the subscription run with nothing awaited between,
+    // so no event can emit unobserved.
+    runStream: async function* (message, o) {
+      const session = runtime.session(agent.name, o?.session ?? "default");
+      const { turnId } = session.start({ turnId: o?.turnId, userText: message, event: o?.event, trigger: o?.trigger, replace: o?.replace });
+      yield* observeTurnEvents(session, turnId);
+    },
+    // HITL: answer a parked turn and stream its continuation (the approval-button path).
+    resumeStream: async function* (o) {
+      const session = runtime.session(agent.name, o.session ?? "default");
+      const { turnId } = session.resume(o.turnId, o.inputId, o.input, { by: o.by });
+      yield* observeTurnEvents(session, turnId);
+    },
     // SESSION RESET (#129): same seam as durableChannelSurface — the in-process runtimes'
     // stores implement archival, so a channel written against ctx.resetSession behaves
     // identically on both targets.

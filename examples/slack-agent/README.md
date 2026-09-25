@@ -161,8 +161,8 @@ await receive(slack, ctx, {
 
 The seed is written to the durable transcript as a distinct **`trigger`-role message** attributed
 to `by` — an honest record that no human sent it (the model adapter maps it to a normal user
-message, so providers need no new role). `receive` needs a streaming host (`ctx.runStream`, the
-edge Durable Object) and a channel that renders outbound (`channel.deliver`, which `slackChannel`
+message, so providers need no new role). `receive` needs a streaming host (`ctx.runStream`: the
+edge Durable Object or the native `mountAgent`) and a channel that renders outbound (`channel.deliver`, which `slackChannel`
 provides); if either is missing it throws rather than silently dropping a scheduled nudge.
 
 `deliver` is also the hand-off primitive: on resolve, one channel can render a turn's stream into

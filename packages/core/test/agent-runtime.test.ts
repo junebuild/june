@@ -522,6 +522,47 @@ describe("cancel-and-replace (#129)", () => {
     expect(assistants[0]).toMatchObject({ turnId: "t2" });
   });
 
+  // A live consumer (runStream, the DO's SSE stream) ends on a terminal event and waits
+  // forever without one — every rejected turn must announce exactly one.
+  const terminalTypes = new Set(["turn.completed", "turn.failed", "turn.cancelled", "input.requested"]);
+  const terminals = (events: TurnEvent[]) => events.filter((e) => terminalTypes.has(e.type));
+
+  test("a store error while opening the turn still announces turn.failed", async () => {
+    const { store } = memStore();
+    store.appendMessage = () => { throw new Error("disk I/O error"); };
+    const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), scriptedModel(ORDER_SCRIPT), [createOrderTool()], noRuntime);
+    const events: TurnEvent[] = [];
+    s.observe((e) => events.push(e));
+    await expect(s.turn({ turnId: "t1", userText: "go" })).rejects.toThrow("disk I/O error");
+    expect(terminals(events)).toEqual([{ type: "turn.failed", turnId: "t1", error: expect.objectContaining({ message: "disk I/O error" }) }]);
+  });
+
+  test("a store error while recording a park still announces turn.failed (no input.requested went out)", async () => {
+    const approve: Tool = {
+      spec: { name: "approve", description: "d", input: { type: "object" } },
+      run: async (_i, ctx) => ({ ok: await ctx.requestInput({ id: "q", prompt: "?" }) }),
+    };
+    const { store } = memStore();
+    const putStep = store.putStep.bind(store);
+    store.putStep = (id, o) => { if (id === "suspended") throw new Error("disk full"); putStep(id, o); };
+    const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), scriptedModel([{ text: "", toolCalls: [{ id: "c1", name: "approve", input: {} }] }]), [approve], noRuntime);
+    const events: TurnEvent[] = [];
+    s.observe((e) => events.push(e));
+    const { turnId } = s.start({ turnId: "t1", userText: "go" });
+    expect(await s.result(turnId)).toMatchObject({ status: "failed", error: { message: "disk full" } });
+    expect(terminals(events)).toEqual([{ type: "turn.failed", turnId: "t1", error: expect.objectContaining({ message: "disk full" }) }]);
+  });
+
+  test("a turn that fails inside the loop announces turn.failed once, not twice", async () => {
+    const badModel: Model = () => replyStream({ text: "", toolCalls: [{ id: "c1", name: "nope", input: {} }] });
+    const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), badModel, [], noRuntime);
+    const events: TurnEvent[] = [];
+    s.observe((e) => events.push(e));
+    await expect(s.turn({ turnId: "t1", userText: "go" })).rejects.toThrow(/unknown tool/);
+    expect(terminals(events)).toHaveLength(1);
+    expect(terminals(events)[0]).toMatchObject({ type: "turn.failed", phase: "tool" }); // runTurn's own, with attribution
+  });
+
   test("a turn queued behind one that later PARKS fails loudly at run time — it must not corrupt the park", async () => {
     const approve: Tool = {
       spec: { name: "approve", description: "d", input: { type: "object" } },
@@ -533,6 +574,8 @@ describe("cancel-and-replace (#129)", () => {
     ];
     const { store } = memStore();
     const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), scriptedModel(script), [approve], noRuntime);
+    const t2Events: TurnEvent[] = [];
+    s.observe((e) => t2Events.push(e), { turnId: "t2" });
     // t2 is queued while t1 RUNS (the start()-time check sees nothing suspended yet);
     // t1 then parks — t2 must not run over the park and adopt its dangling tool call.
     const t1 = s.start({ turnId: "t1", userText: "park" }).turnId;
@@ -540,6 +583,8 @@ describe("cancel-and-replace (#129)", () => {
     expect(await s.result(t1)).toMatchObject({ status: "suspended" });
     expect(await s.result(t2)).toMatchObject({ status: "failed", error: { message: expect.stringMatching(/suspended awaiting input/) } });
     expect(store.messages().filter((m) => m.turnId === "t2")).toHaveLength(0); // nothing persisted for t2
+    // ...and a live observer is told: its terminal event, not silence (a stream waits on it)
+    expect(t2Events).toEqual([{ type: "turn.failed", turnId: "t2", error: expect.objectContaining({ message: expect.stringMatching(/suspended awaiting input/) }) }]);
   });
 });
 

@@ -849,6 +849,7 @@ export class AgentSession {
       if (this.store.getStatus() === "suspended") {
         const s = this.store.getStep("suspended") as SuspendedCheckpoint | undefined;
         if (s && s.turnId !== turnId) {
+          // (announced as turn.failed by withTerminal — runTurn never ran to do it)
           return Promise.reject(new Error(`session is suspended awaiting input "${s.request.id}" (turn ${s.turnId}); resume it before starting a new turn`));
         }
       }
@@ -861,7 +862,7 @@ export class AgentSession {
         { runtime: this.runtime, agent: this.agent, sessionId: this.id, event: input.event, systemOverlay: policy?.overlay, systemMode: policy?.overlayMode, deniedTools: policy?.denyTools, trigger: input.trigger },
       );
     };
-    this.track(turnId, this.chain.then(run));
+    this.track(turnId, this.chain.then(() => this.withTerminal(turnId, run)));
     return { turnId };
   }
 
@@ -890,6 +891,30 @@ export class AgentSession {
   // THIS promise's identity: a suspend→resume reuses the same turnId, so the parked promise's
   // late cleanup must NOT clear the continuation's entry (delete by turnId alone would). Both
   // branches run cleanup, so the rejection is handled here — no unhandled rejection.
+  // Every turn that ends in a rejection announces a terminal event. Live consumers (a host's
+  // runStream, the DO's SSE stream) end on one — turn.completed / failed / cancelled or
+  // input.requested — and wait forever without it. runTurn emits them itself, except where
+  // it throws before or while emitting: the run-time park refusal above (runTurn never
+  // runs), a store error while opening the turn, or one while recording a cancel or a
+  // park. Those are announced here as turn.failed; a turn that already emitted its
+  // terminal event is left alone. result() is unaffected — it reads the rejection.
+  private withTerminal(turnId: string, run: () => Promise<string>): Promise<string> {
+    let announced = false;
+    const off = this.sink.subscribe((e) => {
+      if (e.turnId === turnId && (e.type === "turn.completed" || e.type === "turn.failed" || e.type === "turn.cancelled" || e.type === "input.requested")) announced = true;
+    });
+    let p: Promise<string>;
+    try { p = run(); } catch (err) { p = Promise.reject(err); }
+    return p.then(
+      (text) => { off(); return text; },
+      (err: unknown) => {
+        off();
+        if (!announced) this.sink.emit({ type: "turn.failed", turnId, error: serializeTurnError(err) });
+        throw err;
+      },
+    );
+  }
+
   private track(turnId: string, p: Promise<string>): void {
     this.chain = p.catch(() => {}); // a failed turn must not break the inbox
     this.running.set(turnId, p);
@@ -956,7 +981,7 @@ export class AgentSession {
         { turnId, userText: suspended.userText, cancelled: () => this.cancelRequests.get(turnId) },
         { runtime: this.runtime, agent: this.agent, sessionId: this.id, event: suspended.event, systemOverlay: suspended.systemOverlay, systemMode: suspended.systemMode, deniedTools: suspended.deniedTools, trigger: { kind: "resume", callId: suspended.callId } },
       );
-    this.track(turnId, this.chain.then(run));
+    this.track(turnId, this.chain.then(() => this.withTerminal(turnId, run)));
     return { turnId };
   }
 
