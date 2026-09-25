@@ -267,8 +267,14 @@ export async function runAdapterConformance(
   const noRuntime: Runtime = { session() { throw new Error("conformance: no subagents"); } };
 
   // Serialize a captured wire request for content-containment checks. Provider-shape
-  // agnostic on purpose: whatever the wire looks like, the CONTENT must be in it.
-  const wireText = (w: unknown) => { try { return JSON.stringify(w) ?? String(w); } catch { return String(w); } };
+  // agnostic on purpose: whatever the wire looks like, the CONTENT must be in it. A string
+  // capture is already the serialized body (a transport stub that records the raw HTTP
+  // payload) and is kept as-is: serializing it again would add an escaping layer that the
+  // escape-sensitive checks (the verbatim string-result scenario) would then misread.
+  const wireText = (w: unknown) => {
+    if (typeof w === "string") return w;
+    try { return JSON.stringify(w) ?? String(w); } catch { return String(w); }
+  };
   const wireHas = (wires: unknown[], i: number, needle: string, what: string) => {
     assert(wires.length > i, `expected a captured wire request #${i + 1} — the transport stub must call capture() per request`);
     assert(wireText(wires[i]).includes(needle), `wire request #${i + 1} must carry ${what} (looked for ${JSON.stringify(needle)}) — the adapter's transcript mapping dropped it`);
@@ -352,6 +358,25 @@ export async function runAdapterConformance(
         // the SECOND wire request must carry the prior round back to the provider
         wireHas(wires, 1, "call_1", "the tool call id");
         wireHas(wires, 1, "echoed", "the tool RESULT content");
+      },
+    },
+    {
+      // #172: a tool that returns a string (prose, or JSON it serialized itself) has already
+      // produced the text the model should read — it must reach the provider as that text,
+      // not JSON-encoded a second time into a quoted, escaped string.
+      name: "string tool result reaches the provider verbatim",
+      run: async () => {
+        const wires: unknown[] = [];
+        const result = 'hit "k1" in docs';
+        const lookup: Tool = { spec: { name: "lookup", description: "looks up", input: { type: "object" } }, run: () => result };
+        const model = await makeModel([
+          { reply: { text: "", toolCalls: [{ id: "c1", name: "lookup", input: {} }] } },
+          { reply: { text: "found", toolCalls: [] } },
+        ], (w) => wires.push(w));
+        assert((await turn(model, [lookup], { userText: "look it up" })) === "found", "the turn must complete through the tool round");
+        // Serialized once by wireText, the verbatim string reads `hit \"k1\" in docs`; a second
+        // encoding by the adapter would read `\"hit \\\"k1\\\" in docs\"` and miss this needle.
+        wireHas(wires, 1, JSON.stringify(result).slice(1, -1), "the string result verbatim (not JSON-encoded again)");
       },
     },
     {
