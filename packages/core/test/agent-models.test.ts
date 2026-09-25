@@ -41,6 +41,21 @@ describe("toAnthropicMessages", () => {
     });
   });
 
+  test("a string tool result passes through as-is instead of being JSON-encoded again (#172)", () => {
+    const msgs: Msg[] = [
+      { role: "assistant", turnId: "t1", text: "", toolCalls: [{ id: "c1", name: "a", input: {} }, { id: "c2", name: "b", input: {} }] },
+      { role: "tool", turnId: "t1", toolCallId: "c1", name: "a", result: '[{"id":"k1"}]' }, // JSON the tool serialized itself
+      { role: "tool", turnId: "t1", toolCallId: "c2", name: "b", result: "no matches" },
+    ];
+    expect(toAnthropicMessages(msgs)[1]).toEqual({
+      role: "user",
+      content: [
+        { type: "tool_result", tool_use_id: "c1", content: '[{"id":"k1"}]' },
+        { type: "tool_result", tool_use_id: "c2", content: "no matches" },
+      ],
+    });
+  });
+
   test("a full order flow round-trips into the expected message sequence", () => {
     const msgs: Msg[] = [
       { role: "user", turnId: "t1", text: "order 3 widgets" },

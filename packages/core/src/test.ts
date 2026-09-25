@@ -355,6 +355,25 @@ export async function runAdapterConformance(
       },
     },
     {
+      // #172: a tool that returns a string (prose, or JSON it serialized itself) has already
+      // produced the text the model should read — it must reach the provider as that text,
+      // not JSON-encoded a second time into a quoted, escaped string.
+      name: "string tool result reaches the provider verbatim",
+      run: async () => {
+        const wires: unknown[] = [];
+        const result = 'hit "k1" in docs';
+        const lookup: Tool = { spec: { name: "lookup", description: "looks up", input: { type: "object" } }, run: () => result };
+        const model = await makeModel([
+          { reply: { text: "", toolCalls: [{ id: "c1", name: "lookup", input: {} }] } },
+          { reply: { text: "found", toolCalls: [] } },
+        ], (w) => wires.push(w));
+        assert((await turn(model, [lookup], { userText: "look it up" })) === "found", "the turn must complete through the tool round");
+        // Serialized once by wireText, the verbatim string reads `hit \"k1\" in docs`; a second
+        // encoding by the adapter would read `\"hit \\\"k1\\\" in docs\"` and miss this needle.
+        wireHas(wires, 1, JSON.stringify(result).slice(1, -1), "the string result verbatim (not JSON-encoded again)");
+      },
+    },
+    {
       name: "parallel tool calls in one reply",
       run: async () => {
         const wires: unknown[] = [];
