@@ -25,6 +25,9 @@ import { assertCoreRuntimeVersion } from "./core-version";
 function initSchema(db: SyncSqlite) {
   db.exec(`CREATE TABLE IF NOT EXISTS agent_sessions (session_id TEXT PRIMARY KEY, status TEXT)`);
   db.exec(`CREATE TABLE IF NOT EXISTS agent_messages (seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, body TEXT)`);
+  // Every store read is scoped to one session; without this index each one scanned the
+  // messages of ALL sessions in the file (#168). IF NOT EXISTS: existing DBs gain it.
+  db.exec(`CREATE INDEX IF NOT EXISTS agent_messages_session ON agent_messages (session_id, seq)`);
   // NOTE: PRIMARY KEY (session_id, id) — never id alone. The store view scopes
   // every query by session, so a step id can't leak across sessions.
   db.exec(`CREATE TABLE IF NOT EXISTS agent_steps (session_id TEXT, id TEXT, output TEXT, PRIMARY KEY (session_id, id))`);
@@ -47,8 +50,11 @@ class SqliteSessionStore implements SessionStore {
     return (this.db.query("SELECT body FROM agent_messages WHERE session_id = ? ORDER BY seq").all(this.sid) as { body: string }[])
       .map((r) => JSON.parse(r.body));
   }
+  // Asked once per turn start: probe for the one row instead of parsing the transcript.
   hasOpeningMessage(turnId: string): boolean {
-    return this.messages().some((m) => (m.role === "user" || m.role === "trigger") && m.turnId === turnId);
+    return this.db
+      .query("SELECT 1 FROM agent_messages WHERE session_id = ? AND json_extract(body, '$.turnId') = ? AND json_extract(body, '$.role') IN ('user', 'trigger') LIMIT 1")
+      .get(this.sid, turnId) != null; // bun:sqlite misses with null, node:sqlite with undefined
   }
   getStep(id: string): unknown | undefined {
     const r = this.db.query("SELECT output FROM agent_steps WHERE session_id = ? AND id = ?").get(this.sid, id) as { output: string } | undefined;

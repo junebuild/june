@@ -90,6 +90,47 @@ describe("agent-native (native SessionStore seam)", () => {
     expect(runs.n).toBe(1); // the tool executed once total, never on replay
   });
 
+  test("session reads use an index on agent_messages(session_id), added to an existing file too (#168)", async () => {
+    const path = tmpDbPath();
+    // a file written before the index existed
+    const legacy = await openLocalSqliteSync(path);
+    legacy.exec(`CREATE TABLE agent_messages (seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, body TEXT)`);
+    legacy.close();
+
+    const rt = await createNativeRuntime({ ops: { model: scriptedModel(ORDER_SCRIPT), tools: [createOrderTool()] } }, path);
+    expect(await rt.session("ops", "s1").turn({ turnId: "t1", userText: "Order 3 widgets" })).toBe("Done — order placed.");
+
+    const db = await openLocalSqliteSync(path);
+    const plan = db.query("EXPLAIN QUERY PLAN SELECT body FROM agent_messages WHERE session_id = ? ORDER BY seq").all("ops:s1") as { detail: string }[];
+    db.close();
+    expect(plan.map((r) => r.detail).join("\n")).toContain("USING INDEX agent_messages_session");
+  });
+
+  test("hasOpeningMessage matches this session's opening user/trigger message for the turn only (#168)", async () => {
+    const seen: Record<string, boolean> = {};
+    const probe: Tool = {
+      spec: { name: "probe", description: "", input: { type: "object" } },
+      run: (_input, ctx) => {
+        for (const t of ["t1", "t2"]) seen[`${ctx.sessionId}:${t}`] = ctx.store.hasOpeningMessage(t);
+        return {};
+      },
+    };
+    const model = scriptedModel([
+      { text: "", toolCalls: [{ id: "c1", name: "probe", input: {} }] },
+      { text: "ok", toolCalls: [] },
+    ]);
+    const rt = await createNativeRuntime({ ops: { model, tools: [probe] } });
+    await rt.session("ops", "a").turn({ turnId: "t1", userText: "hi" });
+    // proactive: b's t2 opens with a `trigger` row, not a `user` one — both roles must match
+    await rt.session("ops", "b").turn({ turnId: "t2", userText: "hi", trigger: { kind: "proactive", by: "cron:daily" } });
+    const bOpening = rt.session("ops", "b").transcript()[0]!;
+    expect(bOpening.by).toBe("cron:daily"); // really persisted as a trigger message
+
+    // a's t1 opened (user); b's t2 opened (trigger); neither turn exists in the other
+    // session (and the assistant/tool rows of a turn don't count as its opening)
+    expect(seen).toEqual({ "a:t1": true, "a:t2": false, "b:t1": false, "b:t2": true });
+  });
+
   test("checkpoint keys are session-scoped — two sessions with identical step ids don't collide", async () => {
     const rt = await createNativeRuntime({ ops: { model: scriptedModel(ORDER_SCRIPT), tools: [createOrderTool()] } });
     const a = await rt.session("ops", "alice").turn({ turnId: "t1", userText: "Order 3 widgets" });
