@@ -10,6 +10,7 @@
 import {
   AgentSession,
   withSystem,
+  type ChannelPolicy,
   type EventSink,
   type TurnEvent,
   type Model,
@@ -18,7 +19,7 @@ import {
   type SessionStore,
   type Tool,
 } from "@junejs/core/agent-runtime";
-import { channelFetch, type AgentDefinition, type ChannelContext } from "@junejs/core/agent-config";
+import { buildSystemPrompt, channelFetch, type AgentDefinition, type ChannelContext } from "@junejs/core/agent-config";
 import { openLocalSqliteSync, type SyncSqlite } from "./sqlite-driver";
 import { assertCoreRuntimeVersion } from "./core-version";
 import { observeTurnEvents } from "./turn-events";
@@ -118,7 +119,22 @@ class InProcEventSink implements EventSink {
 
 // `instructions` (the agent's system prompt) is injected into the model per turn
 // by the runtime (withSystem) — single-sourced on the def, not baked into `model`.
-export type AgentDef = { model: Model; tools: Tool[]; instructions?: string; channelInstructions?: Record<string, string> };
+export type AgentDef = { model: Model; tools: Tool[]; instructions?: string; channelInstructions?: Record<string, string | ChannelPolicy> };
+
+// The runtime-side def for an assembled AgentDefinition (#173): the tools (channel
+// capability tools and read_skill included), the system prompt (instructions + the
+// skill index) and the per-surface policies all come from the ONE definition that
+// mountAgent mounts, so the engine and the channels can't drift apart. Only the model
+// is the host's choice.
+//   createNativeRuntime({ [agent.name]: toAgentDef(agent, anthropic({ … })) })
+export function toAgentDef(agent: AgentDefinition, model: Model): AgentDef {
+  return {
+    model,
+    tools: agent.tools,
+    instructions: buildSystemPrompt(agent),
+    ...(agent.channelInstructions ? { channelInstructions: agent.channelInstructions } : {}),
+  };
+}
 
 export type NativeRuntimeOptions = {
   // Soft cap on memoized session actors (#174), default 1000. Past it, the least recently
@@ -148,6 +164,8 @@ export class NativeRuntime implements Runtime {
     this.maxSessions = opts.maxSessions ?? 1000;
     initSchema(db);
   }
+
+  agentDef(name: string): AgentDef | undefined { return this.agents[name]; }
 
   session(agent: string, id: string): AgentSession {
     const key = `${agent}:${id}`;
@@ -235,6 +253,7 @@ export class MemoryRuntime implements Runtime {
     assertCoreRuntimeVersion("MemoryRuntime"); // #94: fail power-on, not mid-turn
     this.agents = agents;
   }
+  agentDef(name: string): AgentDef | undefined { return this.agents[name]; }
   session(agent: string, id: string): AgentSession {
     const key = `${agent}:${id}`;
     let a = this.actors.get(key);
@@ -243,7 +262,9 @@ export class MemoryRuntime implements Runtime {
       if (!def) throw new Error(`unknown agent: ${agent}`);
       const store = new MemorySessionStore();
       this.stores.set(key, store);
-      a = new AgentSession(agent, id, store, new InProcEventSink(), def.model, def.tools, this);
+      // Same def handling as NativeRuntime: switching backend must not change behavior.
+      const model = def.instructions ? withSystem(def.model, def.instructions) : def.model;
+      a = new AgentSession(agent, id, store, new InProcEventSink(), model, def.tools, this, def.channelInstructions);
       this.actors.set(key, a);
     }
     return a;
@@ -269,6 +290,26 @@ export async function createAgentRuntime(
   throw new Error("backend 'durable' is the Cloudflare Durable Object target — construct AgentDurableObject in your worker, not via createAgentRuntime");
 }
 
+// #173: the engine runs the runtime's AgentDef, the channels see the AgentDefinition —
+// declared separately by hand, they drift silently (a tool the model can't call, a
+// channel capability tool the engine never got). Say so once at mount. Only the
+// in-process runtimes expose their def; tools compare by name.
+function warnOnDrift(agent: AgentDefinition, runtime: Runtime) {
+  const def = (runtime as { agentDef?: (name: string) => AgentDef | undefined }).agentDef?.(agent.name);
+  if (!def) return;
+  const names = (tools: Tool[]) => tools.map((t) => t.spec.name).sort();
+  const want = names(agent.tools), have = names(def.tools);
+  if (want.join("\0") !== have.join("\0")) {
+    const missing = want.filter((n) => !have.includes(n)), extra = have.filter((n) => !want.includes(n));
+    console.warn(
+      `[june] mountAgent("${agent.name}"): the runtime's tools differ from the agent definition's` +
+        (missing.length ? ` — missing from the runtime: ${missing.join(", ")}` : "") +
+        (extra.length ? ` — only in the runtime: ${extra.join(", ")}` : "") +
+        `. Build the runtime entry with toAgentDef(agent, model) so both come from one definition.`,
+    );
+  }
+}
+
 // Mount a discovered agent on a runtime. Builds the ChannelContext the channels drive
 // turns through — run, runDetached, runStream, resumeStream and resetSession, each over
 // the runtime's in-process session. Not provided: runDelivered/resumeDelivered, which
@@ -291,6 +332,7 @@ export function mountAgent(
 } {
   const chatPath = opts.chatPath ?? "/message";
   const channelsOn = opts.channels ?? true;
+  warnOnDrift(agent, runtime);
   const ctx: ChannelContext = {
     agent,
     services: opts.services, // same DI bag reachable from channel hooks (parity with durableChannelSurface)

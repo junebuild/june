@@ -28,8 +28,7 @@ import { runWithTrace, type RequestTrace } from "@junejs/core/instrumentation";
 import { findMiddlewareFile, isResourceFile, listRoutes, matchRouteTree, resolveNotFound, routeFiles, type SegmentMatch } from "./router";
 import { createPipeline, type ExtraHandler, type LayoutComponent, type MiddlewareHandler, type Pipeline, type Resolved, type ResourceHandler } from "./pipeline";
 import { discoverAgent } from "./agent-discover";
-import { createAgentRuntime, mountAgent } from "./agent-native";
-import { buildSystemPrompt } from "@junejs/core/agent-config";
+import { createAgentRuntime, mountAgent, toAgentDef } from "./agent-native";
 import { anthropic } from "@junejs/core/agent-models";
 import { resolveBoundary } from "./segment";
 import { memoizeResources } from "./resources";
@@ -237,10 +236,9 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
       // instructions live on the def (single source); the runtime injects them
       // into the model per turn via withSystem — no need to bake into anthropic().
       const model = anthropic({ model: def.model });
-      const rt = await createAgentRuntime(
-        { [def.name]: { model, tools: def.tools, instructions: buildSystemPrompt(def) } },
-        { backend },
-      );
+      // toAgentDef: tools, prompt AND the per-surface policies (#149) from the one
+      // definition — channelInstructions was previously dropped on this path (#173).
+      const rt = await createAgentRuntime({ [def.name]: toAgentDef(def, model) }, { backend });
       const mounted = mountAgent(def, rt, { chatPath: agent.runtime.chat.path, channels: agent.runtime.channels });
       agentSurface = (req) => mounted.surface(req);
       await mounted.startAll();

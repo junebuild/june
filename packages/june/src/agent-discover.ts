@@ -120,8 +120,8 @@ export async function discoverAgentModule(dir: string): Promise<AgentModule> {
 
 // Discover an agent from its directory, returning the assembled AgentDefinition
 // (tools already adapted from defineActions; read_skill added if any skills
-// exist). Mount it on a runtime with createNativeRuntime({ [agent.name]: { model,
-// tools: agent.tools } }).
+// exist). Mount it on a runtime with createNativeRuntime({ [agent.name]:
+// toAgentDef(agent, model) }).
 export async function discoverAgent(dir: string): Promise<AgentDefinition> {
   return assembleAgent(await discoverAgentModule(dir), process.env);
 }
