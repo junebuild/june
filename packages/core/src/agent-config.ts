@@ -69,8 +69,8 @@ export type ChannelContext = {
   // The LIVE variant: run a turn and get its TurnEvent stream, so a channel can render the
   // turn as it happens (typing indicator, progressive edits, tool status) instead of only
   // posting the final text. Optional — a host that can't stream (or a channel that doesn't
-  // render) uses `run`. The host provides it on targets that support streaming (the edge
-  // Durable Object over SSE); a channel checks for it and falls back to `run`.
+  // render) uses `run`. Both hosts provide it: the edge Durable Object (over SSE) and the
+  // native mountAgent (in-process); a channel still checks for it and falls back to `run`.
   // `trigger` marks an agent-INITIATED (proactive) turn — no inbound event; the turn opens with a
   // `trigger`-role seed attributed to `by`. Passed by receive() (§9); omitted for inbound turns.
   // Proactive-only by type: inbound is derived from `event`, resume is engine-internal.
@@ -100,7 +100,7 @@ export type ChannelContext = {
   // continuation's TurnEvent stream, so a channel can render the resumed turn to completion.
   // `by` is the VERIFIED resumer identity (e.g. the user id from a signature-checked Slack
   // interaction) — the engine enforces it against the request's answererId. Optional, like
-  // runStream: provided on streaming targets (the edge Durable Object).
+  // runStream: provided by the edge Durable Object and the native mountAgent.
   resumeStream?: (opts: { session?: string; turnId: string; inputId: string; input: unknown; by?: string }) => AsyncIterable<TurnEvent>;
   // DELIVERED resume (the reply-bearing sibling of resumeStream, mirroring runDelivered):
   // apply the human's answer and have the TURN'S HOST render the continuation through the

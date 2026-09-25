@@ -33,6 +33,7 @@ import {
   type TurnFailurePhase,
 } from "@junejs/core/agent-runtime";
 import type { Resources } from "@junejs/core/resources";
+import { observeTurnEvents } from "./turn-events";
 import {
   channelDispatch,
   DeliverUnsupportedError,
@@ -690,45 +691,6 @@ function sseTurnStream(session: AgentSession, turnId: string): ReadableStream<Ui
     },
     cancel() { stop(); },
   });
-}
-
-// The IN-PROCESS sibling of sseTurnStream: one turn's TurnEvents as an AsyncIterable, for a
-// consumer living in the SAME isolate as the session (a delivered render). Subscribes eagerly
-// at call time — not at first iteration — so the sseTurnStream timing guarantee carries over
-// (call this synchronously after start(), before any event can emit); events landing before
-// the consumer catches up are buffered. Ends after the turn's terminal event (completed,
-// failed, or input.requested — a park ends this stream; a later /resume is a new one), and an
-// early consumer exit (for-await break/return) unsubscribes rather than buffering forever.
-function observeTurnEvents(session: AgentSession, turnId: string): AsyncIterable<TurnEvent> {
-  const queue: TurnEvent[] = [];
-  let terminal = false;
-  let notify: (() => void) | undefined;
-  const unsub = session.observe((e) => {
-    queue.push(e);
-    if (e.type === "turn.completed" || e.type === "turn.failed" || e.type === "turn.cancelled" || e.type === "input.requested") terminal = true;
-    notify?.();
-  }, { turnId });
-  return {
-    [Symbol.asyncIterator]() {
-      return {
-        async next(): Promise<IteratorResult<TurnEvent>> {
-          for (;;) {
-            const e = queue.shift();
-            if (e) return { value: e, done: false };
-            if (terminal) { unsub(); return { value: undefined, done: true }; }
-            await new Promise<void>((resolve) => { notify = resolve; });
-            notify = undefined;
-          }
-        },
-        async return(): Promise<IteratorResult<TurnEvent>> {
-          unsub();
-          terminal = true;
-          queue.length = 0;
-          return { value: undefined, done: true };
-        },
-      };
-    },
-  };
 }
 
 // Consume an SSE turn stream to its terminal state: the final text, or throw on failure.
