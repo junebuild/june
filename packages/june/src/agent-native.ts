@@ -106,37 +106,72 @@ class InProcEventSink implements EventSink {
   private subs = new Set<(e: TurnEvent) => void>();
   emit(e: TurnEvent) { this.subs.forEach((cb) => { try { cb(e); } catch { /* a bad subscriber must not break emit */ } }); }
   subscribe(cb: (e: TurnEvent) => void): () => void { this.subs.add(cb); return () => this.subs.delete(cb); }
+  get size(): number { return this.subs.size; }
 }
 
 // `instructions` (the agent's system prompt) is injected into the model per turn
 // by the runtime (withSystem) — single-sourced on the def, not baked into `model`.
 export type AgentDef = { model: Model; tools: Tool[]; instructions?: string; channelInstructions?: Record<string, string> };
 
+export type NativeRuntimeOptions = {
+  // Soft cap on memoized session actors (#174), default 1000. Past it, the least recently
+  // used IDLE actors (no turn running or queued, no reset pending, no live subscriber) are
+  // dropped; their state is in SQLite, so the next session() rebuilds them transparently.
+  // Busy actors are never dropped, so the count can exceed the cap while they run.
+  maxSessions?: number;
+};
+
 // The native Runtime: a registry of agent definitions over one SQLite handle,
-// handing out (and memoizing) an AgentSession actor per (agent, id).
+// handing out (and memoizing) an AgentSession actor per (agent, id). The memo is an
+// LRU bounded by maxSessions — with slackChannel every thread is a session, so an
+// unbounded memo grew by one actor per thread for the life of the process.
+// Callers must not hold an AgentSession across an await and start turns on it later:
+// if it was evicted meanwhile, a fresh actor for the same session would run turns
+// unserialized with it. Call session() at the point of use (mountAgent does).
 export class NativeRuntime implements Runtime {
-  private actors = new Map<string, AgentSession>();
+  private actors = new Map<string, { session: AgentSession; sink: InProcEventSink }>();
   private readonly agents: Record<string, AgentDef>;
   private readonly db: SyncSqlite;
+  private readonly maxSessions: number;
 
-  constructor(agents: Record<string, AgentDef>, db: SyncSqlite) {
+  constructor(agents: Record<string, AgentDef>, db: SyncSqlite, opts: NativeRuntimeOptions = {}) {
     assertCoreRuntimeVersion("NativeRuntime"); // #94: fail power-on, not mid-turn
     this.agents = agents;
     this.db = db;
+    this.maxSessions = opts.maxSessions ?? 1000;
     initSchema(db);
   }
 
   session(agent: string, id: string): AgentSession {
     const key = `${agent}:${id}`;
-    let a = this.actors.get(key);
-    if (!a) {
-      const def = this.agents[agent];
-      if (!def) throw new Error(`unknown agent: ${agent}`);
-      const model = def.instructions ? withSystem(def.model, def.instructions) : def.model;
-      a = new AgentSession(agent, id, new SqliteSessionStore(this.db, key), new InProcEventSink(), model, def.tools, this, def.channelInstructions);
-      this.actors.set(key, a);
+    const hit = this.actors.get(key);
+    if (hit) {
+      // most recently used → the tail (Map iteration order is insertion order)
+      this.actors.delete(key);
+      this.actors.set(key, hit);
+      return hit.session;
     }
-    return a;
+    const def = this.agents[agent];
+    if (!def) throw new Error(`unknown agent: ${agent}`);
+    const model = def.instructions ? withSystem(def.model, def.instructions) : def.model;
+    const sink = new InProcEventSink();
+    const session = new AgentSession(agent, id, new SqliteSessionStore(this.db, key), sink, model, def.tools, this, def.channelInstructions);
+    this.evictIdle();
+    this.actors.set(key, { session, sink });
+    return session;
+  }
+
+  // Number of memoized actors (observability / tests).
+  get sessionCount(): number { return this.actors.size; }
+
+  // Drop least recently used idle actors until one more fits under the cap. Runs before
+  // the new actor is inserted, so the actor being handed out is never a candidate.
+  private evictIdle() {
+    if (this.actors.size < this.maxSessions) return;
+    for (const [key, a] of this.actors) {
+      if (this.actors.size < this.maxSessions) break;
+      if (a.session.idle() && a.sink.size === 0) this.actors.delete(key);
+    }
   }
 }
 
@@ -146,14 +181,16 @@ export class NativeRuntime implements Runtime {
 export async function createNativeRuntime(
   agents: Record<string, AgentDef>,
   path = ":memory:",
+  opts: NativeRuntimeOptions = {},
 ): Promise<NativeRuntime> {
-  return new NativeRuntime(agents, await openLocalSqliteSync(path));
+  return new NativeRuntime(agents, await openLocalSqliteSync(path), opts);
 }
 
 // ── memory backend — in-process, ephemeral (no DB, no disk) ───────────────────
 // The lightest "no Durable Object, no persistence" option: great for dev, tests,
 // and stateless previews. Same engine + seams; state is a Map that dies with the
-// process. (For durability pick `native` on a long-running host or the Durable
+// process — and is never evicted (the actor IS the state), so it grows with every
+// session: not for a long-running host with unbounded sessions. (For durability pick `native` on a long-running host or the Durable
 // Object target on the edge.)
 class MemorySessionStore implements SessionStore {
   private msgs: Msg[] = [];
@@ -217,11 +254,11 @@ export type AgentBackend = "native" | "memory" | "durable";
 // choice is explicit and a mis-selection fails loudly.
 export async function createAgentRuntime(
   agents: Record<string, AgentDef>,
-  opts: { backend?: AgentBackend; path?: string } = {},
+  opts: { backend?: AgentBackend; path?: string; maxSessions?: number } = {},
 ): Promise<Runtime> {
   const backend = opts.backend ?? "native";
   if (backend === "memory") return new MemoryRuntime(agents);
-  if (backend === "native") return createNativeRuntime(agents, opts.path);
+  if (backend === "native") return createNativeRuntime(agents, opts.path, { maxSessions: opts.maxSessions });
   throw new Error("backend 'durable' is the Cloudflare Durable Object target — construct AgentDurableObject in your worker, not via createAgentRuntime");
 }
 
