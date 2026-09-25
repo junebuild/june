@@ -419,6 +419,15 @@ export function slackChannel(opts: {
   // How Slack lays the timeline out: sequential "timeline" (Slack's default), grouped
   // "plan", or "dense" (consecutive tool calls collapse into one card). Needs `tasks`.
   taskDisplayMode?: "timeline" | "plan" | "dense";
+  // What to do with text the model writes in a step that then calls a tool ("Let me
+  // search the docs…") when streaming (#175). "answer" (default): it streams into the reply
+  // like any text, so the preamble becomes part of the answer. "status": it renders as
+  // progress instead — a task-timeline entry when `tasks` is on, else the status line under
+  // the composer (assistant.threads.setStatus) — and only the final step's text is the
+  // answer. Whether a step will call a tool is known only when it ends, and a Slack stream
+  // can't take text back, so under "status" each step is held until it ends: the answer
+  // appears whole rather than token by token. Requires stream: true.
+  intermediateText?: "answer" | "status";
   onError?: (err: unknown) => void;
 } & ChannelExtensions): Channel & { diagnose: () => Promise<SlackDiagnosis> } {
   const api = opts.apiUrl ?? "https://slack.com/api";
@@ -539,6 +548,10 @@ export function slackChannel(opts: {
     let lastFlush = 0;
     let turnId: string | undefined; // stamped from the first event — the feedback buttons carry it
     if (opts.status && threadId) await setStatus(channelId, threadId, opts.status);
+    // Whether a status line may be showing — the typing indicator above, or a progress line
+    // (intermediateText "status", #175) set even when `status` is off. Every path that ends
+    // without posting clears it on this, not on opts.status.
+    let statusShown = !!(opts.status && threadId);
     // Slack's recipient rule cuts BOTH ways (live-verified 2026-07-15): a channel stream
     // REQUIRES recipient_user_id/recipient_team_id (missing_recipient_team_id), while a DM
     // stream REJECTS them (invalid_arguments) — branch on the id's D-prefix (im channels).
@@ -604,14 +617,32 @@ export function slackChannel(opts: {
       if (pending.trim() && (!streamTs || broken)) { await postMessage(channelId, pending, threadId); return true; }
       return !!streamTs;
     };
+    // intermediateText "status" (#175): the current step's text, held until the step ends —
+    // progress if it ends in a tool call, the answer (via turn.completed) if it doesn't.
+    const holdSteps = opts.intermediateText === "status";
+    let stepText = "";
+    let notes = 0;
+    const showProgress = async (text: string) => {
+      const line = text.trim().slice(0, 256);
+      if (!line) return;
+      if (opts.tasks) await pushChunk({ type: "task_update", id: `june_note:${++notes}`, title: line, status: "complete" });
+      else if (threadId) { await setStatus(channelId, threadId, line); statusShown = true; }
+    };
     try {
       let streamed = false;
       let finalText = "";
       for await (const e of events) {
         if (stoppedByUser) return; // stop rendering; the turn itself runs on host-side
         turnId ??= e.turnId;
-        if (e.type === "message.delta") { await push(e.text); streamed = true; }
-        else if ((e.type === "action.requested" || e.type === "action.completed") && opts.tasks) {
+        if (e.type === "message.delta") {
+          if (holdSteps) stepText += e.text;
+          else { await push(e.text); streamed = true; }
+          continue;
+        }
+        // The step ended in a tool call: what it said was progress, not answer. Only the
+        // batch's first call carries it — the text is consumed here.
+        if (e.type === "action.requested" && holdSteps && stepText) { await showProgress(stepText); stepText = ""; }
+        if ((e.type === "action.requested" || e.type === "action.completed") && opts.tasks) {
           // a tool call becomes a native task-timeline entry: in_progress when requested,
           // complete when done. The app's mapper names it (or hides it with undefined/"").
           const title = opts.tasks(e.call);
@@ -637,7 +668,7 @@ export function slackChannel(opts: {
           const promptTs = await postApproval(channelId, threadId, e.turnId, e.request, session);
           // the prompt normally auto-clears the status; if it failed to post (reported via
           // onError, not thrown), clear explicitly — nothing else ever will
-          if (!promptTs && opts.status && threadId) await setStatus(channelId, threadId, "");
+          if (!promptTs && statusShown && threadId) await setStatus(channelId, threadId, "");
           return; // the stream closed on suspend; the turn continues on the button click
         }
       }
@@ -646,13 +677,13 @@ export function slackChannel(opts: {
       // when NOTHING actually posted — never started, or a task chunk tried to start a
       // stream that startStream couldn't open — nothing will ever auto-clear the status;
       // clear it now instead of leaving "is thinking…" to Slack's 2-minute timeout.
-      if (!posted && opts.status && threadId) await setStatus(channelId, threadId, "");
+      if (!posted && statusShown && threadId) await setStatus(channelId, threadId, "");
     } catch (err) {
       await push("\n_(the turn failed)_").catch(() => {}); // starts the stream/buffer if not yet
       await finish().catch(() => {});
       // the failure note normally auto-clears the status — but if even the salvage failed,
       // don't leave "is thinking…" stuck until Slack's 2-minute timeout
-      if (opts.status && threadId) await setStatus(channelId, threadId, "").catch(() => {});
+      if (statusShown && threadId) await setStatus(channelId, threadId, "").catch(() => {});
       throw err; // let runBackground → onError record it
     }
   }

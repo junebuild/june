@@ -167,6 +167,108 @@ describe("slackChannel", () => {
     ]);
   });
 
+  // #175: a two-step turn — "Let me search…" then a tool call, then the real answer.
+  const twoStepTurn = async function* (): AsyncGenerator<TurnEvent> {
+    const call = { id: "c1", name: "search", input: {} };
+    yield { type: "turn.started", turnId: "t1", trigger: { kind: "proactive", by: "x" } };
+    yield { type: "message.delta", turnId: "t1", text: "Let me " };
+    yield { type: "message.delta", turnId: "t1", text: "search…" };
+    yield { type: "message.completed", turnId: "t1", text: "Let me search…" };
+    yield { type: "action.requested", turnId: "t1", call };
+    yield { type: "action.completed", turnId: "t1", call, result: [] };
+    yield { type: "message.delta", turnId: "t1", text: "Hel" };
+    yield { type: "message.delta", turnId: "t1", text: "lo" };
+    yield { type: "message.completed", turnId: "t1", text: "Hello" };
+    yield { type: "turn.completed", turnId: "t1", text: "Hello" };
+  };
+  const mention = JSON.stringify({ type: "event_callback", event: { type: "message", text: "hi", channel: "C1", ts: "1.1", user: "U1" } });
+
+  test("stream render: by default pre-tool text streams into the answer (unchanged)", async () => {
+    streamStub();
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true });
+    const ctx = ctxWith(async () => "unused");
+    ctx.runStream = twoStepTurn;
+    await ch2.webhook!(await signed(mention), ctx);
+    await flush();
+    const text = calls.map((c) => (c.body as { markdown_text?: string }).markdown_text ?? "").join("");
+    expect(text).toBe("Let me search…Hello");
+  });
+
+  test("intermediateText: status — pre-tool text goes to the status line, only the final step is the answer (#175)", async () => {
+    streamStub();
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true, intermediateText: "status" });
+    const ctx = ctxWith(async () => "unused");
+    ctx.runStream = twoStepTurn;
+    await ch2.webhook!(await signed(mention), ctx);
+    await flush();
+    expect(calls.map((c) => [method(c), (c.body as { markdown_text?: string; status?: string }).markdown_text ?? (c.body as { status?: string }).status])).toEqual([
+      ["assistant.threads.setStatus", "Let me search…"], // progress, under the composer
+      ["chat.startStream", "Hello"], // the final step, whole
+      ["chat.stopStream", undefined],
+    ]);
+  });
+
+  test("intermediateText: status without `status` — a progress line is cleared when the turn ends posting nothing (#175)", async () => {
+    streamStub();
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true, intermediateText: "status" });
+    const ctx = ctxWith(async () => "unused");
+    ctx.runStream = async function* (): AsyncGenerator<TurnEvent> {
+      const call = { id: "c1", name: "add_reaction", input: {} };
+      yield { type: "turn.started", turnId: "t1", trigger: { kind: "proactive", by: "x" } };
+      yield { type: "message.delta", turnId: "t1", text: "Reacting…" };
+      yield { type: "action.requested", turnId: "t1", call };
+      yield { type: "action.completed", turnId: "t1", call, result: {} };
+      yield { type: "turn.completed", turnId: "t1", text: "" }; // tool-only: nothing to post
+    };
+    await ch2.webhook!(await signed(mention), ctx);
+    await flush();
+    expect(calls.map((c) => [method(c), (c.body as { status?: string }).status])).toEqual([
+      ["assistant.threads.setStatus", "Reacting…"],
+      ["assistant.threads.setStatus", ""], // cleared: nothing posted would auto-clear it
+    ]);
+  });
+
+  test("intermediateText: status without `status` — a turn that throws after a progress line clears it (#175)", async () => {
+    calls = [];
+    // Slack accepts setStatus but every post fails, so even the failure-note salvage posts nothing
+    globalThis.fetch = (async (url: unknown, init?: { body?: string }) => {
+      calls.push({ url: String(url), body: init?.body ? JSON.parse(init.body) : undefined });
+      if (String(url).endsWith("/assistant.threads.setStatus")) return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      return new Response(JSON.stringify({ ok: false, error: "fatal_error" }), { status: 200 });
+    }) as typeof fetch;
+    const errors: unknown[] = [];
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true, intermediateText: "status", onError: (e) => errors.push(e) });
+    const ctx = ctxWith(async () => "unused");
+    ctx.runStream = async function* (): AsyncGenerator<TurnEvent> {
+      yield { type: "turn.started", turnId: "t1", trigger: { kind: "proactive", by: "x" } };
+      yield { type: "message.delta", turnId: "t1", text: "Looking…" };
+      yield { type: "action.requested", turnId: "t1", call: { id: "c1", name: "search", input: {} } };
+      throw new Error("host went away");
+    };
+    await ch2.webhook!(await signed(mention), ctx);
+    await flush();
+    const statuses = calls.filter((c) => method(c) === "assistant.threads.setStatus").map((c) => (c.body as { status?: string }).status);
+    expect(statuses).toEqual(["Looking…", ""]);
+    expect(errors.some((e) => String(e).includes("host went away"))).toBe(true);
+  });
+
+  test("intermediateText: status with tasks — pre-tool text becomes a timeline entry before the tool's (#175)", async () => {
+    streamStub();
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true, intermediateText: "status", tasks: (c) => `Running ${c.name}` });
+    const ctx = ctxWith(async () => "unused");
+    ctx.runStream = twoStepTurn;
+    await ch2.webhook!(await signed(mention), ctx);
+    await flush();
+    const chunks: unknown[] = calls.flatMap((c) => (c.body as { chunks?: unknown[] }).chunks ?? []);
+    expect(chunks).toEqual([
+      { type: "task_update", id: "june_note:1", title: "Let me search…", status: "complete" },
+      { type: "task_update", id: "c1", title: "Running search", status: "in_progress" },
+      { type: "task_update", id: "c1", title: "Running search", status: "complete" },
+      { type: "markdown_text", text: "Hello" },
+    ]);
+    expect(calls.some((c) => method(c) === "assistant.threads.setStatus")).toBe(false);
+  });
+
   test("delivered render: a streaming turn is handed to ctx.runDelivered — no worker-side rendering", async () => {
     streamStub();
     const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true });
