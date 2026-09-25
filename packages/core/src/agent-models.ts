@@ -34,7 +34,10 @@ export function toAnthropicMessages(msgs: Msg[]): AnthropicMessage[] {
       for (const tc of m.toolCalls) content.push({ type: "tool_use", id: tc.id, name: tc.name, input: tc.input });
       out.push({ role: "assistant", content });
     } else {
-      const block: AnthropicBlock = { type: "tool_result", tool_use_id: m.toolCallId, content: JSON.stringify(m.result) };
+      // A string result is already the text the model should read — plain prose or JSON the
+      // tool serialized itself. Stringifying it again sent an escaped, quoted string (#172).
+      const content = typeof m.result === "string" ? m.result : JSON.stringify(m.result);
+      const block: AnthropicBlock = { type: "tool_result", tool_use_id: m.toolCallId, content };
       const prev = out[out.length - 1];
       if (prev && prev.role === "user" && Array.isArray(prev.content)) prev.content.push(block);
       else out.push({ role: "user", content: [block] });

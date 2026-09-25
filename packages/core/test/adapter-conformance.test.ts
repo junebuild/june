@@ -32,7 +32,7 @@ describe("runAdapterConformance (#105)", () => {
     const report = await runAdapterConformance(referenceAdapter);
     expect(report.failed).toEqual([]);
     expect(report.skipped).toEqual([]);
-    expect(report.passed).toHaveLength(8);
+    expect(report.passed).toHaveLength(9);
   });
 
   test("usesProviderState/streaming opt-outs skip (not fail) their scenarios", async () => {
@@ -65,6 +65,15 @@ describe("runAdapterConformance (#105)", () => {
     const report = await runAdapterConformance(swallowing);
     expect(report.failed.map((f) => f.scenario)).toEqual(["delta forwarding: scripted reasoning/text deltas arrive, in order, before done"]);
     expect(report.failed[0]!.error).toContain("forwarded in order");
+  });
+
+  test("an adapter that JSON-encodes string tool results again is caught by exactly that scenario (#172)", async () => {
+    const doubleEncoding: typeof referenceAdapter = (script, capture) =>
+      // the ONE defect: every tool result is stringified on the wire, strings included
+      referenceAdapter(script, (msgs) => capture((msgs as Msg[]).map((m) => (m.role === "tool" ? { ...m, result: JSON.stringify(m.result) } : m))));
+    const report = await runAdapterConformance(doubleEncoding);
+    expect(report.failed.map((f) => f.scenario)).toEqual(["string tool result reaches the provider verbatim"]);
+    expect(report.failed[0]!.error).toContain("verbatim");
   });
 
   test("an adapter that drops providerState is caught by exactly that scenario", async () => {
@@ -139,7 +148,7 @@ describe("runAdapterConformance (#105)", () => {
       { usesProviderState: false }, // Anthropic attaches no opaque per-call state — honest skip
     );
     expect(report.failed).toEqual([]);
-    expect(report.passed).toHaveLength(7);
+    expect(report.passed).toHaveLength(8);
     expect(report.skipped).toEqual(["providerState round-trip"]);
   });
 
