@@ -1,0 +1,5 @@
+---
+"@junejs/core": patch
+---
+
+`slackChannel` drops Slack redeliveries of an event it already handled (#170). Slack redelivers an Events API event (`x-slack-retry-num`) with the same envelope `event_id` when a delivery didn't get a 2xx within 3 s — a slow ACK, an error response, or a connection/TLS failure; the channel treated each one as new, ran a second turn and posted a duplicate answer. It now remembers `event_id`s per mount path (module scope, like the #90 counters, so it survives the edge mount's per-request construction) and ACKs a repeat with 200 before anything runs — observers included. An id is recorded only once its delivery is ACKed, so a delivery that fails first (an `accept` callback that throws, say) is retried and handled rather than dropped. Dropped repeats count as `diagnose().counters.duplicates`, with a hint to check ACK latency and the response path back to Slack. Ids are kept for 10 minutes (past Slack's retry window), at most 5,000 per path. Per isolate, so on the edge a retry landing on a different isolate is not caught.
