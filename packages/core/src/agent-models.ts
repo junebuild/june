@@ -103,7 +103,11 @@ export type AnthropicOptions = {
   // Inject a preconstructed client (structural — anything with messages.stream):
   // tests drive the adapter's real mapping/streaming code against a fake transport
   // (see runAdapterConformance), and custom transports skip the SDK entirely.
-  // When set, the lazy @anthropic-ai/sdk import is skipped.
+  // When set, the lazy @anthropic-ai/sdk import is skipped. REQUIRED when the app is
+  // bundled into one file (`bun build --compile`, a single-file worker bundle): the
+  // lazy import is invisible to bundlers, so the SDK is only found at runtime if a
+  // node_modules sits beside the binary. Import it statically in the app and pass
+  // `client: new Anthropic({ … })` — the bundler then sees and includes it (#171).
   client?: AnthropicClient;
 };
 
@@ -118,13 +122,25 @@ export function anthropic(opts: AnthropicOptions = {}): Model {
       let client = opts.client;
       if (!client) {
         // Non-literal specifier (typed `string`) so tsc/bundlers don't require the
-        // optional dep and it stays lazy.
+        // optional dep and it stays lazy. The flip side: a bundler can't see it either,
+        // so a bundled app must inject `client` (see AnthropicOptions.client).
         const specifier: string = "@anthropic-ai/sdk";
-        let Anthropic: AnthropicCtor;
+        let Anthropic: AnthropicCtor | undefined;
+        let cause: unknown;
         try {
-          Anthropic = ((await import(specifier)) as { default: AnthropicCtor }).default;
-        } catch {
-          throw new Error("anthropic(): install @anthropic-ai/sdk to use the Anthropic model adapter");
+          Anthropic = ((await import(specifier)) as { default?: AnthropicCtor }).default;
+        } catch (err) {
+          cause = err;
+        }
+        // Also covers a module that loads without a usable default export (a CJS/ESM
+        // interop mishap), which would otherwise surface as "undefined is not a constructor".
+        if (typeof Anthropic !== "function") {
+          throw new Error(
+            "anthropic(): could not load @anthropic-ai/sdk. Install it to use the Anthropic model adapter; " +
+              "in a bundled app (bun build --compile, a single-file bundle) the lazy import is invisible to the bundler, " +
+              "so import the SDK in your app and pass `client: new Anthropic({ ... })` instead",
+            cause === undefined ? undefined : { cause },
+          );
         }
         client = new Anthropic(opts.apiKey ? { apiKey: opts.apiKey } : undefined);
       }

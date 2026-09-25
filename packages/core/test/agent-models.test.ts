@@ -1,11 +1,17 @@
 // The Anthropic model adapter. The provider call is thin glue over two pure
 // mappings (June transcript ↔ Anthropic Messages), so those get the coverage; the
 // adapter itself is checked for shape + the helpful error when the optional
-// @anthropic-ai/sdk peer isn't installed.
+// @anthropic-ai/sdk peer can't be loaded.
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import type { Msg } from "@junejs/core/agent-runtime";
 import { anthropic, finishFromStopReason, fromAnthropicContent, toAnthropicMessages } from "@junejs/core/agent-models";
+
+// Make the SDK unloadable for this file, whatever the workspace has installed (an example
+// depends on it): the missing-SDK tests exercise exactly that failure, and must never reach
+// the network with an ANTHROPIC_API_KEY that happens to be in the environment.
+// (A module with no usable default export: a factory that throws only fails the first import.)
+mock.module("@anthropic-ai/sdk", () => ({}));
 
 describe("toAnthropicMessages", () => {
   test("a user message becomes plain text content", () => {
@@ -107,10 +113,20 @@ describe("anthropic()", () => {
     ]);
   });
 
-  test("calling it without the optional @anthropic-ai/sdk peer throws a helpful error", async () => {
+  test("calling it when the optional @anthropic-ai/sdk peer cannot load throws a helpful error", async () => {
     const model = anthropic();
     // the model is a stream now; the missing-dep error surfaces when it's iterated
     const drain = async () => { for await (const _ of model([{ role: "user", turnId: "t1", text: "hi" }], [])) void _; };
-    await expect(drain()).rejects.toThrow(/install @anthropic-ai\/sdk/);
+    await expect(drain()).rejects.toThrow(/Install it to use the Anthropic model adapter/);
+  });
+
+  test("the missing-SDK error names the bundling fix (#171)", async () => {
+    const model = anthropic();
+    let err: unknown;
+    try { for await (const _ of model([{ role: "user", turnId: "t1", text: "hi" }], [])) void _; } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(Error);
+    // a compiled binary hits this same failure: the message must point at `client` injection
+    expect((err as Error).message).toContain("bun build --compile");
+    expect((err as Error).message).toContain("client: new Anthropic");
   });
 });
