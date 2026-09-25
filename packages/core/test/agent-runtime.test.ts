@@ -141,7 +141,7 @@ describe("agent-runtime engine", () => {
     // crash right AFTER the tool tx commits (side effect + checkpoint durable)
     const s1 = new AgentSession("ops", "s1", store, new MemBroadcaster(), model, tools, noRuntime);
     await expect(
-      s1.turn({ turnId: "t1", userText: "Order 3 widgets", crash: { at: "after-tool-commit", step: "tool:c1" } }),
+      s1.turn({ turnId: "t1", userText: "Order 3 widgets", crash: { at: "after-tool-commit", step: "tool:1:c1" } }),
     ).rejects.toThrow(/CRASH after-tool-commit/);
     expect(app.orders).toHaveLength(1);
 
@@ -183,6 +183,70 @@ describe("agent-runtime engine", () => {
     expect(b).toBe("Done — order placed.");
     expect(rt.session("ops", "alice").transcript()).toHaveLength(1);
     expect(rt.session("ops", "bob").transcript()).toHaveLength(1);
+  });
+
+  // #167: the same spin WITHIN one session. Provider call ids are only unique per reply
+  // (the mock behind the report restarted at toolu_1; some providers mint call_0 on every
+  // reply), so a later call reusing an id must not find the earlier call's step "cached".
+  test("a later call reusing a call id runs its tool instead of spinning (#167)", async () => {
+    const { store, app } = memStore();
+    // Keyed by call id alone, the loop re-read an unchanged transcript forever without
+    // ever yielding — fail loudly instead of hanging the test runner.
+    let reads = 0;
+    const messages = store.messages.bind(store);
+    store.messages = () => {
+      if (++reads > 500) throw new Error("turn loop is spinning");
+      return messages();
+    };
+    let step = 0;
+    const model: Model = (msgs) => {
+      const last = msgs[msgs.length - 1]!;
+      // every reply that follows a user message calls the tool as "c1" — within a turn
+      // (two rounds) and across turns
+      if (last.role === "user" || (last.role === "tool" && step++ % 2 === 0)) {
+        return replyStream({ text: "", toolCalls: [{ id: "c1", name: "create_order", input: { item: "widget", qty: 1 } }] });
+      }
+      return replyStream({ text: "ok", toolCalls: [] });
+    };
+    const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), model, [createOrderTool()], noRuntime);
+
+    expect(await s.turn({ turnId: "t1", userText: "first" })).toBe("ok");
+    expect(await s.turn({ turnId: "t2", userText: "second" })).toBe("ok");
+    expect(app.orders).toHaveLength(4); // two rounds per turn, each one really ran
+    const answers = store.messages().filter((m) => m.role === "tool");
+    expect(answers.map((m) => m.turnId)).toEqual(["t1", "t1", "t2", "t2"]);
+  });
+
+  test("a replay that crashed mid-batch runs the remaining calls before asking the model (#167)", async () => {
+    const { store, app } = memStore();
+    const runs = { n: 0 };
+    const seen: Msg[][] = [];
+    const model: Model = (msgs) => {
+      seen.push(msgs);
+      if (!msgs.some((m) => m.role === "assistant")) {
+        return replyStream({
+          text: "",
+          toolCalls: [
+            { id: "c1", name: "create_order", input: { item: "a", qty: 1 } },
+            { id: "c2", name: "create_order", input: { item: "b", qty: 1 } },
+          ],
+        });
+      }
+      return replyStream({ text: "both placed", toolCalls: [] });
+    };
+    const tools = [createOrderTool(runs)];
+
+    const s1 = new AgentSession("ops", "s1", store, new MemBroadcaster(), model, tools, noRuntime);
+    await expect(
+      s1.turn({ turnId: "t1", userText: "order a and b", crash: { at: "after-tool-commit", step: "tool:1:c1" } }),
+    ).rejects.toThrow(/CRASH after-tool-commit/);
+
+    const s2 = new AgentSession("ops", "s1", store, new MemBroadcaster(), model, tools, noRuntime);
+    expect(await s2.turn({ turnId: "t1", userText: "order a and b" })).toBe("both placed");
+    expect(app.orders.map((o) => o.item)).toEqual(["a", "b"]); // c1 not re-run, c2 run
+    expect(runs.n).toBe(2);
+    // the follow-up model call saw both calls answered — no tool_use left dangling
+    expect(seen.at(-1)!.filter((m) => m.role === "tool").map((m) => (m as { toolCallId: string }).toolCallId)).toEqual(["c1", "c2"]);
   });
 
   test("turns are serialized — concurrent turn() calls don't interleave", async () => {
@@ -733,13 +797,13 @@ describe("TurnEvent stream (P1)", () => {
     expect(failed.error.stack).toContain("api down"); // a real trace, not just the message
   });
 
-  test("a failing tool step is attributed: phase tool, step tool:<callId> (#96)", async () => {
+  test("a failing tool step is attributed: phase tool, step tool:<n>:<callId> (#96)", async () => {
     const badModel: Model = () => replyStream({ text: "", toolCalls: [{ id: "c1", name: "nope", input: {} }] });
     const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), badModel, [], noRuntime);
     const events: TurnEvent[] = [];
     s.observe((e) => events.push(e));
     await expect(s.turn({ turnId: "t1", userText: "go" })).rejects.toThrow(/unknown tool/);
-    expect(events.at(-1)).toMatchObject({ type: "turn.failed", phase: "tool", step: "tool:c1" });
+    expect(events.at(-1)).toMatchObject({ type: "turn.failed", phase: "tool", step: "tool:1:c1" });
   });
 
   test("a non-Error throwable keeps its JSON shape instead of '[object Object]' (#96)", async () => {
@@ -803,8 +867,8 @@ describe("TurnEvent stream (P1)", () => {
     const assistantMsg = store.messages().find((m): m is Extract<Msg, { role: "assistant" }> => m.role === "assistant")!;
     expect(assistantMsg.toolCalls[0]!.providerState).toBe("sig~abc123"); // durably on the transcript
     expect(events.find((e) => e.type === "action.requested")).toMatchObject({ call: { id: "c1", providerState: "sig~abc123" } });
-    // identity stays the bare id: the tool step checkpointed under tool:c1, state excluded
-    expect(store.getStep("tool:c1")).toBeDefined();
+    // identity stays the bare id: the tool step checkpointed under tool:1:c1, state excluded
+    expect(store.getStep("tool:1:c1")).toBeDefined();
   });
 
   // #95: minted turn ids are globally unique and lexically time-sortable — the

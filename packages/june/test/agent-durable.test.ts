@@ -125,7 +125,7 @@ describe("DoSessionStore (edge durability seam)", () => {
 
     const s1 = new AgentSession("ops", "self", new DoSessionStore(s), new TestBroadcaster(), model, tools, noRuntime);
     await expect(
-      s1.turn({ turnId: "t1", userText: "Order 3 widgets", crash: { at: "after-tool-commit", step: "tool:c1" } }),
+      s1.turn({ turnId: "t1", userText: "Order 3 widgets", crash: { at: "after-tool-commit", step: "tool:1:c1" } }),
     ).rejects.toThrow(/CRASH after-tool-commit/);
     expect(countOrders(s)).toBe(1);
 

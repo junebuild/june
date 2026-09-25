@@ -330,8 +330,8 @@ export type TurnResult =
 // enough to locate the site, the chain explains why).
 export type TurnError = { message: string; stack?: string; causeChain?: string[] };
 // Which engine step was in flight when the turn died — turns "fetch failed" into
-// "the model call failed" vs "tool tool:call_7 failed". `step` on turn.failed carries
-// the precise step id (`model:<n>` / `tool:<callId>`). Absent when the failure struck
+// "the model call failed" vs "tool tool:3:call_7 failed". `step` on turn.failed carries
+// the precise step id (`model:<n>` / `tool:<n>:<callId>`). Absent when the failure struck
 // between steps (transcript reads, status writes).
 export type TurnFailurePhase = "model" | "tool";
 
@@ -380,7 +380,7 @@ function assertCrash(crash: Crash | undefined, at: Crash["at"], step: string) {
 // ── the engine: one durable turn ──────────────────────────────────────────────
 // Reserved step key for the session's initiator principal (#128). It lives in the steps
 // table beside the "suspended" checkpoint and the per-turn step ids ("model:N",
-// "tool:<id>", "input:<turn>:<id>") — a namespace no turn-scoped key can collide with —
+// "tool:N:<id>", "input:<turn>:<id>") — a namespace no turn-scoped key can collide with —
 // so recording it needs no SessionStore contract change and it survives eviction with
 // the rest of the durable log.
 const INITIATOR_STEP = "session:initiator";
@@ -472,19 +472,25 @@ export async function runTurn(
         sink.emit({ type: "turn.completed", turnId: opts.turnId, text: last.text });
         return last.text;
       }
-      if (last.role === "assistant" && last.toolCalls.length > 0) {
-        for (const call of last.toolCalls) {
+      // The calls still owed a result: those of THIS turn's latest assistant message with
+      // no answering tool message after it. Read off the transcript (not the step cache)
+      // so a replay that crashed mid-batch resumes the remaining calls instead of asking
+      // the model with a tool_use left dangling.
+      const pending = unansweredCalls(msgs, opts.turnId);
+      if (pending) {
+        for (const call of pending.calls) {
           // Cancelled mid-batch: the calls already run stay committed; every call still
           // pending gets a synthetic "cancelled" result IN ONE TX, so no tool_use dangles
           // unanswered — the transcript stays valid for the next turn's model call (and
           // the model sees the work was interrupted, not that it silently vanished).
           const why = cancelled();
           if (why) {
-            cancelToolBatch(store, last.toolCalls, opts.turnId);
+            cancelToolBatch(store, pending.calls, pending.at, opts.turnId);
             throw new CancelSignal(opts.turnId, why);
           }
-          inFlight = { phase: "tool", step: `tool:${call.id}` };
-          await toolStep(store, sink, active, call, opts, { ...env, initiator });
+          const stepId = toolStepId(pending.at, call.id);
+          inFlight = { phase: "tool", step: stepId };
+          await toolStep(store, sink, active, call, stepId, opts, { ...env, initiator });
           inFlight = undefined;
         }
         continue;
@@ -527,17 +533,47 @@ export async function runTurn(
   }
 }
 
+// A tool step's durable id: the transcript index of the assistant message that made the
+// call (the same n as its `model:<n>` step) plus the provider's call id. The index is
+// what makes it unique — a provider id is only unique within one reply, and some
+// providers mint "call_0" on every reply. Keyed by call id alone, a later call reusing
+// an id found the earlier step cached, skipped the tool without answering it, and the
+// turn loop spun on the unchanged transcript forever, synchronously (#167).
+function toolStepId(assistantAt: number, callId: string): string {
+  return `tool:${assistantAt}:${callId}`;
+}
+
+// This turn's latest assistant message, if it made calls, and those of its calls that no
+// tool message answers yet. Undefined when nothing is owed (no calls, all answered, or
+// the latest assistant message belongs to an earlier turn).
+function unansweredCalls(msgs: Msg[], turnId: string): { at: number; calls: ToolCall[] } | undefined {
+  for (let at = msgs.length - 1; at >= 0; at--) {
+    const m = msgs[at]!;
+    if (m.role !== "assistant") continue;
+    if (m.turnId !== turnId || m.toolCalls.length === 0) return undefined;
+    const answered = new Set<string>();
+    for (let j = at + 1; j < msgs.length; j++) {
+      const r = msgs[j]!;
+      if (r.role === "tool") answered.add(r.toolCallId);
+    }
+    const calls = m.toolCalls.filter((c) => !answered.has(c.id));
+    return calls.length ? { at, calls } : undefined;
+  }
+  return undefined;
+}
+
 // Close a cancelled turn's partially-run tool batch: every call WITHOUT a committed step
 // gets a synthetic "cancelled" result (step + tool message in one tx), so no tool_use is
 // left unanswered — providers reject a transcript with a dangling call, and the next
 // turn's model call must be able to build on this one. No action.completed is emitted for
 // a synthetic result: nothing ran, and turn.cancelled follows immediately.
-function cancelToolBatch(store: SessionStore, calls: ToolCall[], turnId: string) {
+function cancelToolBatch(store: SessionStore, calls: ToolCall[], assistantAt: number, turnId: string) {
   store.tx(() => {
     for (const call of calls) {
-      if (store.getStep(`tool:${call.id}`) !== undefined) continue;
+      const stepId = toolStepId(assistantAt, call.id);
+      if (store.getStep(stepId) !== undefined) continue;
       const result = { cancelled: true, reason: "the turn was cancelled before this call ran" };
-      store.putStep(`tool:${call.id}`, result);
+      store.putStep(stepId, result);
       store.appendMessage({ role: "tool", turnId, toolCallId: call.id, name: call.name, result });
     }
   });
@@ -610,10 +646,10 @@ async function toolStep(
   sink: EventSink,
   tools: Tool[],
   call: ToolCall,
+  stepId: string,
   opts: { turnId: string; crash?: Crash },
   env: { runtime: Runtime; agent: string; sessionId: string; event?: InboundEvent; initiator?: Principal },
 ) {
-  const stepId = `tool:${call.id}`;
   if (store.getStep(stepId) !== undefined) return;
   const tool = tools.find((t) => t.spec.name === call.name);
   if (!tool) throw new Error(`unknown tool ${call.name}`);
