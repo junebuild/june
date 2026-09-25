@@ -11,6 +11,7 @@
 //   curl -sX POST localhost:8787/message -d '{"message":"order 3 widgets","session":"s1"}'
 
 import { DurableObject } from "cloudflare:workers";
+import Anthropic from "@anthropic-ai/sdk";
 import { AgentDurableObject, durableAgentSurface, durableChannelSurface, type DurableObjectNamespace } from "@junejs/server/agent-durable";
 import { anthropic } from "@junejs/core/agent-models";
 import { assembleDurable } from "@junejs/core/agent-config";
@@ -49,7 +50,12 @@ export class JuneAgentDO extends DurableObject<Env> {
   #agent = new AgentDurableObject(this.ctx, {
     ...def,
     model: this.env.ANTHROPIC_API_KEY
-      ? anthropic({ model: agentModule.config.model ?? "claude-opus-4-8", apiKey: this.env.ANTHROPIC_API_KEY })
+      ? anthropic({
+          model: agentModule.config.model ?? "claude-opus-4-8",
+          // Injected, not left to anthropic()'s lazy SDK import: that import is invisible
+          // to wrangler's bundler, and workerd has no node_modules to find it in (#171).
+          client: new Anthropic({ apiKey: this.env.ANTHROPIC_API_KEY }),
+        })
       : scripted,
     env: this.env, // channel factories resolve their secrets from the DO env
   });

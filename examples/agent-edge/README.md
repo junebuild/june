@@ -39,7 +39,10 @@ bun run deploy                          # wrangler deploy
 ```
 
 With the key set, the DO builds `anthropic({ model: "claude-opus-4-8", … })`
-instead of the scripted model — same loop, real tool-calling.
+instead of the scripted model — same loop, real tool-calling. The worker imports
+`@anthropic-ai/sdk` itself and passes `client: new Anthropic(…)`: `anthropic()`'s
+own SDK import is lazy, which wrangler's bundler can't see, and workerd has no
+`node_modules` to load it from at runtime.
 
 ## What's here
 
