@@ -1,5 +1,12 @@
 # @june-examples/juno-crud
 
+## 0.0.5-dev.42
+
+### Patch Changes
+
+- Updated dependencies [[`cc70d23`](https://github.com/junebuild/june/commit/cc70d236c6824f4edc207c87ba094b299cdbeb15), [`b418d53`](https://github.com/junebuild/june/commit/b418d537ded688ddcae1098b1ae39c821650f813), [`3ad841c`](https://github.com/junebuild/june/commit/3ad841ce43daa5a5fb6af79927e840e117a6c979), [`784388b`](https://github.com/junebuild/june/commit/784388b6b197e8dc23d8d0f7195581fc227a51af), [`38abeae`](https://github.com/junebuild/june/commit/38abeae8ab444ac66e8cdbc279aa602f94858bef)]:
+  - @junejs/core@0.2.0-dev.41
+
 ## 0.0.5-dev.41
 
 ### Patch Changes
