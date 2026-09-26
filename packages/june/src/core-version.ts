@@ -15,7 +15,7 @@ import * as coreRuntime from "@junejs/core/agent-runtime";
 
 // The contract number this server tree is built against. Bump in lockstep with
 // core's RUNTIME_API_VERSION whenever the server↔core runtime contract changes.
-const EXPECTED_CORE_RUNTIME_API = 1;
+const EXPECTED_CORE_RUNTIME_API = 2;
 
 export function assertCoreRuntimeVersion(surface: string): void {
   checkCoreRuntimeVersion(surface, (coreRuntime as { RUNTIME_API_VERSION?: number }).RUNTIME_API_VERSION);

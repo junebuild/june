@@ -161,7 +161,14 @@ export class NativeRuntime implements Runtime {
     assertCoreRuntimeVersion("NativeRuntime"); // #94: fail power-on, not mid-turn
     this.agents = agents;
     this.db = db;
-    this.maxSessions = opts.maxSessions ?? 1000;
+    const max = opts.maxSessions ?? 1000;
+    // At least one actor is always retained (the one being handed out), so a cap below 1
+    // means nothing, and NaN would compare false and evict every idle actor on each miss.
+    // Infinity is allowed: an explicit "no cap".
+    if (!(Number.isInteger(max) && max >= 1) && max !== Infinity) {
+      throw new RangeError(`NativeRuntime: maxSessions must be an integer >= 1 (or Infinity for no cap), got ${max}`);
+    }
+    this.maxSessions = max;
     initSchema(db);
   }
 
