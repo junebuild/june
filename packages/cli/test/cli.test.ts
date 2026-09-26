@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { fileURLToPath } from "node:url";
 
-import { parse, run } from "../src/cli";
+import { coercePort, parse, run } from "../src/cli";
 
 const FIXTURE = fileURLToPath(new URL("../../../examples/basic", import.meta.url));
 
@@ -30,6 +30,23 @@ describe("parse()", () => {
   });
   test("empty argv → empty verb", () => {
     expect(parse([])).toEqual({ verb: "", positional: [], flags: {} });
+  });
+});
+
+describe("coercePort()", () => {
+  test("--port > PORT > default, junk falls back", () => {
+    expect(coercePort("4100", 3000)).toBe(4100); // valid string
+    expect(coercePort(undefined, 3000)).toBe(3000); // no PORT env
+    expect(coercePort("", 3000)).toBe(3000); // PORT=
+    expect(coercePort("abc", 3000)).toBe(3000); // PORT=abc
+    expect(coercePort(true, 3000)).toBe(3000); // `--port` with no value → not port 1
+    expect(coercePort("0", 3000)).toBe(3000); // out of range
+    expect(coercePort("70000", 3000)).toBe(3000); // out of range
+  });
+  test("composes to the --port > PORT > 3000 precedence", () => {
+    expect(coercePort("5001", coercePort("4100", 3000))).toBe(5001); // flag wins
+    expect(coercePort(undefined, coercePort("4100", 3000))).toBe(4100); // env wins
+    expect(coercePort(undefined, coercePort(undefined, 3000))).toBe(3000); // default
   });
 });
 
@@ -97,5 +114,14 @@ describe("help / unknown", () => {
   test("unknown command returns 1", async () => {
     expect(await run(["frobnicate"])).toBe(1);
     expect(text()).toContain('unknown command "frobnicate"');
+  });
+  test("--help after a verb prints help without running the command", async () => {
+    // Would otherwise start the dev server (and hang) — the intercept returns first.
+    expect(await run(["dev", "--help"])).toBe(0);
+    expect(text()).toContain("Usage: june <command>");
+  });
+  test("build --help prints help, doesn't build", async () => {
+    expect(await run(["build", "--help"])).toBe(0);
+    expect(text()).toContain("Commands:");
   });
 });

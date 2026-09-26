@@ -20,6 +20,9 @@ export function ignoredPath(file: string): boolean {
   // the supervisor must NOT respawn over a .css edit, or the swap degrades to a
   // full reload. A .tsx edit still restarts (its rendered markup changed too).
   if (file.endsWith(".css")) return true;
+  // A .log is app output, never a source edit — a server (or CI) writing e.g.
+  // dev.log into the tree would otherwise self-trigger an endless restart loop.
+  if (file.endsWith(".log")) return true;
   return parts.length === 2 && parts[0] === "app" && (/^_content\.[^/]+$/.test(parts[1]!) || parts[1]!.endsWith(".gen.ts"));
 }
 

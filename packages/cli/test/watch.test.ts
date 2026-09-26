@@ -18,6 +18,8 @@ describe("ignoredPath()", () => {
     expect(ignoredPath("dist/worker.js")).toBe(true);
     expect(ignoredPath(".git/HEAD")).toBe(true);
     expect(ignoredPath(".june/blob/x")).toBe(true);
+    expect(ignoredPath("dev.log")).toBe(true); // a log written into the tree must not loop
+    expect(ignoredPath("app/logs/server.log")).toBe(true);
   });
 
   test("stylesheets are ignored — CSS HMR hot-swaps them, a restart would full-reload", () => {
