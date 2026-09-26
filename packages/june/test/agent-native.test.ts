@@ -216,4 +216,31 @@ describe("NativeRuntime session eviction (#174)", () => {
     rt.session("ops", "fourth"); // now all three older ones are idle and unobserved
     expect(rt.sessionCount).toBe(1);
   });
+
+  test("a session with a reset queued is not idle and is never evicted until the reset settles", async () => {
+    const rt = await createNativeRuntime({ ops: { model: answer, tools: [] } }, ":memory:", { maxSessions: 1 });
+    const a = rt.session("ops", "a");
+    await a.turn({ turnId: "t1", userText: "hi" });
+    expect(a.idle()).toBe(true);
+
+    const reset = a.reset(); // queued on the chain, not awaited: nothing running, reset pending
+    expect(a.idle()).toBe(false);
+    rt.session("ops", "b"); // would evict `a` if pendingReset were ignored
+    expect(rt.sessionCount).toBe(2);
+    expect(rt.session("ops", "a")).toBe(a); // same actor: two actors must never race one reset
+
+    await reset;
+    expect(a.idle()).toBe(true);
+    expect(a.transcript()).toHaveLength(0); // the reset ran on the actor that was kept
+  });
+
+  test("maxSessions must be an integer >= 1 (or Infinity)", async () => {
+    const agents = { ops: { model: answer, tools: [] } };
+    for (const bad of [0, -1, 1.5, Number.NaN]) {
+      await expect(createNativeRuntime(agents, ":memory:", { maxSessions: bad })).rejects.toThrow(RangeError);
+    }
+    for (const ok of [1, 1000, Infinity]) {
+      await expect(createNativeRuntime(agents, ":memory:", { maxSessions: ok })).resolves.toBeDefined();
+    }
+  });
 });
