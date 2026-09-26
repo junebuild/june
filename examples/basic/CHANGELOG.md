@@ -1,5 +1,12 @@
 # @june-examples/basic
 
+## 0.0.5-dev.42
+
+### Patch Changes
+
+- Updated dependencies [[`04909db`](https://github.com/junebuild/june/commit/04909dbf82dc45e3f003026d8ca8895e9adb8108)]:
+  - @junejs/core@0.2.0-dev.42
+
 ## 0.0.5-dev.41
 
 ### Patch Changes

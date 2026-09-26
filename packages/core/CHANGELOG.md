@@ -1,5 +1,11 @@
 # @junejs/core
 
+## 0.2.0-dev.42
+
+### Patch Changes
+
+- [#188](https://github.com/junebuild/june/pull/188) [`04909db`](https://github.com/junebuild/june/commit/04909dbf82dc45e3f003026d8ca8895e9adb8108) Thanks [@linyiru](https://github.com/linyiru)! - `runAdapterConformance`: a transport stub that captures the serialized request body (a string) is no longer serialized a second time before the content checks. The escape-sensitive "string tool result reaches the provider verbatim" scenario ([#172](https://github.com/junebuild/june/issues/172)) misread that extra layer and failed a faithful adapter; object-shaped captures are stringified as before.
+
 ## 0.2.0-dev.41
 
 ### Patch Changes
