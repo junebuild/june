@@ -67,6 +67,20 @@ describe("runAdapterConformance (#105)", () => {
     expect(report.failed[0]!.error).toContain("forwarded in order");
   });
 
+  test("a faithful adapter whose transport captures the serialized body (a string) passes every scenario", async () => {
+    const rawBody: typeof referenceAdapter = (script, capture) => referenceAdapter(script, (msgs) => capture(JSON.stringify(msgs)));
+    const report = await runAdapterConformance(rawBody);
+    expect(report.failed).toEqual([]);
+    expect(report.passed).toHaveLength(9);
+  });
+
+  test("double encoding is still caught when the transport captures the serialized body (#172)", async () => {
+    const rawBodyDoubleEncoding: typeof referenceAdapter = (script, capture) =>
+      referenceAdapter(script, (msgs) => capture(JSON.stringify((msgs as Msg[]).map((m) => (m.role === "tool" ? { ...m, result: JSON.stringify(m.result) } : m)))));
+    const report = await runAdapterConformance(rawBodyDoubleEncoding);
+    expect(report.failed.map((f) => f.scenario)).toEqual(["string tool result reaches the provider verbatim"]);
+  });
+
   test("an adapter that JSON-encodes string tool results again is caught by exactly that scenario (#172)", async () => {
     const doubleEncoding: typeof referenceAdapter = (script, capture) =>
       // the ONE defect: every tool result is stringified on the wire, strings included

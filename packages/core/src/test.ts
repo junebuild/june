@@ -267,8 +267,14 @@ export async function runAdapterConformance(
   const noRuntime: Runtime = { session() { throw new Error("conformance: no subagents"); } };
 
   // Serialize a captured wire request for content-containment checks. Provider-shape
-  // agnostic on purpose: whatever the wire looks like, the CONTENT must be in it.
-  const wireText = (w: unknown) => { try { return JSON.stringify(w) ?? String(w); } catch { return String(w); } };
+  // agnostic on purpose: whatever the wire looks like, the CONTENT must be in it. A string
+  // capture is already the serialized body (a transport stub that records the raw HTTP
+  // payload) and is kept as-is: serializing it again would add an escaping layer that the
+  // escape-sensitive checks (the verbatim string-result scenario) would then misread.
+  const wireText = (w: unknown) => {
+    if (typeof w === "string") return w;
+    try { return JSON.stringify(w) ?? String(w); } catch { return String(w); }
+  };
   const wireHas = (wires: unknown[], i: number, needle: string, what: string) => {
     assert(wires.length > i, `expected a captured wire request #${i + 1} — the transport stub must call capture() per request`);
     assert(wireText(wires[i]).includes(needle), `wire request #${i + 1} must carry ${what} (looked for ${JSON.stringify(needle)}) — the adapter's transcript mapping dropped it`);
