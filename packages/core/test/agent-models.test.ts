@@ -5,7 +5,7 @@
 
 import { describe, expect, mock, test } from "bun:test";
 import type { Msg } from "@junejs/core/agent-runtime";
-import { anthropic, finishFromStopReason, fromAnthropicContent, toAnthropicMessages } from "@junejs/core/agent-models";
+import { anthropic, finishFromStopReason, fromAnthropicContent, loadAnthropicSdk, toAnthropicMessages } from "@junejs/core/agent-models";
 
 // Make the SDK unloadable for this file, whatever the workspace has installed (an example
 // depends on it): the missing-SDK tests exercise exactly that failure, and must never reach
@@ -143,5 +143,30 @@ describe("anthropic()", () => {
     // a compiled binary hits this same failure: the message must point at `client` injection
     expect((err as Error).message).toContain("bun build --compile");
     expect((err as Error).message).toContain("client: new Anthropic");
+  });
+});
+
+describe("loadAnthropicSdk", () => {
+  const helpful = /could not load @anthropic-ai\/sdk.*client: new Anthropic/;
+
+  test("an import that rejects becomes the helpful error, with the import's own error as cause", async () => {
+    const notFound = new Error("Cannot find package '@anthropic-ai/sdk'");
+    let err: unknown;
+    try { await loadAnthropicSdk(() => Promise.reject(notFound)); } catch (e) { err = e; }
+    expect((err as Error).message).toMatch(helpful);
+    expect((err as Error).cause).toBe(notFound);
+  });
+
+  test("a default export that can't be constructed is rejected up front, never called", async () => {
+    let called = false;
+    for (const notCtor of [() => { called = true; }, async () => {}, function* () {}, { m() {} }.m, undefined, {}]) {
+      await expect(loadAnthropicSdk(async () => ({ default: notCtor }))).rejects.toThrow(helpful);
+    }
+    expect(called).toBe(false); // the constructability probe never runs the export
+  });
+
+  test("a constructible default export is returned", async () => {
+    class FakeAnthropic { messages = { stream: () => { throw new Error("unused"); } }; }
+    expect(await loadAnthropicSdk(async () => ({ default: FakeAnthropic }))).toBe(FakeAnthropic as never);
   });
 });

@@ -95,7 +95,7 @@ export type AnthropicStream = AsyncIterable<AnthropicStreamEvent> & { finalMessa
 export type AnthropicClient = {
   messages: { stream(body: AnthropicRequest): AnthropicStream };
 };
-type AnthropicCtor = new (opts?: { apiKey?: string }) => AnthropicClient;
+export type AnthropicCtor = new (opts?: { apiKey?: string }) => AnthropicClient;
 
 export type AnthropicOptions = {
   model?: string; // default: claude-opus-4-8
@@ -114,6 +114,47 @@ export type AnthropicOptions = {
   client?: AnthropicClient;
 };
 
+const ANTHROPIC_SDK: string = "@anthropic-ai/sdk";
+
+// Can `f` be called with `new`? Reflect.construct only uses `f` as new.target here, so
+// the check never runs `f`; it throws for arrow, async and generator functions, and
+// methods, which pass a `typeof === "function"` test but can't be constructed.
+function isConstructor(f: unknown): f is AnthropicCtor {
+  if (typeof f !== "function") return false;
+  try {
+    Reflect.construct(String, [], f);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Resolve the SDK's client constructor for anthropic() when no `client` is injected.
+// Non-literal specifier (typed `string`) so tsc/bundlers don't require the optional dep
+// and it stays lazy. The flip side: a bundler can't see it either, so a bundled app must
+// inject `client` (see AnthropicOptions.client). Every failure — the import rejecting,
+// or a module without a constructible default export (a CJS/ESM interop mishap, which
+// would otherwise surface as "… is not a constructor") — becomes one error naming both
+// fixes, with the import's own error as `cause`. `importSdk` is the test seam.
+export async function loadAnthropicSdk(importSdk: () => Promise<unknown> = () => import(ANTHROPIC_SDK)): Promise<AnthropicCtor> {
+  let Anthropic: unknown;
+  let cause: unknown;
+  try {
+    Anthropic = ((await importSdk()) as { default?: unknown }).default;
+  } catch (err) {
+    cause = err;
+  }
+  if (!isConstructor(Anthropic)) {
+    throw new Error(
+      "anthropic(): could not load @anthropic-ai/sdk. Install it to use the Anthropic model adapter; " +
+        "in a bundled app (bun build --compile, a single-file bundle) the lazy import is invisible to the bundler, " +
+        "so import the SDK in your app and pass `client: new Anthropic({ ... })` instead",
+      cause === undefined ? undefined : { cause },
+    );
+  }
+  return Anthropic;
+}
+
 export function anthropic(opts: AnthropicOptions = {}): Model {
   const model = opts.model ?? "claude-opus-4-8";
   const maxTokens = opts.maxTokens ?? 16000;
@@ -124,27 +165,7 @@ export function anthropic(opts: AnthropicOptions = {}): Model {
       const system = callOpts?.system ?? opts.system;
       let client = opts.client;
       if (!client) {
-        // Non-literal specifier (typed `string`) so tsc/bundlers don't require the
-        // optional dep and it stays lazy. The flip side: a bundler can't see it either,
-        // so a bundled app must inject `client` (see AnthropicOptions.client).
-        const specifier: string = "@anthropic-ai/sdk";
-        let Anthropic: AnthropicCtor | undefined;
-        let cause: unknown;
-        try {
-          Anthropic = ((await import(specifier)) as { default?: AnthropicCtor }).default;
-        } catch (err) {
-          cause = err;
-        }
-        // Also covers a module that loads without a usable default export (a CJS/ESM
-        // interop mishap), which would otherwise surface as "undefined is not a constructor".
-        if (typeof Anthropic !== "function") {
-          throw new Error(
-            "anthropic(): could not load @anthropic-ai/sdk. Install it to use the Anthropic model adapter; " +
-              "in a bundled app (bun build --compile, a single-file bundle) the lazy import is invisible to the bundler, " +
-              "so import the SDK in your app and pass `client: new Anthropic({ ... })` instead",
-            cause === undefined ? undefined : { cause },
-          );
-        }
+        const Anthropic = await loadAnthropicSdk();
         client = new Anthropic(opts.apiKey ? { apiKey: opts.apiKey } : undefined);
       }
 
