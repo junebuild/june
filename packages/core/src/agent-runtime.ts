@@ -25,7 +25,8 @@ import type { Principal } from "./context";
 // named, instead of mid-turn with something like "sink.emit is not a function".
 // Bump ONLY when the server↔core runtime contract changes shape (a seam signature,
 // an event/store type the server constructs against) — not on every release.
-export const RUNTIME_API_VERSION = 1;
+// v2: AgentSession.idle() (#174) — NativeRuntime calls it to decide eviction.
+export const RUNTIME_API_VERSION = 2;
 
 // `providerState` (#92) is OPAQUE round-trip state a model adapter may attach to a
 // tool call: some providers require it replayed verbatim (Gemini 3+ returns a
