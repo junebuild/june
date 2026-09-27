@@ -66,3 +66,55 @@ describe("withAssets", () => {
     expect(await res.text()).toBe("DYNAMIC");
   });
 });
+
+// On workerd, handing the incoming Request to env.ASSETS.fetch() transfers its body
+// stream: a 404 from assets then leaves the pipeline a Request whose body is already
+// used, so POST /mcp answered -32700 "Parse error" and actions lost their input — but
+// only when deployed (the Bun dev host has no ASSETS). This fake models that: it
+// drains any body it's handed, and records every method it was asked to serve.
+describe("withAssets: non-GET requests keep their body", () => {
+  function drainingAssets() {
+    const methods: string[] = [];
+    return {
+      methods,
+      binding: {
+        fetch: async (req: Request) => {
+          methods.push(req.method);
+          if (req.body) await req.text(); // the binding consumes the stream, as on workerd
+          return new Response("not found", { status: 404 });
+        },
+      },
+    };
+  }
+  // The pipeline echoes the body it receives — or reports that it had none left.
+  const echo = {
+    fetch: async (req: Request) => (req.bodyUsed ? new Response("BODY ALREADY USED", { status: 500 }) : new Response(await req.text())),
+  };
+  const rpc = '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}';
+
+  test("POST /mcp reaches the pipeline with its JSON body intact", async () => {
+    const assets = drainingAssets();
+    const req = new Request("https://x/mcp", { method: "POST", headers: { "content-type": "application/json" }, body: rpc });
+    const res = await withAssets(echo, { link: LINK }).fetch(req, { ASSETS: assets.binding });
+    expect(await res.text()).toBe(rpc);
+    expect(assets.methods).toEqual([]); // assets never see a write — they only serve reads
+  });
+
+  for (const method of ["PUT", "PATCH", "DELETE"]) {
+    test(`${method} bypasses the assets and keeps its body`, async () => {
+      const assets = drainingAssets();
+      const req = new Request("https://x/some/action", { method, body: "payload" });
+      const res = await withAssets(echo).fetch(req, { ASSETS: assets.binding });
+      expect(await res.text()).toBe("payload");
+      expect(assets.methods).toEqual([]);
+    });
+  }
+
+  test("GET and HEAD are still served from the assets first", async () => {
+    const assets = drainingAssets();
+    const worker = withAssets(echo);
+    await worker.fetch(get("/why"), { ASSETS: assets.binding });
+    await worker.fetch(new Request("https://x/why", { method: "HEAD" }), { ASSETS: assets.binding });
+    expect(assets.methods).toEqual(["GET", "HEAD"]);
+  });
+});
