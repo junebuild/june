@@ -339,19 +339,33 @@ export function AgentStage() {
             ))}
           </div>
         </div>
-        <div className="j-stage-body" role="log" aria-live="off">
-          {shown.map((s, i) => (
-            <div key={`${surfaceId}-${run}-${i}`}>{s.node}</div>
+        {/* The live turn and an invisible, finished copy of EVERY surface's turn share
+            one grid cell, so the cell is always as tall as the tallest finished turn at
+            this width. Playing, skipping, or switching surface then never changes the
+            stage's height — nothing below the hero moves. */}
+        <div className="j-stage-body">
+          {SURFACES.map((s) => (
+            <div key={s.id} className="j-stage-turn is-ghost" aria-hidden="true" inert>
+              {s.steps.map((step, i) => (
+                <div key={i}>{step.node}</div>
+              ))}
+              <span className="j-stage-replay">↻ replay</span>
+            </div>
           ))}
-          {live ? (
-            <button type="button" className="j-stage-replay" onClick={() => setSkipped(true)}>
-              ⏭ skip — show the whole turn
-            </button>
-          ) : (
-            <button type="button" className="j-stage-replay" onClick={play}>
-              ↻ replay
-            </button>
-          )}
+          <div className="j-stage-turn is-live" role="log" aria-live="off">
+            {shown.map((s, i) => (
+              <div key={`${surfaceId}-${run}-${i}`}>{s.node}</div>
+            ))}
+            {live ? (
+              <button type="button" className="j-stage-replay" onClick={() => setSkipped(true)}>
+                ⏭ skip — show the whole turn
+              </button>
+            ) : (
+              <button type="button" className="j-stage-replay" onClick={play}>
+                ↻ replay
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>

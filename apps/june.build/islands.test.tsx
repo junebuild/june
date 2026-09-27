@@ -89,9 +89,26 @@ describe("AskSite", () => {
 });
 
 describe("AgentStage", () => {
-  const rows = (el: HTMLElement) => el.querySelectorAll(".j-stage-body > div").length;
+  // the live turn only — the invisible ghosts that reserve the height are not "shown"
+  const rows = (el: HTMLElement) => el.querySelectorAll(".j-stage-turn.is-live > div").length;
   const button = (el: HTMLElement, text: string) =>
-    [...el.querySelectorAll<HTMLButtonElement>(".j-stage-replay")].find((b) => b.textContent!.includes(text));
+    [...el.querySelectorAll<HTMLButtonElement>(".j-stage-turn.is-live button.j-stage-replay")].find((b) =>
+      b.textContent!.includes(text),
+    );
+
+  test("the stage reserves its height: one hidden, inert, finished ghost per surface", async () => {
+    const el = await mount(<AgentStage />);
+    const ghosts = [...el.querySelectorAll<HTMLElement>(".j-stage-turn.is-ghost")];
+    // one per surface, each the WHOLE turn (so the cell is as tall as the tallest one)
+    expect(ghosts.map((g) => g.querySelectorAll(":scope > div").length)).toEqual([7, 5, 4]);
+    for (const g of ghosts) {
+      expect(g.getAttribute("aria-hidden")).toBe("true"); // not announced twice
+      expect(g.hasAttribute("inert")).toBe(true); //         nothing in it focusable or clickable
+      expect(g.querySelector("button")).toBeNull();
+    }
+    // …and the live turn shares their grid cell (the CSS stacks every .j-stage-turn)
+    expect(el.querySelector(".j-stage-body > .j-stage-turn.is-live")).not.toBeNull();
+  });
 
   test("the auto-playing turn can be stopped: skip shows it whole, and nothing updates after", async () => {
     const el = await mount(<AgentStage />);
@@ -108,11 +125,13 @@ describe("AgentStage", () => {
 
   test("a resumed turn runs as its sender: the approver is resume.by, not ctx.user", async () => {
     const el = await mount(<AgentStage />);
+    // the LIVE turn only: the hidden ghosts carry the same text, and must not satisfy this
+    const live = () => el.querySelector(".j-stage-turn.is-live")!.textContent!;
+    expect(live()).not.toContain("resume.by"); // playing, step 1: proves the scope excludes the ghosts
     await act(async () => button(el, "skip")!.click());
-    const text = el.textContent!;
-    expect(text).toContain("resume.by = @maya");
-    expect(text).toContain("ctx.user = U04DANA");
-    expect(text).not.toContain("U04MAYA");
+    expect(live()).toContain("resume.by = @maya");
+    expect(live()).toContain("ctx.user = U04DANA");
+    expect(live()).not.toContain("U04MAYA");
   });
 
   test("the surface switcher is a labeled toggle-button group, not a partial tabs widget", async () => {
