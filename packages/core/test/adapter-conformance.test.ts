@@ -8,6 +8,7 @@
 // content fails even though the engine handed the adapter everything.
 
 import { describe, expect, test } from "bun:test";
+import type Anthropic from "@anthropic-ai/sdk"; // type-only: the real SDK is never loaded
 import { runAdapterConformance, type ScriptedReply } from "@junejs/core/test";
 import { anthropic, fromAnthropicContent, toAnthropicMessages, type AnthropicBlock, type AnthropicClient, type AnthropicResponseBlock, type AnthropicStream, type AnthropicStreamEvent } from "@junejs/core/agent-models";
 import type { Model, ModelDelta, Msg } from "@junejs/core/agent-runtime";
@@ -181,7 +182,12 @@ describe("runAdapterConformance (#105)", () => {
       messages: {
         stream(_body: SdkishParams) {
           return Object.assign(
-            (async function* (): AsyncGenerator<{ type: "content_block_delta"; delta: { type: "text_delta"; text: string } }> {})(),
+            (async function* (): AsyncGenerator<
+              | { type: "content_block_delta"; delta: { type: "text_delta"; text: string } }
+              // the real stream also yields message_delta, whose delta shares no key with a
+              // text/thinking delta — an all-optional (weak) delta type rejects it (#195)
+              | { type: "message_delta"; delta: { stop_reason: string | null; stop_sequence: string | null } }
+            > {})(),
             { finalMessage: async () => ({ id: "m1", role: "assistant" as const, content: [] as SdkishBlock[] }) },
           );
         },
@@ -203,6 +209,15 @@ describe("runAdapterConformance (#105)", () => {
       { type: "redacted_thinking" },
     ]);
     expect(reply).toEqual({ text: "hi", toolCalls: [{ id: "c1", name: "echo", input: { a: 1 } }] });
+  });
+
+  test("AnthropicClient accepts the REAL @anthropic-ai/sdk client (#195)", () => {
+    // The mirror above drifted from the SDK once (its event union was narrower than the
+    // real one). This pins the documented `client: new Anthropic({ … })` against the
+    // SDK's own types, so an SDK bump that breaks injection fails typecheck.
+    // (Compile-time assertion; nothing is constructed.)
+    const accept = (sdk: Anthropic): AnthropicClient => sdk;
+    expect(accept).toBeFunction();
   });
 
   test("toAnthropicMessages folds consecutive tool results into one user message", () => {
