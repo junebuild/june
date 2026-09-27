@@ -11,12 +11,15 @@ export async function ogResponse(opts: OgOptions): Promise<Response> {
     width: OG_WIDTH,
     height: OG_HEIGHT,
     fonts: await ogFonts(opts),
-    headers: OG_HEADERS,
   });
   // Buffer the stream: ImageResponse renders INSIDE its body stream, so a
   // render error would otherwise escape every try/catch after the 200 is
   // already on the wire. An og:image is ~30–50KB — buffering is free, and
   // errors become catchable.
   const png = await image.arrayBuffer();
-  return new Response(png, { status: image.status, headers: image.headers });
+  // Our headers only — never workers-og's. It sets "Content-Type"/"Cache-Control"
+  // and then spreads options.headers, so passing our lowercase keys left BOTH
+  // spellings in one object and Headers joined them: `content-type: image/png,
+  // image/png`, which strict unfurlers reject as an unloadable image.
+  return new Response(png, { status: image.status, headers: OG_HEADERS });
 }
