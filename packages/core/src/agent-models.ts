@@ -89,8 +89,12 @@ export type AnthropicRequest = {
 // parameter type still satisfies it. `stop_reason` is the Messages API's why-it-stopped
 // field (@anthropic-ai/sdk ≥0.60 Message: end_turn / max_tokens / stop_sequence /
 // tool_use / pause_turn / refusal / model_context_window_exceeded / null) — optional
-// here so a minimal fake transport stays assignable.
-export type AnthropicStreamEvent = { type: string; delta?: { type?: string; text?: string; thinking?: string } };
+// here so a minimal fake transport stays assignable. `delta` is `unknown`, narrowed where
+// it is read: the SDK's event union includes message_delta ({ stop_reason, … }), which
+// shares no key with a text/thinking delta, so any all-optional object type there is a
+// TS "weak type" that rejects the real client (#195) — and an index signature doesn't
+// help, because the SDK declares its deltas as interfaces (no implicit index signature).
+export type AnthropicStreamEvent = { type: string; delta?: unknown };
 export type AnthropicStream = AsyncIterable<AnthropicStreamEvent> & { finalMessage(): Promise<{ content: AnthropicResponseBlock[]; stop_reason?: string | null }> };
 export type AnthropicClient = {
   messages: { stream(body: AnthropicRequest): AnthropicStream };
@@ -183,9 +187,10 @@ export function anthropic(opts: AnthropicOptions = {}): Model {
         messages: toAnthropicMessages(msgs),
       });
       for await (const ev of stream) {
-        if (ev.type !== "content_block_delta" || !ev.delta) continue;
-        if (ev.delta.type === "text_delta" && ev.delta.text) yield { type: "text", text: ev.delta.text };
-        else if (ev.delta.type === "thinking_delta" && ev.delta.thinking) yield { type: "reasoning", text: ev.delta.thinking };
+        if (ev.type !== "content_block_delta" || typeof ev.delta !== "object" || !ev.delta) continue;
+        const d = ev.delta as { type?: unknown; text?: unknown; thinking?: unknown };
+        if (d.type === "text_delta" && typeof d.text === "string" && d.text) yield { type: "text", text: d.text };
+        else if (d.type === "thinking_delta" && typeof d.thinking === "string" && d.thinking) yield { type: "reasoning", text: d.thinking };
       }
       const message = await stream.finalMessage();
       // Spread, don't assign: a transport that omits stop_reason must yield the same delta
