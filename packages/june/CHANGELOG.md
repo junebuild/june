@@ -1,5 +1,20 @@
 # @junejs/server
 
+## 1.0.0-dev.26
+
+### Patch Changes
+
+- [#205](https://github.com/junebuild/june/pull/205) [`0a47816`](https://github.com/junebuild/june/commit/0a4781607d6434873bfee9cab9989507ba0271bc) Thanks [@linyiru](https://github.com/linyiru)! - An app with no icon of its own now also gets PNG icons: `icon.png` (32×32, for Google Search, which doesn't show SVG favicons), `apple-touch-icon.png` (180×180, for iOS home screens), and a real `favicon.ico`. Before, only the letter SVG existed, and `/favicon.ico` returned that SVG. `june build` rasterizes them into `dist/assets/` with `@resvg/resvg-wasm`, `june dev` renders them on first request with the same code, and the document links them (new `DocumentConfig.icons`).
+
+  The font follows the script of the site name's first character, taken as a grapheme so emoji and characters outside the BMP stay whole; the SVG favicon now uses the same rule instead of `charAt(0)`. Latin, Greek, Cyrillic, and digits use a bundled Inter subset (34 KB, OFL), so they need no network. Han uses the Noto Sans CJK face matching `site.lang` through CLDR likely subtags (`zh` → SC, `zh-TW` → TC, `zh-HK` → HK, `ja` → JP, `ko` → KR; no Han signal → SC, CLDR's default). Kana, Hangul, emoji, and scripts such as Arabic or Devanagari get their own Noto faces. Those come from Google Fonts subset to the one character and are cached in `node_modules/.cache/june/fonts`. A glyph the font lacks is detected rather than drawn as tofu. Offline or unknown scripts draw the square without the character and print a warning; they never fail the build. `site.icon` or an icon file in `public/` turns generation off.
+
+- [#202](https://github.com/junebuild/june/pull/202) [`d1c9f23`](https://github.com/junebuild/june/commit/d1c9f235e887c0253a805c442e4b1a9bf5c3cdc5) Thanks [@linyiru](https://github.com/linyiru)! - Every page now ships the social and SEO tags a link preview needs, with no metadata required. Before, the document emitted OpenGraph tags only when a route set `openGraph`, and never `og:url`, `og:site_name`, `og:locale`, `twitter:card`, or a default canonical, so opengraph.to scored june.build 40. Now `og:title`/`og:description`/`og:type`/`og:site_name`/`og:locale` are always present; `og:url` and `<link rel="canonical">` default to the page URL without its query string (`metadata.canonical` overrides it; `noindex` pages get none); `twitter:card` is `summary_large_image` when there is an image, else `summary`; and the homepage carries WebSite JSON-LD.
+
+  Absolute URLs use the public origin: an i18n locale's own domain for its pages, else a new `site.url`, else `https://<deploy.domain>`, else the request origin. The `june build` prerender host is never used. With no public origin, the URL-derived tags are omitted, and a root-relative `openGraph.image` resolves against the origin or is dropped. Homepage detection uses the matched route, so a locale home (`/de`) and `/index` count, and RSC pages get the same tags. New optional fields: `site.twitter` (→ `twitter:site`), `openGraph.imageAlt`/`imageWidth`/`imageHeight`, and `metadata.twitter.card`/`creator`.
+
+- Updated dependencies [[`0a47816`](https://github.com/junebuild/june/commit/0a4781607d6434873bfee9cab9989507ba0271bc), [`d1c9f23`](https://github.com/junebuild/june/commit/d1c9f235e887c0253a805c442e4b1a9bf5c3cdc5)]:
+  - @junejs/core@0.2.0-dev.46
+
 ## 1.0.0-dev.25
 
 ### Patch Changes
