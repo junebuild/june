@@ -1,5 +1,13 @@
 # @junejs/core
 
+## 0.2.0-dev.44
+
+### Patch Changes
+
+- [#191](https://github.com/junebuild/june/pull/191) [`d062d48`](https://github.com/junebuild/june/commit/d062d48c1fe675fe0a18d1fad3eb143c1a270959) Thanks [@linyiru](https://github.com/linyiru)! - `anthropic()` checks that the loaded SDK's default export can actually be constructed, not just that it is a function. Arrow, async and generator functions pass a `typeof` test but not `new`, so an interop-wrapped module could still reach the low-level "… is not a constructor" error the [#171](https://github.com/junebuild/june/issues/171) message was meant to replace; it now gets the helpful error too. The check uses `Reflect.construct` with the export only as `new.target`, so the export is never run. The SDK loading moves into `loadAnthropicSdk(importSdk?)` (exported; `importSdk` is a test seam), which lets the import-rejection path — and its `cause` — be tested directly.
+
+- [#190](https://github.com/junebuild/june/pull/190) [`68e7adc`](https://github.com/junebuild/june/commit/68e7adc9f5912907e042bacb61296eac19ef3a79) Thanks [@linyiru](https://github.com/linyiru)! - Follow-ups to native session eviction ([#174](https://github.com/junebuild/june/issues/174)). The server↔core runtime contract moves to v2 (`RUNTIME_API_VERSION` in core, the expected number in server, in lockstep): `NativeRuntime` now calls `AgentSession.idle()`, so a server paired with an older, nested core copy fails at construction with both versions named instead of at the first eviction with "idle is not a function". `maxSessions` is validated — an integer >= 1, or `Infinity` for no cap; `0`, negatives, fractions and `NaN` throw a `RangeError` at construction.
+
 ## 0.2.0-dev.43
 
 ### Patch Changes
