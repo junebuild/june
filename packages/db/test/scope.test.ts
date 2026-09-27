@@ -3,7 +3,7 @@
 // them outside a scope, or undeclared, throws actionable guidance.
 import { describe, expect, test, beforeAll } from "bun:test";
 
-import { db, kv, runInScope, ensureScope, requestLocal, isolateLocal, registerSqlTagger } from "../src/scope";
+import { db, kv, currentServices, runInScope, ensureScope, requestLocal, isolateLocal, registerSqlTagger } from "../src/scope";
 import type { JuneDb } from "@junejs/core/resources";
 
 beforeAll(async () => {
@@ -35,6 +35,14 @@ describe("ambient resources", () => {
     await runInScope({ resources: {} }, () => {
       expect(() => db.query("select 1")).toThrow(/no `db` resource is declared/);
     });
+  });
+
+  // The two ambient APIs fail DIFFERENTLY outside a scope — the docs (agents-deploy,
+  // the example wrangler configs) tell users which one they'll debug: resources throw,
+  // while the optional, app-defined services bag soft-returns undefined.
+  test("currentServices() OUTSIDE any scope → undefined, not a throw (unlike the resources)", () => {
+    expect(currentServices()).toBeUndefined();
+    expect(() => db.query("select 1")).toThrow(/outside a request scope/);
   });
 
   test("a different ambient (kv) is independent and also guided", () => {

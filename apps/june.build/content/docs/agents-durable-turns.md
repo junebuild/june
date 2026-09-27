@@ -51,25 +51,41 @@ the delivery guarantee:
 
 | `run` is | class | guarantee | how |
 | --- | --- | --- | --- |
-| a plain function | local | **exactly-once** | side effect + checkpoint + transcript append in **one** synchronous transaction |
+| a plain function | local | **exactly-once** for the step, and for writes made through `ctx.store.unwrap()` | those writes + checkpoint + transcript append in **one** synchronous transaction |
 | an `async` function | remote | **at-least-once** | awaited, then checkpoint + append in one transaction |
+
+The transaction covers the session store's own handle and nothing else. A sync
+tool that writes to another database, calls an API, or causes any other effect
+gets no rollback with the checkpoint: a crash after the effect but before the
+commit re-runs it. Treat such effects as at-least-once and make them idempotent.
+
+To make an app write exactly-once, do it through the store handle — the host's
+synchronous SQLite natively, `ctx.storage.sql` in a Durable Object. That handle is
+on the raw tool context (`ToolContext.store`), so this takes a raw `Tool`; a
+`defineAction`'s `run` gets only `{ user }`:
 
 ```ts
 // app/agent/tools/create_order.ts
-import { defineAction } from "@junejs/core/agent";
+import type { Tool } from "@junejs/core/agent-runtime";
 
-// sync → exactly-once: a crash either rolls the whole step back or commits it
-export default defineAction({
-  id: "create_order",
-  description: "Place an order for an item.",
-  input: { type: "object", properties: { item: { type: "string" } }, required: ["item"] },
-  run: (input) => ({ orderId: 1, item: input.item }),
-});
+// sync, and the write goes through ctx.store: a crash rolls back the order row
+// together with the step, or commits both. The handle is the backend's own —
+// this is the Durable Object's ctx.storage.sql; natively it is the sync SQLite
+// handle, written with query(sql).run(...).
+const createOrder: Tool = {
+  spec: {
+    name: "create_order",
+    description: "Place an order for an item.",
+    input: { type: "object", properties: { item: { type: "string" } }, required: ["item"] },
+  },
+  run: (input: { item: string }, ctx) => {
+    const sql = ctx.store.unwrap<{ exec(q: string, ...b: unknown[]): unknown }>();
+    sql.exec("insert into orders (item) values (?)", input.item);
+    return { item: input.item };
+  },
+};
+export default createOrder;
 ```
-
-A local tool that needs its own table can write it inside the same transaction
-through `ctx.store.unwrap()`: the host's synchronous SQLite handle natively,
-`ctx.storage.sql` in a Durable Object.
 
 An async tool can't join that transaction. If the process dies after its network
 call returns but before the checkpoint commits, the replay calls it again. Make

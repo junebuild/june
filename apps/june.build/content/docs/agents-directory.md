@@ -136,8 +136,14 @@ lists. When the agent runs it:
 
 | `run` is | the engine treats it as | guarantee |
 |---|---|---|
-| a plain (sync) function | a local tool | **exactly-once**: side effect, checkpoint, and transcript append commit in one transaction |
+| a plain (sync) function | a local tool | **exactly-once for writes through `ctx.store.unwrap()`**: those, the checkpoint, and the transcript append commit in one transaction |
 | an `async` function | a remote tool | **at-least-once**: it runs, then its result is checkpointed, so a crash in between re-runs it |
+
+The transaction only covers the session store's own handle, which lives on the
+raw tool context — a `defineAction` can't reach it. A sync tool that writes to
+another database, or causes any other side effect, gets no rollback: treat that
+effect as at-least-once and make it idempotent. See
+[Durable turns](/docs/agents-durable-turns) for an exactly-once write.
 
 The engine checks for an `async` function specifically
 (`run.constructor.name === "AsyncFunction"`). A plain function that returns a
@@ -264,7 +270,7 @@ const edgeModel = anthropic({ client: new Anthropic({ apiKey: env.ANTHROPIC_API_
 | option | default | notes |
 |---|---|---|
 | `model` | `"claude-opus-4-8"` | The value the adapter uses when `agent.ts` has no `model` |
-| `apiKey` | — | Leave it out on native, where `ANTHROPIC_API_KEY` is read. It's required on the edge, which has no `process.env` |
+| `apiKey` | — | Only for the lazy-import path. Leave it out on native, where `ANTHROPIC_API_KEY` is read. **Don't use it on the edge**: `apiKey` alone still takes the lazy import a bundler can't see. Inject `client` built with the edge secret instead |
 | `system` | — | A construction-time system prompt. The runtime's per-turn system prompt (the agent's instructions) wins |
 | `maxTokens` | `16000` | |
 | `thinking` | `false` | `true` sends adaptive thinking. It's off by default because the transcript doesn't yet persist thinking blocks |

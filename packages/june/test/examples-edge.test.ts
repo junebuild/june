@@ -130,8 +130,8 @@ describe("edge examples: wrangler config", () => {
         durable_objects?: { bindings: Array<{ name: string; class_name: string }> };
         migrations?: Array<{ new_sqlite_classes?: string[] }>;
       };
-      // without the flag the DO's request scope (node:async_hooks, loaded lazily) is a
-      // pass-through: ambient db/kv/blob and currentServices() stop resolving in tools
+      // without the flag the DO has no request scope (node:async_hooks loads lazily):
+      // ambient db/kv/blob throw, and currentServices() returns undefined
       expect(cfg.compatibility_flags).toContain("nodejs_compat");
       const binding = cfg.durable_objects?.bindings.find((b) => b.name === "AGENT");
       expect(binding).toBeDefined();
