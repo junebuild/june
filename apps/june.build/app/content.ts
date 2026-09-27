@@ -21,8 +21,8 @@ export const PAGES: Page[] = [
     title: "June — build agents into real apps",
     summary:
       "The React framework where an agent is a feature, not a separate runtime. An agent/ directory " +
-      "turns your server actions into its tools, Slack or Crisp into its channels, and every turn " +
-      "into a durable process — while one route() still serves HTML, markdown, JSON, and MCP.",
+      "makes the server actions you export into it its tools, Slack or Crisp its channels, and every turn " +
+      "a durable process — while one route() still serves HTML, markdown, JSON, and MCP.",
     md: `# June
 
 **The React framework for building agents into real apps.**
@@ -50,8 +50,9 @@ server actions, its API is the \`/mcp\` your app already speaks.
 ## The foundation
 
 - **One definition, four surfaces** — every \`route()\` projects an HTML view,
-  JSON, and markdown, and every \`defineAction()\` is a UI action, an agent
-  tool, AND an MCP tool. This very site: try \`/why.md\`, \`/benchmarks.json\`,
+  JSON, and markdown, and every \`defineAction()\` is a UI action AND an MCP
+  tool. Export one from \`agent/tools/\` (or pass it to \`defineAgent({ tools })\`)
+  and it is your agent's tool too. This very site: try \`/why.md\`, \`/benchmarks.json\`,
   \`/llms.txt\`, or call our MCP tools at \`/mcp\`.
 - **No glue layer** — \`run(input, ctx)\` is the one authorization gate for
   the UI, your agent, and anyone else's agent at \`/mcp\`.

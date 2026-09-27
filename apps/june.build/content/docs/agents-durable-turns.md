@@ -64,14 +64,28 @@ synchronous SQLite natively, `ctx.storage.sql` in a Durable Object. That handle 
 on the raw tool context (`ToolContext.store`), so this takes a raw `Tool`; a
 `defineAction`'s `run` gets only `{ user }`:
 
+The handle is the backend's own, so a portable tool branches on its shape: the
+native sync SQLite binds with `query(sql).run(...)`, the Durable Object's
+`ctx.storage.sql` with `exec(sql, ...bindings)`. The in-memory backend has no
+handle (and no rollback), so the helper refuses there instead of writing nowhere:
+
 ```ts
 // app/agent/tools/create_order.ts
-import type { Tool } from "@junejs/core/agent-runtime";
+import type { Tool, ToolContext } from "@junejs/core/agent-runtime";
 
-// sync, and the write goes through ctx.store: a crash rolls back the order row
-// together with the step, or commits both. The handle is the backend's own —
-// this is the Durable Object's ctx.storage.sql; natively it is the sync SQLite
-// handle, written with query(sql).run(...).
+type NativeSql = { query(sql: string): { run(...params: unknown[]): unknown } };
+type DurableSql = { exec(sql: string, ...params: unknown[]): unknown };
+
+// A write that joins the step's transaction, on either SQL backend.
+function storeWrite(ctx: ToolContext, sql: string, ...params: unknown[]): void {
+  const h = ctx.store.unwrap<NativeSql | DurableSql | undefined>();
+  if (!h) throw new Error("this backend has no transactional store handle");
+  if ("query" in h) h.query(sql).run(...params); // native: bun:sqlite / node:sqlite
+  else h.exec(sql, ...params); //                     Durable Object: ctx.storage.sql
+}
+
+// sync, and every write goes through the store: a crash rolls back the order row
+// together with the step, or commits both
 const createOrder: Tool = {
   spec: {
     name: "create_order",
@@ -79,8 +93,8 @@ const createOrder: Tool = {
     input: { type: "object", properties: { item: { type: "string" } }, required: ["item"] },
   },
   run: (input: { item: string }, ctx) => {
-    const sql = ctx.store.unwrap<{ exec(q: string, ...b: unknown[]): unknown }>();
-    sql.exec("insert into orders (item) values (?)", input.item);
+    storeWrite(ctx, "create table if not exists orders (item text not null)");
+    storeWrite(ctx, "insert into orders (item) values (?)", input.item);
     return { item: input.item };
   },
 };
@@ -96,7 +110,10 @@ becomes a remote tool, a plain one stays local.
 Two rules follow from classifying by declaration:
 
 - Declare a tool that awaits anything `async`. A plain function that *returns* a
-  Promise is classified local, and the unresolved Promise is what gets committed.
+  Promise is classified local, and its result is committed immediately — both
+  SQL stores `JSON.stringify` it, and a Promise serializes to `{}`. So the step
+  and the transcript record `{}`, the model reads `{}` as the tool's result, and
+  the real work keeps running outside the transaction with its outcome lost.
 - On the in-memory backend `tx` has no rollback, so exactly-once only holds on
   the SQLite and Durable Object stores.
 

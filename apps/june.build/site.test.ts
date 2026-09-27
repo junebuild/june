@@ -65,6 +65,12 @@ describe("human surface", () => {
     expect(docBoxes.length).toBe((doc.match(/<table/g) ?? []).length); // no bare table left unwrapped
   });
 
+  test("the landing copy doesn't promise every action is an agent tool", async () => {
+    const md = await (await get("/index.md")).text();
+    expect(md).not.toMatch(/every `defineAction\(\)` is a UI action, an agent/);
+    expect(md).toContain("Export one from `agent/tools/`"); // the real rule: exported into the agent
+  });
+
   test("each page gets its own templated title", async () => {
     expect(await (await get("/why")).text()).toContain("<title>Why June · June</title>");
     expect(await (await get("/benchmarks")).text()).toContain("<title>Benchmarks · June</title>");
