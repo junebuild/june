@@ -89,6 +89,32 @@ describe("AskSite", () => {
 });
 
 describe("AgentStage", () => {
+  const rows = (el: HTMLElement) => el.querySelectorAll(".j-stage-body > div").length;
+  const button = (el: HTMLElement, text: string) =>
+    [...el.querySelectorAll<HTMLButtonElement>(".j-stage-replay")].find((b) => b.textContent!.includes(text));
+
+  test("the auto-playing turn can be stopped: skip shows it whole, and nothing updates after", async () => {
+    const el = await mount(<AgentStage />);
+    expect(rows(el)).toBe(1); // playing: only the first step so far
+    await act(async () => button(el, "skip")!.click());
+    const whole = rows(el);
+    expect(whole).toBe(7); // the full Slack turn, at once
+
+    await act(async () => void (await new Promise((r) => setTimeout(r, 1200)))); // > one step's delay
+    expect(rows(el)).toBe(whole); // stopped — no further automatic updates
+    expect(button(el, "skip")).toBeUndefined();
+    expect(button(el, "replay")).toBeDefined();
+  });
+
+  test("a resumed turn runs as its sender: the approver is resume.by, not ctx.user", async () => {
+    const el = await mount(<AgentStage />);
+    await act(async () => button(el, "skip")!.click());
+    const text = el.textContent!;
+    expect(text).toContain("resume.by = @maya");
+    expect(text).toContain("ctx.user = U04DANA");
+    expect(text).not.toContain("U04MAYA");
+  });
+
   test("the surface switcher is a labeled toggle-button group, not a partial tabs widget", async () => {
     const el = await mount(<AgentStage />);
     const group = el.querySelector('[aria-label="Surface"]')!;

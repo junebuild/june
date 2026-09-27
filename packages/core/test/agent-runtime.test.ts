@@ -1116,6 +1116,27 @@ describe("suspend / resume (P3 — HITL)", () => {
       .toMatchObject({ trigger: { kind: "resume", callId: "c1" } });
   });
 
+  test("the approver authorizes the answer, but the resumed turn keeps the SENDER's principal", async () => {
+    const principals: unknown[] = [];
+    const managerApproval: Tool = {
+      spec: { name: "approve", description: "ask a manager to approve", input: { type: "object" } },
+      run: async (_input, ctx) => {
+        principals.push(ctx.principal);
+        return { approved: await ctx.requestInput({ id: "approve-1", prompt: "Refund?", answererId: "U-maya" }) };
+      },
+    };
+    const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), scriptedModel(APPROVE_SCRIPT), [managerApproval], noRuntime);
+    const fromDana = { ...slackEvent, user: { id: "U-dana" }, principal: { id: "dana" } };
+    const { turnId } = s.start({ turnId: "t1", userText: "refund please", event: fromDana });
+    expect(await s.result(turnId)).toMatchObject({ status: "suspended", request: { answererId: "U-maya" } });
+
+    expect(() => s.resume(turnId, "approve-1", true, { by: "U-dana" })).toThrow(/not authorized/); // the sender can't self-approve
+    s.resume(turnId, "approve-1", true, { by: "U-maya" });
+    expect(await s.result(turnId)).toMatchObject({ status: "completed" });
+    // before the park and after the resume, the tool runs as Dana — `by` never becomes ctx.user
+    expect(principals).toEqual([{ id: "dana" }, { id: "dana" }]);
+  });
+
   test("resume enforces the answererId (defaults to the trigger user; absent `by` is denied)", async () => {
     const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), scriptedModel(APPROVE_SCRIPT), [approveTool()], noRuntime);
     const { turnId } = s.start({ turnId: "t1", userText: "refund please", event: slackEvent });
