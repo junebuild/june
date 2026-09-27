@@ -330,3 +330,31 @@ describe("deployOrigin()", () => {
     expect(deployOrigin({})).toBeUndefined();
   });
 });
+
+describe("Document theme-color", () => {
+  const render = (config: DocumentConfig) =>
+    renderToStaticMarkup(
+      <Document config={config}>
+        <main />
+      </Document>,
+    );
+
+  test("June's starter look alone → the starter background", () => {
+    expect(render(baseConfig)).toContain(`<meta name="theme-color" content="#fbfbf8"/>`);
+  });
+
+  test("an app stylesheet or cssReset:false → no guess", () => {
+    expect(render({ ...baseConfig, styles: "/_june/global.css" })).not.toContain("theme-color");
+    expect(render({ ...baseConfig, moduleStyles: "/_june/modules.css" })).not.toContain("theme-color");
+    expect(render({ ...baseConfig, cssReset: false })).not.toContain("theme-color");
+  });
+
+  test("site.themeColor wins; { light, dark } emits one tag per colour scheme", () => {
+    const one = render({ ...baseConfig, styles: "/g.css", site: { ...baseConfig.site, themeColor: "#07080a" } });
+    expect(one).toContain(`<meta name="theme-color" content="#07080a"/>`);
+    const both = render({ ...baseConfig, site: { ...baseConfig.site, themeColor: { light: "#fff", dark: "#000" } } });
+    expect(both).toContain(`<meta name="theme-color" media="(prefers-color-scheme: light)" content="#fff"/>`);
+    expect(both).toContain(`<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#000"/>`);
+    expect(both).not.toContain(`content="#fbfbf8"`);
+  });
+});

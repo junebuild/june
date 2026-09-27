@@ -60,6 +60,11 @@ needed for a link to unfurl as a card:
 - `twitter:card` — `summary_large_image` when the page has an image, else
   `summary`. `site.twitter` adds `twitter:site`.
 - WebSite JSON-LD on the homepage, including a locale's home (`/de`).
+- `theme-color` (the mobile toolbar colour) from `site.themeColor`: one colour,
+  or `{ light, dark }` for a page that follows the system scheme. Unset, June
+  uses its starter background only when the starter look is the page's whole
+  look (no `global.css`, no CSS Modules). Otherwise it can't know your
+  background, so it emits no tag rather than guess.
 
 The public origin is `site.url`, else `https://<deploy.domain>`, else the
 request's own origin. A page served on an i18n locale's own domain

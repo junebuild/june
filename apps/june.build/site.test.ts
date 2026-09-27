@@ -256,6 +256,7 @@ describe("og:image route (app/_extra escape hatch)", () => {
     expect(why).toContain('<meta property="og:image:width" content="1200"/>');
     expect(why).toContain('<meta property="og:image:height" content="630"/>');
     expect(why).toContain('<meta name="twitter:site" content="@junebuild"/>');
+    expect(why).toContain('<meta name="theme-color" content="#07080a"/>');
     expect(await (await get("/docs/features-og-image")).text()).toContain(
       '<meta property="og:image" content="https://june.build/og/features-og-image.png"/>',
     );
