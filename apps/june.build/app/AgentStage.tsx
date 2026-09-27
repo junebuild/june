@@ -314,13 +314,12 @@ export function AgentStage() {
             <span className={"j-dot" + (live ? "" : " is-idle")} />
             {surface.where}
           </div>
-          <div className="j-seg" role="tablist" aria-label="Surface">
+          <div className="j-seg" role="group" aria-label="Surface">
             {SURFACES.map((s) => (
               <button
                 key={s.id}
                 type="button"
-                role="tab"
-                aria-selected={s.id === surfaceId}
+                aria-pressed={s.id === surfaceId}
                 className={s.id === surfaceId ? "is-on" : ""}
                 onClick={() => {
                   setSurfaceId(s.id);

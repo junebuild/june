@@ -5,5 +5,5 @@
     "resolveJsonModule": true,
     "types": ["bun", "react"]
   },
-  "include": ["app", "june.config.ts", "site.test.ts"]
+  "include": ["app", "june.config.ts", "site.test.ts", "islands.test.tsx"]
 }

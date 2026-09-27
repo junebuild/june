@@ -27,9 +27,19 @@ export default defineMcpConnection({
 });
 ```
 
-Remote tools are registered as `defineAction`s, so they join the same registry
-as your own tools: callable by the agent, and re-served from your app's
-[`/mcp`](/docs/features-mcp) under the same authorization gate.
+Remote tools are built as `defineAction`s, so the agent calls them through the
+same `run(input, ctx)` path as your own tools. Where they are *also* listed
+depends on the target:
+
+- **Native (`june dev`, a self-mounted runtime)** — connections are opened in
+  the same process that serves your app, so their actions land in the one
+  action registry and your app's [`/mcp`](/docs/features-mcp) re-serves them
+  under the same authorization gate.
+- **Workers** — connections are opened lazily *inside each session's Durable
+  Object* (see "On the edge" below), a separate
+  isolate from the worker that answers `/mcp`. The agent gets the tools; the
+  worker's `/mcp` does not list them. To expose a remote tool on a deployed
+  `/mcp`, wrap it in a `defineAction` of your own in `app/`.
 
 ## Three kinds
 
