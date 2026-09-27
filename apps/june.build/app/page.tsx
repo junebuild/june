@@ -2,6 +2,7 @@ import { AgentStage } from "./AgentStage";
 import { AskSite } from "./AskSite";
 import { bySlug } from "./content";
 import { InstallCmd } from "./InstallCmd";
+import { ogImage } from "./og-card";
 // Side-effect import: registers search_site / get_page so warmup surfaces them
 // at /mcp (warmup loads route files; standalone modules must be reachable).
 import "./actions";
@@ -624,7 +625,7 @@ export default function Home() {
 export const metadata = {
   title: page.title,
   description: page.summary,
-  openGraph: { image: "https://june.build/og/index.png" },
+  openGraph: ogImage("index"),
 };
 export const md = () => page.md;
 export const json = () => ({ title: page.title, summary: page.summary });

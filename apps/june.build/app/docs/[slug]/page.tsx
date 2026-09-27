@@ -1,6 +1,7 @@
 import type { RouteContext, Loaded } from "@junejs/core/route";
 
 import { doc } from "../../_content";
+import { ogImage } from "../../og-card";
 import { scrollableTables } from "../../tables";
 
 export const loader = (ctx: RouteContext<{ slug: string }>) => {
@@ -22,7 +23,7 @@ export default function Doc({ d }: Loaded<typeof loader>) {
 export const metadata = ({ d }: Loaded<typeof loader>) => ({
   title: String(d.data.title ?? d.slug),
   description: String(d.data.description ?? ""),
-  openGraph: { image: `https://june.build/og/${d.slug}.png` },
+  openGraph: ogImage(d.slug),
 });
 export const md = ({ d }: Loaded<typeof loader>) => d.original;
 export const json = ({ d }: Loaded<typeof loader>) => ({ slug: d.slug, ...d.data, body: d.body });

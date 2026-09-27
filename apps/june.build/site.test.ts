@@ -210,10 +210,13 @@ describe("og:image route (app/_extra escape hatch)", () => {
       expect(res.status).toBe(200);
       expect(res.headers.get("content-type")).toBe("image/png");
     }
-    // and the pages advertise them
-    expect(await (await get("/why")).text()).toContain(
-      '<meta property="og:image" content="https://june.build/og/why.png"/>',
-    );
+    // and the pages advertise them — absolute via deploy.domain, sized, with the
+    // site's X handle
+    const why = await (await get("/why")).text();
+    expect(why).toContain('<meta property="og:image" content="https://june.build/og/why.png"/>');
+    expect(why).toContain('<meta property="og:image:width" content="1200"/>');
+    expect(why).toContain('<meta property="og:image:height" content="630"/>');
+    expect(why).toContain('<meta name="twitter:site" content="@junebuild"/>');
     expect(await (await get("/docs/features-og-image")).text()).toContain(
       '<meta property="og:image" content="https://june.build/og/features-og-image.png"/>',
     );

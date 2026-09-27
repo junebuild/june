@@ -1,6 +1,7 @@
 import type { RouteContext, Loaded } from "@junejs/core/route";
 
 import { post } from "../../_content";
+import { ogImage } from "../../og-card";
 import { scrollableTables } from "../../tables";
 
 export const loader = (ctx: RouteContext<{ slug: string }>) => {
@@ -32,9 +33,7 @@ export default function Post({ entry }: Loaded<typeof loader>) {
 export const metadata = ({ entry }: Loaded<typeof loader>) => ({
   title: String(entry.data.title ?? entry.slug),
   description: String(entry.data.description ?? ""),
-  // Absolute URL (the OG spec wants one), constant origin so prerender stays
-  // origin-independent. The card renders live at /og/<slug>.png (app/_extra).
-  openGraph: { type: "article", image: `https://june.build/og/${entry.slug}.png` },
+  openGraph: { type: "article", ...ogImage(entry.slug) },
 });
 // the agent-facing projection: the authored file, verbatim
 export const md = ({ entry }: Loaded<typeof loader>) => entry.original;

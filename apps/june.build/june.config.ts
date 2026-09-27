@@ -12,6 +12,7 @@ export default defineJune({
   site: {
     name: "June — build agents into real apps",
     titleTemplate: "%s · June",
+    twitter: "@junebuild",
     description:
       "The React framework where an agent is a feature, not a separate runtime: " +
       "your server actions are its tools, every turn is durable, and routes also serve MCP.",

@@ -49,6 +49,14 @@ export type OgFont = { name: string; data: ArrayBuffer; weight: 600; style: "nor
 
 export const OG_WIDTH = 1200;
 export const OG_HEIGHT = 630;
+
+// A page's openGraph image fields: its live card (app/og/[slug]/route.ts) plus
+// the card's size, so unfurlers lay it out before the PNG arrives. Root-relative
+// on purpose — the document resolves it against the public origin
+// (deploy.domain), prerendered pages included.
+export function ogImage(slug: string) {
+  return { image: `/og/${slug}.png`, imageWidth: OG_WIDTH, imageHeight: OG_HEIGHT };
+}
 export const OG_HEADERS = {
   "content-type": "image/png",
   "cache-control": "public, max-age=86400, stale-while-revalidate=604800",

@@ -1,4 +1,5 @@
 import { bySlug } from "../content";
+import { ogImage } from "../og-card";
 
 const page = bySlug("why")!;
 
@@ -96,7 +97,7 @@ export default function Why() {
 export const metadata = {
   title: "Why June",
   description: page.summary,
-  openGraph: { image: "https://june.build/og/why.png" },
+  openGraph: ogImage("why"),
 };
 export const md = () => page.md;
 export const json = () => ({ title: page.title, summary: page.summary });
