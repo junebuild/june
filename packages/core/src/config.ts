@@ -19,6 +19,28 @@ import type { JuneDb, ResourceConfig } from "./resources";
 // running agent: its chat endpoint + inbound channels. Its tools are the SAME
 // defineActions the discovery/mcp surface already exposes. Off unless an agent/
 // directory + `runtime.enabled` are present.
+// Site-wide identity the document's <head> is built from (see JuneConfig.site).
+//   url      the public origin ("https://acme.com"), used to make og:url, canonical,
+//            and og:image absolute. Unset → https://<deploy.domain>, else the
+//            request's own origin — never the build's prerender host. An i18n
+//            locale's own domain always wins for its pages.
+//   twitter  the site's X/Twitter handle ("@acme") → twitter:site.
+export type SiteConfig = {
+  name?: string;
+  titleTemplate?: string;
+  description?: string;
+  icon?: string;
+  lang?: string;
+  url?: string;
+  twitter?: string;
+};
+
+// DocumentConfig.deployOrigin from the config's deploy domain — the public-origin
+// fallback for prerendered pages, which render against a placeholder host.
+export function deployOrigin(cfg: Pick<JuneConfig, "deploy">): string | undefined {
+  return cfg.deploy?.domain ? `https://${cfg.deploy.domain}` : undefined;
+}
+
 export type AgentRuntimeConfig = {
   enabled: boolean; // mount the durable agent surface
   dir: string; // the agent/ directory, relative to the app (default "agent")
@@ -186,7 +208,7 @@ export type JuneConfig = {
   // titleTemplate: "%s" is replaced by the route's title ("%s — Acme").
   // lang: the document-language floor for `<html lang>` (default "en"); i18n's
   // per-request locale overrides it when configured.
-  site?: { name?: string; titleTemplate?: string; description?: string; icon?: string; lang?: string };
+  site?: SiteConfig;
   // Locale routing. OFF by absence: omit it and June does no locale handling
   // (today's behavior — the resolution step never runs, ctx.locale is undefined).
   // Present, it lights up host/path → locale resolution, ctx.locale, and

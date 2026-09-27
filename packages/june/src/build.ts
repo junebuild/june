@@ -27,6 +27,7 @@ import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
 import { loadJuneConfig } from "./config-loader";
 import { buildLinkHeader } from "@junejs/core/discovery";
+import { PRERENDER_ORIGIN } from "@junejs/core/document";
 import { localeHref } from "@junejs/core/i18n";
 import type { BrandedRoute } from "@junejs/core/route";
 import type { ResourcePlan } from "./adapter";
@@ -571,7 +572,7 @@ ${doClass}`;
     if (def.md !== false) targets.push([mdReq, mdFile]); // .md/.json stay flat (exact-path negotiation)
     if (typeof def.json === "function") targets.push([jsonReq, jsonFile]);
     for (const [rp, file] of targets) {
-      const res = await worker.fetch(new Request(`https://prerender.june${rp}`));
+      const res = await worker.fetch(new Request(`${PRERENDER_ORIGIN}${rp}`));
       if (!res.ok) throw new Error(`prerender ${rp} → ${res.status}`);
       const dest = join(assetsDir, file);
       await mkdir(dirname(dest), { recursive: true });
@@ -614,14 +615,14 @@ ${doClass}`;
       ["/sitemap.xml", "sitemap.xml"],
     ];
     for (const [reqPath, file] of extra) {
-      const res = await worker.fetch(new Request(`https://prerender.june${reqPath}`));
+      const res = await worker.fetch(new Request(`${PRERENDER_ORIGIN}${reqPath}`));
       if (!res.ok) continue;
       await writeFile(join(assetsDir, file), Buffer.from(await res.arrayBuffer()));
       hasAssets = true;
     }
     // 404.html — GitHub Pages serves it for any unmatched URL. A deliberately-missing
     // path renders June's not-found HTML (body is written regardless of the 404 status).
-    const nf = await worker.fetch(new Request("https://prerender.june/__june_not_found__"));
+    const nf = await worker.fetch(new Request(`${PRERENDER_ORIGIN}/__june_not_found__`));
     await writeFile(join(assetsDir, "404.html"), Buffer.from(await nf.arrayBuffer()));
     hasAssets = true;
   }

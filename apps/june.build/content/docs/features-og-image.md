@@ -48,6 +48,37 @@ definition renders everywhere: workers-og rasterizes it on workerd, satori +
 resvg-js rasterize the same JSX on the dev host — so the social card you
 preview at `localhost:3000/og/…` is the one that deploys.
 
+## The tags around it
+
+Every page gets the social tags without asking — no `openGraph` metadata
+needed for a link to unfurl as a card:
+
+- `og:title`, `og:description`, `og:type`, `og:site_name`, `og:locale` — from
+  the page's title and description, `site.name`, and the document language.
+- `og:url` and `<link rel="canonical">` — the page's URL without its query
+  string. `metadata.canonical` overrides it; `noindex` pages get none.
+- `twitter:card` — `summary_large_image` when the page has an image, else
+  `summary`. `site.twitter` adds `twitter:site`.
+- WebSite JSON-LD on the homepage, including a locale's home (`/de`).
+
+The public origin is `site.url`, else `https://<deploy.domain>`, else the
+request's own origin. A page served on an i18n locale's own domain
+(`fr: { domain: "example.fr" }`) always uses that domain. Pages `june build`
+prerenders have no real request, so they need `site.url` or `deploy.domain` for
+their absolute URLs. Without either, June leaves those tags out rather than
+emitting wrong ones. A root-relative image resolves against the origin, or is
+left out when there is none:
+
+```ts
+export const metadata = {
+  title: "Pricing",
+  openGraph: { image: "/og/pricing.png", imageWidth: 1200, imageHeight: 630 },
+};
+```
+
+`imageAlt` defaults to the og:title; set `imageWidth`/`imageHeight` so
+unfurlers can lay the card out before the PNG arrives.
+
 ## Why it matters
 
 Social cards are the page most teams generate with a headless browser in a

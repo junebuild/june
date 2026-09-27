@@ -36,7 +36,8 @@ async function streamToString(stream: ReadableStream<Uint8Array>): Promise<strin
   return out;
 }
 
-async function renderDocument(path: string): Promise<string | null> {
+async function renderDocument(url: URL): Promise<string | null> {
+  const path = url.pathname;
   // Non-literal specifier → rolldown leaves it as a runtime import, so the
   // react-server server bundle is loaded (not re-bundled) from beside this file.
   const serverUrl = new URL("./server.js", import.meta.url).href;
@@ -50,7 +51,8 @@ async function renderDocument(path: string): Promise<string | null> {
   }) as unknown as Promise<React.ReactNode>;
 
   const html = await renderToReadableStream(
-    <Document config={DOC_CONFIG}>
+    // RSC routes are exact paths (no locale prefix), so the home route IS "/".
+    <Document config={DOC_CONFIG} pageUrl={url.href} isHome={path === "/"}>
       <Root tree={tree} />
     </Document>,
   );
@@ -62,8 +64,7 @@ async function renderDocument(path: string): Promise<string | null> {
 
 export default {
   async fetch(request: Request): Promise<Response> {
-    const path = new URL(request.url).pathname;
-    const body = await renderDocument(path);
+    const body = await renderDocument(new URL(request.url));
     if (body === null) return new Response("Not Found", { status: 404 });
     return new Response(body, { headers: { "content-type": "text/html; charset=utf-8" } });
   },

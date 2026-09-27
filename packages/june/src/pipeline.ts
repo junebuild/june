@@ -214,6 +214,12 @@ function letterFavicon(siteName: string | undefined): Response {
   );
 }
 
+type PageProps = { pageUrl: string; isHome: boolean; onLocaleDomain: boolean };
+
+// A request's matched route pathname (locale stripped, /index → /), keyed by its
+// ctx — RouteContext is public API, so the pipeline tracks it on the side.
+const routePathOf = new WeakMap<RouteContext, string>();
+
 export function createPipeline(cfg: PipelineConfig): Pipeline {
   const { docConfig, agent } = cfg;
   const NotFound = cfg.notFoundComponent ?? DefaultNotFound;
@@ -249,6 +255,20 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
     });
   }
 
+  // The document's page-identity props: the URL for og:url/canonical, whether the
+  // MATCHED route is home (so /de and /index count, per negotiate's normalized
+  // pathname), and whether the host is a locale's own domain (its public origin).
+  function pageProps(ctx: RouteContext): PageProps {
+    const host = ctx.url.hostname.toLowerCase();
+    return {
+      pageUrl: ctx.url.href,
+      isHome: routePathOf.get(ctx) === "/",
+      onLocaleDomain: cfg.i18n
+        ? Object.values(cfg.i18n.locales).some((l) => l.domain?.toLowerCase() === host)
+        : false,
+    };
+  }
+
   async function renderDocument(
     node: React.ReactNode,
     metadata: Metadata | undefined,
@@ -257,6 +277,7 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
     locale?: string,
     boundaryKey?: string | null,
     alternates?: LocaleAlternate[],
+    page?: PageProps,
   ): Promise<Response> {
     // Wrap root→leaf: chain[0] is outermost.
     const wrapped = chain.reduceRight<React.ReactNode>(
@@ -270,6 +291,7 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
         children: wrapped,
         shellKey: boundaryKey, // stamps data-june-shell on [data-june-root]
         alternates,
+        ...page,
         ...langDir(locale),
       }),
     );
@@ -357,6 +379,7 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
         children: wrapped,
         shellKey: boundaryKey, // stamps data-june-shell on [data-june-root]
         alternates: alternatesFor(ctx),
+        ...pageProps(ctx),
         ...langDir(ctx.locale),
       }),
       { onError: (e: unknown) => console.error("[june] streaming render error:", e) },
@@ -449,7 +472,7 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
     // renders the whole chain (a hard load of the URL is never segment-scoped) —
     // but it stamps the shell key so the client knows which shell is mounted.
     if (target === "fragment") return renderFragment(node, meta, chain, boundaryIndex, boundaryKey);
-    return renderDocument(node, meta, 200, chain, ctx.locale, boundaryKey, alternatesFor(ctx));
+    return renderDocument(node, meta, 200, chain, ctx.locale, boundaryKey, alternatesFor(ctx), pageProps(ctx));
   }
 
   async function discovery(url: URL): Promise<Response | null> {
@@ -562,6 +585,7 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
         locale,
         speculative,
       };
+      routePathOf.set(ctx, pathname);
 
       // Resource route (route.*): a raw-Response handler — no projection, no doc
       // shell. It's matched like any route, so it can't shadow a page.
