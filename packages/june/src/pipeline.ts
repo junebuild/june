@@ -50,6 +50,7 @@ import {
 import type { Resources } from "@junejs/core/resources";
 
 import { iconLetter } from "./icon-letter";
+import { webManifest } from "./web-manifest";
 import { negotiate, TITLE_HEADER, SEGMENT_HEADER, encodeTitle } from "./negotiate";
 
 // Minimal Cookie-header read for the locale negotiation chain (no dependency on
@@ -542,6 +543,12 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
         (url.pathname === "/favicon.svg" || url.pathname === "/favicon.ico")
       ) {
         return letterFavicon(docConfig.site.name);
+      }
+      // --- generated web manifest (only beside June's generated icons) ------
+      if (request.method === "GET" && docConfig.icons?.generated && url.pathname === "/manifest.webmanifest") {
+        return text(webManifest(docConfig), "application/manifest+json", {
+          headers: { "cache-control": "public, max-age=86400" },
+        });
       }
 
       // --- locale resolution (before routing) ------------------------------

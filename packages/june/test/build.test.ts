@@ -102,6 +102,8 @@ describe("juneBuild()", () => {
       ["apple-touch-icon.png", "image/png"],
       ["icon.png", "image/png"],
       ["favicon.ico", "image/x-icon"],
+      ["icon-192.png", "image/png"],
+      ["icon-512.png", "image/png"],
     ] as const) {
       const built = new Uint8Array(await readFile(join(DIST, "assets", file)));
       const res = await dev.fetch(new Request(`https://prerender.june/${file}`));
@@ -111,6 +113,13 @@ describe("juneBuild()", () => {
     const indexHtml = await readFile(join(DIST, "assets", "index.html"), "utf8");
     expect(indexHtml).toContain(`<link rel="icon" href="/icon.png" type="image/png" sizes="32x32"/>`);
     expect(indexHtml).toContain(`<link rel="apple-touch-icon" href="/apple-touch-icon.png"/>`);
+    expect(indexHtml).toContain(`<link rel="manifest" href="/manifest.webmanifest"/>`);
+    // The worker (not an asset) answers the manifest, same bytes as dev.
+    const mod = (await import(`${result.outFile}?manifest`)) as { default: { fetch(r: Request): Promise<Response> } };
+    const built = await mod.default.fetch(new Request("https://june.test/manifest.webmanifest"));
+    const devManifest = await dev.fetch(new Request("https://june.test/manifest.webmanifest"));
+    expect(built.headers.get("content-type")).toBe("application/manifest+json");
+    expect(await built.text()).toBe(await devManifest.text());
   });
 
   test("the bundled worker executes and serves /", async () => {
