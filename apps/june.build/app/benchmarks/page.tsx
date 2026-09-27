@@ -33,6 +33,7 @@ export default function Benchmarks() {
         {sections.map((s) => (
           <section key={s.title}>
             <div className="j-bench-group">{s.title}</div>
+            <div className="j-bench-scroll">
             <table className="j-bench-table">
               <thead>
                 <tr>
@@ -54,6 +55,7 @@ export default function Benchmarks() {
                 ))}
               </tbody>
             </table>
+            </div>
           </section>
         ))}
       </div>

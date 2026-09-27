@@ -15,7 +15,7 @@ function ogOptions(slug: string): OgOptions {
   if (doc) return { title: String(doc.data.title), tag: "june.build/docs" };
   const page = PAGES.find((p) => p.slug === slug);
   if (page) return { title: page.title, tag: "june.build" };
-  return { title: "June — the agent-ready React framework", tag: "june.build" };
+  return { title: "June — build agents into real apps", tag: "june.build" };
 }
 
 export default async function og(_request: Request, ctx: RouteContext): Promise<Response> {

@@ -10,11 +10,11 @@ export default defineJune({
   build: { external: ["workers-og"] },
   deploy: { domain: "june.build" },
   site: {
-    name: "June — the agent-ready React framework",
+    name: "June — build agents into real apps",
     titleTemplate: "%s · June",
     description:
-      "One route() is a page, a JSON API, an MCP server, and an llms.txt entry. " +
-      "Auth, data, and agent capabilities are one coherent model — point an agent " +
-      "at /mcp and it acts as a scoped user.",
+      "The React framework where an agent is a feature, not a separate runtime: " +
+      "your server actions are its tools, Slack and Crisp are its channels, every turn " +
+      "is durable — and one route() still serves HTML, markdown, JSON, and MCP.",
   },
 });

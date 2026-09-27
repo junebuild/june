@@ -15,17 +15,34 @@ export const search_site = defineAction({
     required: ["query"],
   },
   run(input: { query: string }) {
-    const q = input.query.toLowerCase();
-    const pages = PAGES.filter((p) => (p.title + p.summary + p.md).toLowerCase().includes(q)).map(
-      (p) => ({ slug: p.slug, title: p.title, summary: p.summary }),
-    );
-    const posts = POSTS.filter((p) => (p.data.title + " " + p.original).toLowerCase().includes(q)).map(
-      (p) => ({ slug: `blog/${p.slug}`, title: String(p.data.title), summary: String(p.data.description ?? "") }),
-    );
-    const docs = DOCS.filter((d) => (d.data.title + " " + d.original).toLowerCase().includes(q)).map(
-      (d) => ({ slug: `docs/${d.slug}`, title: String(d.data.title), summary: String(d.data.description ?? "") }),
-    );
-    return [...pages, ...posts, ...docs];
+    // Every term of 2+ chars counts; a title hit outweighs a body hit. Ranked,
+    // capped — a card list, not a dump.
+    const terms = input.query.toLowerCase().split(/\s+/).filter((t) => t.length >= 2);
+    if (terms.length === 0) return [];
+    const score = (title: string, body: string) => {
+      const t = title.toLowerCase();
+      const b = body.toLowerCase();
+      return terms.reduce((s, term) => s + (t.includes(term) ? 3 : 0) + (b.includes(term) ? 1 : 0), 0);
+    };
+    const cards = [
+      ...PAGES.map((p) => ({
+        card: { slug: p.slug, title: p.title, summary: p.summary },
+        score: score(p.title, p.summary + " " + p.md),
+      })),
+      ...POSTS.map((p) => ({
+        card: { slug: `blog/${p.slug}`, title: String(p.data.title), summary: String(p.data.description ?? "") },
+        score: score(String(p.data.title), p.original),
+      })),
+      ...DOCS.map((d) => ({
+        card: { slug: `docs/${d.slug}`, title: String(d.data.title), summary: String(d.data.description ?? "") },
+        score: score(String(d.data.title), d.original),
+      })),
+    ];
+    return cards
+      .filter((c) => c.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 8)
+      .map((c) => c.card);
   },
 });
 

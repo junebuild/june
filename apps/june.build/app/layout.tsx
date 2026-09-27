@@ -1,21 +1,23 @@
-// Root layout — wraps every route. The June Design System chrome: a sticky nav
-// (wordmark + global "view as" + theme switch), the page, and the footer. The
-// styling lives in app/global.css (auto-linked); the body font stack ends in CJK
-// faces so the Chinese posts typeset natively, no webfont.
+// Root layout — wraps every route. The chrome: a sticky nav (wordmark, the ⌘K
+// "ask this site" dialog, the global "view as" switch, the theme switch), the
+// page, and the footer. The styling lives in app/global.css (auto-linked); the
+// body font stack ends in CJK faces so the Chinese posts typeset natively.
 
+import { AskSite } from "./AskSite";
 import { ThemeToggle } from "./ThemeToggle";
 import { ViewAs } from "./ViewAs";
 
-// Applies the saved theme to <html> BEFORE paint (no flash for dark users). No
-// stored choice → no attribute → the stylesheet's warm-light default. Inline and
+// Applies a saved LIGHT choice to <html> before paint. Dark is the stylesheet
+// default, so no stored choice → no attribute → no flash. Inline and
 // synchronous; the ThemeToggle island only handles later flips.
 const THEME_INIT =
   "(function(){try{var t=localStorage.getItem('june-theme');" +
   "if(t==='dark'||t==='light')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();";
 
 const NAV = [
-  { href: "/why", label: "Why June" },
+  { href: "/docs/agents-overview", label: "Agents" },
   { href: "/docs", label: "Docs" },
+  { href: "/why", label: "Why June" },
   { href: "/blog", label: "Blog" },
   { href: "/benchmarks", label: "Benchmarks" },
 ];
@@ -23,7 +25,7 @@ const NAV = [
 const FOOTER_COLS = [
   {
     h: "Product",
-    links: [["Why June", "/why"], ["Docs", "/docs"], ["Benchmarks", "/benchmarks"], ["Blog", "/blog"]],
+    links: [["Agents", "/docs/agents-overview"], ["Why June", "/why"], ["Docs", "/docs"], ["Benchmarks", "/benchmarks"], ["Blog", "/blog"]],
   },
   {
     h: "For agents",
@@ -34,7 +36,7 @@ const FOOTER_COLS = [
     links: [
       ["GitHub", "https://github.com/junebuild/june"],
       ["npm @junejs", "https://www.npmjs.com/org/junejs"],
-      ["0.0.x preview", "/why"],
+      ["Stability", "/docs/05-stability"],
     ],
   },
 ];
@@ -47,6 +49,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <nav className="j-nav">
         <div className="j-nav-in">
           <a className="j-wm" href="/" aria-label="June home">
+            <span className="j-wm-mark" aria-hidden="true" />
             June<sup>0.0.x</sup>
           </a>
           <div className="j-nav-links">
@@ -57,6 +60,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             ))}
           </div>
           <div className="j-nav-right">
+            <AskSite client:load />
             <ViewAs client:load />
             <ThemeToggle client:load />
           </div>
@@ -69,11 +73,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <div className="j-footer-in">
           <div className="j-footer-brand">
             <a className="j-wm" href="/">
+              <span className="j-wm-mark" aria-hidden="true" />
               June
             </a>
             <p className="j-footer-tag">
-              The agent-ready React framework. One definition serves humans and agents — HTML, markdown,
-              JSON, MCP.
+              The React framework for building agents into real apps. One definition serves people and
+              agents — HTML, markdown, JSON, MCP.
             </p>
           </div>
           {FOOTER_COLS.map((c) => (
@@ -89,7 +94,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         </div>
         <div className="j-footer-bar">
           <div className="j-footer-bar-in">
-            <span>June — 0.0.x preview · built with June, on June</span>
+            <span>0.0.x preview · this site is a June app, built with June</span>
             <span>
               Every page is also <a href="/index.md">/&lt;page&gt;.md</a> · <a href="/llms.txt">/llms.txt</a> ·{" "}
               <a href="/mcp">/mcp</a>
