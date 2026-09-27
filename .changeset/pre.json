@@ -74,6 +74,7 @@
     "turn-control",
     "turn-error-detail",
     "turn-failed-observability",
-    "turn-suspend-resume-proactive"
+    "turn-suspend-resume-proactive",
+    "with-assets-post-body"
   ]
 }
