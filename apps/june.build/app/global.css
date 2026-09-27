@@ -277,7 +277,15 @@ pre code { background: transparent; }
 .j-stage-bar { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--s-line); flex-wrap: wrap; }
 .j-stage-where { font: 12px var(--font-mono); color: var(--s-muted); display: flex; align-items: center; gap: 8px; margin-right: auto; }
 .j-stage-where b { color: var(--s-strong); font-weight: 500; }
-.j-stage-body { padding: 20px 22px 22px; min-height: 380px; display: flex; flex-direction: column; gap: 14px; }
+/* every turn (the live one + one finished ghost per surface) stacks in the same cell:
+   the cell's height is the tallest finished turn, so playback never reflows the page */
+.j-stage-body { padding: 20px 22px 22px; display: grid; }
+.j-stage-turn { grid-area: 1 / 1; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.j-stage-turn.is-ghost { visibility: hidden; }
+/* the skip/replay control sits at the bottom of the (fixed-height) cell, not after the
+   last row — otherwise every new step would push it down a line */
+.j-stage-turn > .j-stage-replay { margin-top: auto; align-self: center; }
+.j-stage-turn.is-ghost * { animation: none !important; }
 .j-stage-replay { font: 11.5px var(--font-mono); color: var(--s-muted); background: none; border: none; cursor: pointer; padding: 0; }
 .j-stage-replay:hover { color: var(--s-text); }
 
@@ -554,7 +562,7 @@ section:first-child > .j-bench-group { margin-top: 0; }
   .j-nav-links, .j-viewas { display: none; }
   .j-nav-right { margin-left: auto; }
   .j-hero-in { padding: 56px 0 48px; }
-  .j-stage-body { padding: 16px; min-height: 0; }
+  .j-stage-body { padding: 16px; }
   .j-call, .j-park, .j-sys { margin-left: 0; }
   .j-turns, .j-callers, .j-bento, .j-surf { grid-template-columns: 1fr; }
   .j-cell.w2, .j-cell.w3, .j-cell.w4 { grid-column: auto; }
