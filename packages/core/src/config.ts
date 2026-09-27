@@ -29,8 +29,11 @@ import type { JuneDb, ResourceConfig } from "./resources";
 //            one colour, or { light, dark } for a page that follows the system
 //            colour scheme. Unset → June's starter background when June owns the
 //            page's look (see Document), else no tag.
+//   shortName  the home-screen label in the generated web manifest. Unset → the
+//            part of `name` before a " — ", " - ", " | ", or ": " separator.
 export type SiteConfig = {
   name?: string;
+  shortName?: string;
   titleTemplate?: string;
   description?: string;
   icon?: string;

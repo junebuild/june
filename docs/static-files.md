@@ -60,12 +60,24 @@ of `site.name` on a dark square:
 | `/icon.png` (32×32) | Google Search, which doesn't show SVG favicons |
 | `/apple-touch-icon.png` (180×180) | iOS home screens (full-bleed; iOS rounds the corners) |
 | `/favicon.ico` | anything that requests it directly |
+| `/icon-192.png`, `/icon-512.png` | the web manifest (Android home screens) |
+| `/manifest.webmanifest` | Android "Add to Home Screen" (served by the pipeline) |
 
 `june build` rasterizes the PNGs and ICO into `dist/assets/`, and `june dev`
 renders them on first request with the same code, so they match byte for byte.
-The document links `favicon.svg`, `icon.png`, and `apple-touch-icon.png`.
-`favicon.ico` has no `<link>`: it is there for clients that request
+The document links `favicon.svg`, `icon.png`, `apple-touch-icon.png`, and the
+manifest. `favicon.ico` has no `<link>`: it is there for clients that request
 `/favicon.ico` by convention.
+
+The manifest carries `site.name`, a short name (`site.shortName`, else the part
+of the name before " — ", " | ", or ": "), `site.description`, the 192/512
+icons (the 512 is also marked `maskable`, since the glyph stays inside the
+safe zone), and the theme colour when there is a single one. `display` is
+`browser`: a home-screen shortcut that opens a normal tab. For an app-like
+`standalone` launch, ship your own `public/manifest.webmanifest` (or
+`manifest.json`); June links it instead and generates none. June also generates
+no manifest when the app brings its own icons, because there are no 192/512
+PNGs for it to point at.
 
 A rasterizer has no browser fonts, so the font follows the character's script:
 

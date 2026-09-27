@@ -32,12 +32,13 @@ export const ICON_FG = "#fbfbf8";
 
 // Filenames the icons are served at (from the app root), and the public/ files
 // that mean the app brings its own icon — then June generates none.
-export const GENERATED_ICONS = ["apple-touch-icon.png", "icon.png", "favicon.ico"] as const;
+export const GENERATED_ICONS = ["apple-touch-icon.png", "icon.png", "favicon.ico", "icon-192.png", "icon-512.png"] as const;
 export type GeneratedIconFile = (typeof GENERATED_ICONS)[number];
 // The app's own main icon, in preference order: the first one present becomes
 // the page's favicon link (so none of them is ever silently unreferenced).
 const PRIMARY_ICON_FILES = ["favicon.svg", "icon.svg", "favicon.png", "icon.png", "favicon.ico"];
 const CUSTOM_ICON_FILES = [...PRIMARY_ICON_FILES, "apple-touch-icon.png"];
+const MANIFEST_FILES = ["manifest.webmanifest", "manifest.json", "site.webmanifest"];
 
 // `inPublic` for resolveIcons over an app's public/ dir. A symlinked public/ is
 // ignored, as the build and dev server ignore it.
@@ -56,12 +57,28 @@ export function publicFileCheck(publicDir: string): (file: string) => boolean {
 // its own. Otherwise every icon file it has is linked: the first of
 // PRIMARY_ICON_FILES as the favicon (site.icon still wins in the document),
 // plus icon.png and apple-touch-icon.png when present.
+//
+// The web manifest: the app's own public/manifest.webmanifest (or
+// manifest.json) is linked whenever present. Otherwise June generates one only
+// alongside its own icons — an app with custom icons may have no 192/512 PNGs
+// for a manifest to point at.
 export function resolveIcons(
   site: Site,
   inPublic: (file: string) => boolean,
 ): { generate: boolean; icons: NonNullable<DocumentConfig["icons"]> } {
+  const ownManifest = MANIFEST_FILES.find(inPublic);
   const custom = Boolean(site.icon) || CUSTOM_ICON_FILES.some(inPublic);
-  if (!custom) return { generate: true, icons: { png: "/icon.png", appleTouch: "/apple-touch-icon.png" } };
+  if (!custom) {
+    return {
+      generate: true,
+      icons: {
+        png: "/icon.png",
+        appleTouch: "/apple-touch-icon.png",
+        manifest: ownManifest ? `/${ownManifest}` : "/manifest.webmanifest",
+        generated: !ownManifest,
+      },
+    };
+  }
   const primary = PRIMARY_ICON_FILES.find(inPublic);
   return {
     generate: false,
@@ -69,6 +86,7 @@ export function resolveIcons(
       primary: primary ? `/${primary}` : undefined,
       png: inPublic("icon.png") ? "/icon.png" : undefined,
       appleTouch: inPublic("apple-touch-icon.png") ? "/apple-touch-icon.png" : undefined,
+      manifest: ownManifest ? `/${ownManifest}` : undefined,
     },
   };
 }
@@ -179,10 +197,12 @@ const escapeXml = (s: string) => s.replace(/[<>&"']/g, (c) => `&#${c.charCodeAt(
 // Where the glyph goes on the 64×64 square: font size + origin, from its INK
 // box — not its em box — so every script sits optically centred at one size.
 // A probe render measures the ink; cap height and a CJK ideograph both come out
-// INK_H tall, and a wide glyph is held to INK_W.
+// INK_H tall, and a wide glyph is held to INK_W. The ink box's corners stay
+// within 0.4 of the size from the centre, which is the maskable-icon safe zone,
+// so the manifest can mark the full-bleed art "maskable" (pinned in a test).
 const PROBE = 1000;
-const INK_H = 28;
-const INK_W = 40;
+export const INK_H = 28;
+export const INK_W = 40;
 type Placement = { family: string; font: Uint8Array; size: number; x: number; y: number };
 
 function inkBox(resvg: ResvgModule, ch: string, family: string, font: Uint8Array) {
@@ -248,6 +268,11 @@ export type GeneratedIcons = {
   "apple-touch-icon.png": Uint8Array<ArrayBuffer>;
   "icon.png": Uint8Array<ArrayBuffer>;
   "favicon.ico": Uint8Array<ArrayBuffer>;
+  // The web manifest's icons (Android home screen). Full-bleed like the apple
+  // icon: the glyph's ink stays inside the maskable safe zone (a centred circle
+  // of radius 0.4), so one image serves "any" and "maskable".
+  "icon-192.png": Uint8Array<ArrayBuffer>;
+  "icon-512.png": Uint8Array<ArrayBuffer>;
   // What was drawn, for the build log and tests: the character and its font
   // family, or family null when the square went out without one.
   letter: string;
@@ -292,6 +317,8 @@ export async function renderIcons(opts: {
     "apple-touch-icon.png": render(180, false),
     "icon.png": icon32,
     "favicon.ico": pngToIco(icon32, 32),
+    "icon-192.png": render(192, false),
+    "icon-512.png": render(512, false),
     letter: ch,
     family: placement?.family ?? null,
   };

@@ -631,6 +631,7 @@ ${doClass}`;
     // skips its file rather than failing the build.
     const extra: Array<[string, string]> = [
       ["/favicon.svg", "favicon.svg"],
+      ["/manifest.webmanifest", "manifest.webmanifest"],
       ["/llms.txt", "llms.txt"],
       ["/sitemap.xml", "sitemap.xml"],
     ];
