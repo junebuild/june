@@ -72,12 +72,14 @@
     "streaming-model-p2",
     "string-tool-result",
     "test-helpers",
+    "theme-color",
     "tool-step-collision",
     "turn-as-live-process-p1",
     "turn-control",
     "turn-error-detail",
     "turn-failed-observability",
     "turn-suspend-resume-proactive",
+    "web-manifest",
     "with-assets-post-body"
   ]
 }

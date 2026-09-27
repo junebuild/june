@@ -1,5 +1,15 @@
 # @junejs/core
 
+## 0.2.0-dev.48
+
+### Patch Changes
+
+- [#209](https://github.com/junebuild/june/pull/209) [`2b9eefe`](https://github.com/junebuild/june/commit/2b9eefec6c84044385e511a9637b4b98d5b9df50) Thanks [@linyiru](https://github.com/linyiru)! - New `site.themeColor` sets `<meta name="theme-color">`, the mobile browser-toolbar colour. It takes one colour, or `{ light, dark }`, which emits one tag per `prefers-color-scheme`. Unset, the document uses June's starter background (`#fbfbf8`), but only when the starter look is the page's whole look: `cssReset` on, and no `global.css` or CSS Modules. With any app stylesheet the background is unknown, so no tag is emitted rather than a guessed colour.
+
+- [#209](https://github.com/junebuild/june/pull/209) [`595772c`](https://github.com/junebuild/june/commit/595772cc4e1075677f490796981cf737018687f2) Thanks [@linyiru](https://github.com/linyiru)! - An app with no icon of its own now also gets a web app manifest, `/manifest.webmanifest`, linked from every page. It gives Android's "Add to Home Screen" the site name, a short name, the description, 192×192 and 512×512 icons (newly generated alongside the others; the 512 is also marked `maskable`, and a test pins that the glyph's ink stays inside the safe zone), and the theme colour when `resolveThemeColor` yields a single one. `display` is `browser`, so the shortcut opens a normal tab; `standalone` stays opt-in through the app's own manifest.
+
+  The short name is the new `site.shortName`, or else the part of `site.name` before " — ", " | ", or ": " ("June — build agents into real apps" → "June"). The pipeline serves the manifest, like the SVG favicon, so dev, the worker, and a static build agree; the static target writes it as a file. An app's own `public/manifest.webmanifest`, `manifest.json`, or `site.webmanifest` is linked instead, and an app with custom icons and no manifest gets none generated. `resolveThemeColor` is now exported from `@junejs/core/document`.
+
 ## 0.2.0-dev.47
 
 ### Patch Changes
