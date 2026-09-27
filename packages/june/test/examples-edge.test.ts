@@ -1,21 +1,21 @@
-// The hand-written edge examples (examples/agent-edge, examples/slack-agent) are the
-// code people copy, and nothing else imports them — so they drifted once: slack-agent
-// kept a pre-streaming Model (Promise<ModelReply>, which the engine can't iterate) and
-// the lazy apiKey SDK import that #171 moved every edge shell off, and neither
-// wrangler config carried the nodejs_compat flag `june build` emits. This file runs
+// The hand-written edge examples (every examples/* with its own Durable Object shell)
+// are the code people copy, and nothing else imports them — so they drifted once: the
+// two Slack examples kept a pre-streaming Model (Promise<ModelReply>, which the engine
+// can't iterate) and the lazy apiKey SDK import that #171 moved every edge shell off,
+// and no wrangler config carried the nodejs_compat flag `june build` emits. This file runs
 // each example's real Durable Object class under bun:test — `cloudflare:workers` and
 // `@anthropic-ai/sdk` are module mocks, ctx.storage is a fake SqlStorage over
 // synchronous SQLite (the agent-durable.test.ts discipline) — and pins the configs.
 
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { SESSION_HEADER, sseTurnFinalText, type DurableStorage, type SqlStorage } from "../src/agent-durable";
 import { openLocalSqliteSync } from "../src/sqlite-driver";
 
 const EXAMPLES = fileURLToPath(new URL("../../../examples/", import.meta.url));
-const EDGE_EXAMPLES = ["agent-edge", "slack-agent"] as const;
+const EDGE_EXAMPLES = ["agent-edge", "slack-agent", "slack-feedback-agent"] as const;
 
 // ── module mocks ────────────────────────────────────────────────────────────────
 // workerd's DurableObject base only stores (ctx, env); the example's class-field
@@ -111,6 +111,18 @@ function readJsonc(path: string): Record<string, unknown> {
 }
 
 describe("edge examples: wrangler config", () => {
+  // The list above is explicit (the tests name each example) — so pin it to what is on
+  // disk: every example whose worker hand-writes an AgentDurableObject shell is covered.
+  // A new edge example can't silently skip this suite, the way slack-feedback-agent once did.
+  test("covers every example that hand-writes a Durable Object agent shell", () => {
+    const shells = readdirSync(EXAMPLES, { withFileTypes: true })
+      .filter((d) => d.isDirectory() && existsSync(`${EXAMPLES}${d.name}/worker.ts`))
+      .filter((d) => /new AgentDurableObject\(/.test(readFileSync(`${EXAMPLES}${d.name}/worker.ts`, "utf8")))
+      .map((d) => d.name)
+      .sort();
+    expect(shells).toEqual([...EDGE_EXAMPLES].sort());
+  });
+
   for (const example of EDGE_EXAMPLES) {
     test(`${example}: binds the agent DO and carries nodejs_compat, like the \`june build\` output`, () => {
       const cfg = readJsonc(`${EXAMPLES}${example}/wrangler.jsonc`) as {
@@ -138,6 +150,13 @@ describe("edge examples: the Durable Object runs a turn", () => {
       "(offline) You said: hello. Set SLACK_BOT_TOKEN + ANTHROPIC_API_KEY to let me read this thread.",
     );
     expect(sdkConstructions).toHaveLength(0); // offline: the SDK is never touched
+  });
+
+  test("slack-feedback-agent: with no key, the offline model streams a reply through the durable loop", async () => {
+    const JuneSlackDO = await doClassOf("slack-feedback-agent");
+    const agent = new JuneSlackDO({ storage: await fakeStorage() }, {});
+    expect(await sseTurnFinalText(await agent.fetch(turn("hello")))).toBe("(offline) You said: hello");
+    expect(sdkConstructions).toHaveLength(0);
   });
 
   test("agent-edge: with no key, the offline model drives a tool call to completion", async () => {

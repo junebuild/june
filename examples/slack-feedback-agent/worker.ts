@@ -9,10 +9,11 @@
 //   curl -s localhost:8787/feedback          → reactions recorded by the edge hook
 
 import { DurableObject } from "cloudflare:workers";
+import Anthropic from "@anthropic-ai/sdk";
 import { AgentDurableObject, durableAgentSurface, durableChannelSurface, type DurableObjectNamespace } from "@junejs/server/agent-durable";
 import { anthropic } from "@junejs/core/agent-models";
 import { slackChannel } from "@junejs/core/channels";
-import type { InboundEvent, Model, Msg } from "@junejs/core/agent-runtime";
+import { replyStream, type InboundEvent, type Model, type ModelDelta, type Msg } from "@junejs/core/agent-runtime";
 
 type Env = {
   AGENT: DurableObjectNamespace;
@@ -67,9 +68,9 @@ const makeSlack = (env: Env) =>
 const INSTRUCTIONS = "You answer Slack @mentions helpfully in ONE short message. If the question is about the thread, use slack_read_thread / slack_list_reactions.";
 
 // Offline fallback so `wrangler dev` runs with no secrets.
-const scripted: Model = async (msgs: Msg[]) => {
+const scripted: Model = (msgs: Msg[]): AsyncIterable<ModelDelta> => {
   const last = [...msgs].reverse().find((m) => m.role === "user");
-  return { text: `(offline) You said: ${last && last.role === "user" ? last.text : ""}`, toolCalls: [] };
+  return replyStream({ text: `(offline) You said: ${last && last.role === "user" ? last.text : ""}`, toolCalls: [] });
 };
 
 // One DO = one Slack thread. It builds the channel's capability tools from its own env
@@ -84,7 +85,12 @@ export class JuneSlackDO extends DurableObject<Env> {
     instructions: INSTRUCTIONS,
     channelInstructions: { slack: "This turn was triggered from Slack; reply in one short Slack message." },
     model: this.env.ANTHROPIC_API_KEY
-      ? anthropic({ model: "claude-opus-4-8", apiKey: this.env.ANTHROPIC_API_KEY })
+      ? anthropic({
+          model: "claude-opus-4-8",
+          // Injected, not left to anthropic()'s lazy SDK import: that import is invisible
+          // to wrangler's bundler, and workerd has no node_modules to find it in (#171).
+          client: new Anthropic({ apiKey: this.env.ANTHROPIC_API_KEY }),
+        })
       : scripted,
   });
   fetch(req: Request): Promise<Response> {

@@ -90,6 +90,7 @@
     "examples/slack-feedback-agent": {
       "name": "@junejs-examples/slack-feedback-agent",
       "dependencies": {
+        "@anthropic-ai/sdk": "^0.128.0",
         "@junejs/core": "workspace:*",
         "@junejs/server": "workspace:*",
       },

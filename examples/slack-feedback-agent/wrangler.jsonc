@@ -2,6 +2,10 @@
   "name": "june-slack-feedback-agent",
   "main": "worker.ts",
   "compatibility_date": "2025-04-01",
+  // Same flag `june build` emits: the DO runs each turn in a request scope built on
+  // node:async_hooks (loaded lazily), so without it ambient db/kv/blob and
+  // currentServices() silently stop resolving inside tools.
+  "compatibility_flags": ["nodejs_compat"],
   "durable_objects": {
     "bindings": [{ "name": "AGENT", "class_name": "JuneSlackDO" }]
   },
