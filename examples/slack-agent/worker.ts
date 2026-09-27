@@ -14,10 +14,11 @@
 //   curl -sX POST localhost:8787/message -d '{"message":"hello","session":"s1"}'
 
 import { DurableObject } from "cloudflare:workers";
+import Anthropic from "@anthropic-ai/sdk";
 import { AgentDurableObject, durableAgentSurface, durableChannelSurface, type DurableObjectNamespace } from "@junejs/server/agent-durable";
 import { anthropic } from "@junejs/core/agent-models";
 import { slackChannel } from "@junejs/core/channels";
-import type { Model, ModelReply, Msg } from "@junejs/core/agent-runtime";
+import { replyStream, type Model, type ModelDelta, type Msg } from "@junejs/core/agent-runtime";
 
 type Env = {
   AGENT: DurableObjectNamespace;
@@ -69,10 +70,10 @@ const INSTRUCTIONS = [
 // pluggable, so the whole durable loop works deterministically without a key. It
 // does not call the Slack tools (there's no workspace offline); swap in anthropic()
 // with a real bot token to see the agent actually read threads and reactions.
-const scripted: Model = async (msgs: Msg[]): Promise<ModelReply> => {
+const scripted: Model = (msgs: Msg[]): AsyncIterable<ModelDelta> => {
   const last = [...msgs].reverse().find((m) => m.role === "user");
   const text = last && last.role === "user" ? last.text : "";
-  return { text: `(offline) You said: ${text}. Set SLACK_BOT_TOKEN + ANTHROPIC_API_KEY to let me read this thread.`, toolCalls: [] };
+  return replyStream({ text: `(offline) You said: ${text}. Set SLACK_BOT_TOKEN + ANTHROPIC_API_KEY to let me read this thread.`, toolCalls: [] });
 };
 
 // One DO = one Slack thread (session `slack:{channel}:{thread}`). The agent's tools
@@ -91,7 +92,12 @@ export class JuneSlackDO extends DurableObject<Env> {
     // event source, that this turn came from Slack. No userText marker needed.
     channelInstructions: { slack: "This turn was triggered from Slack; keep replies to one short Slack message." },
     model: this.env.ANTHROPIC_API_KEY
-      ? anthropic({ model: "claude-opus-4-8", apiKey: this.env.ANTHROPIC_API_KEY })
+      ? anthropic({
+          model: "claude-opus-4-8",
+          // Injected, not left to anthropic()'s lazy SDK import: that import is invisible
+          // to wrangler's bundler, and workerd has no node_modules to find it in (#171).
+          client: new Anthropic({ apiKey: this.env.ANTHROPIC_API_KEY }),
+        })
       : scripted,
   });
   fetch(req: Request): Promise<Response> {
