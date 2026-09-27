@@ -106,6 +106,10 @@ slackChannel({
   `onEvent` stays the catch-all firehose (`{ raw, event? }`) for observing everything.
 - `events` is **derived** from `respondTo` + `on` keys when omitted — no separate subscribe
   line to drift. Pass `events` explicitly only to override.
+- `respondWhen` narrows `respondTo` per event: `respondTo: ["app_mention", "message"]` with
+  `respondWhen: (e) => e.kind === "app_mention" || e.channelType === "im"` answers mentions
+  and DMs, and only observes other channel messages. A mention's `channelType` is
+  `"unknown"` (Slack doesn't send one), never `"channel"`.
 - `ctx.services` — the app's resolved services bag, the same shape `currentServices()` gives
   a turn. A channel hook runs at the edge (outside the DO), so wire it once:
   `durableChannelSurface({ …, services: (env) => makeServices(env) })` — then a hook writes

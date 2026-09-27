@@ -1,0 +1,5 @@
+---
+"@junejs/core": patch
+---
+
+`slackChannel({ respondWhen })` decides per event whether a `respondTo` kind gets a turn (#212). A DM arrives as a `message` event, the same kind as every channel message, so an app couldn't answer DMs without also answering every message in every accepted channel. `respondWhen(event, raw)` runs after the `respondTo` kind check and after `resolveIdentity` (so `event.principal` is set), never for an event `accept` rejects or a redelivery; the events it turns down still reach `on` and `onEvent`, and still count as arrived in `diagnose()`. A throwing predicate is reported to `onError` and runs no turn. Normalized Slack events now carry `channelType` (`"channel" | "group" | "im" | "mpim" | "unknown"`) from Slack's `channel_type`; it is read from `message` events only, so `app_mention` and reaction events read `"unknown"`, except in a `D…` channel, which is always `"im"`. The new `SlackNormalizedEvent` type is what `respondWhen`, `on` observers and `normalizeSlackEvent` expose. Answering mentions and DMs: `respondTo: ["app_mention", "message"], respondWhen: (e) => e.kind === "app_mention" || e.channelType === "im"`.
