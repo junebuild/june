@@ -75,3 +75,25 @@ jobs:
         # unbuilt in this from-source run. Without it, @junejs/core/cache → the
         # missing dist/cache.js and the smoke dies before it starts.
         run: node --conditions=source --import tsx scripts/smoke-node.ts
+
+  # The BUILT worker on workerd, the runtime production runs. The dev host has no
+  # ASSETS binding and isn't workerd, so deploy-only bugs pass every Bun test — POST
+  # /mcp answered -32700 on every deployed app with assets for three months (#198).
+  # `june build` examples/basic, `wrangler dev --local` it, exercise it over HTTP.
+  workerd:
+    runs-on: ubuntu-latest
+    # The smoke bounds every request itself; this is the backstop against an
+    # unforeseen hang (the default is 6 hours). It runs in ~15s.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Built worker on workerd
+        run: bun scripts/smoke-workerd.ts
