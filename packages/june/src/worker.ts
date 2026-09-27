@@ -322,8 +322,11 @@ export function withAssets(
       }
 
       // 2. Static assets (prerendered HTML/.md/.json, /client.js, hashed CSS)
-      //    served direct.
-      if (assets) {
+      //    served direct — for reads only. Assets never answer a write, and on
+      //    workerd handing the incoming request to ASSETS.fetch() consumes its
+      //    body: a POST that 404s here would reach the pipeline with a used stream
+      //    (POST /mcp → -32700 Parse error, an action's input gone).
+      if (assets && (request.method === "GET" || request.method === "HEAD")) {
         const a = await assets.fetch(request);
         if (a.status !== 404) {
           const ct = a.headers.get("content-type") ?? "";
