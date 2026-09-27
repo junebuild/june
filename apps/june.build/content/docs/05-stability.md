@@ -38,6 +38,10 @@ a false 1.0.
 
 ### Changing
 
+- **The agent layer** — the `agent/` directory, channels (Slack, Crisp,
+  HTTP), connections (MCP, OpenAPI, Google Drive), and durable turns run in
+  dev and on Workers Durable Objects, and are dogfooded — but the config and
+  channel APIs are still moving. See [Agents](/docs/agents-overview).
 - **Data layer** — `resources`, the ambient `import { db }`, and the Juno
   query/migration layer work and are dogfooded, but the surface is still being
   refined.
