@@ -58,6 +58,7 @@
     "slack-dm-stream-recipients",
     "slack-feedback-tasks",
     "slack-identity-seam",
+    "slack-intermediate-text",
     "slack-retry-dedupe",
     "slack-stream-hardening",
     "soft-nav-script-execution",
