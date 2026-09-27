@@ -25,6 +25,10 @@ import type { JuneDb, ResourceConfig } from "./resources";
 //            request's own origin — never the build's prerender host. An i18n
 //            locale's own domain always wins for its pages.
 //   twitter  the site's X/Twitter handle ("@acme") → twitter:site.
+//   themeColor  the mobile browser-toolbar colour (<meta name="theme-color">):
+//            one colour, or { light, dark } for a page that follows the system
+//            colour scheme. Unset → June's starter background when June owns the
+//            page's look (see Document), else no tag.
 export type SiteConfig = {
   name?: string;
   titleTemplate?: string;
@@ -33,6 +37,7 @@ export type SiteConfig = {
   lang?: string;
   url?: string;
   twitter?: string;
+  themeColor?: string | { light: string; dark: string };
 };
 
 // DocumentConfig.deployOrigin from the config's deploy domain — the public-origin

@@ -91,7 +91,9 @@ export const BASE_RESET_CSS = `:where(*,::before,::after,::backdrop){box-sizing:
 // typography plugin included) regardless of specificity. So they're injected together with the reset
 // and, like it, DEFERRED when the app brings its own system (cssReset === false — which auto-derives
 // from Tailwind detection in the host). Then Tailwind Preflight + the app's CSS own the look entirely.
-export const STARTER_CONTENT_CSS = `body{font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#fbfbf8;color:#1d1d1f}
+// The starter look's page background — also its default theme-color.
+export const STARTER_BACKGROUND = "#fbfbf8";
+export const STARTER_CONTENT_CSS = `body{font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:${STARTER_BACKGROUND};color:#1d1d1f}
 main{width:min(720px,calc(100vw - 32px));margin:72px auto}
 code{background:#ecebe4;border-radius:4px;padding:2px 5px}`;
 
@@ -253,6 +255,12 @@ export function Document({
     absolute(metadata?.canonical) ??
     (origin && pageUrl && !noindex ? origin + withBase(new URL(pageUrl).pathname) : undefined);
   const favicon = config.site.icon ?? config.icons?.primary ?? "/favicon.svg";
+  // theme-color: the app's, else the starter background — but only when June's
+  // starter look is the WHOLE look (no global.css or CSS Modules on top); any
+  // other page background is unknown here, and a guessed toolbar colour is worse
+  // than none.
+  const ownsLook = config.cssReset !== false && !config.styles && !config.moduleStyles;
+  const themeColor = config.site.themeColor ?? (ownsLook ? STARTER_BACKGROUND : undefined);
   const docLang = lang ?? config.site.lang ?? "en";
   const ogTitle = og?.title ?? title;
   const ogDescription = og?.description ?? description;
@@ -304,6 +312,13 @@ export function Document({
           />
         ) : null}
         <meta name="viewport" content="width=device-width, initial-scale=1" />
+        {typeof themeColor === "string" ? <meta name="theme-color" content={themeColor} /> : null}
+        {themeColor && typeof themeColor === "object" ? (
+          <>
+            <meta name="theme-color" media="(prefers-color-scheme: light)" content={themeColor.light} />
+            <meta name="theme-color" media="(prefers-color-scheme: dark)" content={themeColor.dark} />
+          </>
+        ) : null}
         {config.speculationRules && config.speculationDelivery === "inline" ? (
           <script
             type="speculationrules"

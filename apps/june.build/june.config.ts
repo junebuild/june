@@ -13,6 +13,9 @@ export default defineJune({
     name: "June — build agents into real apps",
     titleTemplate: "%s · June",
     twitter: "@junebuild",
+    // The dark theme's --s-bg (global.css): dark is the default; light is an
+    // explicit toggle, not prefers-color-scheme, so one colour.
+    themeColor: "#07080a",
     description:
       "The React framework where an agent is a feature, not a separate runtime: " +
       "your server actions are its tools, every turn is durable, and routes also serve MCP.",
