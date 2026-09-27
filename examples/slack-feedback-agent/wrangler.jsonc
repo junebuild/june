@@ -3,8 +3,9 @@
   "main": "worker.ts",
   "compatibility_date": "2025-04-01",
   // Same flag `june build` emits: the DO runs each turn in a request scope built on
-  // node:async_hooks (loaded lazily), so without it ambient db/kv/blob and
-  // currentServices() silently stop resolving inside tools.
+  // node:async_hooks (loaded lazily). Without it there is no scope: ambient
+  // db/kv/blob throw "used outside a request scope", and currentServices()
+  // returns undefined.
   "compatibility_flags": ["nodejs_compat"],
   "durable_objects": {
     "bindings": [{ "name": "AGENT", "class_name": "JuneSlackDO" }]

@@ -2211,6 +2211,19 @@ describe("crispChannel identity (resolveIdentity)", () => {
     expect(calls.at(-1)!.body).toMatchObject({ content: "here you go" }); // the turn still replied
   });
 
+  test("no resolveIdentity → no evidence lookup at all, and the turn stays anonymous", async () => {
+    fakeCrisp(SDK_VERIFIED);
+    const ch = identityChannel(undefined); // identity resolution not opted into
+    let seen: InboundEvent | undefined;
+    const run = (async (_m: string, o?: { event?: InboundEvent }) => { seen = o?.event; return "hi"; }) as ChannelContext["run"];
+    await ch.webhook!(await signed(visitor), ctxWith(run));
+    await flush();
+    // the lookup is opt-in: no GET of the conversation, only the reply POST
+    expect(calls.some((c) => c.url === "https://crisp.test/website/w1/conversation/s1")).toBe(false);
+    expect(calls.map((c) => c.url)).toEqual(["https://crisp.test/website/w1/conversation/s1/message"]);
+    expect(seen?.principal).toBeUndefined();
+  });
+
   test("observe mode: onEvent sees the same principal (shadow-pipeline parity)", async () => {
     fakeCrisp(SDK_VERIFIED);
     const events: (InboundEvent | undefined)[] = [];

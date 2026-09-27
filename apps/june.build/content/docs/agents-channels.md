@@ -49,7 +49,8 @@ stay hidden on anonymous turns.
   granting staff roles, check an allowlist or `users.info`.
 - **Crisp** — webhook user fields are client-writable hints, so the channel
   *pulls* the conversation's identity-verification evidence over authenticated
-  REST (one GET per normalized event). Only `sdk`/`api` email verifications
+  REST — one GET per normalized event, and only when `resolveIdentity` is
+  configured; without it no lookup runs and turns stay anonymous. Only `sdk`/`api` email verifications
   count as `verified`; a failed lookup arrives as `{ fetched: false, verified:
   false }`.
 

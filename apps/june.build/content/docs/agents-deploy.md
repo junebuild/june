@@ -182,7 +182,8 @@ read its own name, so it saves the first key it's given and rejects a mismatched
 one with 409. The store needs no `session_id` column. The object is the session:
 `agent_messages`, `agent_steps`, and `agent_meta` in its SQLite, with
 transactions via `ctx.storage.transactionSync`, so the exactly-once contract is
-the same as native.
+the same as native — including its scope: only writes through `ctx.storage.sql`
+join the step's transaction.
 
 The object's HTTP surface:
 
@@ -246,7 +247,10 @@ env and installed around every turn, so a tool reads ambient `db` and
 `currentServices()` the same way a route loader does. The generated entry passes
 the ones `june.config.ts` declares. The scope uses `node:async_hooks`, which
 needs the `nodejs_compat` flag. The generated config sets it, and a hand-written one
-should too — without it, ambient reads in tools stop resolving without an error.
+should too. Without it the object has no request scope, and the two ambient APIs
+fail differently: `db` / `kv` / `blob` **throw** ("used outside a request scope"),
+while `currentServices()` quietly returns `undefined` — so a missing service shows
+up later, as an undefined value in your own code.
 
 Turn failures go to `console.error` with the step and cause chain.
 `DoAgentDef.onTurnError` replaces that with your own telemetry. If the hook throws,

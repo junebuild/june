@@ -46,9 +46,10 @@ The directory *is* the manifest. No central registry has to stay in sync with it
   an OpenAPI document, or a provider (Google Drive). Its remote tools join the
   agent's tool list.
 - **Turns are durable.** Every model step and tool call is checkpointed to the
-  session's store. A sync tool commits its side effect, its checkpoint, and the
-  transcript append in one transaction, so it runs exactly once. An async tool
-  runs at least once. A tool can park a turn to wait for a human
+  session's store. A sync tool's step commits in one transaction with its
+  checkpoint and transcript append — and so do writes it makes through the
+  store's own handle, which makes those exactly-once. Any other effect (another
+  database, an API call) and every async tool are at-least-once. A tool can park a turn to wait for a human
   (`ctx.requestInput`) and resume it later.
 - **Where it runs.** In dev, turns run on the in-process `NativeRuntime`
   (SQLite). On Cloudflare Workers, each session is its own Durable Object, and
