@@ -231,16 +231,18 @@ export interface SessionStore {
 }
 
 // ── the turn as a live event stream (see docs/rfc-turn-as-live-process.md) ────
-// A turn emits a stream of typed events as it runs. In THIS slice (P1a) events are LIVE:
-// emitted during a fresh execution and observed via AgentSession.observe. There is NOT yet
-// a replay/catch-up path — on a crash-replay a cached step short-circuits WITHOUT
-// re-emitting, so a subscriber that attaches mid-turn misses the prior events; and
-// turn.started's `trigger` + turn.failed are live-only (not persisted in the message/step
-// log). The RFC's target splits events into structural (foldable from the log) vs live
-// *.delta and adds a fold-on-reconnect catch-up — that durable story lands in P1b (SSE +
-// observe replay), not here. P1a emits the structural set (turn.started, action.requested/
-// completed, message.completed, turn.completed/failed); reasoning.delta/message.delta arrive
-// with the streaming Model (P2); input.requested with suspend/resume (P3).
+// A turn emits a stream of typed events as it runs, observed via AgentSession.observe.
+// Events split into STRUCTURAL (foldable from the durable log: message.completed,
+// action.requested/completed, turn.completed) and LIVE-ONLY (reasoning.delta /
+// message.delta, turn.started with its `trigger`, turn.failed, turn.cancelled, and
+// input.requested). On a crash-replay a cached step short-circuits WITHOUT re-emitting,
+// so a fresh subscriber sees only what runs from then on — UNLESS it attaches with
+// observe({ turnId, replay: true }), which folds the structural prefix from the log
+// before subscribing live (catch-up for a late or reconnecting subscriber). That
+// catch-up is IN-PROCESS only: runStream, the Durable Object's SSE, and delivered
+// renders subscribe live at turn start, and no host exposes a reconnectable events
+// endpoint yet. A pending input.requested is not folded either — a late subscriber to a
+// parked turn learns of the park from result()/the session status, not the replay.
 // A tool's request for external (human) input that suspends the turn. `id` keys the answer
 // (stable within the turn). `answererId` is who may answer — defaults to the turn's trigger
 // user; the app widens it (e.g. a manager approves) by passing one to ctx.requestInput.

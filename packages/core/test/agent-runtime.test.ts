@@ -1018,6 +1018,58 @@ describe("TurnEvent stream (P1)", () => {
     expect(replayed).toEqual([{ type: "turn.completed", turnId: "t1", text: "" }]); // no message.completed (empty), but a terminal event
   });
 
+  test("observe({turnId, replay}) attached MID-turn: the folded prefix, then live — no gap, no duplicate", async () => {
+    // The second model call waits on a gate, so the subscriber attaches while the turn is
+    // genuinely in flight: step 1 and the tool call have committed, the final step has not.
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const gated: Model = (msgs) => {
+      const i = msgs.filter((m) => m.role === "assistant").length;
+      if (i === 0) return replyStream(ORDER_SCRIPT[0]!);
+      return (async function* () {
+        await gate;
+        yield* replyStream(ORDER_SCRIPT[1]!);
+      })();
+    };
+    const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), gated, [createOrderTool()], noRuntime);
+    const toolCommitted = new Promise<void>((r) => s.observe((e) => { if (e.type === "action.completed") r(); }, { turnId: "t1" }));
+    s.start({ turnId: "t1", userText: "Order 3 widgets" });
+    await toolCommitted;
+
+    const seen: TurnEvent[] = [];
+    s.observe((e) => seen.push(e), { turnId: "t1", replay: true });
+    // caught up synchronously from the log, before anything live
+    expect(seen.map((e) => e.type)).toEqual(["message.completed", "action.requested", "action.completed"]);
+
+    release();
+    expect(await s.result("t1")).toEqual({ status: "completed", text: "Done — order placed." });
+    const structural = seen.filter((e) => !e.type.endsWith(".delta")).map((e) => e.type);
+    expect(structural).toEqual([
+      "message.completed", "action.requested", "action.completed", // folded
+      "message.completed", "turn.completed",                        // live
+    ]);
+    expect(seen.find((e) => e.type === "turn.started")).toBeUndefined(); // it fired before we attached; live-only
+  });
+
+  test("observe replay on a PARKED turn folds up to the parking call; input.requested is not folded", async () => {
+    const approve: Tool = {
+      spec: { name: "approve", description: "ask a human to approve", input: { type: "object" } },
+      run: async (_input, ctx) => ({ approved: await ctx.requestInput({ id: "approve-1", prompt: "Approve?" }) }),
+    };
+    const script: ModelReply[] = [
+      { text: "Let me check.", toolCalls: [{ id: "c1", name: "approve", input: {} }] },
+      { text: "Approved.", toolCalls: [] },
+    ];
+    const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), scriptedModel(script), [approve], noRuntime);
+    s.start({ turnId: "t1", userText: "refund please", event: { source: "slack", kind: "message", channelId: "C1", ts: "1.1", user: { id: "U1" }, raw: {} } });
+    expect(await s.result("t1")).toMatchObject({ status: "suspended" });
+
+    const replayed: TurnEvent[] = [];
+    s.observe((e) => replayed.push(e), { turnId: "t1", replay: true });
+    // the parking call is in the log; its result, the park itself, and the end are not
+    expect(replayed.map((e) => e.type)).toEqual(["message.completed", "action.requested"]);
+  });
+
   test("result() still resolves after the in-flight promise is pruned (durable log fallback)", async () => {
     const rt = new MemRuntime({ ops: { model: scriptedModel(ORDER_SCRIPT), tools: [createOrderTool()] } });
     const s = rt.session("ops", "s1");
