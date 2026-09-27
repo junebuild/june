@@ -36,7 +36,7 @@ depends on the target:
   action registry and your app's [`/mcp`](/docs/features-mcp) re-serves them
   under the same authorization gate.
 - **Workers** — connections are opened lazily *inside each session's Durable
-  Object* (see "On the edge" below), a separate
+  Object* (see [Errors and the report](#errors-and-the-report)), a separate
   isolate from the worker that answers `/mcp`. The agent gets the tools; the
   worker's `/mcp` does not list them. To expose a remote tool on a deployed
   `/mcp`, wrap it in a `defineAction` of your own in `app/`.

@@ -28,6 +28,24 @@ beforeAll(async () => {
   await app.warmup(); // registers search_site / get_page (page.tsx imports actions)
 });
 
+describe("heading anchors (app/headings.ts)", () => {
+  test("adds a # link to h2–h4 using the framework's id; other levels untouched", async () => {
+    const { withAnchorLinks } = await import("./app/headings");
+    const out = withAnchorLinks('<h1 id="top">Top</h1><h2 id="setup">Set <code>up</code></h2><h4 id="deep">Deep</h4><h5 id="x">X</h5>');
+    expect(out).toBe(
+      '<h1 id="top">Top</h1>' +
+        '<h2 id="setup">Set <code>up</code><a class="j-anchor" href="#setup" aria-label="Link to this section">#</a></h2>' +
+        '<h4 id="deep">Deep<a class="j-anchor" href="#deep" aria-label="Link to this section">#</a></h4>' +
+        '<h5 id="x">X</h5>',
+    );
+    // a raw-HTML heading keeps its other attributes; one without an id is left alone
+    expect(withAnchorLinks('<h2 class="warning" id="title">Title</h2>')).toBe(
+      '<h2 class="warning" id="title">Title<a class="j-anchor" href="#title" aria-label="Link to this section">#</a></h2>',
+    );
+    expect(withAnchorLinks('<h3 class="x">No id</h3>')).toBe('<h3 class="x">No id</h3>');
+  });
+});
+
 describe("human surface", () => {
   test("landing, why, benchmarks render in the layout", async () => {
     for (const [path, marker] of [
@@ -69,6 +87,27 @@ describe("human surface", () => {
     const md = await (await get("/index.md")).text();
     expect(md).not.toMatch(/every `defineAction\(\)` is a UI action, an agent/);
     expect(md).toContain("Export one from `agent/tools/`"); // the real rule: exported into the agent
+  });
+
+  test("docs headings are linkable, and every in-page #link on every doc lands on an id", async () => {
+    const connections = await (await get("/docs/agents-connections")).text();
+    expect(connections).toContain('<h2 id="errors-and-the-report">');
+    expect(connections).toContain('<a class="j-anchor" href="#errors-and-the-report" aria-label="Link to this section">#</a>');
+    // "On this page" lists the h2/h3 headings by the same ids
+    expect(connections).toContain('<nav class="j-toc" aria-label="On this page">');
+    expect(connections).toContain('<a href="#errors-and-the-report">Errors and the report</a>');
+    // agents get the structure in the .json projection
+    const json = await (await get("/docs/agents-connections.json")).json();
+    expect(json.headings).toContainEqual({ depth: 2, text: "Errors and the report", id: "errors-and-the-report" });
+
+    const { DOCS } = await import("./app/_content");
+    for (const d of DOCS) {
+      const html = await (await get(`/docs/${d.slug}`)).text();
+      const ids = new Set([...html.matchAll(/\sid="([^"]+)"/g)].map((m) => m[1]));
+      for (const [, target] of html.matchAll(/href="#([^"]+)"/g)) {
+        expect(ids.has(target!), `/docs/${d.slug}: href="#${target}" has no matching id`).toBe(true);
+      }
+    }
   });
 
   test("each page gets its own templated title", async () => {

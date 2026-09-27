@@ -60,6 +60,12 @@
       "types": "./dist/store.d.ts",
       "default": "./dist/store.js"
     },
+    "./slug": {
+      "source": "./src/slug.ts",
+      "bun": "./src/slug.ts",
+      "types": "./dist/slug.d.ts",
+      "default": "./dist/slug.js"
+    },
     "./jsx-runtime": {
       "source": "./src/jsx-runtime.ts",
       "bun": "./src/jsx-runtime.ts",

@@ -84,7 +84,7 @@ describe("projections from one load()", () => {
 describe("content pipeline", () => {
   test("/posts/hello renders the markdown body to HTML", async () => {
     const html = await (await get("/posts/hello")).text();
-    expect(html).toContain("<h1>Hello, June</h1>");
+    expect(html).toContain('<h1 id="hello-june">Hello, June</h1>'); // headings carry their GitHub-compatible id
   });
 
   test("/posts/hello.md serves the AUTHORED source verbatim (frontmatter included)", async () => {
