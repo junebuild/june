@@ -11,7 +11,12 @@ import { anthropic, finishFromStopReason, fromAnthropicContent, loadAnthropicSdk
 // depends on it): the missing-SDK tests exercise exactly that failure, and must never reach
 // the network with an ANTHROPIC_API_KEY that happens to be in the environment.
 // (A module with no usable default export: a factory that throws only fails the first import.)
-mock.module("@anthropic-ai/sdk", () => ({}));
+// `default: undefined`, not `{}`: module mocks are process-wide in bun:test, and a mock
+// with no `default` binding at all fixes that namespace shape — a later file's mock
+// (packages/june/test/examples-edge.test.ts) could then never supply the default its
+// statically-imported example needs. undefined is still not constructible, so the
+// missing-SDK path below is exercised exactly the same.
+mock.module("@anthropic-ai/sdk", () => ({ default: undefined }));
 
 describe("toAnthropicMessages", () => {
   test("a user message becomes plain text content", () => {
