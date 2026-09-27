@@ -131,6 +131,23 @@ describe("docs", () => {
       expect(html).toContain("<code");
     }
 
+    // the Agents section: grouped between Concepts and Features, every page a code sample
+    expect(index).toContain("<h2>Agents</h2>");
+    expect(index.indexOf("<h2>Concepts</h2>")).toBeLessThan(index.indexOf("<h2>Agents</h2>"));
+    expect(index.indexOf("<h2>Agents</h2>")).toBeLessThan(index.indexOf("<h2>Features</h2>"));
+    for (const slug of [
+      "agents-overview",
+      "agents-directory",
+      "agents-channels",
+      "agents-connections",
+      "agents-durable-turns",
+      "agents-deploy",
+    ]) {
+      const html = await (await get(`/docs/${slug}`)).text();
+      expect(html).toContain('data-layout="docs"');
+      expect(html).toContain("<code");
+    }
+
     // the sidebar shows the short nav label, not the full page title
     const anyDoc = await (await get("/docs/features-mcp")).text();
     expect(anyDoc).toContain(">MCP</a>");
