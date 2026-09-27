@@ -1,6 +1,7 @@
 import type { RouteContext, Loaded } from "@junejs/core/route";
 
 import { post } from "../../_content";
+import { withAnchorLinks } from "../../headings";
 import { ogImage } from "../../og-card";
 import { scrollableTables } from "../../tables";
 
@@ -25,7 +26,7 @@ export default function Post({ entry }: Loaded<typeof loader>) {
       <div className="j-post-meta" style={{ marginBottom: 24 }}>
         <span>{String(entry.data.date)}</span>
       </div>
-      <div className="j-doc-body" dangerouslySetInnerHTML={{ __html: scrollableTables(entry.html) }} />
+      <div className="j-doc-body" dangerouslySetInnerHTML={{ __html: scrollableTables(withAnchorLinks(entry.html)) }} />
     </article>
   );
 }

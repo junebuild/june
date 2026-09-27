@@ -25,15 +25,15 @@ describe("locale routing + per-locale content", () => {
   test("the default locale serves the flat content at the unprefixed URL", async () => {
     const html = await (await get("/docs/intro")).text();
     expect(html).toContain('<html lang="en">'); // ctx.locale = en
-    expect(html).toContain("<h1>Introduction</h1>"); // the flat default file
+    expect(html).toContain('<h1 id="introduction">Introduction</h1>'); // the flat default file
     expect(html).not.toContain("Einführung");
   });
 
   test("a sub-path locale strips the prefix and serves its variant", async () => {
     const html = await (await get("/de/docs/intro")).text();
     expect(html).toContain('<html lang="de">'); // ctx.locale = de (prefix stripped)
-    expect(html).toContain("<h1>Einführung</h1>"); // the German variant, not the default
-    expect(html).not.toContain("<h1>Introduction</h1>");
+    expect(html).toContain('<h1 id="einführung">Einführung</h1>'); // the German variant, not the default
+    expect(html).not.toContain(">Introduction</h1>");
   });
 
   test("the .md projection is the resolved locale's authored source", async () => {
@@ -45,7 +45,7 @@ describe("locale routing + per-locale content", () => {
   test("an untranslated locale falls back to the default file", async () => {
     // fr has no docs/fr/ variant → served the default (English) intro.
     const html = await (await get("/docs/intro", { "accept-language": "fr" })).text();
-    expect(html).toContain("<h1>Introduction</h1>");
+    expect(html).toContain('<h1 id="introduction">Introduction</h1>');
   });
 });
 

@@ -483,6 +483,26 @@ pre code { background: transparent; }
   font: 500 12px var(--font-mono); }
 .j-doc-body td { border-bottom: 1px solid var(--s-line-faint); padding: 9px 12px 9px 0; color: var(--s-body); }
 .j-doc-body blockquote { border-left: 2px solid var(--s-signal); margin: 20px 0; padding: 2px 0 2px 16px; color: var(--s-secondary); }
+/* a doc page: the article, plus an "On this page" rail on wide screens */
+.j-doc-layout { display: grid; grid-template-columns: minmax(0, 1fr) 200px; gap: 48px; align-items: start; }
+.j-toc { position: sticky; top: 80px; max-height: calc(100vh - 110px); overflow-y: auto; padding-top: 8px; }
+.j-toc-h { font: 500 11px var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--s-muted); margin: 0 0 10px; }
+.j-toc ul { list-style: none; margin: 0; padding: 0; border-left: 1px solid var(--s-line); }
+.j-toc li a { display: block; padding: 4px 0 4px 12px; font-size: 13px; line-height: 1.4; color: var(--s-secondary); text-decoration: none; }
+.j-toc li.is-sub a { padding-left: 24px; font-size: 12.5px; }
+.j-toc li a:hover { color: var(--s-text); }
+@media (max-width: 1200px) {
+  .j-doc-layout { grid-template-columns: minmax(0, 1fr); }
+  .j-toc { display: none; }
+}
+/* linkable headings (app/headings.ts): land clear of the sticky nav; the "#" shows on
+   hover, and always when it has keyboard focus */
+.j-doc-body [id] { scroll-margin-top: 80px; }
+.j-anchor { margin-left: 8px; font-weight: 400; color: var(--s-faint); text-decoration: none; opacity: 0;
+  transition: opacity var(--dur-fast), color var(--dur-fast); }
+.j-doc-body :is(h2, h3, h4):hover .j-anchor, .j-anchor:focus-visible { opacity: 1; }
+.j-anchor:hover { color: var(--s-accent); }
+@media (hover: none) { .j-anchor { opacity: 0.6; } } /* touch: no hover to reveal it */
 .j-doc-body hr { border: none; border-top: 1px solid var(--s-line); margin: 36px 0; }
 .j-doc-index section { margin-top: 36px; }
 .j-doc-index ul { list-style: none; padding: 0; margin: 0; border: 1px solid var(--s-line); border-radius: var(--radius-md); overflow: hidden; }

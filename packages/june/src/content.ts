@@ -12,6 +12,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { toHtmlSync, initSync } from "@momiji-rs/sparkdown/gfm";
+import { createSlugger } from "@junejs/core/slug";
 
 import type { ContentSource } from "@junejs/core/config";
 
@@ -29,6 +30,48 @@ const ensureWasm = () => {
   }
 };
 
+export type Heading = { depth: number; text: string; id: string };
+
+// &-entities the renderer emits in heading text, decoded so the text (and so the
+// slug) is what a reader sees: "Q&amp;A" slugs as "Q&A" → "qa", as on GitHub.
+const NAMED: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
+const decodeEntities = (s: string) =>
+  s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e: string) =>
+    e[0] === "#"
+      ? String.fromCodePoint(e[1] === "x" || e[1] === "X" ? parseInt(e.slice(2), 16) : Number(e.slice(1)))
+      : (NAMED[e.toLowerCase()] ?? m),
+  );
+
+// Give every heading in rendered HTML a GitHub-compatible id — one slugger per
+// document, in order, so repeats de-duplicate exactly as GitHub's do — and collect
+// them. Markdown headings render bare (`<h2>…</h2>`) and get only an id. Raw HTML an
+// author wrote is preserved by CommonMark, so a heading may arrive with attributes:
+// its attributes are kept, an authored id is REUSED (the author's explicit anchor),
+// and a generated id never repeats any id already in the document — authored ones
+// included — so every heading's anchor is unique.
+const ID_ATTR = /\sid\s*=\s*(?:"([^"]*)"|'([^']*)')/i;
+export function headingIds(html: string): { html: string; headings: Heading[] } {
+  const slug = createSlugger();
+  const taken = new Set<string>();
+  for (const m of html.matchAll(new RegExp(ID_ATTR.source, "gi"))) taken.add((m[1] ?? m[2])!);
+  const headings: Heading[] = [];
+  const out = html.replace(/<h([1-6])(\s[^>]*)?>([\s\S]*?)<\/h\1>/gi, (_m, depth: string, attrs: string | undefined, inner: string) => {
+    const text = decodeEntities(inner.replace(/<[^>]*>/g, "")).trim();
+    const own = attrs ? ID_ATTR.exec(attrs) : null;
+    const authored = own ? (own[1] ?? own[2]) : undefined;
+    let id = authored;
+    if (!id) {
+      do id = slug(text);
+      while (taken.has(id)); // the slugger suffixes each repeat: -1, -2, …
+      taken.add(id);
+    }
+    headings.push({ depth: Number(depth), text, id });
+    // an authored-but-empty id="" is no anchor: drop it, so the heading carries exactly one id
+    return authored ? _m : `<h${depth}${(attrs ?? "").replace(ID_ATTR, "")} id="${id}">${inner}</h${depth}>`;
+  });
+  return { html: out, headings };
+}
+
 export type ContentEntry = {
   slug: string;
   file: string;
@@ -38,8 +81,13 @@ export type ContentEntry = {
   body: string;
   /** The authored file, verbatim — the agent-facing .md projection. */
   original: string;
-  /** The body rendered to HTML (CommonMark + GFM, via @momiji-rs/sparkdown/gfm wasm). */
+  /** The body rendered to HTML (CommonMark + GFM, via @momiji-rs/sparkdown/gfm wasm).
+   *  Every heading carries a GitHub-compatible `id` (see @junejs/core/slug) and nothing
+   *  else — no injected links or classes; how an anchor looks is the app's call. */
   html: string;
+  /** The headings of `html`, in document order: their depth (1–6), plain text, and the
+   *  `id` each carries in `html` — for a table of contents, or a structured projection. */
+  headings: Heading[];
   /** The locale this entry was authored in — set for files under a `<locale>/`
    *  subdir, undefined for the flat (default-locale) files. */
   locale?: string;
@@ -96,13 +144,15 @@ function loadEntry(file: string, slug: string, locale?: string): ContentEntry {
     if (h1?.[1]) data.title = h1[1];
   }
   ensureWasm(); // sync, idempotent — instantiate the renderer wasm on first use only
+  const { html, headings } = headingIds(toHtmlSync(body));
   const entry: ContentEntry = {
     slug,
     file,
     data,
     body,
     original,
-    html: toHtmlSync(body),
+    html,
+    headings,
     ...(locale ? { locale } : {}),
   };
   memo.set(key, { mtime, entry });
@@ -287,6 +337,7 @@ export function generateContentModule(
     body: e.body,
     original: e.original,
     html: e.html,
+    headings: e.headings,
     ...(e.locale ? { locale: e.locale } : {}),
   });
   // Default scan: each `content/<name>/` is a collection. Guarded — a sources-only app
@@ -340,8 +391,8 @@ export function generateContentModule(
     names.push(name);
   }
   const entryType = anyLocale
-    ? "export type ContentEntry = { slug: string; data: Record<string, string | string[]>; body: string; original: string; html: string; locale?: string };\n"
-    : "export type ContentEntry = { slug: string; data: Record<string, string | string[]>; body: string; original: string; html: string };\n";
+    ? "export type ContentEntry = { slug: string; data: Record<string, string | string[]>; body: string; original: string; html: string; headings: Array<{ depth: number; text: string; id: string }>; locale?: string };\n"
+    : "export type ContentEntry = { slug: string; data: Record<string, string | string[]>; body: string; original: string; html: string; headings: Array<{ depth: number; text: string; id: string }> };\n";
   const code =
     "// AUTO-GENERATED by `june build` — edit content/**/*.md, not this file.\n" + entryType + body;
   return { code, names };

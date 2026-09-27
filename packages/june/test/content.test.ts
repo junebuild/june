@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { collection, entry, generateContentModule, scanCollection } from "../src/content";
+import { collection, entry, generateContentModule, headingIds, scanCollection } from "../src/content";
 
 let root: string; // a content/ dir with two collections: docs (localized) + posts (flat)
 const md = (title: string, date: string, h: string) => `---\ntitle: ${title}\ndate: ${date}\n---\n# ${h}\n`;
@@ -281,6 +281,101 @@ describe("generateContentModule with sources", () => {
   });
 });
 
+describe("heading ids + entry.headings", () => {
+  let dir: string;
+  let e: ReturnType<typeof collection>[number];
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), "june-headings-"));
+    writeFileSync(
+      join(dir, "h.md"),
+      "---\ntitle: T\n---\n" +
+        "# Guide\n\n" +
+        "## Setup\n\ntext\n\n" +
+        "### Use `ctx.user`\n\n" +
+        "## Q & A\n\n" +
+        "## Setup\n\n" +
+        "## 邊緣排版\n\n" +
+        "#### Deep **bold** part\n",
+    );
+    e = collection(dir)[0]!;
+  });
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  test("every level gets an id; repeats de-duplicate in document order", () => {
+    expect(e.headings).toEqual([
+      { depth: 1, text: "Guide", id: "guide" },
+      { depth: 2, text: "Setup", id: "setup" },
+      { depth: 3, text: "Use ctx.user", id: "use-ctxuser" },
+      { depth: 2, text: "Q & A", id: "q--a" }, // entity decoded before slugging, as GitHub
+      { depth: 2, text: "Setup", id: "setup-1" },
+      { depth: 2, text: "邊緣排版", id: "邊緣排版" },
+      { depth: 4, text: "Deep bold part", id: "deep-bold-part" },
+    ]);
+  });
+
+  test("the html carries exactly those ids, inline markup intact", () => {
+    for (const h of e.headings) expect(e.html).toContain(`<h${h.depth} id="${h.id}">`);
+    expect(e.html).toContain('<h3 id="use-ctxuser">Use <code>ctx.user</code></h3>');
+    expect(e.html).toContain('<h4 id="deep-bold-part">Deep <strong>bold</strong> part</h4>');
+  });
+
+  test("raw HTML headings: attributes kept, an authored id reused, generated ids never collide", () => {
+    const { html, headings } = headingIds(
+      '<div id="setup">anchor the author placed</div>' +
+        "<h2>Setup</h2>" + //                          generated: "setup" is taken on the page → setup-1
+        '<h2 class="warning">Title</h2>' + //           attributes kept, id added
+        '<h3 id="my-anchor" class="x">Custom</h3>' + // authored id reused verbatim
+        "<h2>My anchor</h2>" + //                       its natural slug is the authored id → -1
+        '<h4 id="">Empty</h4>', //                      an empty id is no anchor: replaced, not doubled
+    );
+    expect(headings).toEqual([
+      { depth: 2, text: "Setup", id: "setup-1" },
+      { depth: 2, text: "Title", id: "title" },
+      { depth: 3, text: "Custom", id: "my-anchor" },
+      { depth: 2, text: "My anchor", id: "my-anchor-1" },
+      { depth: 4, text: "Empty", id: "empty" },
+    ]);
+    expect(html).toContain('<h2 class="warning" id="title">Title</h2>');
+    expect(html).toContain('<h3 id="my-anchor" class="x">Custom</h3>'); // untouched
+    expect(html).toContain('<h4 id="empty">Empty</h4>');
+    expect(html.match(/\sid="/g)!.length).toBe(6); // one id per element, no duplicates added
+  });
+
+  test("an authored raw heading in markdown flows through the real pipeline", () => {
+    const d = mkdtempSync(join(tmpdir(), "june-rawh-"));
+    try {
+      writeFileSync(join(d, "r.md"), '---\ntitle: R\n---\n<h2 class="warning">Heads up</h2>\n\n## Next\n');
+      const r = collection(d)[0]!;
+      expect(r.headings).toEqual([
+        { depth: 2, text: "Heads up", id: "heads-up" },
+        { depth: 2, text: "Next", id: "next" },
+      ]);
+      expect(r.html).toContain('<h2 class="warning" id="heads-up">Heads up</h2>');
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  test("the .md projection is untouched — the authored bytes, no ids", () => {
+    expect(e.original).toContain("## Setup\n");
+    expect(e.original).not.toContain("id=");
+  });
+
+  test("headings are frozen into the generated content module", () => {
+    const root = mkdtempSync(join(tmpdir(), "june-headings-freeze-"));
+    try {
+      mkdirSync(join(root, "posts"), { recursive: true });
+      writeFileSync(join(root, "posts", "a.md"), "---\ntitle: A\n---\n## Hello World\n");
+      const { code } = generateContentModule(root);
+      expect(code).toContain('"headings": [');
+      expect(code).toContain('"id": "hello-world"');
+      expect(code).toContain("headings: Array<{ depth: number; text: string; id: string }>"); // in the emitted type
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("html rendering (sparkdown/gfm)", () => {
   // entry.html is rendered by the @momiji-rs/sparkdown/gfm wasm (CommonMark + GFM). This guards the renderer swap
   // from marked: GFM features must render, headings must stay BARE (Kura's anchor post-processor regex
@@ -310,12 +405,12 @@ describe("html rendering (sparkdown/gfm)", () => {
   test("GFM bare-URL autolink renders", () => expect(html).toContain('href="https://june.build"'));
   // Flexible: the contract is "a language-* class is present", so extra classes/whitespace are fine.
   test("code fence keeps the language class", () => expect(html).toMatch(/<code class="[^"]*\blanguage-ts\b/));
-  // Strict ON PURPOSE: "bare" IS the contract — Kura's processHtml anchor regex is /<h([23])>/, which
-  // only matches an h2/h3 with NO attributes. So assert the exact bare form AND that no h2 carries attrs;
-  // a loose match would wrongly pass for a contract-breaking `<h2 id=…>`.
-  test("headings stay bare (no injected id/class)", () => {
-    expect(html).toContain("<h2>Section</h2>");
-    expect(html).not.toMatch(/<h2\s/);
+  // Strict ON PURPOSE: the contract is "a GitHub-compatible id and NOTHING else" — no injected
+  // link or class, so the markup stays the app's to style and downstream post-processors can
+  // rely on the exact shape `<hN id="…">`.
+  test("headings carry a GitHub-compatible id, and only that", () => {
+    expect(html).toContain('<h2 id="section">Section</h2>');
+    expect(html).not.toMatch(/<h2(?! id="[^"]*">)/); // no other attribute, no other form
   });
   test("a bare {…} stays literal text (no MDX expression footgun)", () => expect(html).toContain("{literal}"));
 });
