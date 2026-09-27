@@ -20,9 +20,10 @@ export const PAGES: Page[] = [
     slug: "index",
     title: "June — build agents into real apps",
     summary:
-      "The React framework where an agent is a feature, not a separate runtime. An agent/ directory " +
-      "makes the server actions you export into it its tools, Slack or Crisp its channels, and every turn " +
-      "a durable process — while one route() still serves HTML, markdown, JSON, and MCP.",
+      // ≤160 chars: it is the homepage's meta description, which search results
+      // and link previews cut off past that.
+      "The React framework where an agent is a feature, not a separate runtime: " +
+      "your server actions are its tools, every turn is durable, and routes also serve MCP.",
     md: `# June
 
 **The React framework for building agents into real apps.**

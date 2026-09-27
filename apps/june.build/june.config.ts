@@ -14,7 +14,6 @@ export default defineJune({
     titleTemplate: "%s · June",
     description:
       "The React framework where an agent is a feature, not a separate runtime: " +
-      "your server actions are its tools, Slack and Crisp are its channels, every turn " +
-      "is durable — and one route() still serves HTML, markdown, JSON, and MCP.",
+      "your server actions are its tools, every turn is durable, and routes also serve MCP.",
   },
 });
