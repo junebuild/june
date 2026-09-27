@@ -67,7 +67,8 @@ const SURFACES: Surface[] = [
     ),
     note: (
       <>
-        <b>ctx.requestInput</b> parked the turn in the session log. Nothing waits in memory — on Workers the Durable Object can hibernate until someone answers.
+        <b>ctx.requestInput</b> parked the turn in the session log; on Workers the Durable Object can hibernate until
+        someone answers. The approver is only <b>resume.by</b> — the resumed turn still runs as its sender.
       </>
     ),
     steps: [
@@ -102,10 +103,10 @@ const SURFACES: Surface[] = [
         node: (
           <div className="j-sys">
             <span>
-              approved by <b>@maya</b> (manager)
+              resume.by = <b>@maya</b> (manager)
             </span>
             <span className="sep">·</span>
-            <span>turn resumed</span>
+            <span>turn resumed as Dana</span>
           </div>
         ),
         hot: ["refund_order"],
@@ -123,7 +124,7 @@ const SURFACES: Surface[] = [
           <div className="j-sys">
             <b>● done</b>
             <span className="sep">·</span>3 tool calls<span className="sep">·</span>parked 41s
-            <span className="sep">·</span>ctx.user = U04MAYA
+            <span className="sep">·</span>ctx.user = U04DANA
           </div>
         ),
       },
@@ -260,9 +261,11 @@ export function AgentStage() {
   // server + first paint: the finished turn (useful without JS); hydration replays it
   const [step, setStep] = useState(surface.steps.length);
   const [run, setRun] = useState(0);
+  // A played turn runs ~6s; "skip" stops the updates and shows it whole (WCAG 2.2.2).
+  const [skipped, setSkipped] = useState(false);
 
   useEffect(() => {
-    if (prefersReducedMotion()) {
+    if (skipped || prefersReducedMotion()) {
       setStep(surface.steps.length);
       return;
     }
@@ -279,7 +282,12 @@ export function AgentStage() {
     };
     tick();
     return () => clearTimeout(timer);
-  }, [surfaceId, run]);
+  }, [surfaceId, run, skipped]);
+
+  const play = () => {
+    setSkipped(false);
+    setRun((r) => r + 1);
+  };
 
   const shown = surface.steps.slice(0, step);
   const hot = new Set<FileId>(shown.at(-1)?.hot ?? []);
@@ -323,7 +331,7 @@ export function AgentStage() {
                 className={s.id === surfaceId ? "is-on" : ""}
                 onClick={() => {
                   setSurfaceId(s.id);
-                  setRun((r) => r + 1);
+                  play();
                 }}
               >
                 {s.label}
@@ -335,8 +343,12 @@ export function AgentStage() {
           {shown.map((s, i) => (
             <div key={`${surfaceId}-${run}-${i}`}>{s.node}</div>
           ))}
-          {!live && (
-            <button type="button" className="j-stage-replay" onClick={() => setRun((r) => r + 1)}>
+          {live ? (
+            <button type="button" className="j-stage-replay" onClick={() => setSkipped(true)}>
+              ⏭ skip — show the whole turn
+            </button>
+          ) : (
+            <button type="button" className="j-stage-replay" onClick={play}>
               ↻ replay
             </button>
           )}
