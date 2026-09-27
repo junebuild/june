@@ -66,9 +66,12 @@ export type DocumentConfig = {
   //               linked in place of June's letter /favicon.svg; site.icon wins
   //   png         a 32×32 PNG (Google Search and some browsers skip SVG)
   //   appleTouch  the iOS home-screen icon
+  //   manifest    the web app manifest (Android "Add to Home Screen")
+  //   generated   true when the set is June's own (the pipeline then serves the
+  //               generated /manifest.webmanifest)
   // June's generated set when the app has no icon of its own. Absent → only the
   // favicon link.
-  icons?: { primary?: string; png?: string; appleTouch?: string } | null;
+  icons?: { primary?: string; png?: string; appleTouch?: string; manifest?: string; generated?: boolean } | null;
 };
 
 // June's built-in baseline CSS reset — a minimal, Tailwind-Preflight-aligned normalize, NOT a layout
@@ -157,6 +160,15 @@ function publicOrigin(config: DocumentConfig, pageUrl?: string, onLocaleDomain?:
   if (onLocaleDomain && live) return live;
   if (config.site.url) return config.site.url.replace(/\/+$/, "");
   return config.deployOrigin ?? live;
+}
+
+// theme-color: the app's, else the starter background — but only when June's
+// starter look is the WHOLE look (no global.css or CSS Modules on top); any
+// other page background is unknown here, and a guessed toolbar colour is worse
+// than none. Shared with the generated web manifest.
+export function resolveThemeColor(config: DocumentConfig): SiteConfig["themeColor"] {
+  const ownsLook = config.cssReset !== false && !config.styles && !config.moduleStyles;
+  return config.site.themeColor ?? (ownsLook ? STARTER_BACKGROUND : undefined);
 }
 
 // The favicon link's type attribute, from its extension (unknown → none).
@@ -255,12 +267,7 @@ export function Document({
     absolute(metadata?.canonical) ??
     (origin && pageUrl && !noindex ? origin + withBase(new URL(pageUrl).pathname) : undefined);
   const favicon = config.site.icon ?? config.icons?.primary ?? "/favicon.svg";
-  // theme-color: the app's, else the starter background — but only when June's
-  // starter look is the WHOLE look (no global.css or CSS Modules on top); any
-  // other page background is unknown here, and a guessed toolbar colour is worse
-  // than none.
-  const ownsLook = config.cssReset !== false && !config.styles && !config.moduleStyles;
-  const themeColor = config.site.themeColor ?? (ownsLook ? STARTER_BACKGROUND : undefined);
+  const themeColor = resolveThemeColor(config);
   const docLang = lang ?? config.site.lang ?? "en";
   const ogTitle = og?.title ?? title;
   const ogDescription = og?.description ?? description;
@@ -280,6 +287,7 @@ export function Document({
           <link rel="icon" href={withBase(config.icons.png)} type="image/png" sizes="32x32" />
         ) : null}
         {config.icons?.appleTouch ? <link rel="apple-touch-icon" href={withBase(config.icons.appleTouch)} /> : null}
+        {config.icons?.manifest ? <link rel="manifest" href={withBase(config.icons.manifest)} /> : null}
         <title>{title}</title>
         {description ? <meta name="description" content={description} /> : null}
         {canonical ? <link rel="canonical" href={canonical} /> : null}

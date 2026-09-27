@@ -9,6 +9,8 @@ import { join } from "node:path";
 import {
   googleFontFetcher,
   hanFamily,
+  INK_H,
+  INK_W,
   iconFamily,
   pngToIco,
   renderIcons,
@@ -83,11 +85,18 @@ describe("iconFamily() — one font per script", () => {
 
 describe("resolveIcons()", () => {
   const none = () => false;
-  test("no icon of the app's own → June generates and links both PNGs", () => {
+  test("no icon of the app's own → June generates and links both PNGs and a manifest", () => {
     expect(resolveIcons({ name: "Acme" }, none)).toEqual({
       generate: true,
-      icons: { png: "/icon.png", appleTouch: "/apple-touch-icon.png" },
+      icons: { png: "/icon.png", appleTouch: "/apple-touch-icon.png", manifest: "/manifest.webmanifest", generated: true },
     });
+  });
+  test("the app's own manifest is linked, never replaced", () => {
+    const own = resolveIcons({}, (x) => x === "manifest.json").icons;
+    expect(own.manifest).toBe("/manifest.json");
+    expect(own.generated).toBe(false); // June's icons, but the app's manifest
+    // Custom icons and no manifest → none generated (no 192/512 PNGs to point at).
+    expect(resolveIcons({}, (x) => x === "favicon.svg").icons.manifest).toBeUndefined();
   });
   test("site.icon or any public/ icon → generate nothing", () => {
     expect(resolveIcons({ icon: "/brand.svg" }, none).generate).toBe(false);
@@ -126,12 +135,14 @@ describe("pngToIco()", () => {
 });
 
 describe("renderIcons()", () => {
-  test("a Latin name renders with the bundled font — sizes 180 / 32, ico wraps the 32", async () => {
+  test("a Latin name renders with the bundled font — sizes 180 / 32 / 192 / 512, ico wraps the 32", async () => {
     const icons = await renderIcons({ site: { name: "June" }, fetchFont: offline });
     expect(icons.letter).toBe("J");
     expect(icons.family).toBe("Inter");
     expect(pngSize(icons["apple-touch-icon.png"])).toEqual([180, 180]);
     expect(pngSize(icons["icon.png"])).toEqual([32, 32]);
+    expect(pngSize(icons["icon-192.png"])).toEqual([192, 192]);
+    expect(pngSize(icons["icon-512.png"])).toEqual([512, 512]);
     expect(icons["favicon.ico"].slice(22)).toEqual(icons["icon.png"]);
   });
 
@@ -160,6 +171,10 @@ describe("renderIcons()", () => {
     const icons = await renderIcons({ site: { name: "骨" }, fetchFont: async () => inter, warn: (m) => warnings.push(m) });
     expect(icons.family).toBeNull();
     expect(warnings).toHaveLength(1);
+  });
+
+  test("the largest possible ink box fits the maskable safe zone (radius 0.4 of the size)", () => {
+    expect(Math.hypot(INK_W / 2, INK_H / 2) / 64).toBeLessThan(0.4);
   });
 
   test("deterministic: the same site renders the same bytes", async () => {
