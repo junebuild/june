@@ -49,6 +49,7 @@
     "detach-turn-mode",
     "do-session-identity",
     "global-turn-ids",
+    "heading-ids",
     "isolate-scoped-resources",
     "model-finish-reason",
     "native-agent-def",
