@@ -57,6 +57,10 @@ describe("per-route RSC", () => {
     expect(rscHtml).toContain("RSC app root");
     expect(rscHtml).toContain('data-island="tabs"'); // island SSR'd via Flight
     expect(rscHtml).toContain("SERVER overview"); // its server slot children
+    // The request URL reaches the Document: URL-derived social tags + home JSON-LD.
+    expect(rscHtml).toContain('<link rel="canonical" href="http://x/"/>');
+    expect(rscHtml).toContain('<meta property="og:url" content="http://x/"/>');
+    expect(rscHtml).toContain(`"@type":"WebSite"`);
 
     // Any other path → the SSR pipeline, untouched.
     const ssr = await dispatch(new Request("http://x/about"));

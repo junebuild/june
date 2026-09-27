@@ -18,6 +18,7 @@ import type { ComponentType } from "react";
 import { routeFromModule } from "@junejs/core/route";
 import {
   resolveAgent,
+  deployOrigin,
   resolveClientRouter,
   resolveSpeculationRules,
   type JuneConfig,
@@ -143,6 +144,7 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
   const cssEntry = findGlobalCss(appDir);
   const docConfig: DocumentConfig = {
     site: config.site ?? {},
+    deployOrigin: deployOrigin(config),
     speculationRules: resolveSpeculationRules(speculation ?? undefined),
     speculationDelivery: speculation ? speculation.delivery ?? "inline" : "inline",
     viewTransitions: config.viewTransitions ?? true,

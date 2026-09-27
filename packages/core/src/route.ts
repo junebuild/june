@@ -35,8 +35,15 @@ export type Metadata = {
   openGraph?: {
     title?: string;
     description?: string;
-    image?: string;
+    image?: string; // absolute, or root-relative (resolved against site.url)
+    imageAlt?: string; // defaults to the og:title
+    imageWidth?: number; // 1200 for @junejs/og cards
+    imageHeight?: number; // 630 for @junejs/og cards
     type?: string; // "website" | "article" | ...
+  };
+  twitter?: {
+    card?: "summary" | "summary_large_image"; // default: large when there's an image
+    creator?: string; // the author's handle, e.g. "@jane"
   };
 };
 

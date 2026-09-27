@@ -6,7 +6,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
-import { resolveAgent, resolveClientRouter, resolveSpeculationRules } from "@junejs/core/config";
+import { deployOrigin, resolveAgent, resolveClientRouter, resolveSpeculationRules } from "@junejs/core/config";
 import type { JuneConfig } from "@junejs/core/config";
 import type { DocumentConfig } from "@junejs/core/document";
 import { workers, vercel, deno, staticSite, type JuneAdapter } from "./adapter";
@@ -56,6 +56,7 @@ export async function freezeConfig(appRoot: string): Promise<{
   return {
     document: {
       site: cfg.site ?? {},
+      deployOrigin: deployOrigin(cfg),
       speculationRules: resolveSpeculationRules(cfg.speculation ?? undefined),
       speculationDelivery: "inline",
       viewTransitions: cfg.viewTransitions ?? true,

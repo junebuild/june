@@ -198,3 +198,39 @@ describe("document <html lang>/<dir>", () => {
     expect(html).not.toContain('rel="alternate"');
   });
 });
+
+// Social tags see the MATCHED route and the locale's own domain, not the raw URL.
+describe("document social tags under i18n", () => {
+  const socialPipeline = () => {
+    const doc: DocumentConfig = {
+      ...docConfig,
+      site: { name: "T", url: "https://example.com" },
+    };
+    const pipeline = createPipeline({
+      docConfig: doc,
+      agent: resolveAgent(undefined),
+      i18n,
+      routeList: () => [],
+      resolve: async () => ({
+        def: route({ view: () => React.createElement("p", null, "hi") }),
+        params: {},
+        chain: [],
+      }),
+    });
+    return async (urlStr: string) => (await pipeline.fetch(new Request(urlStr))).text();
+  };
+
+  test("a locale-prefixed home (/de) and the /index alias are home: WebSite JSON-LD", async () => {
+    const get = socialPipeline();
+    expect(await get("https://example.com/de")).toContain(`"@type":"WebSite"`);
+    expect(await get("https://example.com/index")).toContain(`"@type":"WebSite"`);
+    expect(await get("https://example.com/de/page")).not.toContain("ld+json");
+  });
+
+  test("a locale's own domain is its public origin, over site.url", async () => {
+    const get = socialPipeline();
+    expect(await get("https://example.fr/page")).toContain(`rel="canonical" href="https://example.fr/page"`);
+    // A path locale on the default origin keeps site.url.
+    expect(await get("https://example.com/de/page")).toContain(`rel="canonical" href="https://example.com/de/page"`);
+  });
+});

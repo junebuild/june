@@ -4,7 +4,7 @@
 import React from "react";
 
 import type { Metadata } from "./route";
-import type { RouterMode } from "./config";
+import type { RouterMode, SiteConfig } from "./config";
 
 // The serializable slice of app config the document needs. The server feeds it
 // from AppConfig; the generated worker inlines it as literals at build time.
@@ -12,7 +12,7 @@ export type DocumentConfig = {
   // `lang` is the document-language FLOOR: a single-locale app sets it (default
   // "en") without any i18n machinery. When `i18n` is configured the resolved
   // per-request locale (ctx.locale) overrides it on `<html lang>`.
-  site: { name?: string; titleTemplate?: string; description?: string; icon?: string; lang?: string };
+  site: SiteConfig;
   speculationRules: string | null;
   speculationDelivery: "inline" | "header";
   viewTransitions: boolean | "instant" | number;
@@ -56,6 +56,11 @@ export type DocumentConfig = {
   // ("/_june/…") — are prefixed so they resolve under the subpath. Empty/absent =
   // root deploy (unchanged). Only the static() target sets it.
   basePath?: string;
+  // "https://<deploy.domain>" when the config names one: the public origin for
+  // pages whose request can't supply it (prerendered pages render against a
+  // placeholder host). Kept apart from site.url so a locale's own domain can
+  // still win over it — see publicOrigin().
+  deployOrigin?: string;
 };
 
 // June's built-in baseline CSS reset — a minimal, Tailwind-Preflight-aligned normalize, NOT a layout
@@ -124,6 +129,43 @@ export const PREFETCH_FALLBACK = `(function(){if(HTMLScriptElement.supports&&HTM
 // from the adjacent <script id="june-webmcp"> JSON.
 export const WEBMCP_SCRIPT = `(function(){var mc=navigator.modelContext;if(!mc||!mc.registerTool)return;var el=document.getElementById('june-webmcp');if(!el)return;var tools;try{tools=JSON.parse(el.textContent)}catch(e){return}var ac=new AbortController();tools.forEach(function(t){mc.registerTool({name:t.name,description:t.description,inputSchema:t.inputSchema,execute:function(args){return fetch('/mcp',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/call',params:{name:t.name,arguments:args}})}).then(function(r){return r.json()}).then(function(j){return j.result})}},{signal:ac.signal})})})();`;
 
+// The host `june build` renders prerendered pages against. It is a placeholder,
+// so the document never derives a public URL from it.
+export const PRERENDER_ORIGIN = "https://prerender.june";
+
+// The public origin for absolute social URLs, first match wins:
+//   1. the request's origin when it is an i18n locale's OWN domain (example.fr
+//      is that locale's public origin, whatever site.url says);
+//   2. site.url;
+//   3. the deploy domain;
+//   4. the request's origin — never the prerender placeholder.
+// undefined → the document emits no og:url / canonical / JSON-LD and drops a
+// root-relative og:image, rather than emitting a wrong or unusable URL.
+function publicOrigin(config: DocumentConfig, pageUrl?: string, onLocaleDomain?: boolean): string | undefined {
+  const requested = pageUrl ? new URL(pageUrl).origin : undefined;
+  const live = requested && requested !== PRERENDER_ORIGIN ? requested : undefined;
+  if (onLocaleDomain && live) return live;
+  if (config.site.url) return config.site.url.replace(/\/+$/, "");
+  return config.deployOrigin ?? live;
+}
+
+// og:locale wants ll_CC ("en_US"); <html lang> is BCP 47 ("en-US").
+function ogLocale(lang: string): string {
+  return lang.replace("-", "_");
+}
+
+// JSON-LD is raw script text: escape "<" so a description can't close the tag.
+function websiteJsonLd(site: SiteConfig, url: string): string {
+  const data = {
+    "@context": "https://schema.org",
+    "@type": "WebSite",
+    name: site.name,
+    url,
+    description: site.description,
+  };
+  return JSON.stringify(data).replace(/</g, "\\u003c");
+}
+
 export function documentTitle(
   meta: Metadata | undefined,
   site: DocumentConfig["site"],
@@ -145,6 +187,9 @@ export function Document({
   dir,
   alternates,
   shellKey,
+  pageUrl,
+  isHome,
+  onLocaleDomain,
 }: {
   children: React.ReactNode;
   metadata?: Metadata;
@@ -162,6 +207,15 @@ export function Document({
   // [data-june-root] as data-june-shell so the client router can tell whether a
   // soft-nav fragment belongs to this shell. Absent on non-boundary routes.
   shellKey?: string | null;
+  // The request URL (href). Yields og:url + canonical; its origin is the public
+  // one on a locale's own domain, or when nothing else names one. Absent → no
+  // URL-derived tags.
+  pageUrl?: string;
+  // The matched route is the site's home ("/", whatever the locale prefix or
+  // /index alias in the URL) → the WebSite JSON-LD goes on this page.
+  isHome?: boolean;
+  // The request host is an i18n locale's own domain (see publicOrigin).
+  onLocaleDomain?: boolean;
 }) {
   const title = documentTitle(metadata, config.site);
   const description = metadata?.description ?? config.site.description;
@@ -171,8 +225,25 @@ export function Document({
   // URLs are rewritten (leaves "//cdn", "https://…", and empty basePath untouched).
   const withBase = (u?: string | null): string | undefined =>
     u && config.basePath && u.startsWith("/") && !u.startsWith("//") ? config.basePath + u : u ?? undefined;
+  // Social tags are on for every page, so a link shared from any June app unfurls
+  // as a card; metadata.openGraph / metadata.twitter only override the values.
+  const origin = publicOrigin(config, pageUrl, onLocaleDomain);
+  // Root-relative → absolute against the public origin; with no origin it is
+  // dropped (unfurlers can't resolve a relative og:image). Absolute URLs pass.
+  const absolute = (u?: string): string | undefined => {
+    if (!u || !u.startsWith("/") || u.startsWith("//")) return u;
+    return origin ? origin + withBase(u) : undefined;
+  };
+  const noindex = metadata?.robots?.includes("noindex") ?? false;
+  const canonical =
+    absolute(metadata?.canonical) ??
+    (origin && pageUrl && !noindex ? origin + withBase(new URL(pageUrl).pathname) : undefined);
+  const docLang = lang ?? config.site.lang ?? "en";
+  const ogTitle = og?.title ?? title;
+  const ogDescription = og?.description ?? description;
+  const ogImage = absolute(og?.image);
   return (
-    <html lang={lang ?? config.site.lang ?? "en"} dir={dir === "rtl" ? "rtl" : undefined}>
+    <html lang={docLang} dir={dir === "rtl" ? "rtl" : undefined}>
       <head>
         {/* charset IN the document (must be in the first 1024 bytes): prerendered
             pages are served by asset layers whose content-type may lack the
@@ -187,17 +258,35 @@ export function Document({
         />
         <title>{title}</title>
         {description ? <meta name="description" content={description} /> : null}
-        {metadata?.canonical ? <link rel="canonical" href={metadata.canonical} /> : null}
+        {canonical ? <link rel="canonical" href={canonical} /> : null}
         {alternates?.map((a) => (
           <link key={a.hreflang} rel="alternate" hrefLang={a.hreflang} href={a.href} />
         ))}
         {metadata?.robots ? <meta name="robots" content={metadata.robots} /> : null}
-        {og ? <meta property="og:title" content={og.title ?? title} /> : null}
-        {og?.description ?? description ? (
-          <meta property="og:description" content={og?.description ?? description} />
+        <meta property="og:title" content={ogTitle} />
+        {ogDescription ? <meta property="og:description" content={ogDescription} /> : null}
+        <meta property="og:type" content={og?.type ?? "website"} />
+        {canonical ? <meta property="og:url" content={canonical} /> : null}
+        {config.site.name ? <meta property="og:site_name" content={config.site.name} /> : null}
+        <meta property="og:locale" content={ogLocale(docLang)} />
+        {ogImage ? <meta property="og:image" content={ogImage} /> : null}
+        {ogImage && og?.imageWidth ? <meta property="og:image:width" content={String(og.imageWidth)} /> : null}
+        {ogImage && og?.imageHeight ? <meta property="og:image:height" content={String(og.imageHeight)} /> : null}
+        {ogImage ? <meta property="og:image:alt" content={og?.imageAlt ?? ogTitle} /> : null}
+        {/* X falls back to og:title/description/image; it only needs the card type. */}
+        <meta
+          name="twitter:card"
+          content={metadata?.twitter?.card ?? (ogImage ? "summary_large_image" : "summary")}
+        />
+        {config.site.twitter ? <meta name="twitter:site" content={config.site.twitter} /> : null}
+        {metadata?.twitter?.creator ? <meta name="twitter:creator" content={metadata.twitter.creator} /> : null}
+        {/* The homepage names the site for search engines (schema.org WebSite). */}
+        {isHome && origin ? (
+          <script
+            type="application/ld+json"
+            dangerouslySetInnerHTML={{ __html: websiteJsonLd(config.site, origin + (withBase("/") ?? "/")) }}
+          />
         ) : null}
-        {og?.image ? <meta property="og:image" content={og.image} /> : null}
-        {og ? <meta property="og:type" content={og.type ?? "website"} /> : null}
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         {config.speculationRules && config.speculationDelivery === "inline" ? (
           <script
