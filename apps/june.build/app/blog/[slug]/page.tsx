@@ -1,6 +1,7 @@
 import type { RouteContext, Loaded } from "@junejs/core/route";
 
 import { post } from "../../_content";
+import { scrollableTables } from "../../tables";
 
 export const loader = (ctx: RouteContext<{ slug: string }>) => {
   const entry = post(ctx.params.slug);
@@ -23,7 +24,7 @@ export default function Post({ entry }: Loaded<typeof loader>) {
       <div className="j-post-meta" style={{ marginBottom: 24 }}>
         <span>{String(entry.data.date)}</span>
       </div>
-      <div className="j-doc-body" dangerouslySetInnerHTML={{ __html: entry.html }} />
+      <div className="j-doc-body" dangerouslySetInnerHTML={{ __html: scrollableTables(entry.html) }} />
     </article>
   );
 }
