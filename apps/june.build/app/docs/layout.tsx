@@ -9,9 +9,7 @@ export default function DocsLayout({ children }: { children: React.ReactNode }) 
     <div data-layout="docs" className="j-docs">
       <aside className="j-docs-side">
         <h4>
-          <a href="/docs" style={{ color: "var(--s-text)", textDecoration: "none", fontWeight: 600 }}>
-            Documentation
-          </a>
+          <a href="/docs">Documentation</a>
         </h4>
         {docSections().map((section) => (
           <div key={section.title}>

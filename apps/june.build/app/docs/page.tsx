@@ -8,24 +8,26 @@ export const loader = () => ({ sections: docSections() });
 
 export default function Docs({ sections }: Loaded<typeof loader>) {
   return (
-    <article className="j-doc-body">
+    <article className="j-doc-body j-doc-index">
       <h1>Documentation</h1>
+      <p className="j-lead">
+        Every page here is also markdown — append <code>.md</code>, or ask this site from the ⌘K box.
+      </p>
       {sections.map((section) => (
         <section key={section.title}>
           {section.title && <h2>{section.title}</h2>}
-          <ul style={{ lineHeight: 2, listStyle: "none", paddingLeft: 0 }}>
+          <ul>
             {section.docs.map((d) => (
               <li key={d.slug}>
-                <a href={`/docs/${d.slug}`}>{String(d.data.title)}</a>{" "}
-                <span style={{ color: "var(--s-secondary)" }}>— {String(d.data.description ?? "")}</span>
+                <a href={`/docs/${d.slug}`}>
+                  <b>{String(d.data.title)}</b>
+                  {d.data.description && <span>{String(d.data.description)}</span>}
+                </a>
               </li>
             ))}
           </ul>
         </section>
       ))}
-      <p style={{ color: "var(--s-muted)", fontSize: 14 }}>
-        Agents: every doc serves its authored markdown at <code>/docs/&lt;slug&gt;.md</code>.
-      </p>
     </article>
   );
 }

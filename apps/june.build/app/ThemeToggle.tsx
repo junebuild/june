@@ -1,16 +1,16 @@
 "use client";
-// The warm-light ↔ dark-agentic switch. The no-FOUC inline script in the layout
-// already applied the saved theme before paint; this island just lets the user
-// flip it and persists the choice. Server-renders inert; hydration wires it.
+// The dark ↔ light switch. Dark is the stylesheet default; the no-FOUC inline
+// script in the layout already applied a saved choice before paint. This island
+// lets the user flip it and persists the choice. Server-renders inert.
 import { useEffect, useState } from "react";
 
 export function ThemeToggle() {
-  const [theme, setTheme] = useState<"light" | "dark">("light");
+  const [theme, setTheme] = useState<"light" | "dark">("dark");
 
   // adopt whatever the inline script set on <html> (avoids a hydration flip)
   useEffect(() => {
     const cur = document.documentElement.getAttribute("data-theme");
-    setTheme(cur === "dark" ? "dark" : "light");
+    setTheme(cur === "light" ? "light" : "dark");
   }, []);
 
   const toggle = () => {
@@ -29,8 +29,8 @@ export function ThemeToggle() {
       type="button"
       className="j-themetoggle"
       onClick={toggle}
-      aria-label={theme === "dark" ? "Switch to warm light" : "Switch to dark agentic"}
-      title={theme === "dark" ? "Warm light" : "Dark agentic"}
+      aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+      title={theme === "dark" ? "Light" : "Dark"}
     >
       {theme === "dark" ? "☀" : "☾"}
     </button>

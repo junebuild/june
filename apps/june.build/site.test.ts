@@ -31,7 +31,7 @@ beforeAll(async () => {
 describe("human surface", () => {
   test("landing, why, benchmarks render in the layout", async () => {
     for (const [path, marker] of [
-      ["/", "One definition, four surfaces"],
+      ["/", "The directory is the manifest."],
       ["/why", "Core design philosophy"],
       ["/benchmarks", "48k ops/s"],
     ] as const) {
@@ -45,7 +45,7 @@ describe("human surface", () => {
     expect(await (await get("/why")).text()).toContain("<title>Why June · June</title>");
     expect(await (await get("/benchmarks")).text()).toContain("<title>Benchmarks · June</title>");
     expect(await (await get("/")).text()).toContain(
-      "<title>June — the agent-ready React framework</title>",
+      "<title>June — build agents into real apps</title>",
     );
   });
 

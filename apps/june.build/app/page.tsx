@@ -1,6 +1,6 @@
-
+import { AgentStage } from "./AgentStage";
+import { AskSite } from "./AskSite";
 import { bySlug } from "./content";
-import { HeroViewer } from "./HeroViewer";
 import { InstallCmd } from "./InstallCmd";
 // Side-effect import: registers search_site / get_page so warmup surfaces them
 // at /mcp (warmup loads route files; standalone modules must be reachable).
@@ -10,158 +10,242 @@ const page = bySlug("index")!;
 
 export const prerender = true;
 
-const cw = { fontFamily: "var(--font-mono)", fontSize: "0.86em", color: "var(--s-strong)" } as const;
-
-const SURFACES = [
-  { mime: "text/html", h: "Human view", p: "Server-streamed RSC, zero client JS by default.", live: false },
-  { mime: "text/markdown", h: "Agent reads", p: "The same route(), as clean markdown — append .md to any page.", live: false },
-  { mime: "application/json", h: "Machine API", p: "The same route() as structured data.", live: false },
-  { mime: "/mcp", h: "Agent acts", p: "Every defineAction() is a callable tool, one auth gate.", live: true },
-];
-
 const BENCH = [
   { v: "59", u: "ms", c: "dev cold start" },
   { v: "73", u: "ms", c: "HMR flight" },
-  { v: "0", u: "", c: "client JS default" },
+  { v: "0", u: "", c: "client JS by default" },
   { v: "8.8", u: "×", c: "fewer D1 queries" },
 ];
+
+function Head({ n, label, title, lead }: { n: string; label: string; title: React.ReactNode; lead: React.ReactNode }) {
+  return (
+    <div className="j-section-head">
+      <div>
+        <p className="j-eyebrow">
+          <span className="j-num">{n}</span> {label}
+        </p>
+        <h2 className="j-h2">{title}</h2>
+      </div>
+      <p className="j-lead">{lead}</p>
+    </div>
+  );
+}
 
 function Hero() {
   return (
     <header className="j-hero">
       <div className="j-hero-grid" />
       <div className="j-hero-in">
-        <div className="j-hero-rail">
-          <div className="j-hero-eyebrow">
-            <span className="j-dot" />One definition · four surfaces
-          </div>
+        <div className="j-hero-copy">
+          <a className="j-hero-tag" href="#agents">
+            <span className="j-dot" />
+            <b>New</b> the agent layer — channels, connections, durable turns →
+          </a>
           <h1>
-            One <span className="j-codeword">route()</span> is <span className="j-accent">four surfaces.</span>
+            Build agents
+            <br />
+            <span className="dim">into real apps.</span>
           </h1>
           <p className="j-hero-sub">
-            June is the opinionated, agent-ready React framework. A single <code>route()</code> serves a page to
-            people and <code>.md</code>, <code>.json</code>, and <code>/mcp</code> to agents — from one definition.
-            Nothing drifts, because nothing is duplicated.
+            June is the React framework where an agent is a feature, not a separate runtime. Drop an{" "}
+            <code>agent/</code> directory into your app: its tools are your server actions, its channels are Slack,
+            Crisp, or HTTP, and every turn is durable — checkpointed, resumable, one Durable Object per session at the edge.
           </p>
-          <div className="j-install">
+          <div className="j-hero-cta">
             <InstallCmd client:load />
-            <a className="j-secondary-link" href="/why">
+            <a className="j-btn" href="/docs/01-getting-started">
+              Get started
+            </a>
+            <a className="j-link" href="/why">
               Why June →
             </a>
           </div>
-          <div className="j-hero-meta">
-            <span>
-              <b>59ms</b> dev cold start
-            </span>
-            <span>
-              <b>0</b> client JS by default
-            </span>
-            <span>
-              <b>1</b> auth gate, both audiences
-            </span>
-          </div>
         </div>
-        <HeroViewer client:load />
+        <div className="j-hero-stage">
+          <AgentStage client:load />
+        </div>
       </div>
     </header>
   );
 }
 
-function FourSurfaces() {
+const MANIFEST = [
+  {
+    f: "agent.ts",
+    d: (
+      <>
+        <b>Name, model, per-surface policy.</b> A plain object — <code>surfaces.slack.denyTools</code> hides a tool
+        from one channel.
+      </>
+    ),
+  },
+  {
+    f: "instructions.md",
+    d: (
+      <>
+        <b>The system prompt</b>, as a file you can diff. <code>instructions.&lt;source&gt;.md</code> appends to it —
+        or replaces it — on one surface.
+      </>
+    ),
+  },
+  {
+    f: "tools/*.ts",
+    d: (
+      <>
+        <b>Each file is a <code>defineAction()</code></b> — the same one your UI calls and <code>/mcp</code> serves.
+        A raw tool when it needs the turn itself, e.g. to ask a human.
+      </>
+    ),
+  },
+  {
+    f: "skills/*.md",
+    d: (
+      <>
+        <b>Loaded on demand</b> through an automatic <code>read_skill</code> tool — long procedures stay out of
+        the prompt until needed.
+      </>
+    ),
+  },
+  {
+    f: "channels/*.ts",
+    d: (
+      <>
+        <b>Inbound edges.</b> <code>slackChannel</code>, <code>crispChannel</code>, <code>httpChannel</code>, or
+        your own <code>defineChannel</code>.
+      </>
+    ),
+  },
+  {
+    f: "connections/*.ts",
+    d: (
+      <>
+        <b>Outbound tool sources.</b> A remote MCP server, an OpenAPI spec, Google Drive — credentials resolved
+        server-side per call.
+      </>
+    ),
+  },
+];
+
+function Manifest() {
   return (
-    <section className="j-section">
+    <section className="j-section" id="agents">
       <div className="j-section-in">
-        <div className="j-section-head">
-          <p className="j-eyebrow">
-            <span className="j-num">01</span> — One definition
-          </p>
-          <h2 className="j-h2">Write it once. Serve humans and agents alike.</h2>
-          <p className="j-lead">
-            Every <code style={cw}>route()</code> projects four surfaces, and every{" "}
-            <code style={cw}>defineAction()</code> is a UI action and an MCP tool. The projections are derived —
-            never maintained by hand.
-          </p>
-        </div>
-        <div className="j-surfaces">
-          {SURFACES.map((s) => (
-            <div key={s.mime} className={"j-surface" + (s.live ? " is-live" : "")}>
-              <div className="j-surface-k">
-                {s.live && <span className="j-livedot2" />}
-                {s.mime}
+        <Head
+          n="01"
+          label="The agent layer"
+          title="The directory is the manifest."
+          lead={
+            <>
+              No agent framework to adopt, no config to assemble. June discovers <code>agent/</code>, mounts it in
+              dev, and compiles it for the edge on <code>june build</code>. Presence is the API.
+            </>
+          }
+        />
+        <div className="j-manifest">
+          {MANIFEST.map((m) => (
+            <div key={m.f} className="j-manifest-row">
+              <div className="j-manifest-f">
+                <span className="dir">agent/</span>
+                {m.f}
               </div>
-              <h3 className="j-surface-h">{s.h}</h3>
-              <p className="j-surface-p">{s.p}</p>
+              <div className="j-manifest-arrow">→</div>
+              <div className="j-manifest-d">{m.d}</div>
             </div>
           ))}
+        </div>
+        <div style={{ marginTop: 24, display: "flex", gap: 20, flexWrap: "wrap" }}>
+          <a className="j-link" href="/docs/agents-overview">
+            Agents overview →
+          </a>
+          <a className="j-link" href="/docs/agents-directory">
+            The agent/ directory reference →
+          </a>
         </div>
       </div>
     </section>
   );
 }
 
-function NoGlue() {
+function OneAction() {
   return (
     <section className="j-section">
       <div className="j-section-in">
         <div className="j-split">
           <div className="j-split-text">
             <p className="j-eyebrow">
-              <span className="j-num">02</span> — No glue layer
+              <span className="j-num">02</span> No glue layer
             </p>
-            <h2 className="j-h2">Auth, data, and agents are one model.</h2>
+            <h2 className="j-h2">One action. Four callers. One gate.</h2>
             <p className="j-lead">
-              There is no "expose to agents" step and no second permission system. A{" "}
-              <code style={cw}>defineAction()</code> is a server action and an MCP tool behind a single
-              authorization gate — <code style={cw}>run(input, ctx)</code> is the only gate.
+              There is no &quot;expose to agents&quot; step and no second permission system. The{" "}
+              <code>defineAction()</code> your button calls is the tool your agent calls — and the tool anyone
+              else&apos;s agent calls at <code>/mcp</code>.
             </p>
-            <ul className="j-feature-list">
-              <li>
-                <span className="j-fk">one gate</span>
-                <span className="j-fb">
-                  <b>run(input, ctx)</b> — the same ctx whether the caller is your React UI or an agent at /mcp.
-                </span>
-              </li>
-              <li>
-                <span className="j-fk">no adapter</span>
-                <span className="j-fb">
-                  you wire <b>no adapter matrix</b>. The route graph derives the API catalog, sitemap, and
-                  llms.txt.
-                </span>
-              </li>
-              <li>
-                <span className="j-fk">auth</span>
-                <span className="j-fb">
-                  <b>Better Auth</b> is the blessed default <i>(a first-class integration is coming soon)</i> — or
-                  bring your own. Either way the gate is the same.
-                </span>
-              </li>
-            </ul>
+            <div className="j-gate">
+              <span className="j-dot" />
+              <span>
+                <b>run(input, ctx)</b> — ctx.user is whoever is really asking
+              </span>
+            </div>
+            <div className="j-callers">
+              {[
+                ["your UI", "A server action behind a button or form."],
+                ["your agent", "A tool in agent/tools/, scoped to the speaker a channel resolved."],
+                ["/mcp", "An MCP tool for any external agent holding a user's credential."],
+                ["WebMCP", "A browser tool, registered with navigator.modelContext."],
+              ].map(([k, p]) => (
+                <div key={k} className="j-caller">
+                  <div className="j-caller-k">{k}</div>
+                  <p className="j-caller-p">{p}</p>
+                </div>
+              ))}
+            </div>
           </div>
           <div className="j-panel">
             <div className="j-panel-bar">
-              <span className="fn">app/actions.ts</span>
+              <span className="fn">agent/tools/refund_order.ts</span>
               <span className="lg">ts</span>
             </div>
             <pre>
-              {"import { db } from "}
-              <span className="tk-str">"@junejs/db"</span>
-              {";  "}
-              <span className="tk-mut">{"// ambient + scoped — never on ctx"}</span>
-              {"\n\nexport const "}
-              <span className="tk-key">createUser</span>
-              {" = "}
-              <span className="tk-key">defineAction</span>
+              {"import { "}
+              <span className="tk-fn">defineAction</span>
+              {" } from "}
+              <span className="tk-str">&quot;@junejs/core/agent&quot;</span>
+              {";\nimport { db } from "}
+              <span className="tk-str">&quot;@junejs/db&quot;</span>
+              {";\n\nexport default "}
+              <span className="tk-fn">defineAction</span>
               {"({\n  id: "}
-              <span className="tk-str">"createUser"</span>
+              <span className="tk-str">&quot;refund_order&quot;</span>
               {",\n  description: "}
-              <span className="tk-str">"Create a user"</span>
+              <span className="tk-str">&quot;Refund a delivered order.&quot;</span>
+              {",\n  input: { "}
+              <span className="tk-key">type</span>
+              {": "}
+              <span className="tk-str">&quot;object&quot;</span>
+              {", "}
+              <span className="tk-key">properties</span>
+              {": { id: { type: "}
+              <span className="tk-str">&quot;number&quot;</span>
+              {" } } },\n  requiresPrincipal: "}
+              <span className="tk-key">true</span>
               {",  "}
-              <span className="tk-mut">{"// → an MCP tool"}</span>
-              {"\n  input: { name: "}
-              <span className="tk-str">"string"</span>
-              {" },\n  run: (input, ctx) => {\n    "}
-              <span className="tk-mut">{"// ctx is the principal (user/session) — UI or agent."}</span>
-              {"\n    return db.users.insert(input);\n  },\n});"}
+              <span className="tk-mut">{"// hidden from anonymous turns"}</span>
+              {"\n  "}
+              <span className="tk-key">async</span>
+              {" run(input, ctx) {\n    "}
+              <span className="tk-mut">{"// the one gate: a button, the agent, and /mcp all land here"}</span>
+              {"\n    "}
+              <span className="tk-key">if</span>
+              {" (!ctx.user?.canRefund) "}
+              <span className="tk-key">throw</span>
+              {" "}
+              <span className="tk-key">new</span>
+              {" Error("}
+              <span className="tk-str">&quot;forbidden&quot;</span>
+              {");\n    "}
+              <span className="tk-key">return</span>
+              {" db.orders.refund(input.id);\n  },\n});"}
             </pre>
           </div>
         </div>
@@ -170,155 +254,73 @@ function NoGlue() {
   );
 }
 
-function ScopedAgents() {
-  return (
-    <section className="j-agentband">
-      <div className="j-agentband-glow" />
-      <div className="j-agentband-in">
-        <div>
-          <p className="j-eyebrow">
-            <span className="j-num">03</span> — Agents as scoped users
-          </p>
-          <h2>Watch an agent use your app.</h2>
-          <p>
-            No SDK, no tool re-declaration. Your routes and actions are the surface — an agent connects as a
-            scoped principal and works the same authorization the UI does.
-          </p>
-          <ul className="j-feature-list">
-            <li>
-              <span className="j-fk">/mcp</span>
-              <span className="j-fb">every action, as a callable tool</span>
-            </li>
-            <li>
-              <span className="j-fk">/llms.txt</span>
-              <span className="j-fb">the site map an agent reads first</span>
-            </li>
-            <li>
-              <span className="j-fk">*.md</span>
-              <span className="j-fb">your authored bytes, verbatim</span>
-            </li>
-          </ul>
-          <div style={{ marginTop: 22, marginBottom: 22 }}>
-            <span className="j-badge-agent">
-              <span className="d" />scoped as user_42
-            </span>
-          </div>
-          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-            <a className="j-btn-agent solid" href="/mcp">
-              Point an agent at /mcp →
-            </a>
-            <a className="j-btn-agent ghost" href="/docs/features-mcp">
-              Read the MCP docs
-            </a>
-          </div>
-        </div>
-        <div className="j-console">
-          <div className="j-console-bar">
-            <span className="j-pulse" />agent session · /mcp<span className="dim">scoped as user_42</span>
-          </div>
-          <div className="j-console-body">
-            <div className="j-console-step">
-              <span className="j-console-n">01</span>
-              <div>
-                <div className="j-console-line">
-                  <span className="pr">› </span>tools/list
-                </div>
-                <div className="j-mcp-chips" style={{ marginBottom: 0 }}>
-                  {["search_site", "get_page", "createUser"].map((t) => (
-                    <span key={t} className="j-mcp-chip">
-                      <span className="d" />
-                      {t}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            </div>
-            <div className="j-console-step">
-              <span className="j-console-n">02</span>
-              <div>
-                <div className="j-console-line">
-                  <span className="pr">› </span>tools/call search_site {"{"}
-                  <span className="k">"q"</span>: <span className="s">"cold start"</span>
-                  {"}"} <span className="note">auth ✓</span>
-                </div>
-                <div className="j-console-out">
-                  3 hits · top: <span style={{ color: "var(--agent-cyan)" }}>"59ms: anatomy of a dev cold start"</span>
-                </div>
-              </div>
-            </div>
-            <div className="j-console-step">
-              <span className="j-console-n">●</span>
-              <div>
-                <span style={{ color: "var(--agent-green)" }}>done</span>
-                <span style={{ color: "var(--agent-text-muted)" }}> · 2 tool calls · 71ms · one auth gate</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function DataMagic() {
+function Hub() {
   return (
     <section className="j-section">
       <div className="j-section-in">
-        <div className="j-split is-rev">
-          <div className="j-split-text">
-            <p className="j-eyebrow">
-              <span className="j-num">04</span> — Data
-            </p>
-            <h2 className="j-h2">Declare it once. The layer does the rest.</h2>
-            <p className="j-lead">
-              Declare <code style={cw}>db</code> / <code style={cw}>kv</code> / <code style={cw}>blob</code> in
-              your config; reach them ambiently with <code style={cw}>import &#123; db &#125;</code> — scoped per
-              request, plain SQL, no ORM ceremony. It maps to D1, Turso, or local SQLite per target — or bring
-              your own.
-            </p>
-            <ul className="j-feature-list">
-              <li>
-                <span className="j-fk">ambient db</span>
-                <span className="j-fb">
-                  <b>import &#123; db &#125;</b>, scoped per request — <b>ctx is identity-only</b> (user/session),
-                  never the database.
-                </span>
-              </li>
-              <li>
-                <span className="j-fk">plain SQL</span>
-                <span className="j-fb">
-                  the <b>SQL you read is the SQL that runs</b> — no DSL for a human or an agent to misread.
-                </span>
-              </li>
-              <li>
-                <span className="j-fk">writes</span>
-                <span className="j-fb">
-                  <b>auto-invalidate</b> the cache — no revalidatePath, no tags to remember.
-                </span>
-              </li>
-              <li>
-                <span className="j-fk">reads</span>
-                <span className="j-fb">
-                  <b>8.8× fewer</b> queries on D1 vs concurrent per-component reads, auto-batched.
-                </span>
-              </li>
-            </ul>
+        <Head
+          n="03"
+          label="Channels & connections"
+          title="Meet people where they work. Reach what they use."
+          lead={
+            <>
+              Channels bring turns in and resolve who is speaking. Connections take tools out — the agent never holds
+              a token. Each is one file.
+            </>
+          }
+        />
+        <div className="j-hub">
+          <div className="j-hub-col">
+            <h3 className="j-hub-h">
+              <span className="j-pill is-signal">in</span> channels/
+            </h3>
+            {[
+              ["slackChannel", "Streams its reply, shows a thinking line, approval buttons, drops redeliveries."],
+              ["crispChannel", "Customer chat — plus private notes only your operators see."],
+              ["httpChannel", "POST /message for your own UI, a CLI, or a cron."],
+              ["defineChannel", "Anything else with a webhook."],
+            ].map(([n, d]) => (
+              <div key={n} className="j-hub-item">
+                <span className="n">{n}</span>
+                <span className="d">{d}</span>
+              </div>
+            ))}
+            <a className="j-link" href="/docs/agents-channels">
+              Channels →
+            </a>
           </div>
-          <div className="j-panel">
-            <div className="j-panel-bar">
-              <span className="fn">app/page.tsx</span>
-              <span className="lg">tsx</span>
+          <div className="j-hub-col j-hub-core">
+            <div className="j-hub-core-box">
+              <div className="t">
+                <span className="j-dot" />
+                agent/
+              </div>
+              <p>One agent, many surfaces. Each surface can append or replace the instructions and deny tools.</p>
             </div>
-            <pre>
-              {"async function "}
-              <span className="tk-key">Page</span>
-              {"() {\n  "}
-              <span className="tk-mut">{"// N reads in N components → 1 batched query"}</span>
-              {"\n  const user = await db.users.find(id);\n  const posts = await db.posts.byAuthor(id);\n  return <Profile user={user} posts={posts} />;\n}\n\n"}
-              <span className="tk-mut">{"// a write anywhere auto-invalidates the reads"}</span>
-              {"\nawait db.posts.insert({ ... });  "}
-              <span className="tk-mut">{"// cache: stale ✓"}</span>
-            </pre>
+            <div className="j-hub-pills">
+              <span className="j-pill is-tool">tools = your actions</span>
+              <span className="j-pill is-human">ctx.user per speaker</span>
+              <span className="j-pill">anthropic()</span>
+            </div>
+          </div>
+          <div className="j-hub-col">
+            <h3 className="j-hub-h">
+              <span className="j-pill is-tool">out</span> connections/
+            </h3>
+            {[
+              ["MCP server", "Any remote MCP server; its tools arrive as conn__tool."],
+              ["OpenAPI", "Point at a spec — operations become tools."],
+              ["Google Drive", "Read and save files, on the user's own linked account."],
+              ["auth(ctx)", "Credentials resolve server-side per call, never in the prompt."],
+            ].map(([n, d]) => (
+              <div key={n} className="j-hub-item">
+                <span className="n">{n}</span>
+                <span className="d">{d}</span>
+              </div>
+            ))}
+            <a className="j-link" href="/docs/agents-connections">
+              Connections →
+            </a>
           </div>
         </div>
       </div>
@@ -326,54 +328,206 @@ function DataMagic() {
   );
 }
 
-function GettingStarted() {
-  const steps = [
-    { n: "01", cmd: "npm create june@latest", d: "Scaffold an app — no adapter matrix to configure." },
-    { n: "02", cmd: "june dev", d: "Boot in 59ms. Save → HMR pushes a flight in 73ms." },
-    { n: "03", cmd: "june build", d: "Freeze the dev graph into a deployable bundle." },
-    { n: "04", cmd: "june deploy", d: "Ship to Workers, Vercel, or Deno — same graph." },
+function Durable() {
+  const turns = [
+    {
+      s: "running",
+      c: "var(--s-signal)",
+      h: "Crash-proof",
+      p: (
+        <>
+          Every model call and tool result is checkpointed. Redeliver a turn after a crash and it replays: finished steps are skipped, not re-run.
+        </>
+      ),
+    },
+    {
+      s: "parked",
+      c: "var(--s-human)",
+      h: "Human in the loop",
+      p: (
+        <>
+          A tool calls <code>ctx.requestInput()</code> and the turn parks for an answer — minutes or days — then
+          picks back up. Slack renders it as Approve / Deny.
+        </>
+      ),
+    },
+    {
+      s: "replaced",
+      c: "var(--s-tool)",
+      h: "Superseded cleanly",
+      p: <>Opt in to replace, and a newer message cancels the unfinished turn instead of queueing behind it.</>,
+    },
+    {
+      s: "initiated",
+      c: "var(--s-signal)",
+      h: "Agent goes first",
+      p: <>An agent can start a turn itself — a reminder, a follow-up — through the same log and channels.</>,
+    },
   ];
   return (
     <section className="j-section">
       <div className="j-section-in">
-        <div className="j-section-head">
-          <p className="j-eyebrow">
-            <span className="j-num">05</span> — Start
-          </p>
-          <h2 className="j-h2">Ship in an afternoon.</h2>
-          <p className="j-lead">
-            Four commands from empty directory to an app deployed at the edge — already speaking to humans and
-            agents.
-          </p>
-        </div>
-        <div className="j-steps">
-          {steps.map((s) => (
-            <div key={s.n} className="j-step">
-              <div className="j-step-n">{s.n}</div>
-              <div className="j-step-cmd">
-                <span className="p">$ </span>
-                {s.cmd}
+        <Head
+          n="04"
+          label="Durable turns"
+          title="A turn is a process, not a request."
+          lead={
+            <>
+              Real work outlives an HTTP request. June persists each turn as it runs and streams its events, so
+              an agent can wait on a person, survive a restart, and still answer in the right thread.
+            </>
+          }
+        />
+        <div className="j-turns">
+          {turns.map((t) => (
+            <div key={t.s} className="j-turn">
+              <div className="j-turn-state" style={{ color: t.c }}>
+                <span className="j-dot" style={{ background: t.c, boxShadow: "none" }} />
+                {t.s}
               </div>
-              <div className="j-step-d">{s.d}</div>
+              <h3>{t.h}</h3>
+              <p>{t.p}</p>
             </div>
           ))}
+        </div>
+        <div className="j-runtimes">
+          <div className="j-runtime">
+            <span className="j-runtime-k">june dev</span>
+            <div>
+              <b>NativeRuntime · SQLite</b>
+              <span>Mounted automatically when agent/ exists, on Bun or Node. SQLite in memory by default — fast to iterate, reset on restart.</span>
+            </div>
+          </div>
+          <div className="j-runtime">
+            <span className="j-runtime-k">deploy</span>
+            <div>
+              <b>Workers · one Durable Object per session</b>
+              <span>june build generates the DO class and the wrangler binding. Nothing to wire.</span>
+            </div>
+          </div>
+        </div>
+        <div style={{ marginTop: 24, display: "flex", gap: 20, flexWrap: "wrap" }}>
+          <a className="j-link" href="/docs/agents-durable-turns">
+            Durable turns →
+          </a>
+          <a className="j-link" href="/docs/agents-deploy">
+            Run &amp; deploy →
+          </a>
         </div>
       </div>
     </section>
   );
 }
 
-function BenchStrip() {
+function AskBand() {
   return (
     <section className="j-section">
       <div className="j-section-in">
-        <div className="j-section-head">
-          <p className="j-eyebrow">
-            <span className="j-num">06</span> — Measured, not marketing
-          </p>
-          <h2 className="j-h2">Every number traces to a named run.</h2>
+        <div className="j-split">
+          <div className="j-split-text">
+            <p className="j-eyebrow">
+              <span className="j-num">05</span> Try it on this site
+            </p>
+            <h2 className="j-h2">This site is a June app. Ask it.</h2>
+            <p className="j-lead">
+              The box calls <code>search_site</code> on this site&apos;s own <code>/mcp</code> — a{" "}
+              <code>defineAction()</code> in <code>app/actions.ts</code>, the same tool Claude or any agent gets. Or
+              point one at it:
+            </p>
+            <div className="j-panel" style={{ marginTop: 24 }}>
+              <pre>
+                <span className="tk-fn">$</span>
+                {" curl -X POST https://june.build/mcp \\\n    -d '"}
+                <span className="tk-str">{'{"jsonrpc":"2.0","id":1,"method":"tools/list"}'}</span>
+                {"'"}
+              </pre>
+            </div>
+          </div>
+          <AskSite client:load variant="inline" />
         </div>
-        <div className="j-figs">
+      </div>
+    </section>
+  );
+}
+
+function Foundation() {
+  return (
+    <section className="j-section">
+      <div className="j-section-in">
+        <Head
+          n="06"
+          label="The foundation"
+          title="Underneath: a framework that already speaks agent."
+          lead={
+            <>
+              The agent layer stands on the same core that serves your pages — server-first React where every
+              route is readable by people and machines alike.
+            </>
+          }
+        />
+        <div className="j-bento">
+          <div className="j-cell w4">
+            <span className="j-cell-k">route()</span>
+            <h3>One definition, four surfaces.</h3>
+            <p>
+              A page&apos;s default export is the view; named exports configure the rest. Nothing drifts, because
+              nothing is duplicated — append <code>.md</code> to any URL on this site.
+            </p>
+            <div className="j-surf">
+              <div>
+                <b>text/html</b>
+                <span>streamed RSC</span>
+              </div>
+              <div>
+                <b>.md</b>
+                <span>your authored bytes</span>
+              </div>
+              <div>
+                <b>.json</b>
+                <span>the loader data</span>
+              </div>
+              <div>
+                <b>/mcp</b>
+                <span>every action</span>
+              </div>
+            </div>
+          </div>
+          <div className="j-cell w2">
+            <span className="j-cell-k">discovery</span>
+            <h3>llms.txt, sitemap, API catalog.</h3>
+            <p>Derived from the route graph. On by default — june.config.ts exists to turn things off.</p>
+            <a className="j-link" href="/docs/features-llms-txt">
+              llms.txt →
+            </a>
+          </div>
+          <div className="j-cell w2">
+            <span className="j-cell-k">data</span>
+            <h3>Ambient db, plain SQL.</h3>
+            <p>
+              <code>import {"{ db }"}</code>, scoped per request. Writes auto-invalidate; reads auto-batch.
+            </p>
+            <a className="j-link" href="/docs/features-data">
+              Data model →
+            </a>
+          </div>
+          <div className="j-cell w2">
+            <span className="j-cell-k">rsc + islands</span>
+            <h3>Zero client JS by default.</h3>
+            <p>Interactivity is an explicit island. Navigation is the browser&apos;s — Speculation Rules, View Transitions.</p>
+            <a className="j-link" href="/docs/features-islands">
+              Islands →
+            </a>
+          </div>
+          <div className="j-cell w2">
+            <span className="j-cell-k">web standards</span>
+            <h3>fetch(Request) → Response.</h3>
+            <p>That is the framework. Bun-first toolchain, runtime-agnostic core, deploys to Workers.</p>
+            <a className="j-link" href="/docs/features-web-standards">
+              Web Standards →
+            </a>
+          </div>
+        </div>
+        <div className="j-figs" style={{ marginTop: 64 }}>
           {BENCH.map((b) => (
             <div key={b.c} className="j-fig">
               <div className="j-fig-v">
@@ -384,9 +538,9 @@ function BenchStrip() {
             </div>
           ))}
         </div>
-        <div style={{ marginTop: 28 }}>
-          <a className="j-secondary-link" href="/benchmarks">
-            See all benchmarks →
+        <div style={{ marginTop: 24 }}>
+          <a className="j-link" href="/benchmarks">
+            Every number traces to a named run →
           </a>
         </div>
       </div>
@@ -394,32 +548,57 @@ function BenchStrip() {
   );
 }
 
-function CtaBand() {
+function Status() {
+  const cols = [
+    { k: "ok", h: "Stable", items: ["routes & projections", "defineAction()", "/mcp, llms.txt, discovery"] },
+    { k: "warn", h: "Changing", items: ["the agent layer (agent/, channels, connections)", "data layer", "auth"] },
+    { k: "exp", h: "Experimental", items: ["native Rust+V8 runtime", "live RSC"] },
+  ];
   return (
-    <section className="j-cta-band">
-      <div className="j-cta-in">
-        <h2>Your app is the agent's API.</h2>
-        <p>
-          One React framework for both audiences. 0.0.x preview — APIs will change, and we'll tell you when.
-        </p>
+    <section className="j-section">
+      <div className="j-section-in">
+        <Head
+          n="07"
+          label="Honest status"
+          title="0.0.x preview. APIs will change — we'll say which."
+          lead={
+            <>
+              The shape is settled; the surface is still moving. Calibrate with the{" "}
+              <a href="/docs/05-stability">stability &amp; roadmap</a> page.
+            </>
+          }
+        />
         <div className="j-status">
-          <span>
-            <b className="ok">Stable</b>routes · projections · actions · MCP
-          </span>
-          <span>
-            <b className="warn">Changing</b>data layer · auth
-          </span>
-          <span>
-            <b className="exp">Experimental</b>native runtime · live RSC
-          </span>
+          {cols.map((c) => (
+            <div key={c.k} className="j-status-col">
+              <div className={"j-status-h " + c.k}>
+                <span className="j-dot" style={{ background: "currentColor", boxShadow: "none", animation: "none" }} />
+                {c.h}
+              </div>
+              <ul>
+                {c.items.map((i) => (
+                  <li key={i}>{i}</li>
+                ))}
+              </ul>
+            </div>
+          ))}
         </div>
-        <div style={{ marginTop: 14 }}>
-          <a className="j-secondary-link" href="/docs/05-stability">
-            Stability &amp; roadmap →
-          </a>
-        </div>
-        <div className="j-install">
+      </div>
+    </section>
+  );
+}
+
+function Cta() {
+  return (
+    <section className="j-cta">
+      <div className="j-cta-in">
+        <h2>Your app is the agent.</h2>
+        <p>Start with a page. Add an agent/ directory when you need one. Deploy both with one command.</p>
+        <div className="j-hero-cta" style={{ justifyContent: "center" }}>
           <InstallCmd client:load />
+          <a className="j-btn" href="/docs">
+            Read the docs
+          </a>
         </div>
       </div>
     </section>
@@ -430,13 +609,14 @@ export default function Home() {
   return (
     <>
       <Hero />
-      <FourSurfaces />
-      <NoGlue />
-      <ScopedAgents />
-      <DataMagic />
-      <GettingStarted />
-      <BenchStrip />
-      <CtaBand />
+      <Manifest />
+      <OneAction />
+      <Hub />
+      <Durable />
+      <AskBand />
+      <Foundation />
+      <Status />
+      <Cta />
     </>
   );
 }
