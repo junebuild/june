@@ -43,6 +43,15 @@ import { generateIslandRegistry } from "./island-registry";
 import { findGlobalCss, globalCssUsesTailwind, processCssCached, STYLES_URL } from "./css";
 import { buildModuleCss, registerCssModules, MODULE_STYLES_URL, type ModuleMaps } from "./css-modules";
 import { contentTypeFor, RESERVED_PREFIX, safeRelativePath } from "./static-files";
+import {
+  GENERATED_ICONS,
+  googleFontFetcher,
+  publicFileCheck,
+  renderIcons,
+  resolveIcons,
+  type GeneratedIconFile,
+  type GeneratedIcons,
+} from "./favicon";
 
 export type CreateAppOptions = {
   appDir: string;
@@ -133,6 +142,19 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
   } catch {
     /* no public/ dir → nothing to serve */
   }
+  // Default PNG icons: linked by the document, rendered once on first request
+  // (a failed render is retried next time rather than memoized).
+  const iconPlan = resolveIcons(config.site ?? {}, publicFileCheck(publicDir));
+  let iconsPromise: Promise<GeneratedIcons> | undefined;
+  const getIcons = () =>
+    (iconsPromise ??= renderIcons({
+      site: config.site ?? {},
+      fetchFont: googleFontFetcher(join(dirname(appDir), "node_modules", ".cache", "june", "fonts")),
+      warn: (msg) => console.warn(msg),
+    }).catch((err) => {
+      iconsPromise = undefined;
+      throw err;
+    }));
   const agent = resolveAgent(config.agent);
   const speculation = config.speculation;
   // app/_client.* present → the dev document loads /client.js and we serve it
@@ -153,6 +175,7 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
     clientRouter: resolveClientRouter(config.clientRouter),
     clientScript: clientEntry ? CLIENT_SCRIPT_URL : null,
     styles: cssEntry ? STYLES_URL : null,
+    icons: iconPlan.icons,
   };
 
   // CSS Modules: glob + transform app/**/*.module.css ONCE (memoized) → the maps
@@ -401,6 +424,20 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
               () => toPipeline(),
             );
           }
+        }
+      }
+      // June's default PNG icons (the app has none of its own): rendered on first
+      // request with the same code `june build` writes them with.
+      if (iconPlan.generate && (request.method === "GET" || request.method === "HEAD")) {
+        const name = new URL(request.url).pathname.slice(1);
+        if ((GENERATED_ICONS as readonly string[]).includes(name)) {
+          return getIcons().then(
+            (icons) =>
+              new Response(request.method === "HEAD" ? null : icons[name as GeneratedIconFile], {
+                headers: { "content-type": contentTypeFor(name), "cache-control": "public, max-age=0, must-revalidate" },
+              }),
+            () => toPipeline(),
+          );
         }
       }
       return toPipeline();

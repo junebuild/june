@@ -61,6 +61,14 @@ export type DocumentConfig = {
   // placeholder host). Kept apart from site.url so a locale's own domain can
   // still win over it — see publicOrigin().
   deployOrigin?: string;
+  // The icon links, filled by the host from public/ (see favicon.ts resolveIcons):
+  //   primary     the app's own main icon (public/favicon.svg, icon.svg, …) —
+  //               linked in place of June's letter /favicon.svg; site.icon wins
+  //   png         a 32×32 PNG (Google Search and some browsers skip SVG)
+  //   appleTouch  the iOS home-screen icon
+  // June's generated set when the app has no icon of its own. Absent → only the
+  // favicon link.
+  icons?: { primary?: string; png?: string; appleTouch?: string } | null;
 };
 
 // June's built-in baseline CSS reset — a minimal, Tailwind-Preflight-aligned normalize, NOT a layout
@@ -147,6 +155,12 @@ function publicOrigin(config: DocumentConfig, pageUrl?: string, onLocaleDomain?:
   if (onLocaleDomain && live) return live;
   if (config.site.url) return config.site.url.replace(/\/+$/, "");
   return config.deployOrigin ?? live;
+}
+
+// The favicon link's type attribute, from its extension (unknown → none).
+function iconType(href: string): string | undefined {
+  const ext = href.split(/[?#]/)[0]!.split(".").pop()?.toLowerCase();
+  return ext === "svg" ? "image/svg+xml" : ext === "png" ? "image/png" : ext === "ico" ? "image/x-icon" : undefined;
 }
 
 // og:locale wants ll_CC ("en_US"); <html lang> is BCP 47 ("en-US").
@@ -238,6 +252,7 @@ export function Document({
   const canonical =
     absolute(metadata?.canonical) ??
     (origin && pageUrl && !noindex ? origin + withBase(new URL(pageUrl).pathname) : undefined);
+  const favicon = config.site.icon ?? config.icons?.primary ?? "/favicon.svg";
   const docLang = lang ?? config.site.lang ?? "en";
   const ogTitle = og?.title ?? title;
   const ogDescription = og?.description ?? description;
@@ -249,13 +264,14 @@ export function Document({
             pages are served by asset layers whose content-type may lack the
             charset param — without this, UTF-8 text mojibakes as windows-1252. */}
         <meta charSet="utf-8" />
-        {/* site.icon overrides; otherwise the framework's generated letter
-            favicon answers /favicon.svg, so no June app 404s its icon. */}
-        <link
-          rel="icon"
-          href={withBase(config.site.icon ?? "/favicon.svg")}
-          type={(config.site.icon ?? "/favicon.svg").endsWith(".svg") ? "image/svg+xml" : undefined}
-        />
+        {/* site.icon overrides, then the app's own icon in public/; otherwise the
+            framework's generated letter favicon answers /favicon.svg, so no June
+            app 404s its icon. */}
+        <link rel="icon" href={withBase(favicon)} type={iconType(favicon)} />
+        {config.icons?.png && config.icons.png !== favicon ? (
+          <link rel="icon" href={withBase(config.icons.png)} type="image/png" sizes="32x32" />
+        ) : null}
+        {config.icons?.appleTouch ? <link rel="apple-touch-icon" href={withBase(config.icons.appleTouch)} /> : null}
         <title>{title}</title>
         {description ? <meta name="description" content={description} /> : null}
         {canonical ? <link rel="canonical" href={canonical} /> : null}
