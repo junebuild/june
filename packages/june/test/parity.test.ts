@@ -45,7 +45,9 @@ const SURFACES = [
   "/.well-known/mcp/server-card.json",
   "/__extra/ping",
   "/favicon.svg",
-  "/favicon.ico",
+  // /favicon.ico is not here: dev renders the real ICO, and a built app ships it
+  // as an asset the platform answers before the worker. build.test.ts pins
+  // dev ≡ build for it (and the PNG icons).
   "/does/not/exist",
 ];
 

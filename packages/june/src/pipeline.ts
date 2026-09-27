@@ -49,6 +49,7 @@ import {
 } from "@junejs/core/i18n";
 import type { Resources } from "@junejs/core/resources";
 
+import { iconLetter } from "./icon-letter";
 import { negotiate, TITLE_HEADER, SEGMENT_HEADER, encodeTitle } from "./negotiate";
 
 // Minimal Cookie-header read for the locale negotiation chain (no dependency on
@@ -200,10 +201,11 @@ function StreamedView({
 // The default favicon: the site name's first character in a rounded square —
 // a plain SVG string, so it needs no fonts, no rasterizer, and works for CJK
 // names as readily as latin ones. Served at /favicon.svg AND /favicon.ico
-// (browsers respect the svg content-type), so no June app 404s its icon.
+// (browsers respect the svg content-type), so no June app 404s its icon. A built
+// app also ships real PNG/ICO files (favicon.ts), which the asset layer answers
+// first, so this /favicon.ico is only the fallback.
 function letterFavicon(siteName: string | undefined): Response {
-  const first = (siteName ?? "").trim().charAt(0) || "•";
-  const letter = first.toUpperCase().replace(/[<>&"']/g, "");
+  const letter = (iconLetter(siteName) || "•").replace(/[<>&"']/g, "");
   return text(
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">` +
       `<rect width="64" height="64" rx="12" fill="#1d1d1f"/>` +

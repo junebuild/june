@@ -34,6 +34,7 @@ import type { ResourcePlan } from "./adapter";
 import { generateAgentModule } from "./agent-compile";
 import { freezeConfig, resolveDeployAdapter, workerName } from "./config-freeze";
 import { generateContent } from "./content-freeze";
+import { GENERATED_ICONS, googleFontFetcher, publicFileCheck, renderIcons, resolveIcons } from "./favicon";
 import { createWorker } from "./worker";
 import { buildManifest, importLayout, type ImportedLayout } from "./manifest";
 import { findMiddlewareFile } from "./router";
@@ -541,6 +542,25 @@ ${doClass}`;
       publicFiles.push(rel);
     }
     if (publicFiles.length) hasAssets = true;
+  }
+
+  // ---- default PNG icons: apple-touch-icon.png, icon.png, favicon.ico -----
+  // Only when the app brings no icon of its own (the frozen document already
+  // links them — same resolveIcons call). Listed with publicFiles so adapters
+  // with a separate static tier (vercel) place them like any public/ file.
+  const site = frozen.document.site;
+  if (resolveIcons(site, publicFileCheck(publicDir)).generate) {
+    const icons = await renderIcons({
+      site,
+      fetchFont: googleFontFetcher(join(appRoot, "node_modules", ".cache", "june", "fonts")),
+      warn: (msg) => console.warn(msg),
+    });
+    await mkdir(assetsDir, { recursive: true }); // an app with no public/ has none yet
+    for (const file of GENERATED_ICONS) {
+      await writeFile(join(assetsDir, file), icons[file]);
+      publicFiles.push(file);
+    }
+    hasAssets = true;
   }
 
   // static() target: prerender EVERY route (not just opted-in ones) + enumerate

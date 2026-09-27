@@ -12,6 +12,7 @@ import type { DocumentConfig } from "@junejs/core/document";
 import { workers, vercel, deno, staticSite, type JuneAdapter } from "./adapter";
 import { findClientEntry, CLIENT_SCRIPT_URL } from "./client-bundle";
 import { loadJuneConfig } from "./config-loader";
+import { publicFileCheck, resolveIcons } from "./favicon";
 import { findGlobalCss, globalCssUsesTailwind, STYLES_URL } from "./css";
 import type { WorkerManifest } from "./worker";
 
@@ -69,6 +70,9 @@ export async function freezeConfig(appRoot: string): Promise<{
       // asset URLs; the prerender path re-freezes through buildManifest and gets the
       // same value, keeping static pages' asset links correct under the subpath.
       basePath: normalizeBase(cfg.basePath),
+      // PNG icon links: June's generated set unless public/ or site.icon brings one
+      // (juneBuild writes the files; resolveIcons makes the same call there).
+      icons: resolveIcons(cfg.site ?? {}, publicFileCheck(join(appRoot, "public"))).icons,
     },
     agent: resolveAgent(cfg.agent),
     // Pass i18n through as-is: the in-process buildManifest keeps a resolveLocale

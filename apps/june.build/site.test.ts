@@ -224,14 +224,22 @@ describe("og:image route (app/_extra escape hatch)", () => {
 });
 
 describe("favicon (generated letter default)", () => {
-  test("favicon answers as SVG with the site initial; pages link it", async () => {
-    for (const path of ["/favicon.svg", "/favicon.ico"]) {
+  test("favicon answers as SVG with the site initial, plus PNG/ICO; pages link them", async () => {
+    const svg = await get("/favicon.svg");
+    expect(svg.headers.get("content-type")).toContain("image/svg+xml");
+    expect(await svg.text()).toContain(">J</text>"); // June → J
+    for (const [path, type] of [
+      ["/favicon.ico", "image/x-icon"],
+      ["/icon.png", "image/png"],
+      ["/apple-touch-icon.png", "image/png"],
+    ]) {
       const res = await get(path);
       expect(res.status).toBe(200);
-      expect(res.headers.get("content-type")).toContain("image/svg+xml");
-      expect(await res.text()).toContain(">J</text>"); // June → J
+      expect(res.headers.get("content-type")).toBe(type);
     }
-    expect(await (await get("/")).text()).toContain('<link rel="icon" href="/favicon.svg"');
+    const home = await (await get("/")).text();
+    expect(home).toContain('<link rel="icon" href="/favicon.svg"');
+    expect(home).toContain('<link rel="apple-touch-icon" href="/apple-touch-icon.png"/>');
   });
 });
 

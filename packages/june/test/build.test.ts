@@ -94,6 +94,25 @@ describe("juneBuild()", () => {
     expect(indexHtml).toMatch(/<script type="module" src="\/_june\/client\.[a-f0-9]{8}\.js">/);
   });
 
+  test("writes the default PNG icons, byte-equal to what dev serves, and links them", async () => {
+    // examples/basic has no icon of its own, so June generates the set ("June
+    // Basic" → J, bundled Inter: no network).
+    const dev = createApp({ appDir: join(ROOT, "app"), config: await loadJuneConfig(ROOT) });
+    for (const [file, type] of [
+      ["apple-touch-icon.png", "image/png"],
+      ["icon.png", "image/png"],
+      ["favicon.ico", "image/x-icon"],
+    ] as const) {
+      const built = new Uint8Array(await readFile(join(DIST, "assets", file)));
+      const res = await dev.fetch(new Request(`https://prerender.june/${file}`));
+      expect(res.headers.get("content-type")).toBe(type);
+      expect(new Uint8Array(await res.arrayBuffer())).toEqual(built);
+    }
+    const indexHtml = await readFile(join(DIST, "assets", "index.html"), "utf8");
+    expect(indexHtml).toContain(`<link rel="icon" href="/icon.png" type="image/png" sizes="32x32"/>`);
+    expect(indexHtml).toContain(`<link rel="apple-touch-icon" href="/apple-touch-icon.png"/>`);
+  });
+
   test("the bundled worker executes and serves /", async () => {
     const mod = (await import(`${result.outFile}?t=${result.routes.length}`)) as {
       default: { fetch(r: Request): Promise<Response> };

@@ -25,6 +25,49 @@ describe("documentTitle()", () => {
   });
 });
 
+describe("Document PNG icon links", () => {
+  test("links the host's icons beside the SVG favicon, under basePath", () => {
+    const html = renderToStaticMarkup(
+      <Document config={{ ...baseConfig, basePath: "/b", icons: { png: "/icon.png", appleTouch: "/apple-touch-icon.png" } }}>
+        <main />
+      </Document>,
+    );
+    expect(html).toContain(`<link rel="icon" href="/b/favicon.svg" type="image/svg+xml"/>`);
+    expect(html).toContain(`<link rel="icon" href="/b/icon.png" type="image/png" sizes="32x32"/>`);
+    expect(html).toContain(`<link rel="apple-touch-icon" href="/b/apple-touch-icon.png"/>`);
+  });
+
+  test("the app's own primary icon replaces the letter favicon, typed by extension", () => {
+    const render = (icons: DocumentConfig["icons"], site = baseConfig.site) =>
+      renderToStaticMarkup(
+        <Document config={{ ...baseConfig, site, icons }}>
+          <main />
+        </Document>,
+      );
+    const png = render({ primary: "/favicon.png" });
+    expect(png).toContain(`<link rel="icon" href="/favicon.png" type="image/png"/>`);
+    expect(png).not.toContain("/favicon.svg");
+    expect(render({ primary: "/favicon.ico" })).toContain(`<link rel="icon" href="/favicon.ico" type="image/x-icon"/>`);
+    // icon.png as the primary isn't linked a second time.
+    const iconPng = render({ primary: "/icon.png", png: "/icon.png" });
+    expect(iconPng.match(/href="\/icon\.png"/g)).toHaveLength(1);
+    // site.icon still wins.
+    expect(render({ primary: "/favicon.png" }, { ...baseConfig.site, icon: "/brand.svg" })).toContain(
+      `<link rel="icon" href="/brand.svg" type="image/svg+xml"/>`,
+    );
+  });
+
+  test("no icons config → no extra links", () => {
+    const html = renderToStaticMarkup(
+      <Document config={baseConfig}>
+        <main />
+      </Document>,
+    );
+    expect(html).not.toContain("apple-touch-icon");
+    expect(html).not.toContain(`type="image/png"`);
+  });
+});
+
 describe("Document basePath (deploy subpath)", () => {
   const withAssets: DocumentConfig = {
     ...baseConfig,
