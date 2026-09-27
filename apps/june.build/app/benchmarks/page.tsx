@@ -33,7 +33,9 @@ export default function Benchmarks() {
         {sections.map((s) => (
           <section key={s.title}>
             <div className="j-bench-group">{s.title}</div>
-            <div className="j-bench-scroll">
+            {/* a scroll region on narrow screens: focusable + named, so a keyboard user can
+                reach the overflowing columns with the arrow keys */}
+            <div className="j-bench-scroll" tabIndex={0} role="region" aria-label={`${s.title} benchmarks`}>
             <table className="j-bench-table">
               <thead>
                 <tr>

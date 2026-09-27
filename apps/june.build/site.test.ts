@@ -41,6 +41,30 @@ describe("human surface", () => {
     }
   });
 
+  test("keyboard access: every outline removal has a replacement focus indicator", async () => {
+    const css = await Bun.file(join(ROOT, "app/global.css")).text();
+    // selectors whose rule drops the outline — each needs a named stand-in indicator
+    const suppressed = [...css.matchAll(/([^{}]+)\{[^}]*outline:\s*none/g)].map((m) => m[1]!.trim());
+    const REPLACEMENTS: Record<string, RegExp> = {
+      ".j-ask-input": /\.j-ask-form:focus-within\s*\{[^}]*box-shadow:[^};]*var\(--s-signal\)/,
+    };
+    expect(suppressed).toEqual(Object.keys(REPLACEMENTS)); // a new `outline: none` must be added here, with its indicator
+    for (const indicator of Object.values(REPLACEMENTS)) expect(css).toMatch(indicator);
+  });
+
+  test("keyboard access: every table scroll box is a focusable, named region", async () => {
+    const bench = await (await get("/benchmarks")).text();
+    const benchBoxes = bench.match(/<div class="j-bench-scroll" tabindex="0" role="region" aria-label="[^"]+ benchmarks">/g) ?? [];
+    expect(benchBoxes.length).toBeGreaterThan(0);
+    expect(benchBoxes.length).toBe((bench.match(/<table/g) ?? []).length);
+
+    // markdown-rendered tables (docs + blog share the wrapper)
+    const doc = await (await get("/docs/agents-directory")).text();
+    const docBoxes = doc.match(/<div class="j-table-scroll" tabindex="0" role="region" aria-label="Table"><table>/g) ?? [];
+    expect(docBoxes.length).toBeGreaterThan(0);
+    expect(docBoxes.length).toBe((doc.match(/<table/g) ?? []).length); // no bare table left unwrapped
+  });
+
   test("each page gets its own templated title", async () => {
     expect(await (await get("/why")).text()).toContain("<title>Why June · June</title>");
     expect(await (await get("/benchmarks")).text()).toContain("<title>Benchmarks · June</title>");
