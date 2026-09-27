@@ -1,4 +1,5 @@
 import { bySlug } from "../content";
+import { ogImage } from "../og-card";
 // THE named-run registry: numbers live in bench/results.json next to the
 // scripts that produce them; this page (and the .md/.json projections via
 // content.ts) renders from it. Never hand-edit a number here.
@@ -68,7 +69,7 @@ export default function Benchmarks() {
 export const metadata = {
   title: "Benchmarks",
   description: page.summary,
-  openGraph: { image: "https://june.build/og/benchmarks.png" },
+  openGraph: ogImage("benchmarks"),
 };
 export const md = () => page.md;
 export const json = () => ({
