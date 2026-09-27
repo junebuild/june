@@ -177,9 +177,9 @@ function OneAction() {
             </p>
             <h2 className="j-h2">One action. Four callers. One gate.</h2>
             <p className="j-lead">
-              There is no &quot;expose to agents&quot; step and no second permission system. The{" "}
-              <code>defineAction()</code> your button calls is the tool your agent calls — and the tool anyone
-              else&apos;s agent calls at <code>/mcp</code>.
+              No second permission system. A <code>defineAction()</code> is your button&apos;s server action and
+              an <code>/mcp</code> tool for anyone else&apos;s agent, automatically. Export it from{" "}
+              <code>agent/tools/</code> and your own agent calls the very same one.
             </p>
             <div className="j-gate">
               <span className="j-dot" />
