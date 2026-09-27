@@ -245,8 +245,8 @@ reach it. `DoAgentDef.resources` and `services` are built from the object's own
 env and installed around every turn, so a tool reads ambient `db` and
 `currentServices()` the same way a route loader does. The generated entry passes
 the ones `june.config.ts` declares. The scope uses `node:async_hooks`, which
-needs the `nodejs_compat` flag. The generated config sets it; a hand-written one
-must too if tools use ambient resources.
+needs the `nodejs_compat` flag. The generated config sets it, and a hand-written one
+should too — without it, ambient reads in tools stop resolving without an error.
 
 Turn failures go to `console.error` with the step and cause chain.
 `DoAgentDef.onTurnError` replaces that with your own telemetry. If the hook throws,
@@ -347,6 +347,7 @@ export default {
   "name": "june-agent-edge",
   "main": "worker.ts",
   "compatibility_date": "2025-04-01",
+  "compatibility_flags": ["nodejs_compat"],
   "durable_objects": { "bindings": [{ "name": "AGENT", "class_name": "JuneAgentDO" }] },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["JuneAgentDO"] }]
 }
