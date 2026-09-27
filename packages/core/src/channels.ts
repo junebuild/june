@@ -276,6 +276,14 @@ export function httpChannel(opts: { path?: string; mcp?: (req: Request) => Promi
 // guard for reactions: with it set, the bot's OWN reactions (e.g. from slack_add_reaction)
 // don't trigger a turn — the bot_id/subtype guard already covers self-messages.
 export type SlackEventKind = "message" | "app_mention" | "reaction_added" | "reaction_removed";
+// Where a Slack event happened (#212): public channel, private channel, DM, group DM.
+export type SlackChannelType = "channel" | "group" | "im" | "mpim" | "unknown";
+// A normalized Slack event: the shared InboundEvent plus the Slack-only facts a
+// respondWhen predicate or an `on` observer decides on.
+export type SlackNormalizedEvent = InboundEvent & {
+  /** From the event's `channel_type`. `app_mention` events don't carry one: `"unknown"`. Neither do reactions. Either reads `"im"` in a `D…` (DM) channel. */
+  channelType: SlackChannelType;
+};
 // A feedback_buttons click, normalized: who rated which streamed reply, tied back to the
 // turn/session the buttons were minted with (stopStream embeds them in the button value —
 // a PROACTIVE turn's session is caller-chosen and couldn't be re-derived from the thread).
@@ -345,11 +353,20 @@ export function slackChannel(opts: {
   // `events` (every subscribed kind responds — the prior behavior). `mode:"observe"`
   // forces this empty (respond to nothing).
   respondTo?: SlackEventKind[];
+  /** Per event: whether a kind listed in `respondTo` gets a turn. Observers still fire. Default: always. */
+  // Checked after the respondTo kind check and after resolveIdentity (event.principal is
+  // set) — never for an event `accept` rejects or a redelivery. `raw` is the envelope
+  // `accept` and `onEvent` see. E.g. answer mentions
+  // and DMs but not every channel message:
+  //   respondTo: ["app_mention", "message"],
+  //   respondWhen: (e) => e.kind === "app_mention" || e.channelType === "im",
+  // A throw is reported to onError and counts as "no" (the observers already ran).
+  respondWhen?: (event: SlackNormalizedEvent, raw: unknown) => boolean;
   // Per-kind observers: `on[kind]` fires (background) only for that kind, only when a
   // normalized event exists — no onEvent-style `event.kind` demux or `event?` guard.
   // Coexists with onEvent (which stays the "observe everything incl. un-normalizable"
   // firehose). A kind present here is auto-subscribed (see the `events` derivation).
-  on?: Partial<Record<SlackEventKind, KindObserver>>;
+  on?: Partial<Record<SlackEventKind, (event: SlackNormalizedEvent, ctx: ChannelContext) => Promise<void> | void>>;
   botUserId?: string;
   // The identity seam (the Slack sibling of crispChannel's resolveIdentity): map the
   // PLATFORM-VERIFIED sender to the app's own Principal before any consumer of a
@@ -438,6 +455,15 @@ export function slackChannel(opts: {
   const events: SlackEventKind[] =
     opts.events ?? (opts.respondTo || opts.on ? [...new Set([...(opts.respondTo ?? []), ...onKinds])] : ["message", "app_mention"]);
   const respondTo: string[] = opts.mode === "observe" ? [] : (opts.respondTo ?? events);
+  const respondsTo = (event: SlackNormalizedEvent, raw: unknown): boolean => {
+    if (!opts.respondWhen) return true;
+    try {
+      return opts.respondWhen(event, raw);
+    } catch (err) {
+      try { opts.onError?.(err); } catch { /* error reporting failed — nothing more to do */ }
+      return false;
+    }
+  };
   const authHeaders = { "content-type": "application/json; charset=utf-8", authorization: `Bearer ${opts.botToken}` };
   async function postMessage(channel: string, text: string, thread_ts?: string): Promise<string | undefined> {
     const r = (await (await fetch(`${api}/chat.postMessage`, { method: "POST", headers: authHeaders, body: JSON.stringify({ channel, text, thread_ts }) })).json().catch(() => ({}))) as { ts?: string };
@@ -1071,7 +1097,9 @@ export function slackChannel(opts: {
           const handler = opts.on?.[norm.event.kind as SlackEventKind];
           if (handler) runBackground(ctx, async () => { await identityReady; return handler(norm.event, ctx); }, opts.onError);
         }
-        // respond: only kinds in respondTo drive a turn + reply (reactions can stay observe-only)
+        // respond: only kinds in respondTo drive a turn + reply (reactions can stay observe-only),
+        // and of those only the events respondWhen lets through (#212) — asked inside the
+        // background task, once the principal is resolved, like every other consumer
         if (norm && respondTo.includes(norm.event.kind)) {
           const { event, session, userText } = norm;
           // Debounce (#129): a new message/mention supersedes the thread's in-flight turn.
@@ -1079,6 +1107,7 @@ export function slackChannel(opts: {
           const replace = (opts.replaceInFlight && (event.kind === "message" || event.kind === "app_mention")) || undefined;
           runBackground(ctx, async () => {
             await identityReady; // the turn must carry the resolved principal (requiresPrincipal gating)
+            if (!respondsTo(event, payload)) return;
             // Prefer DELIVERED rendering: the turn's host (the DO) renders the reply through
             // this channel's own deliver() under its OWN lifetime, so a long multi-round turn
             // isn't cancelled by the edge waitUntil ceiling ~30s after the ACK (the silent
@@ -1156,10 +1185,20 @@ type SlackEvent = {
   channel?: string;
   ts?: string;
   thread_ts?: string;
+  channel_type?: string;
   user?: string;
   reaction?: string;
   item?: { type?: string; channel?: string; ts?: string };
 };
+
+// Slack sends `channel_type` on message events only, and only there is it read: a mention
+// reads "unknown" as documented even if a payload carried one. Without it a `D…` id is always a DM;
+// a `C…` id can be public or private, and a `G…` id a private channel or a group DM (older
+// workspaces), so neither is guessed.
+function slackChannelType(channelType: string | undefined, channelId: string): SlackChannelType {
+  if (channelType === "channel" || channelType === "group" || channelType === "im" || channelType === "mpim") return channelType;
+  return channelId.startsWith("D") ? "im" : "unknown";
+}
 
 // The subset of a Slack block_actions interaction payload we read (a button click).
 // `response_url` lets us answer the CLICKER ephemerally (e.g. a rejected resume) without
@@ -1184,13 +1223,13 @@ export function normalizeSlackEvent(
   // the envelope's team_id (NOT on the inner event) — chat.startStream demands it as
   // recipient_team_id when streaming into a channel, even in-thread (live-verified 2026-07-15)
   teamId?: string,
-): { event: InboundEvent; session: string; userText: string } | null {
+): { event: SlackNormalizedEvent; session: string; userText: string } | null {
   // text turns: a channel message or an @-mention. Skip our own bot + non-user subtypes,
   // and blank text (a whitespace-only message shouldn't burn a turn).
   if ((e.type === "message" || e.type === "app_mention") && events.includes(e.type) && !e.bot_id && !e.subtype && e.text && e.text.trim() && e.channel && e.ts) {
     const thread = e.thread_ts ?? e.ts; // reply in-thread; one session per thread
     return {
-      event: { source: "slack", kind: e.type, channelId: e.channel, threadId: thread, teamId, ts: e.ts, user: e.user ? { id: e.user } : undefined, text: e.text, raw: e },
+      event: { source: "slack", kind: e.type, channelId: e.channel, channelType: slackChannelType(e.type === "message" ? e.channel_type : undefined, e.channel), threadId: thread, teamId, ts: e.ts, user: e.user ? { id: e.user } : undefined, text: e.text, raw: e },
       session: `slack:${e.channel}:${thread}`,
       userText: e.text,
     };
@@ -1203,7 +1242,7 @@ export function normalizeSlackEvent(
     const channel = e.item.channel, itemTs = e.item.ts;
     const verb = e.type === "reaction_added" ? "added" : "removed";
     return {
-      event: { source: "slack", kind: e.type, channelId: channel, threadId: itemTs, teamId, ts: itemTs, user: e.user ? { id: e.user } : undefined, reaction: { name: e.reaction, itemTs }, raw: e },
+      event: { source: "slack", kind: e.type, channelId: channel, channelType: slackChannelType(undefined, channel), threadId: itemTs, teamId, ts: itemTs, user: e.user ? { id: e.user } : undefined, reaction: { name: e.reaction, itemTs }, raw: e },
       session: `slack:${channel}:${itemTs}`,
       userText: `[reaction] <@${e.user ?? "someone"}> ${verb} :${e.reaction}: on a message in this thread`,
     };

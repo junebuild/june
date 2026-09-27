@@ -2276,3 +2276,151 @@ describe("crispChannel identity (resolveIdentity)", () => {
     expect(headersSeen.every((h) => h["X-Crisp-Tier"] === "plugin")).toBe(true);
   });
 });
+
+// ── #212: respondWhen — a turn for some events of a kind, not others ──
+describe("slackChannel respondWhen + channelType", () => {
+  const secret = "shhh";
+  beforeEach(() => resetSlackCounters()); // the redelivery registry is module-level too
+  async function slackSigned(body: string) {
+    const ts = String(Math.floor(Date.now() / 1000));
+    return new Request("http://x/channels/slack", { method: "POST", headers: { "x-slack-request-timestamp": ts, "x-slack-signature": "v0=" + (await hmacHex(secret, `v0:${ts}:${body}`)) }, body });
+  }
+  const dm = (eventId = "EvDM") =>
+    JSON.stringify({ type: "event_callback", event_id: eventId, event: { type: "message", channel_type: "im", text: "hello bot", channel: "D1", ts: "1.1", user: "U1" } });
+  const channelMessage = (eventId = "EvC") =>
+    JSON.stringify({ type: "event_callback", event_id: eventId, event: { type: "message", channel_type: "channel", text: "chatter", channel: "C1", ts: "2.2", user: "U2" } });
+  // the issue's configuration: answer mentions and DMs, observe everything else
+  const mentionsAndDms = (extra: Partial<Parameters<typeof slackChannel>[0]> = {}) => slackChannel({
+    signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test",
+    respondTo: ["app_mention", "message"],
+    respondWhen: (e) => e.kind === "app_mention" || e.channelType === "im",
+    ...extra,
+  });
+
+  test("a DM message runs a turn and replies in the DM", async () => {
+    captureFetch();
+    const turns: string[] = [];
+    await mentionsAndDms().webhook!(await slackSigned(dm()), ctxWith(async (m) => { turns.push(m); return "hi there"; }));
+    await flush();
+    expect(turns).toEqual(["hello bot"]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe("https://slack.test/chat.postMessage");
+    expect(calls[0]!.body).toMatchObject({ channel: "D1", text: "hi there" });
+  });
+
+  test("a declined channel message runs no turn and makes no model call, but reaches onEvent and on", async () => {
+    captureFetch();
+    let modelCalls = 0;
+    const observed: string[] = [];
+    const typed: string[] = [];
+    const ch = mentionsAndDms({
+      onEvent: (e) => { observed.push(e.event?.text ?? "raw"); },
+      on: { message: (e) => { typed.push(`${e.channelType}:${e.text}`); } },
+    });
+    await ch.webhook!(await slackSigned(channelMessage()), ctxWith(async () => { modelCalls++; return "should not run"; }));
+    await flush();
+    expect(modelCalls).toBe(0);
+    expect(calls).toHaveLength(0);
+    expect(observed).toEqual(["chatter"]);
+    expect(typed).toEqual(["channel:chatter"]);
+  });
+
+  test("a mention in a channel still runs a turn", async () => {
+    captureFetch();
+    const turns: string[] = [];
+    const body = JSON.stringify({ type: "event_callback", event_id: "EvM", event: { type: "app_mention", text: "<@B> help", channel: "C1", ts: "3.3", user: "U2" } });
+    await mentionsAndDms().webhook!(await slackSigned(body), ctxWith(async (m) => { turns.push(m); return "ok"; }));
+    await flush();
+    expect(turns).toEqual(["<@B> help"]);
+  });
+
+  test("a redelivered DM runs one turn, and respondWhen is called once", async () => {
+    captureFetch();
+    const turns: string[] = [];
+    let asked = 0;
+    const ch = mentionsAndDms({ respondWhen: (e) => { asked++; return e.channelType === "im"; } });
+    const ctx = ctxWith(async (m) => { turns.push(m); return "hi"; });
+    await ch.webhook!(await slackSigned(dm("EvDup")), ctx);
+    const retry = await slackSigned(dm("EvDup"));
+    retry.headers.set("x-slack-retry-num", "1");
+    await ch.webhook!(retry, ctx);
+    await flush();
+    expect(turns).toEqual(["hello bot"]);
+    expect(asked).toBe(1);
+  });
+
+  test("respondWhen is not called for an event accept rejects, nor in observe mode", async () => {
+    captureFetch();
+    let asked = 0;
+    const respondWhen = () => { asked++; return true; };
+    await mentionsAndDms({ respondWhen, accept: () => false }).webhook!(await slackSigned(dm("Ev1")), ctxWith(async () => "x"));
+    await mentionsAndDms({ respondWhen, mode: "observe" }).webhook!(await slackSigned(dm("Ev2")), ctxWith(async () => "x"));
+    await flush();
+    expect(asked).toBe(0);
+  });
+
+  test("respondWhen gets the envelope as raw", async () => {
+    captureFetch();
+    let raw: unknown;
+    await mentionsAndDms({ respondWhen: (_e, r) => { raw = r; return false; } }).webhook!(await slackSigned(dm("EvRaw")), ctxWith(async () => "x"));
+    await flush();
+    expect(raw).toMatchObject({ type: "event_callback", event_id: "EvRaw" });
+  });
+
+  test("respondWhen sees the principal resolveIdentity resolved", async () => {
+    captureFetch();
+    const turns: string[] = [];
+    const ch = mentionsAndDms({
+      resolveIdentity: async (id) => { await new Promise((r) => setTimeout(r, 1)); return id.userId === "U1" ? { id: "staff-1" } : null; },
+      respondWhen: (e) => e.principal?.id === "staff-1",
+    });
+    const ctx = ctxWith(async (m) => { turns.push(m); return "ok"; });
+    await ch.webhook!(await slackSigned(dm("EvP1")), ctx);             // U1 → staff → answered
+    await ch.webhook!(await slackSigned(channelMessage("EvP2")), ctx); // U2 → anonymous → declined
+    await flush();
+    expect(turns).toEqual(["hello bot"]);
+  });
+
+  test("a throwing respondWhen is reported to onError and runs no turn; observers still fire", async () => {
+    captureFetch();
+    const errors: unknown[] = [];
+    const observed: string[] = [];
+    let modelCalls = 0;
+    const ch = mentionsAndDms({
+      respondWhen: () => { throw new Error("predicate blew up"); },
+      onError: (err) => { errors.push(err); },
+      onEvent: (e) => { observed.push(e.event?.kind ?? "raw"); },
+    });
+    const res = await ch.webhook!(await slackSigned(dm("EvThrow")), ctxWith(async () => { modelCalls++; return "x"; }));
+    await flush();
+    expect(res.status).toBe(200); // ACKed — the observers already ran, so a retry would run them twice
+    expect(modelCalls).toBe(0);
+    expect((errors[0] as Error).message).toBe("predicate blew up");
+    expect(observed).toEqual(["message"]);
+  });
+
+  test("diagnose() counts a declined event as arrived", async () => {
+    captureFetch();
+    const ch = mentionsAndDms();
+    await ch.webhook!(await slackSigned(channelMessage("EvD1")), ctxWith(async () => "x"));
+    await ch.webhook!(await slackSigned(dm("EvD2")), ctxWith(async () => "x"));
+    await flush();
+    globalThis.fetch = (async () => Response.json({ ok: true, user_id: "B1" }, { headers: { "x-oauth-scopes": "" } })) as unknown as typeof fetch;
+    const d = await ch.diagnose();
+    expect(d.counters.eventsReceived).toMatchObject({ message: 2 });
+  });
+
+  test("channelType: from channel_type when Slack sends it; a D… id is an IM; otherwise unknown", () => {
+    const type = (e: Record<string, unknown>) => normalizeSlackEvent(e, ["message", "app_mention", "reaction_added"])!.event.channelType;
+    expect(type({ type: "app_mention", text: "<@B> hi", channel: "C1", ts: "1" })).toBe("unknown");
+    expect(type({ type: "message", channel_type: "im", text: "hi", channel: "D1", ts: "1" })).toBe("im");
+    expect(type({ type: "message", channel_type: "channel", text: "hi", channel: "C1", ts: "1" })).toBe("channel");
+    expect(type({ type: "message", channel_type: "group", text: "hi", channel: "C2", ts: "1" })).toBe("group");
+    expect(type({ type: "message", channel_type: "mpim", text: "hi", channel: "C3", ts: "1" })).toBe("mpim");
+    expect(type({ type: "app_mention", text: "<@B> hi", channel: "D1", ts: "1" })).toBe("im");
+    expect(type({ type: "app_mention", channel_type: "channel", text: "<@B> hi", channel: "C1", ts: "1" })).toBe("unknown"); // only a message's channel_type is read
+    expect(type({ type: "message", channel_type: "app_home", text: "hi", channel: "C4", ts: "1" })).toBe("unknown");
+    expect(type({ type: "reaction_added", user: "U1", reaction: "tada", item: { type: "message", channel: "C1", ts: "1" } })).toBe("unknown");
+    expect(type({ type: "reaction_added", user: "U1", reaction: "tada", item: { type: "message", channel: "D1", ts: "1" } })).toBe("im");
+  });
+});

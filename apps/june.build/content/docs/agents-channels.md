@@ -121,6 +121,21 @@ slackChannel({
   "app_mention"]`, or is derived from `respondTo` + `on` keys when you set
   those.
 - `respondTo` — which of `events` drive a turn (default: all of them).
+- `respondWhen(event, raw)` — per event, whether a `respondTo` kind gets a
+  turn; the ones it turns down still reach `on` / `onEvent`. It is never
+  called for an event `accept` rejects or for a redelivery. To answer mentions
+  and DMs without answering every channel message:
+
+  ```ts
+  respondTo: ["app_mention", "message"],
+  respondWhen: (e) => e.kind === "app_mention" || e.channelType === "im",
+  ```
+
+  `event.channelType` is `"channel" | "group" | "im" | "mpim" | "unknown"`,
+  from Slack's `channel_type`. Only `message` events carry one, so a mention in
+  a channel reads `"unknown"`, never `"channel"`. Any event in a `D…` channel
+  reads `"im"`. DMs also need the `im:history` scope and the `message.im`
+  subscription.
 - `mode: "observe"` — never run a turn or post; only `on` / `onEvent` fire.
 - Reaction turns carry no text: the user text is a synthesized note and the
   target rides on `event.reaction`.
