@@ -43,6 +43,9 @@ function AskPanel({ autoFocus }: { autoFocus?: boolean }) {
   const [q, setQ] = useState("");
   const [state, setState] = useState<State>({ phase: "idle" });
   const input = useRef<HTMLInputElement>(null);
+  // Searches can finish out of order: only the latest one may write state, so a slow
+  // earlier response never replaces the newer query's loading state or results.
+  const latest = useRef(0);
 
   useEffect(() => {
     if (autoFocus) input.current?.focus();
@@ -51,13 +54,16 @@ function AskPanel({ autoFocus }: { autoFocus?: boolean }) {
   const run = async (query: string) => {
     const trimmed = query.trim();
     if (!trimmed) return;
+    const id = ++latest.current;
     setQ(trimmed);
     setState({ phase: "loading", query: trimmed });
     const t0 = performance.now();
     try {
       const hits = await searchSite(trimmed);
+      if (id !== latest.current) return;
       setState({ phase: "done", query: trimmed, hits, ms: Math.round(performance.now() - t0) });
     } catch (e) {
+      if (id !== latest.current) return;
       setState({ phase: "error", query: trimmed, message: e instanceof Error ? e.message : String(e) });
     }
   };
@@ -185,6 +191,7 @@ export function AskSite({ variant = "dialog" }: { variant?: "dialog" | "inline" 
       <dialog
         ref={dialog}
         className="j-dialog"
+        aria-label="Ask this site"
         onClose={() => setOpen(false)}
         onClick={(e) => {
           if (e.target === e.currentTarget) setOpen(false); // backdrop click

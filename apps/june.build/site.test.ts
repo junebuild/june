@@ -230,6 +230,20 @@ describe("agent surface", () => {
     expect(html).toContain("registerTool");
   });
 
+  test("search_site splits queries on punctuation, in any script", async () => {
+    const search = async (query: string) => {
+      const res = await rpc({ method: "tools/call", params: { name: "search_site", arguments: { query } } });
+      return JSON.parse(res.result.content[0].text) as Array<{ slug: string }>;
+    };
+    // sentence punctuation stays off the term: "slack?" searches for "slack"
+    expect((await search("slack?")).some((c) => c.slug === "docs/agents-channels")).toBe(true);
+    expect((await search("cold-start")).some((c) => c.slug.includes("cold-start"))).toBe(true);
+    // letters in any script are terms (the CJK post's title carries 排版)
+    expect((await search("排版?")).some((c) => c.slug.includes("typesetting-cjk"))).toBe(true);
+    // nothing but punctuation → no terms → no results, not everything
+    expect(await search("?!")).toEqual([]);
+  });
+
   test("search_site finds the cold-start post; get_page returns verbatim markdown", async () => {
     const search = await rpc({
       method: "tools/call",

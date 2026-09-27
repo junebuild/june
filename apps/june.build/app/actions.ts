@@ -15,9 +15,10 @@ export const search_site = defineAction({
     required: ["query"],
   },
   run(input: { query: string }) {
-    // Every term of 2+ chars counts; a title hit outweighs a body hit. Ranked,
-    // capped — a card list, not a dump.
-    const terms = input.query.toLowerCase().split(/\s+/).filter((t) => t.length >= 2);
+    // Terms are runs of letters/digits in any script, so "slack?" or "cold-start"
+    // match like "slack" and "cold start". Every term of 2+ chars counts; a title hit
+    // outweighs a body hit. Ranked, capped — a card list, not a dump.
+    const terms = input.query.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((t) => t.length >= 2);
     if (terms.length === 0) return [];
     const score = (title: string, body: string) => {
       const t = title.toLowerCase();
