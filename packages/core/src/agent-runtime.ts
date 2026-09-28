@@ -412,6 +412,14 @@ type AnnouncementBody =
 export type InputAnnouncement = { id: string; agent: string; session: string; at: string } & AnnouncementBody;
 const ANNOUNCE_OUTBOX = "announce-outbox";
 
+// How many held turns wait behind the park of `parkedTurnId` (#263): the parked turn itself is
+// excluded — a held turn that ran and parked again stays in the held list until its turn
+// settles (crash safety), and must not count as waiting behind itself. The ONE count used by
+// pending().queued and by the parked / held announcements, so an index agrees with pending().
+function heldBehind(store: SessionStore, parkedTurnId: string): number {
+  return ((store.getStep(INBOUND_QUEUE) as QueuedTurn[] | undefined) ?? []).filter((q) => q.turnId !== parkedTurnId).length;
+}
+
 // Append to the outbox inside the CALLER's transaction (putStep is insert-only: replace).
 function recordAnnouncement(store: SessionStore, a: InputAnnouncement): void {
   const outbox = (store.getStep(ANNOUNCE_OUTBOX) as InputAnnouncement[] | undefined) ?? [];
@@ -657,7 +665,7 @@ export async function runTurn(
         if (store.getStep("suspended") === undefined) {
           store.putStep("suspended", checkpoint);
           if (env.announce) {
-            const queued = ((store.getStep(INBOUND_QUEUE) as unknown[] | undefined) ?? []).length;
+            const queued = heldBehind(store, opts.turnId);
             recordAnnouncement(store, announcement(env, { kind: "parked", turnId: opts.turnId, request: err.request, event, queued }));
           }
         }
@@ -1216,7 +1224,7 @@ export class AgentSession {
   // conversation moved on after the request was made.
   pending(): { turnId: string; request: InputRequest; queued: number } | undefined {
     const suspended = this.store.getStep("suspended") as SuspendedCheckpoint | undefined;
-    return suspended ? { turnId: suspended.turnId, request: suspended.request, queued: this.heldTurns().length } : undefined;
+    return suspended ? { turnId: suspended.turnId, request: suspended.request, queued: heldBehind(this.store, suspended.turnId) } : undefined;
   }
 
   // The inbound turns held while the session was parked (#263), oldest first.
@@ -1275,7 +1283,7 @@ export class AgentSession {
       this.store.delStep(INBOUND_QUEUE);
       this.store.putStep(INBOUND_QUEUE, [...held, entry]);
       if (parked && this.onAnnounce) {
-        recordAnnouncement(this.store, announcement({ agent: this.agent, sessionId: this.id }, { kind: "held", turnId: parked.turnId, inputId: parked.request.id, queued: held.length + 1 }));
+        recordAnnouncement(this.store, announcement({ agent: this.agent, sessionId: this.id }, { kind: "held", turnId: parked.turnId, inputId: parked.request.id, queued: heldBehind(this.store, parked.turnId) }));
       }
     });
     void this.flushAnnouncements();

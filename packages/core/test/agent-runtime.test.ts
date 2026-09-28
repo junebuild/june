@@ -1487,6 +1487,29 @@ describe("suspend / resume (P3 — HITL)", () => {
       expect(live[0]).toEqual({ type: "input.resolved", turnId: "t1", inputId: "approve-1", outcome: "answered", by: "U1" });
     });
 
+    test("a held turn that parks again does not count itself as waiting behind its own park", async () => {
+      const script: ModelReply[] = [
+        { text: "Let me check.", toolCalls: [{ id: "c1", name: "approve", input: {} }] },
+        { text: "Approved — refund sent.", toolCalls: [] },
+        { text: "That needs approval too.", toolCalls: [{ id: "c2", name: "approve", input: {} }] },
+      ];
+      const got: InputAnnouncement[] = [];
+      const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), scriptedModel(script), [approveTool()], noRuntime);
+      s.onAnnounce = (a) => { got.push(a); };
+      s.start({ turnId: "t1", userText: "refund please", event: slackEvent });
+      await s.result("t1");
+      s.start({ turnId: "t2", userText: "another refund", event: { ...slackEvent, ts: "1.2" }, ifSuspended: "queue" });
+      s.start({ turnId: "t3", userText: "hello?", event: followUp("m3"), ifSuspended: "queue" });
+      s.resume("t1", "approve-1", true, { by: "U1" });
+      await s.result("t1");
+      expect(await s.result("t2")).toMatchObject({ status: "suspended" }); // t2 ran, and parked in turn
+      await s.flushAnnouncements();
+
+      const t2Park = got.find((a) => a.kind === "parked" && a.turnId === "t2");
+      expect(t2Park).toMatchObject({ queued: 1 }); // only t3 waits behind it — not t2 itself
+      expect(s.pending()).toMatchObject({ turnId: "t2", queued: 1 });
+    });
+
     test("a reset retires the park, and carries undelivered announcements into the new generation", async () => {
       const store = memStore().store;
       const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), scriptedModel(APPROVE_SCRIPT), [approveTool()], noRuntime);
