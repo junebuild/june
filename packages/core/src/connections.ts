@@ -108,6 +108,48 @@ async function resolveHeaders(c: McpConnection | OpenapiConnection, ctx?: Action
   return h;
 }
 
+// --- tool ids -----------------------------------------------------------------
+
+// The Claude API's tool-name rule (other providers are no looser).
+const TOOL_NAME_MAX = 128;
+
+// `<connection>__<remote name>`, reduced to the tool-name alphabet
+// (^[a-zA-Z0-9_-]{1,128}$) as a WHOLE. Remote names routinely fall outside it:
+// GitHub's operationIds are "issues/list-for-repo", MCP explicitly allows dots
+// ("admin.tools.list") and names up to 128 characters BEFORE our prefix, and a
+// connection may be named "github.com". One invalid id makes the model API
+// reject every request of the agent. The remote is still called by its own
+// name — only the id the model and /mcp see is reduced.
+//
+// Ids are assigned for the whole list at once, in two passes, so that an id
+// which was ALREADY valid never moves: pass 1 reserves every valid
+// `<connection>__<name>` as-is; pass 2 reduces the rest and suffixes only them
+// on a collision. Otherwise a reduced "admin.tools.list" listed first would take
+// `srv__admin_tools_list` from the real "admin_tools_list", and an existing
+// caller of that id would silently invoke a different remote tool.
+const TOOL_NAME = /^[A-Za-z0-9_-]{1,128}$/;
+
+function toolIds(connection: string, remoteNames: readonly string[]): string[] {
+  const ids: (string | undefined)[] = [];
+  const taken = new Set<string>();
+  remoteNames.forEach((name, i) => {
+    const raw = `${connection}__${name}`;
+    if (TOOL_NAME.test(raw) && !taken.has(raw)) {
+      ids[i] = raw;
+      taken.add(raw);
+    }
+  });
+  return remoteNames.map((name, i) => {
+    const kept = ids[i];
+    if (kept !== undefined) return kept;
+    const base = `${connection}__${name}`.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, TOOL_NAME_MAX);
+    let id = base;
+    for (let n = 2; taken.has(id); n++) id = `${base.slice(0, TOOL_NAME_MAX - String(n).length - 1)}_${n}`;
+    taken.add(id);
+    return id;
+  });
+}
+
 // --- MCP client ---------------------------------------------------------------
 
 async function rpc(url: string, headers: Headers, method: string, params?: object) {
@@ -127,9 +169,10 @@ async function connectMcp(c: McpConnection): Promise<AnyAction[]> {
     tools: { name: string; description?: string; inputSchema?: JsonSchema; annotations?: ToolAnnotations }[];
   };
 
-  return listed.tools.map((t) =>
+  const ids = toolIds(c.name, listed.tools.map((t) => t.name));
+  return listed.tools.map((t, i) =>
     defineAction({
-      id: `${c.name}__${t.name}`,
+      id: ids[i]!,
       description: `[${c.name}] ${t.description ?? t.name}`,
       input: t.inputSchema ?? { type: "object", properties: {} },
       // Gateway fidelity: the remote's behavior hints survive re-serving.
@@ -176,9 +219,6 @@ const MANY_OPERATIONS = 100;
 // ({}): enough for a request body's nested objects, bounded against both cycles
 // and the size blow-up of deeply linked vendor schemas.
 const MAX_REF_DEPTH = 3;
-// The Claude API's tool-name rule (other providers are no looser).
-const TOOL_NAME_MAX = 128;
-
 // Resolve a LOCAL JSON pointer ("#/components/parameters/owner"); remote refs
 // ("other.yaml#/…") are not fetched and resolve to undefined.
 function resolvePointer(doc: OpenApiDoc, ref: string): unknown {
@@ -217,17 +257,6 @@ function property(p: Parameter): { type: string; description?: string } {
     ...(schema.type || composite ? {} : { type: "string" }),
     ...(p.description ? { description: p.description } : {}),
   } as { type: string; description?: string };
-}
-
-// `<connection>__<operationId>`, reduced to the tool-name alphabet
-// (^[a-zA-Z0-9_-]{1,128}$) as a WHOLE: GitHub's operationIds are
-// "issues/list-for-repo", and a connection may be named "github.com".
-function toolId(connection: string, opName: string, taken: Set<string>): string {
-  const base = `${connection}__${opName}`.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, TOOL_NAME_MAX);
-  let id = base;
-  for (let n = 2; taken.has(id); n++) id = `${base.slice(0, TOOL_NAME_MAX - String(n).length - 1)}_${n}`;
-  taken.add(id);
-  return id;
 }
 
 function includes(c: OpenapiConnection, op: OpenapiOperation): boolean {
@@ -275,8 +304,9 @@ async function connectOpenapi(c: OpenapiConnection): Promise<AnyAction[]> {
   const doc = await fetchOpenapiDoc(c);
   const baseUrl = (c.baseUrl ?? doc.servers?.[0]?.url ?? new URL(c.url).origin).replace(/\/$/, "");
 
-  const actions: AnyAction[] = [];
-  const taken = new Set<string>();
+  // Collect every operation first: ids are assigned for the whole list at once
+  // (see toolIds), then the actions are defined.
+  const pending: { opName: string; build: (id: string) => AnyAction }[] = [];
   for (const [path, item] of Object.entries(doc.paths ?? {})) {
     const pathItem = inline(doc, item) as Json;
     // Path-level parameters apply to every operation; an operation's own
@@ -307,46 +337,50 @@ async function connectOpenapi(c: OpenapiConnection): Promise<AnyAction[]> {
       }
 
       const opName = op.operationId ?? `${method}_${path}`;
-      actions.push(
-        defineAction({
-          id: toolId(c.name, opName, taken),
-          description: `[${c.name}] ${op.summary ?? opName}`,
-          input: { type: "object", properties, ...(required.length ? { required: [...new Set(required)] } : {}) },
-          ...(c.requiresPrincipal ? { requiresPrincipal: true } : {}),
-          run: async (input: Record<string, unknown>, ctx: ActionContext) => {
-            let url = baseUrl + path;
-            const query = new URLSearchParams();
-            const headers = await resolveHeaders(c, ctx);
-            const body: Record<string, unknown> = { ...input };
-            for (const p of params) {
-              const name = p.name!;
-              if (!(name in input)) continue;
-              const value = String(input[name]);
-              if (p.in === "path") url = url.replace(`{${name}}`, encodeURIComponent(value));
-              else if (p.in === "header") headers[name.toLowerCase()] = value;
-              else query.set(name, value);
-              delete body[name];
-            }
-            const qs = query.toString();
-            if (qs) url += `?${qs}`;
-            const init: RequestInit = { method: method.toUpperCase(), headers };
-            if (method !== "get" && method !== "head" && bodySchema) init.body = JSON.stringify(body);
-            const res = await fetch(url, init);
-            const text = await res.text();
-            // A non-2xx must not read as data: throw, so the model sees an error
-            // with the status (and the start of the body), not a JSON blob.
-            if (!res.ok) throw new Error(`${c.name}: ${init.method} ${path} failed (${res.status})${text ? `: ${text.slice(0, 500)}` : ""}`);
-            if (!text) return null;
-            try {
-              return JSON.parse(text);
-            } catch {
-              return text;
-            }
-          },
-        }),
-      );
+      pending.push({
+        opName,
+        build: (id) =>
+          defineAction({
+            id,
+            description: `[${c.name}] ${op.summary ?? opName}`,
+            input: { type: "object", properties, ...(required.length ? { required: [...new Set(required)] } : {}) },
+            ...(c.requiresPrincipal ? { requiresPrincipal: true } : {}),
+            run: async (input: Record<string, unknown>, ctx: ActionContext) => {
+              let url = baseUrl + path;
+              const query = new URLSearchParams();
+              const headers = await resolveHeaders(c, ctx);
+              const body: Record<string, unknown> = { ...input };
+              for (const p of params) {
+                const name = p.name!;
+                if (!(name in input)) continue;
+                const value = String(input[name]);
+                if (p.in === "path") url = url.replace(`{${name}}`, encodeURIComponent(value));
+                else if (p.in === "header") headers[name.toLowerCase()] = value;
+                else query.set(name, value);
+                delete body[name];
+              }
+              const qs = query.toString();
+              if (qs) url += `?${qs}`;
+              const init: RequestInit = { method: method.toUpperCase(), headers };
+              if (method !== "get" && method !== "head" && bodySchema) init.body = JSON.stringify(body);
+              const res = await fetch(url, init);
+              const text = await res.text();
+              // A non-2xx must not read as data: throw, so the model sees an error
+              // with the status (and the start of the body), not a JSON blob.
+              if (!res.ok) throw new Error(`${c.name}: ${init.method} ${path} failed (${res.status})${text ? `: ${text.slice(0, 500)}` : ""}`);
+              if (!text) return null;
+              try {
+                return JSON.parse(text);
+              } catch {
+                return text;
+              }
+            },
+          }),
+      });
     }
   }
+  const ids = toolIds(c.name, pending.map((p) => p.opName));
+  const actions = pending.map((p, i) => p.build(ids[i]!));
   if (!c.include && actions.length > MANY_OPERATIONS) {
     console.warn(
       `[june] connection "${c.name}": ${actions.length} OpenAPI operations became tools, and every one is offered to the model on every turn. Narrow them with \`include\` (operationIds or tags).`,

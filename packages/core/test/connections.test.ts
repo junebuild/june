@@ -531,6 +531,16 @@ describe("OpenAPI: spec features the minimal client used to mishandle", () => {
     for (const id of ids) expect(id).toMatch(/^[a-zA-Z0-9_-]{1,128}$/);
   });
 
+  test("an already-valid operationId keeps its id even when a reduced one listed earlier would take it", async () => {
+    const calls = serveOpenapi({
+      "https://api.test/doc": doc({ "/a": { get: { operationId: "list/items" } }, "/b": { get: { operationId: "list_items" } } }),
+    });
+    const { actions } = await connectAll([defineOpenapiConnection({ name: "t", url: "https://api.test/doc" })]);
+    expect(actions.map((a) => a.id)).toEqual(["t__list_items_2", "t__list_items"]);
+    await actions.find((a) => a.id === "t__list_items")!.run({} as never, {} as never);
+    expect(calls.at(-1)!.url).toBe("https://api.test/b"); // still the operation that was always list_items
+  });
+
   test("the connection name is sanitized too (a connection named after its host)", async () => {
     serveOpenapi({ "https://api.test/doc": doc({ "/a": { get: { operationId: "list" } } }) });
     const { actions } = await connectAll([defineOpenapiConnection({ name: "api.github.com", url: "https://api.test/doc" })]);
@@ -553,5 +563,53 @@ describe("OpenAPI: spec features the minimal client used to mishandle", () => {
     } finally {
       console.warn = warn;
     }
+  });
+});
+
+describe("MCP: tool ids are valid tool names; the remote is still called by its own name", () => {
+  // MCP allows dots ("admin.tools.list") and names up to 128 characters before
+  // our `<connection>__` prefix — both break the model API's ^[a-zA-Z0-9_-]{1,128}$.
+  function mcpServer(names: string[]) {
+    const called: string[] = [];
+    globalThis.fetch = (async (_url: unknown, init?: { body?: string }) => {
+      const rpc = JSON.parse(init!.body!) as { id: unknown; method: string; params?: { name?: string } };
+      const reply = (result: unknown) => Response.json({ jsonrpc: "2.0", id: rpc.id, result });
+      if (rpc.method === "tools/list") return reply({ tools: names.map((name) => ({ name, inputSchema: { type: "object", properties: {} } })) });
+      if (rpc.method === "tools/call") {
+        called.push(rpc.params!.name!);
+        return reply({ content: [{ type: "text", text: JSON.stringify({ ran: rpc.params!.name }) }] });
+      }
+      return reply({});
+    }) as typeof fetch;
+    return called;
+  }
+
+  test("dotted, over-long and colliding names get valid, unique ids — and each still calls its own remote tool", async () => {
+    const long = "t".repeat(128); // valid in MCP; with the "srv__" prefix it is not
+    const called = mcpServer(["admin.tools.list", "admin_tools_list", long, "get_weather"]);
+    const { actions, report } = await connectAll([defineMcpConnection({ name: "srv", url: "http://x/mcp" })]);
+    const ids = actions.map((a) => a.id);
+    // The already-valid "admin_tools_list" keeps its id even though the dotted
+    // name that reduces to the same id is listed first: only the reduced one
+    // is suffixed, so an existing caller of srv__admin_tools_list still reaches
+    // the same remote tool.
+    expect(ids).toEqual(["srv__admin_tools_list_2", "srv__admin_tools_list", `srv__${long}`.slice(0, 128), "srv__get_weather"]);
+    expect(report[0]!.tools).toEqual(ids);
+    for (const id of ids) expect(id).toMatch(/^[a-zA-Z0-9_-]{1,128}$/);
+
+    for (const a of actions) await a.run({}, {} as never);
+    expect(called).toEqual(["admin.tools.list", "admin_tools_list", long, "get_weather"]);
+  });
+
+  test("a connection named after its host yields valid ids", async () => {
+    mcpServer(["search"]);
+    const { actions } = await connectAll([defineMcpConnection({ name: "mcp.example.com", url: "http://x/mcp" })]);
+    expect(actions.map((a) => a.id)).toEqual(["mcp_example_com__search"]);
+  });
+
+  test("already-valid names are unchanged", async () => {
+    mockRemotes();
+    const { actions } = await connectAll([defineMcpConnection({ name: "weather", url: "http://x/mcp" })]);
+    expect(actions.map((a) => a.id)).toEqual(["weather__get_weather"]);
   });
 });
