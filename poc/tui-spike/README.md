@@ -38,27 +38,32 @@ are replayed with Unicode 6 widths (a stand-in for legacy `wcwidth` tables).
 
 ## Results
 
-CI run [36461777855](https://github.com/junebuild/june/actions/runs/36461777855) (2026-09-28,
-OpenTUI 0.5.12, Bun 1.4.2 on every target). Windows runs 39 checks: SIGTERM is skipped. Alpine
-has no npm, so musl has no npm column.
+CI run [36464286319](https://github.com/junebuild/june/actions/runs/36464286319) (2026-09-28,
+OpenTUI 0.5.12, Bun 1.4.2 on every target). Windows runs 40 checks: SIGTERM is skipped. Alpine
+has no npm, so musl has no npm or npm-global column.
 
-| target | source | compiled | npm | bun | frame avg / max | events/s |
-|---|---|---|---|---|---|---|
-| darwin-arm64 | ✅ 44/44 | ✅ 44/44 | ✅ 44/44 | ✅ 44/44 | 2.7 / 14.9 ms | 19.5 |
-| darwin-x64 | ✅ 44/44 | ✅ 44/44 | ✅ 44/44 | ✅ 44/44 | 11.2 / 165.5 ms | 17.5 |
-| linux-x64 | ✅ 44/44 | ✅ 44/44 | ✅ 44/44 | ✅ 44/44 | 3.8 / 14.9 ms | 17.5 |
-| linux-arm64 | ✅ 44/44 | ✅ 44/44 | ✅ 44/44 | ✅ 44/44 | 4.0 / 22.5 ms | 17.5 |
-| linux-x64-musl | ✅ 44/44 | ✅ 44/44 | — | ✅ 44/44 | 5.5 / 17.9 ms | 18 |
-| linux-arm64-musl | ✅ 44/44 | ✅ 44/44 | — | ✅ 44/44 | 3.9 / 15.3 ms | 17.5 |
-| win32-x64 | ✅ 39/39 | ✅ 39/39 | ✅ 39/39 | ✅ 39/39 | 5.4 / 24.7 ms | 18 |
-| win32-arm64 | ✅ 39/39 | ✅ 39/39 | ✅ 39/39 | ✅ 39/39 | 4.3 / 17.6 ms | 18 |
+| target | source | compiled | npm | bun | npm-global | bun-global | bunx | frame avg / max | events/s |
+|---|---|---|---|---|---|---|---|---|---|
+| darwin-arm64 | ✅ 45/45 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 2.2 / 18.9 ms | 19 |
+| darwin-x64 | ✅ 45/45 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 4.3 / 37.2 ms | 17 |
+| linux-x64 | ✅ 45/45 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 1.7 / 8.3 ms | 18 |
+| linux-arm64 | ✅ 45/45 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 1.8 / 12.8 ms | 18 |
+| linux-x64-musl | ✅ 45/45 | ✅ | — | ✅ | — | ✅ | ✅ | 1.1 / 12.5 ms | 18 |
+| linux-arm64-musl | ✅ 45/45 | ✅ | — | ✅ | — | ✅ | ✅ | 1.6 / 11.2 ms | 17.5 |
+| win32-x64 | ✅ 40/40 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 2.6 / 17.8 ms | 17.5 |
+| win32-arm64 | ✅ 40/40 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 1.9 / 13.2 ms | 18 |
+
+Every ✅ is the full check count for that target. Frame times are from the source path and vary
+between runs on the same Bun: the previous 1.4.2 run
+([36461777855](https://github.com/junebuild/june/actions/runs/36461777855)) averaged 2.7–5.5 ms,
+11.2 ms on the Intel macOS runner.
 
 On Bun 1.3.14 (run [36460069360](https://github.com/junebuild/june/actions/runs/36460069360))
 the same checks passed everywhere except Windows arm64, where the native core does not load
-(finding 1), and frames were slower: 5–8 ms average against 2.7–5.5 ms on 1.4.2.
+(finding 1), and frames were slower: 5–8 ms average.
 
-Also verified by hand: darwin-arm64 (MacBook Air M3) and win32-x64 (starship-win11 over SSH), all
-four paths, 2026-09-28, on Bun 1.3.14.
+Also verified by hand: darwin-arm64 (MacBook Air M3) and win32-x64 (starship-win11 over SSH),
+2026-09-28 — the first four paths on Bun 1.3.14, all seven on darwin-arm64 with Bun 1.4.2.
 
 ## Findings
 

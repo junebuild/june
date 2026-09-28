@@ -4,14 +4,18 @@ Status: **proposal / draft** · Stage: v0 · Companion to `docs/rfc-email.md` §
 the operator client's shape: `@junejs/inbox` (bin `june-inbox`), an external subcommand behind
 `june inbox`, shipped as a package and as compiled binaries, with OpenTUI pinned to an exact
 version behind a thin component layer. This appendix records **why OpenTUI over Ink**, the
-terminal conventions the TUI follows, and the spike that gates building it.
+terminal conventions the TUI follows, and the spike that gates building it — run 2026-09-28
+(`poc/tui-spike`, PR #275), whose findings are folded in below.
 
 ## Summary
 
 The TUI is a live view over streams — the pending queue, thread traces, the `InboxEvent`
 change feed. That is Ink's weakest case and OpenTUI's strongest, and OpenTUI's runtime floor
-(Bun 1.3+ or Node 26.4+) costs June nothing: the `june` CLI already runs on Bun. Choose
-**OpenTUI with `@opentui/react`**; keep Ink as the fallback the component layer makes cheap.
+(Bun 1.3+ or Node 26.4+; Bun 1.4.2+ on Windows arm64) costs June little: the `june` CLI already
+runs on Bun. Choose **OpenTUI with `@opentui/react`**; keep Ink as the fallback the component
+layer makes cheap. The spike passed on all eight prebuilt targets through every install path
+that exists yet, with two things `@junejs/inbox` must do itself (§3, §4) and one cost to accept
+(§3).
 
 ## 1. What the TUI has to do
 
@@ -36,7 +40,7 @@ Both are React renderers for the terminal with flexbox layout. They differ below
 |---|---|---|
 | Engine | JS React reconciler + Yoga layout (WASM, embedded as base64 in `yoga-layout` 3.2.1), writes ANSI strings | Native core in Zig (rendering, frame diff, buffers) with a TypeScript API |
 | Framework bindings | React only | React (`@opentui/react`), Solid (`@opentui/solid`), or the imperative core API |
-| Runtime (npm `engines`) | `node >=22`; runs on Bun | `bun >=1.3.0`, `node >=26.4.0` |
+| Runtime (npm `engines`) | `node >=22`; runs on Bun | `bun >=1.3.0`, `node >=26.4.0`. **Windows arm64 needs Bun ≥ 1.4.2**: 1.3.14's native build has no TinyCC, so `bun:ffi` `dlopen()` — how OpenTUI loads its core — is unavailable |
 | Version (2026-09-28) | 7.1.1 — mature, stable API | 0.5.12 — pre-1.0, the API still moves |
 | Used by | Claude Code, Gemini CLI, Copilot CLI, Wrangler, Shopify CLI | opencode |
 | Frequent redraws, long output | Re-renders the tree to strings. By default rewrites the whole output; `incrementalRendering` (off by default) rewrites only changed **lines**. Flicker and slowdown on long, fast-changing trees are its best-known complaints | Native frame diff: only changed **cells** are written |
@@ -45,16 +49,17 @@ Both are React renderers for the terminal with flexbox layout. They differ below
 | Screen mode | Inline by default; alternate screen optional | Alternate screen, mouse tracking on by default |
 | Accessibility | Has a screen-reader mode | Not documented |
 | Ecosystem | Large (text input, spinners, select, tables) | Small; most widgets we would write |
-| Install size (macOS arm64) | ~1.4 MB (`ink` + `yoga-layout`) | ~19.6 MB (`@opentui/core` 14 MB + platform binary 5.4 MB) |
-| Prebuilt platforms | n/a (JS + WASM, no platform-specific packages) | darwin x64/arm64, linux x64/arm64 (glibc + musl), win32 x64/arm64 |
+| Fresh `npm install` with `react` (macOS arm64) | 23 MB, 38 packages (`es-toolkit` 18 MB; Ink's peer `react-devtools-core` is optional, so not installed) | **67 MB**: `@opentui/core` 14 MB + platform binary 5.4 MB, plus three peers npm and bun install automatically because none is marked optional — `typescript` 23 MB (a peer of `bun-ffi-structs`), `react-devtools-core` 15 MB (of `@opentui/react`), `web-tree-sitter` 5.7 MB (of `@opentui/core`) |
+| Prebuilt platforms | n/a (JS + WASM, no platform-specific packages) | darwin x64/arm64, linux x64/arm64 (glibc + musl), win32 x64/arm64. **The musl build is picked only when `OPENTUI_LIBC=musl`**: OpenTUI does not detect the libc |
 
-### Verified 2026-09-28 (macOS arm64, Bun 1.3.14)
+### Verified 2026-09-28
 
-- Both render a bordered box with `@opentui/react` / `ink` + React 19.3 under Bun.
-- `bun build --compile` of the OpenTUI program produces a working standalone binary (72 MB,
-  almost all of it the Bun runtime); the native core is embedded, no side files.
-- **Not yet verified**: Linux and Windows at runtime, the npm install path loading the native
-  core from a user's `node_modules`, OpenTUI under Node 26.4+. See §5.
+- Both render a bordered box with `@opentui/react` / `ink` + React 19.3 under Bun 1.3.14.
+- `bun build --compile` of the OpenTUI program produces a working standalone binary (72 MB on
+  macOS arm64, almost all of it the Bun runtime); the native core is embedded, no side files.
+- The spike (§5) passed on all eight prebuilt targets, from source, compiled, and through
+  every install path of §9.3 that exists yet.
+- **Not verified**: OpenTUI under Node 26.4+.
 
 ## 3. Why OpenTUI
 
@@ -64,6 +69,10 @@ Both are React renderers for the terminal with flexbox layout. They differ below
    OpenTUI's native cell diff and scroll container are built for.
 2. **No new runtime.** `june` already runs on Bun: `packages/cli/bin.mjs` probes for Bun and
    re-executes `src/june.ts` under it, and `@junejs/inbox` compiles with `bun build --compile`.
+   Windows arm64 needs Bun ≥ 1.4.2, which June tracks anyway: the repo follows the newest Bun
+   (decided 2026-09-28, #281 moves every pin to 1.4.2). A Windows arm64 user of `bunx
+   @junejs/inbox` needs it too. x64 Bun under emulation is no way around an older Bun: in the
+   spike the compiled and bun-installed bins died after the first frame.
 3. **React, as everywhere else in June.** The monorepo pins React 19 in the workspace catalog,
    and `@opentui/react` peers on `react >=19.2`. Screens are not shared with the web GUI (the
    host elements differ), but hooks, the API client, the `InboxEvent` cursor logic and the
@@ -75,6 +84,11 @@ Both are React renderers for the terminal with flexbox layout. They differ below
 Ink would be the right call if the TUI had to run on Node older than 26.4 (OpenTUI's floor),
 if stable Windows or screen-reader support were first requirements, or if it were mostly
 prompts and wizards rather than live streams. None of these hold for June today.
+
+The cost to accept is size: 67 MB against Ink's 23 MB for a fresh `bunx` or npm install, 44 MB
+of it peers the TUI never loads at runtime. The compiled binaries do not pay it, which is one
+more reason §9.3 ships them; for the package, upstream marking those peers optional is the fix
+to ask for.
 
 ## 4. Terminal conventions
 
@@ -92,24 +106,48 @@ prompts and wizards rather than live streams. None of these hold for June today.
   tree is not remounted. The spike still proves it with real editors (§5).
 - **Keys first, mouse optional.** Every action has a key; mouse only adds click and wheel.
 - **Width and CJK**: bodies are user mail in any language; wide characters and emoji must not
-  break borders or columns; never assume one locale or script.
+  break borders or columns; never assume one locale or script. The spike found CJK text and
+  borders correct on every target. Emoji depend on the terminal's width table: with Unicode 11
+  widths (VS Code, Windows Terminal, current emulators) the screen is clean; with legacy
+  Unicode 6 widths a stale cell follows some emoji (`☕r`). User content cannot be policed, so
+  the TUI's own chrome uses no emoji, and the rest is a known limitation of old terminals.
+- **Detect musl before loading OpenTUI.** OpenTUI loads its glibc build unless
+  `OPENTUI_LIBC=musl` — on Alpine x64 that fails with `Error loading shared library
+  ld-linux-x86-64.so.2`. The client sets the variable when `/lib` has an `ld-musl-*` loader, in
+  a module imported before `@opentui/core` (the spike's `src/libc.ts`); an explicit value
+  wins. Compiled musl binaries are built on musl.
 - **Color**: respect `NO_COLOR` and degrade on 16-color terminals.
 
-## 5. Spike before building (half a day, gates P1c)
+## 5. Spike before building (gates P1c)
 
 A throwaway prototype — a scrolling list fed by a fake SSE stream at 20 events/s, a detail pane
-with a 2 000-line trace — checked on every target `@opentui/core` ships a prebuilt for and
-§9.3's CI smoke test covers:
+with a 2 000-line trace — in `poc/tui-spike` (PR #275). A harness drives it under a real
+pseudo-terminal (`Bun.spawn({ terminal })`: openpty, or ConPTY on Windows), replays the output
+into headless xterm.js and asserts on what a user would see; `.github/workflows/tui-spike.yml`
+runs it on every prebuilt target. Results as of 2026-09-28 (CI run 36464286319 on Bun 1.4.2,
+all eight targets × seven paths; earlier runs on 1.3.14 and by hand on macOS arm64 and Windows
+x64 agree except where noted):
 
-- [ ] Renders, resizes and restores the terminal on exit and on Ctrl-C on all eight prebuilt
-      targets: macOS x64 and arm64; Linux x64 and arm64, each on glibc and on musl (e.g.
-      Alpine); Windows x64 and arm64.
-- [ ] Every install path of §9.3 loads the native core: `bunx @junejs/inbox`, a global install,
-      `june inbox` delegating inside a project, and the `bun build --compile` binary.
-- [ ] Falls back to text when stdin or stdout is not a TTY.
-- [ ] `$EDITOR` suspend / resume round-trip, with vim and with VS Code (`code --wait`).
-- [ ] CJK and emoji in list rows and borders.
-- [ ] No visible flicker or lag at 20 events/s while scrolling the trace.
+- [x] Renders, resizes and restores the terminal on `q`, Ctrl-C, an uncaught error and SIGTERM
+      (not on Windows) on all eight prebuilt targets: macOS x64 and arm64; Linux x64 and arm64,
+      each on glibc and on musl (Alpine); Windows x64 and arm64 (arm64 only from Bun 1.4.2).
+- [x] The native core loads from source and from the compiled binary, and from a packed
+      tarball installed each way a user would: `npm install` and `bun add` in a fresh project,
+      `npm install -g` and `bun add -g`, and `bunx`. `june inbox` delegation is not testable
+      until the external-subcommand lookup exists.
+- [x] Falls back to text when stdout is not a TTY, and when stdin is redirected under a TTY
+      stdout.
+- [x] `$EDITOR` round-trip: the editor gets the terminal, the TUI comes back, mounted once with
+      one feed subscription. **Still by hand:** vim, and VS Code with `code --wait`.
+- [x] CJK and borders on every target; emoji as described in §4.
+- [x] No full-screen clears while streaming; the feed keeps 17–19 events/s while keys are
+      pressed (the fake feed emits 20/s, ~16/s on Windows). On Bun 1.4.2 frames average
+      1.1–5.5 ms across two runs, against 5–8 ms on 1.3.14. The Intel macOS runner is the
+      outlier and varies run to run: 4–23 ms average, worst frames from 37 to 533 ms. **Still
+      by hand:** flicker by eye in real terminals, including an older Intel Mac.
+- [x] A selected row stays on screen while events are prepended above it — once it is scrolled
+      from the data in a layout effect (spike README, finding 7); the obvious `useEffect` /
+      `scrollChildIntoView` versions lose it.
 
 If a box fails and cannot be fixed upstream quickly, re-run the same prototype on Ink with
 `incrementalRendering: true` before building further — the component layer keeps that cheap.
@@ -120,3 +158,6 @@ If a box fails and cannot be fixed upstream quickly, re-run the same prototype o
    plain-text subcommands the supported path, or do we need a TUI mode for it?
 2. **Other TUIs.** Should `june dev` gain a TUI dashboard (routes, requests, agent turns) on the
    same component layer, or stay a plain log stream?
+3. **Upstream.** Two OpenTUI changes would remove workarounds: detecting musl itself, and marking
+   `typescript`, `react-devtools-core` and `web-tree-sitter` optional peers (44 MB of every
+   package install). File them, or carry the workarounds?
