@@ -57,6 +57,7 @@
     "global-turn-ids",
     "heading-ids",
     "held-inbound-turns",
+    "input-announcements",
     "isolate-scoped-resources",
     "llms-sections",
     "mcp-2026-07-28",
