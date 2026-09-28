@@ -160,7 +160,7 @@ On Workers the Durable Object's `POST /turn` responds with this stream as
 ## Human in the loop
 
 A tool can stop the turn and wait for a person with `ctx.requestInput({ id,
-prompt, schema?, answererId? })`. Only an **async** tool can park. In a sync tool
+prompt, schema?, answerers? })`. Only an **async** tool can park. In a sync tool
 the call throws, because a local tool commits inside a transaction that can't be
 left open. `defineAction` tools get an `ActionContext`, not the tool context, so
 a parking tool is a plain `Tool`:
@@ -215,17 +215,52 @@ Things to know:
   after it.
 - **Answers are turn-scoped.** A later turn that asks with the same `id` parks
   again. An old approval never carries over.
-- **`answererId` is enforced.** It defaults to the triggering user
-  (`event.user.id`). When it is set, a resume whose `by` doesn't match throws
-  `ResumeAuthorizationError`, and so does a resume with no `by` at all. The Durable
-  Object maps that to 403, and a wrong turn, a wrong input id, or a turn that
-  isn't suspended to 409. `by` must be an identity you verified, such as the user
-  id from a signature-checked Slack interaction. With no `answererId` and no
-  triggering user, any resumer is accepted.
+- **Who may answer: `answerers`.** `requestInput` takes an optional `answerers`:
+  - `{ user }` — exactly this identity, compared with the resumer's verified
+    `by`. A resume whose `by` doesn't match, or that has no `by`, throws
+    `ResumeAuthorizationError`. `by` must be an identity you verified, such as the
+    user id from a signature-checked Slack interaction.
+  - `{ policy, scope? }` — a rule only the app can decide ("the operators of
+    mailbox scout", "a manager of this tenant"). The host evaluates it at resume
+    time through the agent's `authorizeAnswer` hook; only a matching grant lets the
+    resume through. `by` alone never answers a policy, and a grant never answers a
+    `{ user }`.
+
+  With no `answerers`, the default answerer is the turn's speaker — but only when
+  the channel **attests** that identity (`event.user.attested`). Slack signs every
+  event, so a Slack approval still defaults to the triggering user. A turn whose
+  speaker isn't attested (an email, whose `From:` anyone can forge) refuses to
+  park: `requestInput` throws, telling you to name an answerer. A turn with no
+  inbound event (proactive, programmatic) keeps no restriction — the app drives
+  its own resume.
+- **Resuming a policy answerer.** `resume(turnId, inputId, input, { by, granted })`
+  accepts a `{ policy }` answer only with a `granted` for exactly that policy and
+  scope. A host builds it with `grantAnswer(session, resume, authorizeAnswer)` —
+  the one async step, which may read the db — before the synchronous `resume`.
+  `session.pending()` returns the input the session is parked on. Both are
+  exported for hosts and custom surfaces, and `resumeStream` / `resumeDelivered`
+  (and the Durable Object's `/resume`) carry the resumer's `principal` beside `by`
+  so `authorizeAnswer` can use it. The Durable Object maps `ResumeAuthorizationError`
+  to 403, and a wrong turn, a wrong input id, or a turn that isn't suspended to 409.
 - **One park at a time.** While a session is suspended, `start()` rejects any
   other turn. Redelivering the parked turn is allowed.
 - On Slack, `slackChannel` renders `input.requested` as Approve / Deny buttons.
   A click resumes with `true` or `false` and the clicker's verified id.
+
+Declare `authorizeAnswer` on the agent (`agent.ts`, `defineAgent`, or
+`DoAgentDef`) to decide `{ policy }` answerers. It runs at resume time — on the
+Durable Object inside the request scope, so it can read the app's db and
+services:
+
+```ts
+// app/agent/agent.ts
+export default {
+  name: "ops",
+  // Return true to let this resumer answer the parked { policy, scope } request.
+  authorizeAnswer: async ({ policy, scope, by, principal }) =>
+    policy === "operator" && (await isOperator(principal, scope)),
+};
+```
 
 ## Cancellation and replace
 

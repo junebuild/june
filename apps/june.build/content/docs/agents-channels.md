@@ -152,10 +152,12 @@ isn't caught; dropped repeats show up in `diagnose().counters.duplicates`.
 **Approvals (HITL).** When a tool calls `ctx.requestInput({ id, prompt })`, the
 turn parks and the channel posts the prompt with **Approve / Deny** buttons.
 The click arrives on the same endpoint (Interactivity must be on), and the
-clicker's verified Slack id resumes the turn — checked against `answererId`,
-which defaults to the user who triggered it. A rejected click leaves the
-buttons in place and tells the clicker ephemerally. `approvalConfirm: true`
-adds Slack's confirmation dialog. Works with and without `stream`.
+clicker's verified Slack id resumes the turn — checked against the request's
+`answerers`. Because Slack attests every event, an approval with no `answerers`
+defaults to the user who triggered it; a `{ policy }` answerer is decided by the
+agent's `authorizeAnswer` hook. A rejected click leaves the buttons in place and
+tells the clicker ephemerally. `approvalConfirm: true` adds Slack's confirmation
+dialog. Works with and without `stream`.
 
 **Agent tools.** Mounting the channel gives the agent four tools. Each defaults
 its target from the current Slack event, so the model can call them with no
