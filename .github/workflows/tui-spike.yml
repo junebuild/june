@@ -47,6 +47,12 @@ jobs:
       - name: Typecheck
         run: bunx tsc -p .
 
+      # The TUI can only show a native load error inside its pseudo-terminal;
+      # this prints the whole thing to the log.
+      - name: Native core
+        if: ${{ !cancelled() }}
+        run: bun harness/probe.ts
+
       - name: From source
         if: ${{ !cancelled() }}
         run: bun harness/run.ts --out results-source.json
@@ -93,10 +99,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # OpenTUI does not detect musl: without OPENTUI_LIBC=musl it loads the
+      # glibc build. The first probe records what happens then; everything
+      # after it runs with the variable set.
       - name: Harness in Alpine
         run: |
           docker run --rm -v "$PWD:/w" -w /w oven/bun:1.3.14-alpine sh -euc '
             bun install --frozen-lockfile
+            bun harness/probe.ts || echo "(expected without OPENTUI_LIBC)"
+            export OPENTUI_LIBC=musl
+            bun harness/probe.ts
             status=0
             bun harness/run.ts --out results-source.json || status=1
             bun build --compile src/main.tsx --outfile dist/tui-spike
@@ -108,7 +120,7 @@ jobs:
 
       - name: Summary
         if: ${{ !cancelled() }}
-        run: cat summary.md >> "$GITHUB_STEP_SUMMARY"
+        run: cat summary.md >> "$GITHUB_STEP_SUMMARY" || echo "no summary (the job stopped early)" >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}

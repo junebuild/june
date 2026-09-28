@@ -135,7 +135,10 @@ const scenarios: Record<string, () => Promise<void>> = {
       TUI_SPIKE_EDITOR_MARK: mark,
       EDITOR: `"${process.execPath}" "${join(root, "harness/fake-editor.ts")}"`,
     });
-    check(s, "renders", await run.waitFor(() => run.screen().includes("pending ("), 15_000), run.screen().slice(0, 200));
+    const rendered = await run.waitFor(() => run.screen().includes("pending ("), 15_000);
+    check(s, "renders", rendered, run.screen().slice(0, 200));
+    // Whatever the TUI printed instead — a load error lives only on this screen.
+    if (!rendered) console.log(`--- screen ---\n${run.screen().trimEnd()}\n--------------`);
     check(s, "feed is live (≥ 40 events)", await run.waitFor(() => eventsOnScreen(run) >= 40, 15_000), eventsOnScreen(run));
 
     // CJK / emoji: every body row keeps its borders in the same columns.
@@ -174,10 +177,11 @@ const scenarios: Record<string, () => Promise<void>> = {
     await run.waitFor(() => true, 0);
     notes.steadyBytesPerSec = Math.round((run.raw().length - before) / 2);
     // The feed emits 20/s (≈16/s on Windows, whose timers tick every 15.6 ms);
-    // well below that means the TUI is starving the event loop.
+    // a starved event loop drops to ~0. Slow machines land between: the Intel
+    // macOS runner renders at ~15 ms/frame and keeps ~9/s.
     const rate = (eventsOnScreen(run) - eventsBefore) / 2;
     notes.eventsPerSecWhileInteracting = rate;
-    check(s, "feed keeps up while interacting (≥ 10/s)", rate >= 10, rate);
+    check(s, "feed keeps up while interacting (≥ 5/s)", rate >= 5, rate);
     notes.staleCellsUnicode6 = staleLegacy.size ? [...staleLegacy].slice(0, 3) : "none";
     const clears = run.raw().split("\x1b[2J").length - clearsBefore;
     check(s, "no full-screen clears while streaming", clears === 0, clears);
