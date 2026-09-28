@@ -2,8 +2,9 @@
 // Sidebar order now lives in `order` frontmatter, so no slug is numbered; the
 // old URLs are linked from elsewhere and cached by agents, so they stay alive
 // as a permanent redirect to the unnumbered slug, projection suffix included
-// (/docs/05-stability.md → /docs/stability.md).
-const NUMBERED_DOC = /^\/docs\/\d{2}-([^/]+)$/;
+// (/docs/05-stability.md → /docs/stability.md). The router ignores a trailing
+// slash, so the old URL answered with one too; it redirects to the canonical form.
+const NUMBERED_DOC = /^\/docs\/\d{2}-([^/]+)\/?$/;
 
 export default function middleware(_request: Request, url: URL): Response | null {
   const m = NUMBERED_DOC.exec(url.pathname);
