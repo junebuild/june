@@ -105,6 +105,13 @@ to ask for.
   a child process with inherited stdio runs between `suspend()` and `resume()`, and the React
   tree is not remounted. The spike still proves it with real editors (§5).
 - **Keys first, mouse optional.** Every action has a key; mouse only adds click and wheel.
+- **Keep keys typed during startup.** OpenTUI emits keys as soon as the renderer exists, but
+  `useKeyboard` subscribes in an effect, so a key typed before that — `june inbox` then `j` at
+  once — reaches no listener (measured: lost 5 of 5 times before the first frame). Buffer
+  `renderer.keyInput` from right after `createCliRenderer`. Replaying into the handler is not
+  enough: the pending queue has not loaded yet, so a `j` would move through an empty list. Quit
+  keys act at once; every other key, buffered or live, waits until the first data has loaded and
+  then runs in order (the spike's `main.tsx` / `App`).
 - **Width and CJK**: bodies are user mail in any language; wide characters and emoji must not
   break borders or columns; never assume one locale or script. The spike found CJK text and
   borders correct on every target. Emoji depend on the terminal's width table: with Unicode 11
@@ -124,7 +131,7 @@ A throwaway prototype — a scrolling list fed by a fake SSE stream at 20 events
 with a 2 000-line trace — in `poc/tui-spike` (PR #275). A harness drives it under a real
 pseudo-terminal (`Bun.spawn({ terminal })`: openpty, or ConPTY on Windows), replays the output
 into headless xterm.js and asserts on what a user would see; `.github/workflows/tui-spike.yml`
-runs it on every prebuilt target. Results as of 2026-09-28 (CI run 36464286319 on Bun 1.4.2,
+runs it on every prebuilt target. Results as of 2026-09-28 (CI run 36467382075 on Bun 1.4.2,
 all eight targets × seven paths; earlier runs on 1.3.14 and by hand on macOS arm64 and Windows
 x64 agree except where noted):
 
@@ -148,6 +155,8 @@ x64 agree except where noted):
 - [x] A selected row stays on screen while events are prepended above it — once it is scrolled
       from the data in a layout effect (spike README, finding 7); the obvious `useEffect` /
       `scrollChildIntoView` versions lose it.
+- [x] Keys typed the instant the process starts are acted on: `q` at once, `j` once the list
+      has data (spike README, finding 8; §4).
 
 If a box fails and cannot be fixed upstream quickly, re-run the same prototype on Ink with
 `incrementalRendering: true` before building further — the component layer keeps that cheap.

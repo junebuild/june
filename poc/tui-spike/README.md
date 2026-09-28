@@ -29,6 +29,8 @@ bun harness/installed.ts bun                # also: npm-global, bun-global, bunx
 | scenario | checks |
 |---|---|
 | session | renders; feed live; CJK on screen; box borders in the same columns on every row; no stale cells after emoji (Unicode 11 widths); no full-screen clears and ≥ 5 events/s while keys are pressed (a starved event loop drops to ~0); the selected row stays on screen while events are prepended above it (≥ 18 of 20 samples); `$EDITOR` runs with the terminal and the TUI comes back; resize 120x40 and 60x20; `q` exits 0; terminal restored; mounted once, one feed subscription, suspend/resume paired |
+| typeahead | `q` sent the instant the process starts, before the first frame: exits 0 and restores the terminal |
+| typeahead nav | `j` sent the instant the process starts: once the list has data, a row is selected (it stays put while events stream in) |
 | ctrl-c, crash, sigterm | exits 130 / 1 / 143 and restores alternate screen, cursor and mouse modes (sigterm skipped on Windows) |
 | stdin redirected | stdout a TTY, stdin `/dev/null` or `NUL`: no full-screen UI, prints the listing, exits 0 |
 | no TTY | pipes only: plain text, five lines, exits 0 |
@@ -38,25 +40,24 @@ are replayed with Unicode 6 widths (a stand-in for legacy `wcwidth` tables).
 
 ## Results
 
-CI run [36464286319](https://github.com/junebuild/june/actions/runs/36464286319) (2026-09-28,
-OpenTUI 0.5.12, Bun 1.4.2 on every target). Windows runs 40 checks: SIGTERM is skipped. Alpine
+CI run [36467382075](https://github.com/junebuild/june/actions/runs/36467382075) (2026-09-28,
+OpenTUI 0.5.12, Bun 1.4.2 on every target). Windows runs 48 checks: SIGTERM is skipped. Alpine
 has no npm, so musl has no npm or npm-global column.
 
 | target | source | compiled | npm | bun | npm-global | bun-global | bunx | frame avg / max | events/s |
 |---|---|---|---|---|---|---|---|---|---|
-| darwin-arm64 | ✅ 45/45 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 2.2 / 18.9 ms | 19 |
-| darwin-x64 | ✅ 45/45 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 4.3 / 37.2 ms | 17 |
-| linux-x64 | ✅ 45/45 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 1.7 / 8.3 ms | 18 |
-| linux-arm64 | ✅ 45/45 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 1.8 / 12.8 ms | 18 |
-| linux-x64-musl | ✅ 45/45 | ✅ | — | ✅ | — | ✅ | ✅ | 1.1 / 12.5 ms | 18 |
-| linux-arm64-musl | ✅ 45/45 | ✅ | — | ✅ | — | ✅ | ✅ | 1.6 / 11.2 ms | 17.5 |
-| win32-x64 | ✅ 40/40 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 2.6 / 17.8 ms | 17.5 |
-| win32-arm64 | ✅ 40/40 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 1.9 / 13.2 ms | 18 |
+| darwin-arm64 | ✅ 53/53 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 1.8 / 16.5 ms | 19 |
+| darwin-x64 | ✅ 53/53 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 6.3 / 46.9 ms | 17 |
+| linux-x64 | ✅ 53/53 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 2.1 / 17.0 ms | 18 |
+| linux-arm64 | ✅ 53/53 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 1.7 / 12.6 ms | 17.5 |
+| linux-x64-musl | ✅ 53/53 | ✅ | — | ✅ | — | ✅ | ✅ | 2.4 / 14.7 ms | 18 |
+| linux-arm64-musl | ✅ 53/53 | ✅ | — | ✅ | — | ✅ | ✅ | 1.7 / 10.9 ms | 17.5 |
+| win32-x64 | ✅ 48/48 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 2.1 / 15.0 ms | 18.5 |
+| win32-arm64 | ✅ 48/48 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 2.0 / 16.6 ms | 17.5 |
 
 Every ✅ is the full check count for that target. Frame times are from the source path and vary
-between runs on the same Bun: the previous 1.4.2 run
-([36461777855](https://github.com/junebuild/june/actions/runs/36461777855)) averaged 2.7–5.5 ms,
-11.2 ms on the Intel macOS runner.
+between runs on the same Bun: earlier 1.4.2 runs averaged 1.1–5.5 ms, 4.3–11.2 ms on the Intel
+macOS runner.
 
 On Bun 1.3.14 (run [36460069360](https://github.com/junebuild/june/actions/runs/36460069360))
 the same checks passed everywhere except Windows arm64, where the native core does not load
@@ -101,7 +102,17 @@ Also verified by hand: darwin-arm64 (MacBook Air M3) and win32-x64 (starship-win
    at commit time the new rows are not laid out, so it scrolls one row short. Setting `scrollTop`
    from the row's index in `useLayoutEffect` holds it 20 of 20 (six runs). The list also never
    evicts the selected event at its 500-row cap.
-8. **Spawning on Windows**: npm makes `.cmd` shims, bun makes `.exe` shims; `cmd.exe` does not
+8. **Keys typed during startup are lost unless buffered.** OpenTUI emits keys from the moment the
+   renderer exists, but `useKeyboard` subscribes in an effect: a `q` sent before the first frame
+   (~80 ms) reached no listener 5 of 5 times, while a listener on `renderer.keyInput` attached
+   right after `createCliRenderer` saw it 5 of 5. On the slow Intel macOS runner the gap reached
+   past the first frame and dropped the harness's crash key once. Buffering and replaying is not
+   enough: a replayed `j` meets an empty list, since the first event has not arrived, and is
+   spent on nothing — as is a live `j` in that window. So `main.tsx` buffers keys until `App` has
+   subscribed; quit keys then act at once, and every other key waits until the list has data and
+   runs in order (`move` is a functional update, so queued moves compose). The `typeahead`
+   check fails without the buffer, `typeahead nav` without the queue (3 of 3 each).
+9. **Spawning on Windows**: npm makes `.cmd` shims, bun makes `.exe` shims; `cmd.exe` does not
    parse backslash-escaped quotes; Windows PowerShell 5.1 strips quotes from arguments to native
    commands (hence `--bin`).
 

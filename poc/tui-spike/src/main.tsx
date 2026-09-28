@@ -5,7 +5,7 @@
 // First: ES modules evaluate in import order, and this must set
 // OPENTUI_LIBC before @opentui/core resolves its native package.
 import "./libc";
-import { createCliRenderer } from "@opentui/core";
+import { createCliRenderer, type KeyEvent } from "@opentui/core";
 import { createRoot } from "@opentui/react";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -31,6 +31,16 @@ if (!(process.stdin.isTTY && process.stdout.isTTY)) {
 }
 
 const renderer = await createCliRenderer({ exitOnCtrlC: false, gatherStats: true, targetFps: 30 });
+
+// Typeahead: buffer keys from the moment the renderer exists until App has
+// subscribed, then hand them over (see App's drainEarlyKeys effect).
+const earlyKeys: KeyEvent[] = [];
+const bufferKey = (key: KeyEvent) => earlyKeys.push(key);
+renderer.keyInput.on("keypress", bufferKey);
+function drainEarlyKeys(): KeyEvent[] {
+  renderer.keyInput.off("keypress", bufferKey);
+  return earlyKeys.splice(0);
+}
 
 let done = false;
 function shutdown(reason: string, code: number, error?: unknown): never {
@@ -95,4 +105,6 @@ function openEditor(text: string): number {
   return code;
 }
 
-createRoot(renderer).render(<App feedUrl={feedUrl} openEditor={openEditor} quit={(r, c) => shutdown(r, c)} />);
+createRoot(renderer).render(
+  <App feedUrl={feedUrl} openEditor={openEditor} quit={(r, c) => shutdown(r, c)} drainEarlyKeys={drainEarlyKeys} />,
+);
