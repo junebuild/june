@@ -1,5 +1,68 @@
 # @junejs/server
 
+## 1.0.0-dev.33
+
+### Patch Changes
+
+- [#243](https://github.com/junebuild/june/pull/243) [`b46bc2c`](https://github.com/junebuild/june/commit/b46bc2c4a50cd3d213f9ed9da4bc079f1287f434) Thanks [@linyiru](https://github.com/linyiru)! - `/api` answers as an API when nothing else claims a path there (with `agent.api` on).
+
+  - `GET /api` (and `/api/`) returns a JSON index: the `/openapi.json` URL, each
+    served action as `{ id, method: "POST", path, description }`, and the error
+    shape, with a `Link: </openapi.json>; rel="service-desc"` header. HEAD gets
+    the same headers with no body, and any other method gets a 405 JSON error
+    (`Allow: GET, HEAD`).
+  - Any other unmatched path under `/api/` gets the REST surface's JSON 404,
+    `{ error: { code: "not_found", message, hint } }`, for every method and every
+    `Accept` (it used to fall through to the HTML not-found page). No versions are
+    invented: `/api/v1` is a miss like any other path.
+  - Order under `/api`: a registered action's `/api/<id>` is dispatched before
+    routing, as before. Every other path goes to the app's routes, so an app
+    route at `/api` or at any `/api/<path>` that isn't an action replaces the
+    index or the error there. Only a path neither claims gets them. With
+    `agent.api` off, `/api` is an ordinary path again. A static build prerenders
+    nothing for `/api`.
+  - New `@junejs/core/api` exports: `apiIndex`, `apiNamespaceResponse`,
+    `isApiNamespace`.
+  - Fix (server): a request path with a malformed percent-escape (`/docs/%ZZ`,
+    `/blog/%E0%A4%A`) crashed the request instead of 404ing. Every route resolver
+    (the dev tree matcher and the built worker's route tables) decodes URL
+    segments, and the `URIError` escaped: `app.fetch` threw on the dev server, and
+    `wrangler dev` answered 500 `URIError: URI malformed`. Cloudflare's edge
+    rejects such URLs with a 400 before the worker runs, so deployed Workers
+    weren't affected, but other hosts were. The pipeline now checks that every
+    segment of the path decodes BEFORE resolving. A path that doesn't is a routing
+    miss (the normal negotiated 404, or the API's JSON 404 under `/api`) and never
+    reaches a resolver. Anything a resolver itself throws, including a genuine
+    `URIError` from a route module, still propagates.
+
+- [#248](https://github.com/junebuild/june/pull/248) [`f2ed6ba`](https://github.com/junebuild/june/commit/f2ed6ba41bac8ac5dbab86a701385d6aca80b226) Thanks [@linyiru](https://github.com/linyiru)! - Every non-home page now carries a schema.org `BreadcrumbList` in its JSON-LD,
+  using the same single-`@graph` shape as the homepage's `WebSite`.
+
+  - **The trail comes from the URL.** It starts at the site home, named by the
+    short part of `site.name`, or at a locale's own home (`/de`). It continues
+    through each ancestor path that is a page and ends with the page itself,
+    named by its title.
+  - **Only declared pages count as ancestors.** An ancestor gets a crumb only if
+    it resolves to a route matched with no params.
+    - A path that matches nothing is skipped.
+    - So is a dynamic match, since only its data says whether it exists.
+    - Ancestors are resolved, never loaded.
+  - **Ancestor names.** An ancestor is named by its static `metadata.title`.
+    Failing that, it's named by its humanized URL segment.
+  - **New `Metadata.breadcrumb`.** Set it to `false` to opt a page out, or to an
+    array of `{ name, path }` crumbs after the home to set the trail yourself. A
+    `metadata` function can build that array from loaded data.
+  - **Same gates as the canonical.** A trail needs a public origin, and `noindex`
+    pages get none. Item URLs are absolute and include any `basePath`. The last
+    item is the page's canonical URL.
+  - **Streamed pages included.** Pages rendered with `loading.tsx` carry the
+    trail too. Pages served by the experimental RSC renderer get none: that path
+    doesn't pass route metadata to the document yet.
+  - **`Breadcrumb` type.** It is exported from `@junejs/core/document`.
+
+- Updated dependencies [[`b46bc2c`](https://github.com/junebuild/june/commit/b46bc2c4a50cd3d213f9ed9da4bc079f1287f434), [`f2ed6ba`](https://github.com/junebuild/june/commit/f2ed6ba41bac8ac5dbab86a701385d6aca80b226)]:
+  - @junejs/core@0.2.0-dev.53
+
 ## 1.0.0-dev.32
 
 ### Patch Changes
