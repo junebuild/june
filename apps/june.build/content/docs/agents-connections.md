@@ -106,8 +106,11 @@ Documents often live on a different host from the API: GitHub's is on
 `headers` and `auth` go with the document request only when `baseUrl` is set
 and has the same origin as `url`. Set `docAuth: true` to send them anyway, for
 a protected document on another host, or `docAuth: false` to never send them.
-If a document fetched without credentials answers 401 or 403, the connection
-fails with an error that names both options.
+Credentials belong to the document's origin, so if the document redirects to
+another origin, that request goes without them. If a document fetched without
+credentials answers 401 or 403, the connection fails with an error that says
+which fix applies: `baseUrl` or `docAuth`, or, after a cross-origin redirect,
+pointing `url` at the final location.
 
 ## Errors and the report
 

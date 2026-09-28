@@ -220,9 +220,10 @@ function property(p: Parameter): { type: string; description?: string } {
 }
 
 // `<connection>__<operationId>`, reduced to the tool-name alphabet
-// (^[a-zA-Z0-9_-]{1,128}$): GitHub's operationIds are "issues/list-for-repo".
+// (^[a-zA-Z0-9_-]{1,128}$) as a WHOLE: GitHub's operationIds are
+// "issues/list-for-repo", and a connection may be named "github.com".
 function toolId(connection: string, opName: string, taken: Set<string>): string {
-  const base = `${connection}__${opName.replace(/[^A-Za-z0-9_-]/g, "_")}`.slice(0, TOOL_NAME_MAX);
+  const base = `${connection}__${opName}`.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, TOOL_NAME_MAX);
   let id = base;
   for (let n = 2; taken.has(id); n++) id = `${base.slice(0, TOOL_NAME_MAX - String(n).length - 1)}_${n}`;
   taken.add(id);
@@ -235,16 +236,36 @@ function includes(c: OpenapiConnection, op: OpenapiOperation): boolean {
   return c.include.some((s) => s === op.operationId || op.tags.includes(s));
 }
 
+const MAX_DOC_REDIRECTS = 5;
+
 async function fetchOpenapiDoc(c: OpenapiConnection): Promise<OpenApiDoc> {
-  const sameOrigin = c.baseUrl !== undefined && new URL(c.baseUrl, c.url).origin === new URL(c.url).origin;
-  const withCredentials = c.docAuth ?? sameOrigin;
+  const docOrigin = new URL(c.url).origin;
+  const sameOrigin = c.baseUrl !== undefined && new URL(c.baseUrl, c.url).origin === docOrigin;
+  const allowed = c.docAuth ?? sameOrigin;
   // Discovery credentials (auth with no ctx) only when they are going to the API itself.
-  const res = await fetch(c.url, withCredentials ? { headers: await resolveHeaders(c) } : {});
+  const credentials = allowed ? await resolveHeaders(c) : undefined;
+  // Credentials are for the document's ORIGIN, not wherever it redirects: fetch
+  // forwards custom headers (x-api-key, …) across origins on redirect, so a
+  // credentialed fetch follows redirects by hand and drops them on any hop that
+  // leaves that origin.
+  let url = c.url;
+  let res: Response;
+  let sent = false;
+  for (let hop = 0; ; hop++) {
+    sent = credentials !== undefined && new URL(url).origin === docOrigin;
+    res = await fetch(url, credentials ? { redirect: "manual", ...(sent ? { headers: credentials } : {}) } : {});
+    const location = res.headers.get("location");
+    if (!credentials || res.status < 300 || res.status >= 400 || !location) break;
+    if (hop >= MAX_DOC_REDIRECTS) throw new Error(`OpenAPI document ${c.url}: more than ${MAX_DOC_REDIRECTS} redirects.`);
+    url = new URL(location, url).href;
+  }
   if (!res.ok) {
-    const hint =
-      (res.status === 401 || res.status === 403) && !withCredentials && (c.auth || c.headers)
-        ? " The document was fetched WITHOUT the connection's credentials: set `baseUrl` to the API origin if the document is served by the API, or `docAuth: true` to send them regardless."
-        : "";
+    const denied = (res.status === 401 || res.status === 403) && !sent && (c.auth || c.headers);
+    const hint = !denied
+      ? ""
+      : credentials
+        ? ` It redirected to ${new URL(url).origin}, and credentials are never forwarded to another origin: point \`url\` at the final location.`
+        : " The document was fetched WITHOUT the connection's credentials: set `baseUrl` to the API origin if the document is served by the API, or `docAuth: true` to send them regardless.";
     throw new Error(`OpenAPI document ${c.url} → ${res.status}.${hint}`);
   }
   return (await res.json()) as OpenApiDoc;

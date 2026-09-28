@@ -280,9 +280,13 @@ describe("provider connections", () => {
 type Call = { url: string; method: string; headers: Record<string, string>; body?: unknown };
 
 // Serve `docs` by URL; record every request; answer API calls with `api(url)`.
+// Like real fetch, a 3xx is FOLLOWED unless `redirect: "manual"` — re-sending
+// the same headers, custom ones included (only Authorization is special-cased
+// by the Fetch spec) — so code relying on default redirects leaks exactly as
+// it would in production.
 function serveOpenapi(docs: Record<string, unknown | (() => Response)>, api: (call: Call) => Response = () => Response.json({ ok: true })) {
   const calls: Call[] = [];
-  globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+  const fake = (async (url: unknown, init?: RequestInit): Promise<Response> => {
     const call: Call = {
       url: String(url),
       method: init?.method ?? "GET",
@@ -291,11 +295,17 @@ function serveOpenapi(docs: Record<string, unknown | (() => Response)>, api: (ca
     };
     calls.push(call);
     const doc = docs[call.url];
-    if (doc !== undefined) return typeof doc === "function" ? (doc as () => Response)() : Response.json(doc);
-    return api(call);
+    const res = doc !== undefined ? (typeof doc === "function" ? (doc as () => Response)() : Response.json(doc)) : api(call);
+    const location = res.headers.get("location");
+    if (res.status >= 300 && res.status < 400 && location && init?.redirect !== "manual") {
+      return fake(new URL(location, call.url).href, init);
+    }
+    return res;
   }) as typeof fetch;
+  globalThis.fetch = fake;
   return calls;
 }
+const redirectTo = (location: string) => () => new Response(null, { status: 302, headers: { location } });
 
 const GITHUB_SLICE = JSON.parse(readFileSync(new URL("./fixtures/openapi/github-issues.json", import.meta.url), "utf8"));
 const RAW = "https://raw.githubusercontent.com/github/rest-api-description/main/descriptions/api.github.com/api.github.com.json";
@@ -333,6 +343,41 @@ describe("OpenAPI: credentials never go to the document host by default", () => 
       defineOpenapiConnection({ name: "b", url: "https://api.example.com/openapi.json", baseUrl: "https://api.example.com", auth: secretAuth, docAuth: false }),
     ]);
     expect(calls[0]!.headers.authorization).toBeUndefined();
+  });
+
+  test("a credentialed document that redirects to another origin loses every credential header on that hop", async () => {
+    const CDN = "https://cdn.example.net/openapi.json";
+    const calls = serveOpenapi({ "https://api.example.com/openapi.json": redirectTo(CDN), [CDN]: GITHUB_SLICE });
+    const { report } = await connectAll([
+      defineOpenapiConnection({ name: "ex", url: "https://api.example.com/openapi.json", baseUrl: "https://api.example.com", auth: secretAuth, headers: { "x-api-key": "k" } }),
+    ]);
+    expect(report[0]!.error).toBeUndefined();
+    expect(calls.map((c) => c.url)).toEqual(["https://api.example.com/openapi.json", CDN]);
+    expect(calls[0]!.headers["x-api-key"]).toBe("k"); // the document's own origin: sent
+    expect(calls[1]!.headers["x-api-key"]).toBeUndefined(); // the CDN: never
+    expect(calls[1]!.headers.authorization).toBeUndefined();
+  });
+
+  test("a same-origin redirect keeps the credentials; a redirect loop is cut off", async () => {
+    let calls = serveOpenapi({ "https://api.example.com/openapi.json": redirectTo("/v2/openapi.json"), "https://api.example.com/v2/openapi.json": GITHUB_SLICE });
+    await connectAll([defineOpenapiConnection({ name: "ex", url: "https://api.example.com/openapi.json", baseUrl: "https://api.example.com", auth: secretAuth })]);
+    expect(calls[1]!.url).toBe("https://api.example.com/v2/openapi.json");
+    expect(calls[1]!.headers.authorization).toBe("Bearer ghs_SECRET");
+
+    calls = serveOpenapi({ "https://api.example.com/openapi.json": redirectTo("/openapi.json") });
+    const { report } = await connectAll([defineOpenapiConnection({ name: "loop", url: "https://api.example.com/openapi.json", docAuth: true, auth: secretAuth })]);
+    expect(report[0]!.error).toContain("more than 5 redirects");
+    expect(calls).toHaveLength(6);
+  });
+
+  test("a 401 after a cross-origin redirect says credentials weren't forwarded (docAuth wouldn't help)", async () => {
+    const CDN = "https://cdn.example.net/private.json";
+    serveOpenapi({ "https://api.example.com/openapi.json": redirectTo(CDN), [CDN]: () => new Response("no", { status: 401 }) });
+    const { report } = await connectAll([
+      defineOpenapiConnection({ name: "ex", url: "https://api.example.com/openapi.json", baseUrl: "https://api.example.com", auth: secretAuth }),
+    ]);
+    expect(report[0]!.error).toContain("redirected to https://cdn.example.net");
+    expect(report[0]!.error).not.toContain("docAuth");
   });
 
   test("a protected document fetched without credentials fails with a hint naming baseUrl / docAuth", async () => {
@@ -484,6 +529,12 @@ describe("OpenAPI: spec features the minimal client used to mishandle", () => {
     expect(ids).toContain("t__list_items");
     expect(ids).toContain("t__list_items_2");
     for (const id of ids) expect(id).toMatch(/^[a-zA-Z0-9_-]{1,128}$/);
+  });
+
+  test("the connection name is sanitized too (a connection named after its host)", async () => {
+    serveOpenapi({ "https://api.test/doc": doc({ "/a": { get: { operationId: "list" } } }) });
+    const { actions } = await connectAll([defineOpenapiConnection({ name: "api.github.com", url: "https://api.test/doc" })]);
+    expect(actions.map((a) => a.id)).toEqual(["api_github_com__list"]);
   });
 
   test("many operations without include warn once; include silences it", async () => {

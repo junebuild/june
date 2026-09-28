@@ -11,7 +11,11 @@ OpenAPI connections work against real-world descriptions (#245).
   when `baseUrl` is set and shares the document's origin. Before this change,
   they were sent to whatever host served the document; for GitHub's
   description, that meant sending the API token to `raw.githubusercontent.com`.
-  The new `docAuth: true | false` option overrides the rule either way. If a
+  The new `docAuth: true | false` option overrides the rule either way.
+  Credentials belong to the document's origin: a credentialed fetch follows
+  redirects itself, and any hop to another origin goes without them. Custom
+  headers such as `x-api-key` would otherwise be forwarded across origins on
+  a redirect. If a
   protected document is fetched without credentials and answers 401 or 403,
   the connection fails with an error that names `baseUrl` and `docAuth`.
   **Check your connections:** one whose document requires auth and whose
@@ -36,7 +40,9 @@ OpenAPI connections work against real-world descriptions (#245).
     no longer turned into tools.
   - Header parameters are sent as headers instead of in the query string.
 - **Tool ids are always valid tool names.** Characters outside
-  `[A-Za-z0-9_-]` become `_`, ids are cut to 128 characters, and colliding ids
+  `[A-Za-z0-9_-]` become `_` in the whole id, connection name included (so a
+  connection named `api.github.com` works), ids are cut to 128 characters,
+  and colliding ids
   get a numeric suffix. GitHub's `issues/list-for-repo` becomes
   `<name>__issues_list-for-repo`. Before, a single such id made the Claude API
   reject every request from the agent.
