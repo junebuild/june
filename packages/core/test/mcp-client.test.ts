@@ -12,6 +12,10 @@ import { connectAll, defineMcpConnection } from "@junejs/core/connections";
 import { McpClient, McpError } from "../src/mcp-client";
 import { decodeHeaderValue, encodeHeaderValue, headerParams, headerParamValues, readSse, type JsonRpcMessage } from "../src/mcp-protocol";
 import { fakeMcpServer, type FakeCall } from "./mcp-fake-server";
+import { AgentSession, replyStream, type EventSink, type Model, type Msg, type TurnEvent } from "@junejs/core/agent-runtime";
+import { actionToTool } from "@junejs/core/agent-config";
+import { toAnthropicMessages } from "@junejs/core/agent-models";
+import { memorySessionStore } from "@junejs/core/test";
 
 let preexisting = new Map(ACTION_REGISTRY);
 const realFetch = globalThis.fetch;
@@ -564,4 +568,33 @@ describe("review round 3: sessions per credential, DiscoverResult shape, broken 
       { jsonrpc: "2.0", id: "srv-ping", result: {} },
     ]);
   });
+});
+
+describe("end to end: a connection tool's failure reaches the model, and the turn goes on (#232)", () => {
+  for (const era of ["modern", "legacy"] as const) {
+    test(`${era}: an MCP tool answering isError becomes a failed call the model reads — no turn.failed`, async () => {
+      fakeMcpServer({ era, tools: ["search"], call: () => ({ content: [{ type: "text", text: "search index offline" }], isError: true }) }).install();
+      const { actions } = await connectAll([defineMcpConnection({ name: "kb", url: "https://mcp.test/mcp" })]);
+      const tools = actions.map(actionToTool);
+
+      // Call kb__search once, then answer with what the tool said.
+      const model: Model = (msgs) => {
+        const result = msgs.find((m): m is Extract<Msg, { role: "tool" }> => m.role === "tool");
+        return replyStream(result ? { text: `Sorry: ${(result.result as { error: string }).error}`, toolCalls: [] } : { text: "", toolCalls: [{ id: "c1", name: "kb__search", input: {} }] });
+      };
+      const listeners = new Set<(e: TurnEvent) => void>();
+      const sink: EventSink = { emit: (e) => listeners.forEach((l) => l(e)), subscribe: (cb) => (listeners.add(cb), () => listeners.delete(cb)) };
+      const store = memorySessionStore();
+      const session = new AgentSession("ops", "s1", store, sink, model, tools, { session() { throw new Error("no subagents"); } });
+      const events: TurnEvent[] = [];
+      session.observe((e) => events.push(e));
+
+      expect(await session.turn({ turnId: "t1", userText: "find it" })).toBe("Sorry: search index offline");
+      expect(events.map((e) => e.type)).not.toContain("turn.failed");
+      expect(events.find((e) => e.type === "action.completed")).toMatchObject({ error: "search index offline" });
+      // What the model was sent for the call (the message before its final answer).
+      const toolTurn = toAnthropicMessages(store.messages()).find((m) => Array.isArray(m.content) && m.content.some((b) => b.type === "tool_result"));
+      expect(toolTurn!.content).toEqual([{ type: "tool_result", tool_use_id: "c1", content: '{"error":"search index offline"}', is_error: true }]);
+    });
+  }
 });

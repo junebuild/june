@@ -67,11 +67,11 @@ on the raw tool context (`ToolContext.store`), so this takes a raw `Tool`; a
 The handle is the backend's own, so a portable tool branches on its shape: the
 native sync SQLite binds with `query(sql).run(...)`, the Durable Object's
 `ctx.storage.sql` with `exec(sql, ...bindings)`. The in-memory backend has no
-handle (and no rollback), so the helper refuses there instead of writing nowhere:
+handle (and no rollback), so the helper refuses there instead of writing nowhere, and fails the turn with a `FatalToolError`, since the model can't fix a deployment:
 
 ```ts
 // app/agent/tools/create_order.ts
-import type { Tool, ToolContext } from "@junejs/core/agent-runtime";
+import { FatalToolError, type Tool, type ToolContext } from "@junejs/core/agent-runtime";
 
 type NativeSql = { query(sql: string): { run(...params: unknown[]): unknown } };
 type DurableSql = { exec(sql: string, ...params: unknown[]): unknown };
@@ -79,7 +79,8 @@ type DurableSql = { exec(sql: string, ...params: unknown[]): unknown };
 // A write that joins the step's transaction, on either SQL backend.
 function storeWrite(ctx: ToolContext, sql: string, ...params: unknown[]): void {
   const h = ctx.store.unwrap<NativeSql | DurableSql | undefined>();
-  if (!h) throw new Error("this backend has no transactional store handle");
+  // A deployment mistake, not something the model can retry: fail the turn.
+  if (!h) throw new FatalToolError("this backend has no transactional store handle");
   if ("query" in h) h.query(sql).run(...params); // native: bun:sqlite / node:sqlite
   else h.exec(sql, ...params); //                     Durable Object: ctx.storage.sql
 }
@@ -117,6 +118,29 @@ Two rules follow from classifying by declaration:
 - On the in-memory backend `tx` has no rollback, so exactly-once only holds on
   the SQLite and Durable Object stores.
 
+## When a tool throws
+
+A tool that throws does not fail the turn: the error becomes that call's
+result, so the model reads it on its next step and can react. It can retry, try
+another path, or tell the user what went wrong. This covers a failed clone, a
+404 from an API, a missing file or a busy sandbox, and it needs no `try` /
+`catch` in each tool.
+
+- **What the model reads.** The result is `{ error }`, holding the error's
+  message, prefixed with its class when that isn't a plain `Error`
+  (`QuotaError: quota exceeded`), and cut to 2,000 characters. The stack is
+  never included. The Anthropic adapter sends it as a `tool_result` with
+  `is_error: true`.
+- **It is checkpointed like any result.** A replay doesn't re-run the failed
+  call. A sync tool's transaction rolled back, so the side effects it wrote
+  through the store are undone before the error is recorded.
+- **Events show the failure.** `action.completed` carries `error`, and the
+  Slack task timeline shows the call as an error.
+- **Throw `FatalToolError` to fail the turn instead.** Use it for a mistake the
+  model can't fix, such as a misconfigured deployment or a broken invariant;
+  the `storeWrite` helper above does this. The runtime's own signals, parking
+  for input and cancellation, keep propagating as before.
+
 ## Streaming turn events
 
 Every turn emits typed `TurnEvent`s as it runs:
@@ -127,7 +151,7 @@ Every turn emits typed `TurnEvent`s as it runs:
 | `reasoning.delta` / `message.delta` | live model tokens (not persisted, not replayed) |
 | `message.completed` | an assistant message was committed with text |
 | `action.requested` | the model asked for a tool call |
-| `action.completed` | a tool call's result was committed |
+| `action.completed` | a tool call's result was committed; `error` is set when the tool threw (see [When a tool throws](#when-a-tool-throws)) |
 | `input.requested` | the turn parked, waiting for a human |
 | `turn.completed` | final text |
 | `turn.failed` | the error, plus `phase` (`model` / `tool`) and `step` when a step was in flight |

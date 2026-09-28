@@ -46,7 +46,9 @@ export type Msg =
   // user/system message (providers needn't support a new role). See RFC decision #6.
   | { role: "trigger"; turnId: string; text: string; by: string }
   | { role: "assistant"; turnId: string; text: string; toolCalls: ToolCall[] }
-  | { role: "tool"; turnId: string; toolCallId: string; name: string; result: unknown };
+  // `isError`: the tool threw — `result` is `{ error: message }`, and the model adapter marks
+  // the block as an error (Anthropic `is_error`) so the model reads a failed call, not data.
+  | { role: "tool"; turnId: string; toolCallId: string; name: string; result: unknown; isError?: true };
 export type ModelReply = { text: string; toolCalls: ToolCall[] };
 export type ToolSpec = { name: string; description: string; input: unknown };
 
@@ -297,7 +299,8 @@ function sameAnswerers(a: Answerers, b: Answerers): boolean {
 function defaultAnswerers(event: InboundEvent | undefined, inputId: string): Answerers | undefined {
   if (!event) return undefined;
   if (event.user?.attested) return { user: event.user.id };
-  throw new Error(
+  // The app must name who may answer — the model can't fix this, so it fails the turn.
+  throw new FatalToolError(
     `requestInput("${inputId}"): this turn's speaker is not attested by its channel ("${event.source}"), so nobody could answer — ` +
       `name who may: ctx.requestInput({ …, answerers: { user } | { policy, scope } })`,
   );
@@ -315,6 +318,33 @@ export class SuspendSignal extends Error {
     this.request = request;
     this.callId = callId;
   }
+}
+
+// A tool that throws does NOT fail the turn: the error becomes the tool's result, so the model
+// can react — retry, try another way, tell the user (#232). Throw a FatalToolError for the rare
+// error that must end the turn instead (a broken invariant, a misconfigured deployment): it
+// propagates like before and the turn fails with it.
+export class FatalToolError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "FatalToolError";
+  }
+}
+
+// What the model reads for a thrown error: the message (with its class when it isn't a plain
+// Error), never the stack, bounded so a huge message can't flood the context.
+const TOOL_ERROR_MAX = 2000;
+function toolErrorText(err: unknown): string {
+  let text: string;
+  try {
+    text =
+      err instanceof Error ? (err.name && err.name !== "Error" ? `${err.name}: ${err.message}` : String(err.message)) : typeof err === "string" ? err : String(err);
+  } catch {
+    // Anything can be thrown — `Object.create(null)` has no toString, a getter can throw.
+    // Formatting must never be what fails the turn.
+    text = "the tool threw a value that can't be converted to text";
+  }
+  return text.length > TOOL_ERROR_MAX ? `${text.slice(0, TOOL_ERROR_MAX)}…` : text;
 }
 
 // Thrown by AgentSession.resume when the resumer may not answer the pending request.
@@ -362,7 +392,8 @@ export type TurnTrigger =
 export type TurnEvent =
   | { type: "turn.started"; turnId: string; trigger: TurnTrigger }
   | { type: "action.requested"; turnId: string; call: ToolCall }
-  | { type: "action.completed"; turnId: string; call: ToolCall; result: unknown }
+  // `error`: the tool threw; `result` is `{ error }` and the model was told (#232).
+  | { type: "action.completed"; turnId: string; call: ToolCall; result: unknown; error?: string }
   | { type: "message.completed"; turnId: string; text: string }
   | { type: "input.requested"; turnId: string; request: InputRequest }
   | { type: "turn.completed"; turnId: string; text: string }
@@ -720,7 +751,7 @@ async function toolStep(
     // and synchronously — an async requestInput would hand it a rejected Promise it can't await,
     // which the local-tool tx would then commit as its checkpointed result.
     requestInput: (req) => {
-      if (!remote) throw new Error(`requestInput: tool "${call.name}" runs sync (local) — only an async tool can park the turn awaiting input`);
+      if (!remote) throw new FatalToolError(`requestInput: tool "${call.name}" runs sync (local) — only an async tool can park the turn awaiting input`);
       const answer = store.getStep(`input:${opts.turnId}:${req.id}`);
       if (answer !== undefined) return Promise.resolve((answer as { input: unknown }).input);
       throw new SuspendSignal({ id: req.id, prompt: req.prompt, schema: req.schema, answerers: req.answerers ?? defaultAnswerers(env.event, req.id) }, call.id);
@@ -728,24 +759,48 @@ async function toolStep(
   };
 
   assertCrash(opts.crash, "before-tool-commit", stepId); // nothing done → safe clean re-run
-  const toolMsg = (result: unknown): Msg => ({ role: "tool", turnId: opts.turnId, toolCallId: call.id, name: call.name, result });
+  const record = (result: unknown, error: string | undefined) => {
+    store.putStep(stepId, result);
+    store.appendMessage({ role: "tool", turnId: opts.turnId, toolCallId: call.id, name: call.name, result, ...(error !== undefined ? { isError: true as const } : {}) });
+  };
 
   let out: unknown;
-  if (remote) {
-    // network / subagent side effect: at-least-once (can't 2PC with local storage;
-    // a subagent is itself durable, and its child turnId makes replay idempotent)
-    out = await tool.run(call.input, ctx);
-    store.tx(() => { store.putStep(stepId, out); store.appendMessage(toolMsg(out)); });
-  } else {
-    // local side effect: exactly-once (side effect + checkpoint + append in ONE tx)
-    store.tx(() => {
-      out = tool.run(call.input, ctx);
-      store.putStep(stepId, out);
-      store.appendMessage(toolMsg(out));
-    });
+  let error: string | undefined;
+  // Only what the TOOL throws becomes its result. A failure recording a successful result
+  // (the store's own putStep / appendMessage) is infrastructure and must still fail the
+  // turn — so the local path marks a tool throw before rethrowing it out of the tx (the
+  // rethrow is what rolls the tx back).
+  let toolThrew = false;
+  try {
+    if (remote) {
+      // network / subagent side effect: at-least-once (can't 2PC with local storage;
+      // a subagent is itself durable, and its child turnId makes replay idempotent)
+      toolThrew = true;
+      out = await tool.run(call.input, ctx);
+      toolThrew = false;
+    } else {
+      // local side effect: exactly-once (side effect + checkpoint + append in ONE tx)
+      store.tx(() => {
+        toolThrew = true;
+        out = tool.run(call.input, ctx);
+        toolThrew = false;
+        record(out, undefined);
+      });
+    }
+  } catch (err) {
+    // The runtime's own control flow keeps propagating — park, cancel, a tool that declared
+    // its error fatal — and so does anything that didn't come from the tool itself.
+    if (!toolThrew || err instanceof SuspendSignal || err instanceof CancelSignal || err instanceof FatalToolError) throw err;
+    // Anything else is the tool's RESULT (#232): the model sees the failure on its next step
+    // and can react, instead of the whole turn dying. A local tool's tx rolled back, so its
+    // side effect is undone and the error is recorded in a fresh tx below. Checkpointed like
+    // any result, so a replay doesn't re-run the failed call.
+    error = toolErrorText(err);
+    out = { error };
   }
+  if (remote || error !== undefined) store.tx(() => record(out, error));
   assertCrash(opts.crash, "after-tool-commit", stepId); // committed → replay skips (no duplicate side effect)
-  sink.emit({ type: "action.completed", turnId: opts.turnId, call, result: out });
+  sink.emit({ type: "action.completed", turnId: opts.turnId, call, result: out, ...(error !== undefined ? { error } : {}) });
 }
 
 // ── transcript fold (pure; used by observe/transcript surfaces) ───────────────
@@ -1120,7 +1175,13 @@ export class AgentSession {
         if (m.text.trim()) out.push({ type: "message.completed", turnId, text: m.text });
         for (const call of m.toolCalls) { inputs.set(call.id, call); out.push({ type: "action.requested", turnId, call }); }
       } else if (m.role === "tool") {
-        out.push({ type: "action.completed", turnId, call: inputs.get(m.toolCallId) ?? { id: m.toolCallId, name: m.name, input: undefined }, result: m.result });
+        out.push({
+          type: "action.completed",
+          turnId,
+          call: inputs.get(m.toolCallId) ?? { id: m.toolCallId, name: m.name, input: undefined },
+          result: m.result,
+          ...(m.isError ? { error: String((m.result as { error?: unknown } | undefined)?.error ?? "tool failed") } : {}),
+        });
       }
     }
     // terminal iff the last assistant message has no tool calls — same condition the live

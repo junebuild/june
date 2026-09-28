@@ -269,6 +269,24 @@ describe("slackChannel", () => {
     expect(calls.some((c) => method(c) === "assistant.threads.setStatus")).toBe(false);
   });
 
+  test("tasks: a tool that threw shows as an error on the timeline, and the turn goes on (#232)", async () => {
+    streamStub();
+    const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true, tasks: (c) => `Running ${c.name}` });
+    const ctx = ctxWith(async () => "unused");
+    ctx.runStream = async function* (): AsyncGenerator<TurnEvent> {
+      const call = { id: "c1", name: "search", input: {} };
+      yield { type: "turn.started", turnId: "t1", trigger: { kind: "proactive", by: "x" } };
+      yield { type: "action.requested", turnId: "t1", call };
+      yield { type: "action.completed", turnId: "t1", call, result: { error: "index offline" }, error: "index offline" };
+      yield { type: "message.completed", turnId: "t1", text: "The search index is offline." };
+      yield { type: "turn.completed", turnId: "t1", text: "The search index is offline." };
+    };
+    await ch2.webhook!(await signed(mention), ctx);
+    await flush();
+    const tasks = calls.flatMap((c) => (c.body as { chunks?: { type: string; status?: string }[] }).chunks ?? []).filter((c) => c.type === "task_update");
+    expect(tasks.map((t) => t.status)).toEqual(["in_progress", "error"]);
+  });
+
   test("delivered render: a streaming turn is handed to ctx.runDelivered — no worker-side rendering", async () => {
     streamStub();
     const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true });

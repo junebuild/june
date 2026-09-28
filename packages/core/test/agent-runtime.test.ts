@@ -6,6 +6,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   AgentSession,
+  FatalToolError,
   grantAnswer,
   replyStream,
   mintTurnId,
@@ -1520,5 +1521,134 @@ describe("channel policies (surface overlay modes + denyTools)", () => {
     await s.turn({ turnId: "t2", userText: "hi", event: event("crisp") });
     expect(seen[0]!.specs).toEqual(["ping"]);
     expect(seen[1]!.specs).toEqual(["ping", "write_ledger"]);
+  });
+});
+
+describe("a tool that throws tells the model instead of failing the turn (#232)", () => {
+  // Call `name` once, then answer with whatever the tool result said.
+  const callOnce = (name: string): Model => (msgs) => {
+    const tool = msgs.find((m): m is Extract<Msg, { role: "tool" }> => m.role === "tool");
+    return replyStream(
+      tool
+        ? { text: `saw: ${JSON.stringify(tool.result)}`, toolCalls: [] }
+        : { text: "", toolCalls: [{ id: "c1", name, input: {} }] },
+    );
+  };
+  const mk = (id: string, model: Model, tools: Tool[]) => {
+    const { store } = memStore();
+    return { s: new AgentSession("ops", id, store, new MemBroadcaster(), model, tools, noRuntime), store };
+  };
+  const throwing = (name: string, err: () => unknown, opts: { local?: boolean; runs?: { n: number } } = {}): Tool => ({
+    spec: { name, description: "fails", input: { type: "object" } },
+    run: opts.local
+      ? () => {
+          if (opts.runs) opts.runs.n++;
+          throw err();
+        }
+      : async () => {
+          if (opts.runs) opts.runs.n++;
+          throw err();
+        },
+  });
+
+  for (const local of [false, true]) {
+    test(`${local ? "a local (sync)" : "a remote (async)"} tool's error becomes its result: the turn completes and the model reads { error }`, async () => {
+      const { s, store } = mk("s1", callOnce("fetch_page"), [throwing("fetch_page", () => new Error("upstream returned 404"), { local })]);
+      const events: TurnEvent[] = [];
+      s.observe((e) => events.push(e));
+      expect(await s.turn({ turnId: "t1", userText: "go" })).toBe('saw: {"error":"upstream returned 404"}');
+      expect(s.snapshot().status).toBe("done");
+      const toolMsg = store.messages().find((m) => m.role === "tool")!;
+      expect(toolMsg).toMatchObject({ role: "tool", result: { error: "upstream returned 404" }, isError: true });
+      expect(events.find((e) => e.type === "action.completed")).toMatchObject({ result: { error: "upstream returned 404" }, error: "upstream returned 404" });
+      expect(events.map((e) => e.type)).not.toContain("turn.failed");
+    });
+  }
+
+  test("what the model reads: the message (class-prefixed when not a plain Error), never the stack, bounded", async () => {
+    class QuotaError extends Error {
+      override name = "QuotaError";
+    }
+    const cases: [() => unknown, string | RegExp][] = [
+      [() => new QuotaError("quota exceeded"), "QuotaError: quota exceeded"],
+      [() => "a thrown string", "a thrown string"],
+      [() => ({ code: 42 }), "[object Object]"],
+    ];
+    for (const [err, expected] of cases) {
+      const { s, store } = mk(`s-${String(expected)}`, callOnce("t"), [throwing("t", err)]);
+      await s.turn({ turnId: "t1", userText: "go" });
+      const result = (store.messages().find((m) => m.role === "tool") as Extract<Msg, { role: "tool" }>).result as { error: string };
+      expect(result.error).toBe(expected as string);
+      expect(result.error).not.toContain("    at "); // no stack frames
+    }
+    const { s: long, store: longStore } = mk("s-long", callOnce("t"), [throwing("t", () => new Error("x".repeat(5000)))]);
+    await long.turn({ turnId: "t1", userText: "go" });
+    const error = ((longStore.messages().find((m) => m.role === "tool") as Extract<Msg, { role: "tool" }>).result as { error: string }).error;
+    expect(error).toHaveLength(2001);
+    expect(error.endsWith("…")).toBe(true);
+  });
+
+  test("a throwable that can't even be converted to text is still reported, with a fallback", async () => {
+    const { s, store } = mk("s-null", callOnce("t"), [throwing("t", () => Object.create(null))]);
+    await s.turn({ turnId: "t1", userText: "go" });
+    const toolMsg = store.messages().find((m): m is Extract<Msg, { role: "tool" }> => m.role === "tool")!;
+    expect(toolMsg).toMatchObject({ isError: true, result: { error: "the tool threw a value that can't be converted to text" } });
+  });
+
+  for (const local of [false, true]) {
+    test(`${local ? "local" : "remote"}: a STORE failure while recording a successful result still fails the turn — it isn't the tool's error`, async () => {
+      const { store } = memStore();
+      // TRANSIENT: the first tool-message append fails, a retry would succeed — so a
+      // runtime that misread it as the tool's error would record { error } and carry on.
+      let failed = false;
+      const failing: SessionStore = {
+        ...store,
+        appendMessage(m) {
+          if (m.role === "tool" && !failed) {
+            failed = true;
+            throw new Error("disk I/O error");
+          }
+          store.appendMessage(m);
+        },
+      };
+      const ok: Tool = {
+        spec: { name: "t", description: "succeeds", input: { type: "object" } },
+        run: local ? () => ({ done: true }) : async () => ({ done: true }),
+      };
+      const s = new AgentSession("ops", "s1", failing, new MemBroadcaster(), callOnce("t"), [ok], noRuntime);
+      const events: TurnEvent[] = [];
+      s.observe((e) => events.push(e));
+      await expect(s.turn({ turnId: "t1", userText: "go" })).rejects.toThrow("disk I/O error");
+      expect(events.map((e) => e.type)).toContain("turn.failed");
+      expect(events.find((e) => e.type === "action.completed")).toBeUndefined(); // never reported as { error }
+    });
+  }
+
+  test("a FatalToolError still fails the turn, as before", async () => {
+    const { s, store } = mk("s1", callOnce("t"), [throwing("t", () => new FatalToolError("misconfigured deployment"))]);
+    const events: TurnEvent[] = [];
+    s.observe((e) => events.push(e));
+    await expect(s.turn({ turnId: "t1", userText: "go" })).rejects.toThrow("misconfigured deployment");
+    expect(events.map((e) => e.type)).toContain("turn.failed");
+    expect(store.messages().some((m) => m.role === "tool")).toBe(false);
+  });
+
+  test("a failed remote call is checkpointed: a crash-replay does not run it again", async () => {
+    const { store } = memStore();
+    const runs = { n: 0 };
+    const tools = [throwing("t", () => new Error("boom"), { runs })];
+    const s1 = new AgentSession("ops", "s1", store, new MemBroadcaster(), callOnce("t"), tools, noRuntime);
+    await expect(s1.turn({ turnId: "t1", userText: "go", crash: { at: "after-tool-commit", step: "tool:1:c1" } })).rejects.toThrow("CRASH");
+    const s2 = new AgentSession("ops", "s1", store, new MemBroadcaster(), callOnce("t"), tools, noRuntime);
+    expect(await s2.turn({ turnId: "t1", userText: "go" })).toBe('saw: {"error":"boom"}');
+    expect(runs.n).toBe(1);
+  });
+
+  test("a replayed event stream (from the durable log) carries the error too", async () => {
+    const { s, store } = mk("s1", callOnce("t"), [throwing("t", () => new Error("boom"))]);
+    await s.turn({ turnId: "t1", userText: "go" });
+    const replayed: TurnEvent[] = [];
+    s.observe((e) => replayed.push(e), { replay: true, turnId: "t1" })();
+    expect(replayed.find((e) => e.type === "action.completed")).toMatchObject({ error: "boom", result: { error: "boom" } });
   });
 });

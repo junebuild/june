@@ -29,14 +29,16 @@ function tempDir(): string {
   return dir;
 }
 
-// The page's one ```ts block that defines storeWrite(), as a runnable module.
-// Its only import is `import type`, which the transpiler erases, so it runs from a
-// temp dir with no package resolution.
+// The page's one ```ts block that defines storeWrite(), as a runnable module. It imports
+// a value (FatalToolError) from @junejs/core, so it runs from a temp dir INSIDE this
+// package, where module resolution finds the workspace's @junejs/core.
 async function documentedCreateOrder(): Promise<Tool> {
   const blocks = [...readFileSync(DOC, "utf8").matchAll(/```ts\n([\s\S]*?)```/g)].map((m) => m[1]!);
   const snippet = blocks.find((b) => b.includes("function storeWrite("));
   if (!snippet) throw new Error("agents-durable-turns.md no longer has the storeWrite example");
-  const file = join(tempDir(), "create_order.ts");
+  const dir = mkdtempSync(join(fileURLToPath(new URL(".", import.meta.url)), ".doc-snippet-"));
+  cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
+  const file = join(dir, "create_order.ts");
   writeFileSync(file, snippet);
   return ((await import(file)) as { default: Tool }).default;
 }
