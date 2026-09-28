@@ -83,7 +83,7 @@ automatically.
 - **[Opt-in client router](https://june.build/docs/features-client-router)** — `clientRouter: true` adds soft swaps + `<Island persist>` when state must outlive a navigation
 - **[Web Standards end to end](https://june.build/docs/features-web-standards)** — `fetch(Request) → Response` *is* the framework
 - **[Reload-on-save dev loop](https://june.build/docs/features-dx)** — server restarts, browser follows
-- **[Deploy](https://june.build/docs/04-deployment)** — `june deploy` to Cloudflare Workers, Vercel, or Deno Deploy, or `staticSite()` for a static export — each an adapter over one host seam
+- **[Deploy](https://june.build/docs/deployment)** — `june deploy` to Cloudflare Workers, Vercel, or Deno Deploy, or `staticSite()` for a static export — each an adapter over one host seam
 
 Every docs page is also markdown — append `.md` to any
 [june.build](https://june.build) URL. The site is built with June and is its
@@ -99,7 +99,7 @@ full navigations. The agent layer, the data layer, and auth still change between
 releases. The Rust+V8
 runtime numbers on the site are an experimental track; today's host is
 Bun/Node. Where each piece stands lives on
-[june.build/docs/05-stability](https://june.build/docs/05-stability).
+[june.build/docs/stability](https://june.build/docs/stability).
 
 ## This repository
 

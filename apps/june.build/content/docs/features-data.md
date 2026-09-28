@@ -100,4 +100,4 @@ remember) removes both failure modes by construction, for humans and agents
 alike.
 
 > Status: **Changing** — the model above is settled; the query/resource surface
-> is still being refined. See [Stability](/docs/05-stability).
+> is still being refined. See [Stability](/docs/stability).

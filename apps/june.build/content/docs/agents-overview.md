@@ -136,7 +136,7 @@ transcript does not survive a restart.
 The agent layer is part of June's `0.0.x preview`. The `agent/` directory,
 channels, connections, and durable turns run in dev and on Workers Durable
 Objects, and they're dogfooded. The config and channel APIs are still changing.
-See [Stability](/docs/05-stability) for where each piece stands.
+See [Stability](/docs/stability) for where each piece stands.
 
 ## Where to next
 

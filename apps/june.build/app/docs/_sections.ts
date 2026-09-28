@@ -1,6 +1,6 @@
 // Shared doc grouping for the sidebar and the /docs index: docs without a
-// `section` come first (slug order — the numeric prefixes), then each named
-// section ordered by its `order` frontmatter.
+// `section` come first, then each named section; within each, docs sort by
+// their `order` frontmatter.
 import { DOCS, type ContentEntry } from "../_content";
 
 export type DocSection = { title: string; docs: ContentEntry[] };

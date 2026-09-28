@@ -81,4 +81,4 @@ await kv.set("greeting", "hi");
 await blob.put("avatar.png", bytes);
 ```
 
-> Status: **Changing** — see [Stability](/docs/05-stability).
+> Status: **Changing** — see [Stability](/docs/stability).
