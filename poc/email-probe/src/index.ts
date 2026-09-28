@@ -106,7 +106,9 @@ export default {
     }
     const url = new URL(req.url);
     if (req.method === "GET" && url.pathname === "/events") {
-      const limit = Math.min(Number(url.searchParams.get("limit") ?? 50) || 50, 500);
+      // A positive integer, capped: SQLite reads `LIMIT -1` as no limit and rejects fractions.
+      const n = Math.trunc(Number(url.searchParams.get("limit") ?? 50));
+      const limit = n > 0 ? Math.min(n, 500) : 50;
       return Response.json(await env.LOG.get(env.LOG.idFromName("probe")).list(limit));
     }
     if (req.method === "POST" && url.pathname === "/send") {
@@ -117,7 +119,11 @@ export default {
         to: body.to,
         subject: body.subject ?? `june-email-probe ${probe}`,
         text: `Probe ${probe}. Sent by the june-email-probe Worker (docs/rfc-email.md §13).`,
-        headers: { "X-Probe": probe, ...body.headers },
+        // The generated X-Probe wins over a caller's copy in any case, so the logged UUID is the one delivered.
+        headers: {
+          ...Object.fromEntries(Object.entries(body.headers ?? {}).filter(([k]) => k.toLowerCase() !== "x-probe")),
+          "X-Probe": probe,
+        },
       };
       try {
         const result = await env.EMAIL.send(message);
