@@ -52,7 +52,8 @@ export const search_site = defineAction({
 export const get_page = defineAction({
   id: "get_page",
   description:
-    "Fetch one june.build page as clean markdown. Slugs: index, why, benchmarks, blog/<slug>, docs/<slug>.",
+    // The page slugs come from PAGES, so a new page is advertised here the moment it exists.
+    `Fetch one june.build page as clean markdown. Slugs: ${PAGES.map((p) => p.slug).join(", ")}, blog/<slug>, docs/<slug>.`,
   input: {
     type: "object",
     properties: { slug: { type: "string", description: "Page slug (e.g. why)" } },
