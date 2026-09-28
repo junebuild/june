@@ -22,6 +22,7 @@ import {
   withSystem,
   type Answerers,
   type AuthorizeAnswer,
+  type InputAnnouncement,
   type ChannelPolicy,
   type EventSink,
   type TurnEvent,
@@ -245,6 +246,9 @@ export type DoAgentDef = {
   // Decides a { policy } answerer of a parked requestInput at /resume (#261) — the same hook
   // an AgentDefinition carries natively; assembleDurable passes agent.ts's through.
   authorizeAnswer?: AuthorizeAnswer;
+  // Receives this session's input announcements (#260) — run inside the request scope, so it
+  // can write the app's cross-session index with the ambient db.
+  onInputAnnouncement?: (a: InputAnnouncement) => void | Promise<void>;
 };
 
 // The agent runtime INSIDE a Durable Object. A plain class (constructor takes the
@@ -288,6 +292,7 @@ export class AgentDurableObject {
   private readonly doEnv: unknown;
   private readonly services: unknown;
   private readonly authorizeAnswer?: AuthorizeAnswer;
+  private readonly onInputAnnouncement?: (a: InputAnnouncement) => void | Promise<void>;
   private resolveResources(): Promise<Resources> {
     return (this.resourcesOpened ??= Promise.resolve(
       typeof this.resourcesInput === "function" ? this.resourcesInput(this.doEnv) : (this.resourcesInput ?? {}),
@@ -330,6 +335,7 @@ export class AgentDurableObject {
     this.doEnv = def.env;
     this.services = def.services;
     this.authorizeAnswer = def.authorizeAnswer;
+    this.onInputAnnouncement = def.onInputAnnouncement;
     const name = def.name ?? "agent";
     // Failure observability (#76): a turn that dies after the fast-ACK has no other
     // observable surface on the edge — the webhook already 200'd and runBackground
@@ -442,6 +448,14 @@ export class AgentDurableObject {
     this.session.onDequeue = (heldTurnId, held) => {
       if ((held.hostContext as { deliver?: boolean } | undefined)?.deliver && held.event) this.deliverHeld(this.session!, heldTurnId, held.event);
     };
+    // Input announcements (#260): delivered in the request scope (the hook writes the app's
+    // index), and flushed on every rebuild — an earlier life may have committed a park and
+    // died before delivering it.
+    const announce = this.onInputAnnouncement;
+    if (announce) {
+      this.session.onAnnounce = (a) => this.ready().then((resources) => runInScope({ resources, services: this.services }, () => announce(a)));
+      void this.session.flushAnnouncements();
+    }
     return this.session;
   }
 

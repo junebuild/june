@@ -2,13 +2,14 @@
 // the in-process session, and slackChannel({ stream: true }) actually streaming on the
 // native host instead of silently degrading to one chat.postMessage.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 
 import { defineAgent } from "@junejs/core/agent-config";
-import type { Model, ModelDelta, Tool, TurnEvent } from "@junejs/core/agent-runtime";
+import type { InputAnnouncement, Model, ModelDelta, Tool, TurnEvent } from "@junejs/core/agent-runtime";
 import { slackChannel } from "@junejs/core/channels";
 import { signSlackRequest } from "@junejs/core/test";
-import { createNativeRuntime, mountAgent } from "../src/agent-native";
+import { createNativeRuntime, mountAgent, NativeRuntime } from "../src/agent-native";
+import { openLocalSqliteSync } from "../src/sqlite-driver";
 
 // Answers with two text deltas; with `approve`, first calls a tool that parks on requestInput.
 function model(opts: { approve?: boolean } = {}): Model {
@@ -103,6 +104,40 @@ describe("native mountAgent streaming (#169)", () => {
       { policy: "mailbox-operator", scope: { agent: "scout" }, principal: { id: "someone" } },
       { policy: "mailbox-operator", scope: { agent: "scout" }, principal: { id: "ops-1" } },
     ]);
+  });
+
+  test("the runtime installs onInputAnnouncement on its sessions: the park and the answer are announced (#260)", async () => {
+    const got: InputAnnouncement[] = [];
+    const rt = await createNativeRuntime({ ops: { model: model({ approve: true }), tools: [approveTool], onInputAnnouncement: (a) => { got.push(a); } } });
+    const { ctx } = mountAgent(defineAgent({ name: "ops", instructions: "" }), rt);
+
+    const requested = (await collect(ctx.runStream!("ship it", { session: "s1" }))).at(-1)!;
+    await rt.session("ops", "s1").flushAnnouncements();
+    expect(got).toMatchObject([{ kind: "parked", agent: "ops", session: "s1", turnId: requested.turnId, request: { id: "a1" } }]);
+
+    await collect(ctx.resumeStream!({ session: "s1", turnId: requested.turnId, inputId: "a1", input: true }));
+    await rt.session("ops", "s1").flushAnnouncements();
+    expect(got.map((a) => a.kind)).toEqual(["parked", "resolved"]);
+  });
+
+  test("a rebuilt runtime delivers what an earlier process recorded but never delivered (#260)", async () => {
+    const db = await openLocalSqliteSync(":memory:");
+    const errors = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const before = new NativeRuntime({ ops: { model: model({ approve: true }), tools: [approveTool], onInputAnnouncement: () => { throw new Error("index down"); } } }, db);
+      const { ctx } = mountAgent(defineAgent({ name: "ops", instructions: "" }), before);
+      await collect(ctx.runStream!("ship it", { session: "s1" }));
+      await before.session("ops", "s1").flushAnnouncements();
+      expect(before.session("ops", "s1").undeliveredAnnouncements().map((a) => a.kind)).toEqual(["parked"]);
+    } finally {
+      errors.mockRestore();
+    }
+
+    const got: string[] = [];
+    const after = new NativeRuntime({ ops: { model: model({ approve: true }), tools: [approveTool], onInputAnnouncement: (a) => { got.push(a.kind); } } }, db);
+    after.session("ops", "s1"); // building the session is all it takes: it flushes on its own
+    await waitFor(() => got.length > 0);
+    expect(got).toEqual(["parked"]);
   });
 
   test("a refused start surfaces on the first pull, not as a hung stream", async () => {

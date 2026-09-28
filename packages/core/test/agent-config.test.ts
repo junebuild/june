@@ -253,6 +253,14 @@ describe("assembleDurable", () => {
     expect("authorizeAnswer" in assembleDurable({ ...mod, config: { name: "ops" } })).toBe(false);
   });
 
+  test("carries agent.ts's onInputAnnouncement to both hosts (#260)", async () => {
+    const onInputAnnouncement = () => {};
+    const mod = { config: { name: "scout", onInputAnnouncement }, instructions: "i", surfaceInstructions: {}, tools: [], skills: [], channels: {}, channelInstructions: {}, connections: [] };
+    expect(assembleDurable(mod).onInputAnnouncement).toBe(onInputAnnouncement);
+    expect((await assembleAgent(mod)).onInputAnnouncement).toBe(onInputAnnouncement);
+    expect("onInputAnnouncement" in assembleDurable({ ...mod, config: { name: "ops" } })).toBe(false);
+  });
+
   test("throws on a duplicate tool name, like defineAgent", () => {
     const dup: Tool = { spec: { name: "x", description: "d", input: { type: "object", properties: {} } }, run: () => ({}) };
     expect(() =>
