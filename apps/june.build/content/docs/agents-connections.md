@@ -58,8 +58,9 @@ All three are exported from `@junejs/core/connections`.
 - **OpenAPI** — a minimal subset of OpenAPI 3:
   - **Tool ids** are `<name>__<operationId>`, or an id built from the method
     and path when an operation has none. Characters outside `[A-Za-z0-9_-]`
-    become `_`, and ids are cut to 128 characters, which is the tool-name rule
-    of the Claude API. For example, GitHub's `issues/list-for-repo` becomes
+    become `_`, ids are cut to 128 characters, and a colliding id gets a
+    numeric suffix — all to satisfy the tool-name rule of the Claude API. For
+    example, GitHub's `issues/list-for-repo` becomes
     `github__issues_list-for-repo`.
   - **The input schema** is built from the path, query and header
     parameters, including path-level ones, plus the properties of a JSON
