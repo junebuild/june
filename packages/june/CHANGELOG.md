@@ -1,5 +1,11 @@
 # @junejs/server
 
+## 1.0.0-dev.30
+
+### Patch Changes
+
+- [#226](https://github.com/junebuild/june/pull/226) [`7467f33`](https://github.com/junebuild/june/commit/7467f331b5940f1b5720c7adb5688833542c0615) Thanks [@linyiru](https://github.com/linyiru)! - `oxc-parser` moves from `^0.137.0` to `^0.151.0`. A 0.x caret range never crosses a minor, so installs were held at 0.137 while the project shipped fourteen releases; `june build`'s island scan (`parseSync` over `client:*` pages) behaves the same on the newer parser.
+
 ## 1.0.0-dev.29
 
 ### Patch Changes
