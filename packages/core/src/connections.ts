@@ -159,18 +159,47 @@ async function rpc(url: string, headers: Headers, method: string, params?: objec
   return json.result;
 }
 
+type McpTool = { name: string; description?: string; inputSchema?: JsonSchema; annotations?: ToolAnnotations };
+
+// A server bug that never ends the listing must fail the connection, not hang it.
+const MAX_TOOL_PAGES = 100;
+
+// tools/list is paginated: follow `nextCursor` until the server omits it. The
+// cursor is opaque — per the spec (2026-07-28), only a missing/null nextCursor
+// ends the listing; an EMPTY STRING is a valid cursor and must be sent back.
+// Stopping at page 1 would silently drop every later tool; a repeated cursor
+// or an endless listing throws instead, so tools are never lost without a
+// report.
+async function listMcpTools(c: McpConnection): Promise<McpTool[]> {
+  const headers = await resolveHeaders(c); // one discovery credential for the whole listing
+  const tools: McpTool[] = [];
+  const sent = new Set<string>();
+  let cursor: string | undefined;
+  for (let page = 1; ; page++) {
+    const result = (await rpc(c.url, headers, "tools/list", cursor === undefined ? undefined : { cursor })) as {
+      tools?: McpTool[];
+      nextCursor?: string | null;
+    };
+    tools.push(...(result.tools ?? []));
+    const next = result.nextCursor;
+    if (next === undefined || next === null) return tools;
+    if (sent.has(next)) throw new Error(`tools/list: the server repeated cursor ${JSON.stringify(next)} — the listing would never end.`);
+    if (page >= MAX_TOOL_PAGES) throw new Error(`tools/list: more than ${MAX_TOOL_PAGES} pages — refusing to keep listing.`);
+    sent.add(next);
+    cursor = next;
+  }
+}
+
 async function connectMcp(c: McpConnection): Promise<AnyAction[]> {
   await rpc(c.url, await resolveHeaders(c), "initialize", {
     protocolVersion: "2025-06-18",
     capabilities: {},
     clientInfo: { name: "june", version: "0.0.0" },
   });
-  const listed = (await rpc(c.url, await resolveHeaders(c), "tools/list")) as {
-    tools: { name: string; description?: string; inputSchema?: JsonSchema; annotations?: ToolAnnotations }[];
-  };
+  const tools = await listMcpTools(c);
 
-  const ids = toolIds(c.name, listed.tools.map((t) => t.name));
-  return listed.tools.map((t, i) =>
+  const ids = toolIds(c.name, tools.map((t) => t.name));
+  return tools.map((t, i) =>
     defineAction({
       id: ids[i]!,
       description: `[${c.name}] ${t.description ?? t.name}`,

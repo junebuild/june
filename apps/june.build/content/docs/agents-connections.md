@@ -51,7 +51,11 @@ All three are exported from `@junejs/core/connections`.
 | `defineOpenapiConnection` | `name`, `url` (the OpenAPI doc), `baseUrl?`, `headers?`, `auth?`, `requiresPrincipal?`, `include?`, `docAuth?` | each path × method in the doc, or those `include` selects |
 | `defineProviderConnection` | `name`, `connect`, `url?`, `requiresPrincipal?` | whatever `connect()` returns |
 
-- **MCP** — the tool's description is prefixed `[<name>]` and its
+- **MCP** — a paginated `tools/list` is read to the end: June follows
+  `nextCursor` until the server omits it (an empty-string cursor is a cursor,
+  not the end). A server that repeats a cursor, or pages past 100, fails
+  the connection rather than dropping tools silently. The tool's
+  description is prefixed `[<name>]` and its
   `annotations` (`readOnlyHint`, `destructiveHint`, …) carry through when
   June re-serves it. A call's first text content block is parsed as JSON,
   falling back to the raw text. MCP allows dots in tool names
