@@ -103,7 +103,36 @@ export type RouteDefinition<TData = unknown> = {
   staticPaths?: string[] | (() => string[] | Promise<string[]>);
   // Document metadata for the view projection (title/description/OG/...).
   metadata?: Metadata | ((data: TData, ctx: RouteContext) => Metadata);
+  // How this route appears in /llms.txt. See LlmsEntry. Absent: a static route is
+  // listed under "Pages" with its static metadata title/description; a dynamic
+  // route (a [param] template an agent can't fetch) is not listed. `false` drops
+  // the route from llms.txt.
+  llms?: LlmsDeclaration;
 };
+
+// One /llms.txt link. llmstxt.org asks for a CURATED file: links grouped under H2
+// sections, each with a one-line description, and an "Optional" section for links
+// an agent can skip when context is short. June fills this from the routes:
+//   • path        the page's pathname. Required for a dynamic route (list each real
+//                 page); defaults to the route's own path for a static one.
+//   • title       link text. Default: the route's static metadata title, else the path.
+//   • description one line after the link. Default: static metadata description.
+//   • section     the H2 it's grouped under. Default: "Pages".
+//   • optional    true → listed under "## Optional" (e.g. blog posts, changelogs).
+// Each link points at the page's markdown projection (<path>.md) unless the route
+// disables md, so an agent reads the page, not its HTML.
+export type LlmsEntry = {
+  path?: string;
+  title?: string;
+  description?: string;
+  section?: string;
+  optional?: boolean;
+};
+export type LlmsDeclaration =
+  | false
+  | LlmsEntry
+  | LlmsEntry[]
+  | (() => LlmsEntry | LlmsEntry[] | Promise<LlmsEntry | LlmsEntry[]>);
 
 const ROUTE_BRAND = Symbol.for("june.route");
 
@@ -158,6 +187,7 @@ export type PageModule = {
   cache?: RouteCache;
   prerender?: boolean;
   staticPaths?: string[] | (() => string[] | Promise<string[]>);
+  llms?: LlmsDeclaration;
 };
 
 // Adapt a page module's exports into the internal BrandedRoute the pipeline
@@ -169,7 +199,7 @@ export function routeFromModule(mod: unknown): BrandedRoute | null {
   const View = typeof m.default === "function" ? m.default : undefined;
   const hasConfig =
     "loader" in m || "json" in m || "md" in m || "metadata" in m || "prerender" in m ||
-    "staticPaths" in m;
+    "staticPaths" in m || "llms" in m;
   if (!View && !hasConfig) return null;
   return route({
     load: m.loader,
@@ -180,6 +210,7 @@ export function routeFromModule(mod: unknown): BrandedRoute | null {
     cache: m.cache,
     prerender: m.prerender,
     staticPaths: m.staticPaths,
+    llms: m.llms,
   });
 }
 

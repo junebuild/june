@@ -1,6 +1,6 @@
-import type { RouteContext, Loaded } from "@junejs/core/route";
+import type { RouteContext, Loaded, LlmsEntry } from "@junejs/core/route";
 
-import { post } from "../../_content";
+import { POSTS, post } from "../../_content";
 import { withAnchorLinks } from "../../headings";
 import { ogImage } from "../../og-card";
 import { scrollableTables } from "../../tables";
@@ -39,3 +39,13 @@ export const metadata = ({ entry }: Loaded<typeof loader>) => ({
 // the agent-facing projection: the authored file, verbatim
 export const md = ({ entry }: Loaded<typeof loader>) => entry.original;
 export const json = ({ entry }: Loaded<typeof loader>) => ({ slug: entry.slug, ...entry.data, body: entry.body });
+
+// /llms.txt: posts are background, not reference — listed under "Optional", the
+// section an agent may skip when its context is short.
+export const llms = (): LlmsEntry[] =>
+  POSTS.map((p) => ({
+    path: `/blog/${p.slug}`,
+    title: String(p.data.title ?? p.slug),
+    description: p.data.description ? String(p.data.description) : undefined,
+    optional: true,
+  }));

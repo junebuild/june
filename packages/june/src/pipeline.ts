@@ -50,6 +50,7 @@ import {
 import type { Resources } from "@junejs/core/resources";
 
 import { iconLetter } from "./icon-letter";
+import { collectLlmsLinks } from "./llms-links";
 import { webManifest } from "./web-manifest";
 import { negotiate, TITLE_HEADER, SEGMENT_HEADER, encodeTitle } from "./negotiate";
 
@@ -480,11 +481,12 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
 
   async function discovery(url: URL): Promise<Response | null> {
     switch (url.pathname) {
-      case "/llms.txt":
-        return text(
-          llmsTxt(url.origin, await cfg.routeList(), agent, docConfig.site),
-          "text/markdown; charset=utf-8",
-        );
+      case "/llms.txt": {
+        const routes = await cfg.routeList();
+        // sections, descriptions, and Optional come from each route's `llms` export
+        const links = await collectLlmsLinks(url.origin, routes, cfg.resolve);
+        return text(llmsTxt(url.origin, routes, agent, docConfig.site, links), "text/markdown; charset=utf-8");
+      }
       case "/robots.txt":
         return text(robotsTxt(url.origin), "text/plain; charset=utf-8");
       case "/sitemap.xml":

@@ -1,9 +1,10 @@
-import type { RouteContext, Loaded } from "@junejs/core/route";
+import type { RouteContext, Loaded, LlmsEntry } from "@junejs/core/route";
 
 import { doc } from "../../_content";
 import { withAnchorLinks } from "../../headings";
 import { ogImage } from "../../og-card";
 import { scrollableTables } from "../../tables";
+import { docSections } from "../_sections";
 
 export const loader = (ctx: RouteContext<{ slug: string }>) => {
   const d = doc(ctx.params.slug);
@@ -45,3 +46,15 @@ export const metadata = ({ d }: Loaded<typeof loader>) => ({
 export const md = ({ d }: Loaded<typeof loader>) => d.original;
 // agents get the section structure too: each heading's id is a deep link into the page
 export const json = ({ d }: Loaded<typeof loader>) => ({ slug: d.slug, ...d.data, headings: d.headings, body: d.body });
+
+// /llms.txt: every doc, grouped by the same sections as the sidebar, each with its
+// frontmatter description — the curated index llmstxt.org asks for.
+export const llms = (): LlmsEntry[] =>
+  docSections().flatMap((s) =>
+    s.docs.map((d) => ({
+      path: `/docs/${d.slug}`,
+      title: String(d.data.title ?? d.slug),
+      description: d.data.description ? String(d.data.description) : undefined,
+      section: s.title || "Docs",
+    })),
+  );
