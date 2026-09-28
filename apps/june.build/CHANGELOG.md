@@ -1,5 +1,12 @@
 # june.build
 
+## 0.0.5-dev.51
+
+### Patch Changes
+
+- Updated dependencies [[`862a969`](https://github.com/junebuild/june/commit/862a9693cc3ab00cfb5c08e6bc07542590b58349), [`cde48a2`](https://github.com/junebuild/june/commit/cde48a28d8a532b2d5d549d569894dff28caba39), [`eac1daa`](https://github.com/junebuild/june/commit/eac1daa276c2f2f94ca1d98f2306a83a5a88563f), [`18cc523`](https://github.com/junebuild/june/commit/18cc523dabecf56ef510e64ce0b94edf02ce9e02), [`c54a6f0`](https://github.com/junebuild/june/commit/c54a6f08547413c9a020b673b7181ea9fb496b01)]:
+  - @junejs/core@0.2.0-dev.51
+
 ## 0.0.5-dev.50
 
 ### Patch Changes
