@@ -245,6 +245,14 @@ describe("assembleDurable", () => {
     expect((mod as unknown as { resolved: { env?: unknown } }).resolved.env).toBeUndefined();
   });
 
+  test("carries agent.ts's authorizeAnswer to both hosts (#261) — dropping it would leave every { policy } unanswerable", async () => {
+    const authorizeAnswer = () => true;
+    const mod = { config: { name: "scout", authorizeAnswer }, instructions: "i", surfaceInstructions: {}, tools: [], skills: [], channels: {}, channelInstructions: {}, connections: [] };
+    expect(assembleDurable(mod).authorizeAnswer).toBe(authorizeAnswer);
+    expect((await assembleAgent(mod)).authorizeAnswer).toBe(authorizeAnswer);
+    expect("authorizeAnswer" in assembleDurable({ ...mod, config: { name: "ops" } })).toBe(false);
+  });
+
   test("throws on a duplicate tool name, like defineAgent", () => {
     const dup: Tool = { spec: { name: "x", description: "d", input: { type: "object", properties: {} } }, run: () => ({}) };
     expect(() =>
