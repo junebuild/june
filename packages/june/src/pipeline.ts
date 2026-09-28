@@ -42,6 +42,7 @@ import {
   sitemapXml,
 } from "@junejs/core/discovery";
 import { mcpHandler, mcpServerIdentity, mcpTools } from "@junejs/core/mcp";
+import { apiActionId, apiHandler, OPENAPI_MEDIA_TYPE, openApiDocument } from "@junejs/core/api";
 import type { Principal, Session } from "@junejs/core/context";
 
 import { ensureScope, runInScope, setRequestLocale } from "@junejs/db";
@@ -508,6 +509,7 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
       links.push(["llms.txt — the site index for agents", "/llms.txt"], ["sitemap.xml — every page", "/sitemap.xml"]);
     }
     if (agent.mcp) links.push(["MCP server — this site's tools", "/mcp"]);
+    if (agent.api) links.push(["OpenAPI — the same tools over HTTP", "/openapi.json"]);
     const home = await cfg.resolve("/");
     if (home && "def" in home && home.def.md !== false) links.push(["Home page (Markdown)", "/index.md"]);
     return links;
@@ -731,6 +733,26 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
           { request, ...identity },
           mcpServerIdentity(url.origin, { site: docConfig.site, agent }),
         );
+      }
+      // The REST projection of the same actions: POST /api/<id> dispatches through
+      // the same invokeAction with the same principal as /mcp. Only a registered
+      // action's canonical path is claimed — any other /api/* falls through to the app.
+      // /openapi.json is the API's own description, so it is gated on agent.api (not
+      // agent.discovery) and answered here; the discovery gate below never sees it.
+      if (agent.api) {
+        if (url.pathname === "/openapi.json" && (request.method === "GET" || request.method === "HEAD")) {
+          const doc = Response.json(openApiDocument(url.origin, docConfig.site), {
+            // the same type the Link header + api-catalog advertise
+            headers: { "content-type": OPENAPI_MEDIA_TYPE, "access-control-allow-origin": "*" },
+          });
+          // HEAD: the same status + headers, no body.
+          return request.method === "HEAD" ? new Response(null, { status: doc.status, headers: doc.headers }) : doc;
+        }
+        const actionId = apiActionId(url.pathname);
+        if (actionId) {
+          const identity = cfg.identity ? await cfg.identity(request) : undefined;
+          return apiHandler(request, actionId, { request, ...identity });
+        }
       }
       // The server card is read cross-origin by browser-based MCP clients; its
       // If-None-Match revalidation is a non-safelisted header → a CORS preflight.

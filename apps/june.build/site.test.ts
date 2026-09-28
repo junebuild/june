@@ -350,7 +350,7 @@ describe("agent surface", () => {
     // Pages first, the docs sidebar's sections in order, the tools, and Optional as the LAST H2
     expect(sections.slice(1)).toEqual([
       "Pages", "Get started", "Concepts", "Agents", "Features",
-      "Tools (MCP)", "Tools (WebMCP, in-browser)", "Optional",
+      "Tools (MCP)", "Tools (WebMCP, in-browser)", "HTTP API", "Optional",
     ]);
     expect(llms).toContain(
       "- [Connections: where tools come from](http://june.build/docs/agents-connections.md): A connection is an agent's outbound edge",
@@ -400,6 +400,23 @@ describe("agent surface", () => {
     const names = res.result.tools.map((t: any) => t.name);
     expect(names).toContain("search_site");
     expect(names).toContain("get_page");
+  });
+
+  test("the same tools over HTTP: /openapi.json + POST /api/<id>", async () => {
+    const doc = (await (await get("/openapi.json")).json()) as { paths: Record<string, { post: { operationId: string } }> };
+    expect(doc.paths["/api/search_site"]!.post.operationId).toBe("search_site");
+    expect(doc.paths["/api/get_page"]!.post.operationId).toBe("get_page");
+
+    const res = await app.fetch(
+      new Request("http://june.build/api/search_site", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ query: "cold start" }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const cards = (await res.json()) as Array<{ slug: string }>;
+    expect(cards.some((c) => c.slug.includes("cold-start"))).toBe(true);
   });
 
   test("WebMCP: pages inject the tool manifest + registration bridge", async () => {

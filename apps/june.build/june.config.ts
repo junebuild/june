@@ -4,6 +4,7 @@ import { defineJune } from "@junejs/core/config";
 //   agent.discovery  llms.txt, sitemap.xml, robots.txt, api-catalog, ai-catalog,
 //                    agent skills, Link header
 //   agent.mcp        the /mcp endpoint (your defineAction()s as tools)
+//   agent.api        the same actions as POST /api/<id>, described by /openapi.json
 export default defineJune({
   agent: { enabled: true, discovery: true, mcp: true, webmcp: true },
   // workers-og stays external: wrangler's own esbuild bundles it at deploy,

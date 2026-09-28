@@ -509,11 +509,12 @@ ${doClass}`;
   if (clientAsset) manifest.document.clientScript = `/${clientAsset}`;
   if (moduleCssAsset) manifest.document.moduleStyles = `/${moduleCssAsset}`;
   // A static site has no server: /mcp (and the WebMCP tools that proxy to it)
-  // does not exist there. Render with MCP projected out, so the published files
-  // advertise only what is deployed: llms.txt drops its MCP section, the catalogs
-  // and the generated skill list no MCP server, pages register no WebMCP tools.
+  // and the HTTP API (POST /api/<id>, /openapi.json) do not exist there. Render
+  // with both projected out, so the published files advertise only what is
+  // deployed: llms.txt drops its MCP and HTTP API sections, the catalogs and the
+  // generated skill list neither, pages register no WebMCP tools.
   const isStatic = adapter.capabilities.runtime === "static";
-  if (isStatic) manifest.agent = { ...manifest.agent, mcp: false, webmcp: false };
+  if (isStatic) manifest.agent = { ...manifest.agent, mcp: false, api: false, webmcp: false };
   // The static() target prerenders its sitemap too; that build is where the
   // route contract lets `staticPaths` run, so its sitemap lists those pages.
   const worker = createWorker(manifest, { staticBuild: isStatic });

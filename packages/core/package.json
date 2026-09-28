@@ -168,6 +168,12 @@
       "types": "./dist/mcp.d.ts",
       "default": "./dist/mcp.js"
     },
+    "./api": {
+      "source": "./src/api.ts",
+      "bun": "./src/api.ts",
+      "types": "./dist/api.d.ts",
+      "default": "./dist/api.js"
+    },
     "./discovery": {
       "source": "./src/discovery.ts",
       "bun": "./src/discovery.ts",

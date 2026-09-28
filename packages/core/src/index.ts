@@ -108,6 +108,18 @@ export {
 // The Web-standard MCP endpoint
 export { mcpHandler, mcpTools } from "./mcp";
 
+// The REST projection of the same actions + its OpenAPI description
+export {
+  apiActionId,
+  apiActionPath,
+  apiHandler,
+  isJsonContentType,
+  isRoutableActionId,
+  OPENAPI_MEDIA_TYPE,
+  openApiDocument,
+  type ApiErrorCode,
+} from "./api";
+
 // Cache primitives + the CacheStore seam
 export {
   cache,
