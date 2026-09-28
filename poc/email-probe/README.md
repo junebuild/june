@@ -1,7 +1,8 @@
 # PoC: Cloudflare Email Service live tests (email RFC §13)
 
-**Status: run 2026-09-28** on `agents.june.build`, account-owned deploy token, wrangler
-4.143.0. Answers the five questions `docs/rfc-email.md` §13 could not settle from
+**Status: run 2026-09-28** on `agents.june.build` with an account-owned deploy token
+(a temporary one with the same policy as `junebuild-agents-deploy`; a redeploy with
+`junebuild-agents-deploy` itself succeeded the same day), wrangler 4.143.0. Answers the five questions `docs/rfc-email.md` §13 could not settle from
 Cloudflare's docs.
 
 A bare Worker, not a June app, so each behavior is observed without framework code in
@@ -55,7 +56,7 @@ Everything lands in one SQLite-backed Durable Object, so results survive a misse
 ## Setup (as run)
 
 ```sh
-export CLOUDFLARE_API_TOKEN="$(security find-generic-password -s cloudflare-api-token-junebuild-agents-deploy -w)"
+export CLOUDFLARE_API_TOKEN="$(op read op://Kaik/cloudflare-api-token-junebuild-agents-deploy/credential)"
 export CLOUDFLARE_ACCOUNT_ID=<account id>
 W="bunx wrangler@4.143.0"
 
@@ -93,4 +94,4 @@ curl -H "Authorization: Bearer $KEY" "$U/events?limit=50"      # what was observ
 
 Delete the routing rule, `wrangler queues subscription delete`, `wrangler delete`,
 `wrangler queues delete june-email-probe-events`, and the `june-email-probe-key` Keychain
-item. The deploy token `junebuild-agents-deploy-probe` expires 2026-10-12 by itself.
+item. (The temporary deploy token used for the first run was deleted on 2026-09-28.)
