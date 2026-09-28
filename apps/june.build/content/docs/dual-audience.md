@@ -33,7 +33,10 @@ hook `useLoaderData<typeof loader>()` (also catches the Remix muscle-memory).
 
 The `.md` projection serves the file you wrote, byte-for-byte — frontmatter
 included. Most frameworks reconstruct markdown from rendered HTML; June serves
-the source, so there is nothing to drift. Actions are the capability surface —
+the source, so there is nothing to drift. A projection with no frontmatter of
+its own (a generated `md()`, or the derived JSON block) opens with one built
+from the page's metadata — `title`, `description`, `canonical` — so an agent
+gets the same facts the HTML `<head>` carries. Actions are the capability surface —
 each `defineAction()` is an MCP tool at `/mcp` (and a browser WebMCP tool).
 
 ## What agents discover automatically
@@ -42,6 +45,14 @@ each `defineAction()` is an MCP tool at `/mcp` (and a browser WebMCP tool).
 - `/sitemap.xml`, `/robots.txt`, `/.well-known/api-catalog`
 - `/mcp` — your `defineAction()`s as MCP tools: one definition is a UI server
   action AND an MCP tool AND a browser WebMCP tool
+- `<link rel="alternate" type="text/markdown">` pointing at a page's `.md`
+  twin — on every page whose markdown projection is live (`agent.discovery`
+  on, and the route doesn't set `md = false`)
+- `Vary: Accept` on pages — the same URL answers HTML or Markdown (whichever the
+  client's `Accept` ranks higher, q-values included), so caches key on the header
+- A 404 an agent can act on: `Accept: text/markdown` (or a `.md` URL) gets a
+  Markdown 404 linking `/llms.txt`, `/sitemap.xml` and `/mcp`; JSON clients get
+  `{ error, code: "not_found", path, hint }`
 
 ## Actions are one gate
 

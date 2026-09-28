@@ -24,7 +24,7 @@ import {
   type RenderTarget,
   type RouteContext,
 } from "@junejs/core/route";
-import { Document, type DocumentConfig } from "@junejs/core/document";
+import { Document, documentTitle, pageCanonical, type DocumentConfig } from "@junejs/core/document";
 import {
   apiCatalog,
   buildLinkHeader,
@@ -218,7 +218,28 @@ function letterFavicon(siteName: string | undefined): Response {
   );
 }
 
-type PageProps = { pageUrl: string; isHome: boolean; onLocaleDomain: boolean };
+// A page URL's markdown twin — the same paths `june build` prerenders: /index.md
+// for the home page (and a locale home, /zh-cn/index.md), <path>.md otherwise.
+// A trailing slash is dropped first: /users/ is the same page as /users, whose
+// twin is the flat /users.md (never /users/index.md). A home reached through its
+// /index alias (/index, /de/index) is the same home: /de/index → /de/index.md.
+// Only a HOME folds /index — /docs/index is its own route, twin /docs/index.md.
+export function markdownPath(pathname: string, isHome: boolean): string {
+  const path = pathname.replace(/\/+$/, "");
+  return isHome ? `${path.replace(/\/index$/, "")}/index.md` : `${path}.md`;
+}
+
+// The inverse: the path a page's HTML form lives at, for the markdown
+// projection's canonical — /docs/x.md → /docs/x; for a home, its /index alias
+// folds away (/index.md → /, /de/index.md and /de/index → /de). A non-home
+// /docs/index(.md) stays /docs/index.
+export function htmlPath(pathname: string, isHome: boolean): string {
+  const path = pathname.endsWith(".md") ? pathname.slice(0, -3) : pathname;
+  if (!isHome) return path;
+  return path.replace(/\/+$/, "").replace(/\/index$/, "") || "/";
+}
+
+type PageProps = { pageUrl: string; isHome: boolean; onLocaleDomain: boolean; markdownHref?: string };
 
 // A request's matched route pathname (locale stripped, /index → /), keyed by its
 // ctx — RouteContext is public API, so the pipeline tracks it on the side.
@@ -229,7 +250,9 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
   const NotFound = cfg.notFoundComponent ?? DefaultNotFound;
 
   function htmlHeaders(): Headers {
-    const headers = new Headers({ "content-type": "text/html; charset=utf-8" });
+    // Every pipeline document is one variant of an Accept-negotiated URL (its .md
+    // and .json answer at the same path) — including streamed pages and the 404.
+    const headers = new Headers({ "content-type": "text/html; charset=utf-8", vary: "accept" });
     const links = [buildLinkHeader(agent), ...(cfg.earlyHints ?? [])].filter(Boolean) as string[];
     if (links.length) headers.set("link", links.join(", "));
     if (cfg.htmlCacheControl) headers.set("cache-control", cfg.htmlCacheControl);
@@ -262,15 +285,23 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
   // The document's page-identity props: the URL for og:url/canonical, whether the
   // MATCHED route is home (so /de and /index count, per negotiate's normalized
   // pathname), and whether the host is a locale's own domain (its public origin).
-  function pageProps(ctx: RouteContext): PageProps {
-    const host = ctx.url.hostname.toLowerCase();
+  function pageProps(ctx: RouteContext, def: BrandedRoute): PageProps {
+    const isHome = routePathOf.get(ctx) === "/";
     return {
       pageUrl: ctx.url.href,
-      isHome: routePathOf.get(ctx) === "/",
-      onLocaleDomain: cfg.i18n
-        ? Object.values(cfg.i18n.locales).some((l) => l.domain?.toLowerCase() === host)
-        : false,
+      isHome,
+      onLocaleDomain: onLocaleDomain(ctx),
+      // The page's markdown twin, advertised as a discovery signal (so gated with
+      // the rest of discovery). A disabled md projection gets no link to a 404.
+      markdownHref: agent.discovery && def.md !== false ? markdownPath(ctx.url.pathname, isHome) : undefined,
     };
+  }
+
+  function onLocaleDomain(ctx: RouteContext): boolean {
+    const host = ctx.url.hostname.toLowerCase();
+    return cfg.i18n
+      ? Object.values(cfg.i18n.locales).some((l) => l.domain?.toLowerCase() === host)
+      : false;
   }
 
   async function renderDocument(
@@ -383,7 +414,7 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
         children: wrapped,
         shellKey: boundaryKey, // stamps data-june-shell on [data-june-root]
         alternates: alternatesFor(ctx),
-        ...pageProps(ctx),
+        ...pageProps(ctx, def),
         ...langDir(ctx.locale),
       }),
       { onError: (e: unknown) => console.error("[june] streaming render error:", e) },
@@ -398,16 +429,66 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
     pathname: string,
     locale?: string,
   ): Promise<Response> | Response {
-    // Data clients get a JSON 404; humans get the rendered NotFound document.
-    return target !== "view"
-      ? Response.json({ error: "Not Found", path: pathname }, { status: 404 })
-      : renderDocument(
-          React.createElement(NotFound, { pathname }),
-          { title: "Not found", robots: "noindex" },
-          404,
-          [],
-          locale,
-        );
+    // Agents get a 404 they can act on: Markdown for an Accept: text/markdown (or
+    // .md) request, structured JSON for other data clients — both pointing at the
+    // discovery surfaces. Humans get the rendered NotFound document. The body
+    // depends on Accept, so every variant says so to caches.
+    if (target === "md") {
+      return discoveryLinks().then((links) =>
+        text(notFoundMarkdown(pathname, links), "text/markdown; charset=utf-8", {
+          status: 404,
+          headers: { vary: "accept" },
+        }),
+      );
+    }
+    if (target !== "view") {
+      return discoveryLinks().then((links) =>
+        Response.json(
+          { error: "Not Found", code: "not_found", path: pathname, hint: notFoundHint(links) },
+          { status: 404, headers: { vary: "accept" } },
+        ),
+      );
+    }
+    return renderDocument(
+      React.createElement(NotFound, { pathname }),
+      { title: "Not found", robots: "noindex" },
+      404,
+      [],
+      locale,
+    );
+  }
+
+  // Where an agent that hit a dead end should look next — only surfaces this app
+  // actually serves: /index.md only when a root page exists with its md live.
+  async function discoveryLinks(): Promise<Array<[label: string, href: string]>> {
+    const links: Array<[string, string]> = [];
+    if (agent.discovery) {
+      links.push(["llms.txt — the site index for agents", "/llms.txt"], ["sitemap.xml — every page", "/sitemap.xml"]);
+    }
+    if (agent.mcp) links.push(["MCP server — this site's tools", "/mcp"]);
+    const home = await cfg.resolve("/");
+    if (home && "def" in home && home.def.md !== false) links.push(["Home page (Markdown)", "/index.md"]);
+    return links;
+  }
+
+  function notFoundHint(links: Array<[string, string]>): string {
+    return links.length
+      ? `No page at this path. Start from ${links.map(([, h]) => h).join(", ")}.`
+      : "No page at this path.";
+  }
+
+  function notFoundMarkdown(pathname: string, links: Array<[string, string]>): string {
+    const site = docConfig.site.name ? ` on ${docConfig.site.name}` : "";
+    return [
+      "# 404 — Not found",
+      "",
+      links.length
+        ? `There is no page at \`${pathname}\`${site}. Try one of these instead:`
+        : `There is no page at \`${pathname}\`${site}.`,
+      "",
+      ...links.map(([label, href]) => `- [${label}](${href})`),
+      "",
+    ].join("\n");
   }
 
   function resolveMeta(def: BrandedRoute, data: unknown, ctx: RouteContext): Metadata | undefined {
@@ -421,14 +502,36 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
     // json is also absent). md/json === false is handled as 404 by the caller.
     const jsonData =
       typeof def.json === "function" ? await def.json(data, ctx) : def.json === false ? null : data;
-    const body =
+    const content =
       typeof def.md === "function"
         ? await def.md(data, ctx)
         : "```json\n" + JSON.stringify(jsonData, null, 2) + "\n```\n";
+    const body = withFrontmatter(content, resolveMeta(def, data, ctx), ctx);
     // x-markdown-tokens: a rough estimate (~4 chars/token) agents use to budget.
     return text(body, "text/markdown; charset=utf-8", {
       headers: { "x-markdown-tokens": String(Math.ceil(body.length / 4)) },
     });
+  }
+
+  // Open served markdown with a frontmatter block (title, description, canonical)
+  // so an agent gets the page's metadata without scraping the HTML. A body that
+  // already opens with its own frontmatter (e.g. a content file served verbatim)
+  // is left alone. Values are JSON strings — valid YAML double-quoted scalars.
+  function withFrontmatter(body: string, meta: Metadata | undefined, ctx: RouteContext): string {
+    if (/^---\r?\n/.test(body)) return body;
+    // The page's OWN title, not the templated <title> ("Users", not "Users · Site"):
+    // the template is browser-tab branding, and authored frontmatter (served
+    // verbatim) carries the bare title too — so every .md reads the same way. The
+    // site name is only the fallback for a page with no title — an empty title
+    // counts as none, exactly as documentTitle() treats it.
+    const title = meta?.title || documentTitle(meta, docConfig.site);
+    const description = meta?.description ?? docConfig.site.description;
+    const canonical = pageCanonical(docConfig, meta, ctx.url.href, htmlPath(ctx.url.pathname, routePathOf.get(ctx) === "/"), onLocaleDomain(ctx));
+    const lines = ["---", `title: ${JSON.stringify(title)}`];
+    if (description) lines.push(`description: ${JSON.stringify(description)}`);
+    if (canonical) lines.push(`canonical: ${JSON.stringify(canonical)}`);
+    lines.push("---", "");
+    return lines.join("\n") + body;
   }
 
   async function renderProjection(
@@ -476,7 +579,7 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
     // renders the whole chain (a hard load of the URL is never segment-scoped) —
     // but it stamps the shell key so the client knows which shell is mounted.
     if (target === "fragment") return renderFragment(node, meta, chain, boundaryIndex, boundaryKey);
-    return renderDocument(node, meta, 200, chain, ctx.locale, boundaryKey, alternatesFor(ctx), pageProps(ctx));
+    return renderDocument(node, meta, 200, chain, ctx.locale, boundaryKey, alternatesFor(ctx), pageProps(ctx, def));
   }
 
   async function discovery(url: URL): Promise<Response | null> {
