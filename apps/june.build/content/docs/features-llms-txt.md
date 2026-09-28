@@ -60,7 +60,12 @@ export const llms = (): LlmsEntry[] =>
 ```ts
 // app/blog/[slug]/page.tsx: posts are background, so they go under Optional
 export const llms = (): LlmsEntry[] =>
-  POSTS.map((p) => ({ path: `/blog/${p.slug}`, title: String(p.data.title ?? p.slug), optional: true }));
+  POSTS.map((p) => ({
+    path: `/blog/${p.slug}`,
+    title: String(p.data.title ?? p.slug),
+    description: p.data.description ? String(p.data.description) : undefined,
+    optional: true,
+  }));
 ```
 
 An entry is `{ path, title?, description?, section?, optional? }`. A static
