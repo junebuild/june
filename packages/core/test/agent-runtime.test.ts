@@ -1333,6 +1333,51 @@ describe("suspend / resume (P3 — HITL)", () => {
       expect(await s.result("t3")).toMatchObject({ status: "completed", text: "Got your third message." });
     });
 
+    test("a redelivery of the PARKED turn is never held, even with others held: it replays and re-parks", async () => {
+      const s = await parked();
+      s.start({ turnId: "t2", userText: "second", event: followUp("m2"), ifSuspended: "queue" });
+      expect(s.start({ turnId: "t1", userText: "refund please", event: slackEvent, ifSuspended: "queue" })).toEqual({ turnId: "t1" });
+      expect(await s.result("t1")).toMatchObject({ status: "suspended" }); // the same park, re-announced
+      expect(s.heldTurns().map((q) => q.turnId)).toEqual(["t2"]);
+      s.resume("t1", "approve-1", true, { by: "U1" });
+      await s.result("t1");
+      expect(await s.result("t2")).toMatchObject({ status: "completed" });
+      expect(s.transcript().map((t) => t.text)).toEqual(["Approved — refund sent.", "Got your follow-up."]); // t1 ran once
+    });
+
+    test("after a restart, a queue-asking turn stays held behind a drained turn that parks again", async () => {
+      const store = memStore().store;
+      await parked(store);
+      const first = new AgentSession("ops", "s1", store, new MemBroadcaster(), scriptedModel(QUEUE_SCRIPT), [approveTool()], noRuntime);
+      first.start({ turnId: "t2", userText: "another refund", event: { ...slackEvent, ts: "1.2" }, ifSuspended: "queue" });
+      store.tx(() => { store.delStep("suspended"); store.setStatus("completed"); }); // resolved, then the host died
+
+      // t2's turn asks for approval again; t3 arrives meanwhile
+      const script: ModelReply[] = [QUEUE_SCRIPT[0]!, { text: "That needs approval too.", toolCalls: [{ id: "c2", name: "approve", input: {} }] }, { text: "done", toolCalls: [] }, { text: "third", toolCalls: [] }];
+      const rebuilt = new AgentSession("ops", "s1", store, new MemBroadcaster(), scriptedModel(script), [approveTool()], noRuntime);
+      expect(rebuilt.start({ turnId: "t3", userText: "third", event: followUp("m3"), ifSuspended: "queue" })).toEqual({ turnId: "t3", queued: true });
+      expect(await rebuilt.result("t2")).toMatchObject({ status: "suspended" });
+      expect(rebuilt.heldTurns().map((q) => q.turnId)).toEqual(["t3"]); // still held — not run into the park and failed
+      expect(rebuilt.pending()).toMatchObject({ turnId: "t2", queued: 1 });
+    });
+
+    test("a turn that runs now goes after turns a restart left held", async () => {
+      const store = memStore().store;
+      const s = await parked(store);
+      s.start({ turnId: "t2", userText: "second", event: followUp("m2"), ifSuspended: "queue" });
+      store.tx(() => { store.delStep("suspended"); store.setStatus("completed"); });
+      const rebuilt = new AgentSession("ops", "s1", store, new MemBroadcaster(), scriptedModel([QUEUE_SCRIPT[0]!, { text: "held first", toolCalls: [] }, { text: "then the new one", toolCalls: [] }]), [approveTool()], noRuntime);
+      expect(rebuilt.start({ turnId: "t3", userText: "hello" })).toEqual({ turnId: "t3" });
+      expect(await rebuilt.result("t3")).toMatchObject({ status: "completed", text: "then the new one" });
+      expect(await rebuilt.result("t2")).toMatchObject({ status: "completed", text: "held first" });
+    });
+
+    test("turn() refuses a held turn instead of resolving to undefined", async () => {
+      const s = await parked();
+      const asked = { turnId: "t2", userText: "any news?", event: followUp("m2"), ifSuspended: "queue" as const };
+      await expect(s.turn(asked as Parameters<AgentSession["turn"]>[0])).rejects.toThrow(/turn t2 was held, not run — use start\(\)/);
+    });
+
     test("with nothing parked and nothing held, a queue-asking turn simply runs", async () => {
       const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), scriptedModel([{ text: "Hi.", toolCalls: [] }]), [], noRuntime);
       expect(s.start({ turnId: "t1", userText: "hello", event: followUp("m1"), ifSuspended: "queue" })).toEqual({ turnId: "t1" });
