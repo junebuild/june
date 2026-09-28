@@ -64,6 +64,7 @@
     "native-eviction-review",
     "native-run-stream",
     "native-session-eviction",
+    "openapi-connections-real-world",
     "oxc-parser-0151",
     "png-favicons",
     "provider-state",
