@@ -3,6 +3,7 @@
 // See docs/agent-discoverability.md.
 
 import { ACTION_REGISTRY } from "./agent";
+import { apiActionPath, isRoutableActionId, OPENAPI_MEDIA_TYPE } from "./api";
 import type { AgentConfig, SiteConfig } from "./config";
 import { withBasePath, type DocumentConfig } from "./document";
 import { localeAlternates, type I18nConfig } from "./i18n";
@@ -34,6 +35,7 @@ export function buildLinkHeader(agent: AgentConfig, opts: { catalogs?: boolean }
   // ai-catalog is the relation the AI Catalog spec defines for Link-header discovery.
   if (opts.catalogs !== false) links.push(`<${AI_CATALOG_PATH}>; rel="ai-catalog"; type="application/json"`);
   if (agent.mcp) links.push(`</.well-known/mcp/server-card.json>; rel="mcp-server"; type="${MCP_SERVER_CARD_TYPE}"`);
+  if (agent.api) links.push(`</openapi.json>; rel="service-desc"; type="${OPENAPI_MEDIA_TYPE}"`);
   return links.join(", ");
 }
 
@@ -132,6 +134,16 @@ export function llmsTxt(
       );
     }
   }
+  if (agent.api) {
+    // The same actions as plain HTTP, for clients that speak OpenAPI / function
+    // calling rather than MCP. Listed even with MCP off: it's its own surface.
+    lines.push(
+      "",
+      "## HTTP API",
+      `- OpenAPI 3.1: ${origin}/openapi.json`,
+      `- Each tool is also \`POST ${origin}/api/<tool>\` with its input as the JSON body (\`{}\` when it takes none); errors are JSON \`{ "error": { "code", "message", "hint?" } }\`.`,
+    );
+  }
   lines.push(...optional);
   return lines.join("\n") + "\n";
 }
@@ -214,7 +226,7 @@ export function sitemapXml(origin: string, routes: Array<string | SitemapPage>, 
 // surface added here shows up in all of them. A new surface (e.g. a REST/OpenAPI
 // projection of the actions) is one more entry, gated on its own config flag.
 export type AgentService = {
-  // Stable short name of the surface ("site", "mcp").
+  // Stable short name of the surface ("site", "mcp", "api").
   id: string;
   // The service endpoint itself (the RFC 9727 `item` and linkset anchor).
   endpoint: string;
@@ -252,6 +264,22 @@ export function agentServices(
         type: MCP_SERVER_CARD_TYPE,
         url: card,
         displayName: `${siteLabel(origin, site)} MCP server`,
+      },
+    });
+  }
+  if (agent.api) {
+    // The same actions as plain HTTP (POST /api/<id>), described by OpenAPI.
+    const spec = `${origin}/openapi.json`;
+    services.push({
+      id: "api",
+      endpoint: `${origin}/api/`,
+      desc: { href: spec, type: OPENAPI_MEDIA_TYPE },
+      doc: llms,
+      catalog: {
+        namespace: "api",
+        type: OPENAPI_MEDIA_TYPE,
+        url: spec,
+        displayName: `${siteLabel(origin, site)} HTTP API`,
       },
     });
   }
@@ -333,12 +361,16 @@ export function siteSkill(
   const name = skillName(origin);
   const host = new URL(origin).host;
   const label = siteLabel(origin, site);
-  const tools = agent.mcp ? [...ACTION_REGISTRY.values()].filter((a) => a.description) : [];
+  const rich = [...ACTION_REGISTRY.values()].filter((a) => a.description);
+  const tools = agent.mcp || agent.api ? rich : [];
+  // The HTTP surface serves only the ids a URL path can carry (see api.ts).
+  const httpTools = agent.api ? rich.filter((a) => isRoutableActionId(a.id)) : [];
+  const via = [agent.mcp && "MCP", agent.api && "HTTP"].filter(Boolean).join(" or ");
   const about = site?.description?.replace(/\s+/g, " ").trim().replace(/[.。]$/, "");
   const description = (
     `Use ${host}${about ? `: ${about}` : ""}. ` +
     `Read its pages as Markdown` +
-    (tools.length ? ` and call its ${tools.length} tool${tools.length === 1 ? "" : "s"} over MCP` : "") +
+    (tools.length ? ` and call its ${tools.length} tool${tools.length === 1 ? "" : "s"} over ${via}` : "") +
     `. Use when a task needs information from ${host}` +
     (tools.length ? ` or actions on it.` : ".")
   ).slice(0, 1024);
@@ -384,6 +416,36 @@ export function siteSkill(
         "```",
         "",
         "(Fill `arguments` per the tool's input schema.)",
+      );
+    }
+  }
+  if (agent.api) {
+    lines.push(
+      "",
+      "## Act (HTTP)",
+      "",
+      `- OpenAPI 3.1: ${origin}/openapi.json — one POST operation per tool, \`operationId\` = the tool name, with its input schema.`,
+      `- Call: \`POST ${origin}/api/<tool>\` with \`Content-Type: application/json\` and the input as the body (\`{}\` when it takes none). The result comes back as JSON; a failure is \`{ "error": { "code", "message", "hint?" } }\`.`,
+    );
+    // The tool list lives under MCP when MCP is on — list it here only otherwise.
+    if (!agent.mcp && httpTools.length) {
+      lines.push("", "Tools:", "");
+      for (const t of httpTools) {
+        const gate = t.requiresPrincipal ? " (requires a signed-in user)" : "";
+        lines.push(`- \`${t.id}(${paramList(t.input)})\`${gate} — ${t.description.replace(/\s+/g, " ").trim()}`);
+      }
+    }
+    const first = httpTools[0];
+    if (first) {
+      lines.push(
+        "",
+        "Call a tool:",
+        "",
+        "```sh",
+        `curl -s ${origin}${apiActionPath(first.id)} -H 'content-type: application/json' -d '{}'`,
+        "```",
+        "",
+        "(Send the input per the tool's schema in /openapi.json.)",
       );
     }
   }

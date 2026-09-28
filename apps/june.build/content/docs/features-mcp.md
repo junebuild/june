@@ -99,6 +99,35 @@ curl -X POST https://june.build/mcp \
   -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search_site","arguments":{"query":"cold start"}}}'
 ```
 
+## The same tools over plain HTTP
+
+Not every client speaks MCP. With `agent.api` (also on by default), each tool is
+also `POST /api/<id>`, with its input as the JSON body and its result as the
+JSON response. `/openapi.json` describes them all as OpenAPI 3.1: one
+operation per tool, where `operationId` is the tool id, `requestBody` is its
+input schema, and the tool's `annotations` appear as `x-mcp-annotations`. That's
+the shape function-calling clients and OpenAPI tooling import directly.
+
+```bash
+curl -X POST https://june.build/api/search_site \
+  -H 'content-type: application/json' \
+  -d '{"query":"cold start"}'
+```
+
+It is the same dispatch as `/mcp`, and the same `run(input, ctx)` gate:
+`requiresPrincipal` holds, and the input is validated against the schema
+before `run`. Every failure has one JSON shape,
+`{ "error": { "code", "message", "hint?" } }`, where `code` is one of
+`invalid_json`, `invalid_input`, `unauthorized`, `unsupported_media_type`,
+`method_not_allowed`, `not_found`, or `execution_error`. Every call needs a JSON
+body with `Content-Type: application/json` (or another `+json` type), so send
+`{}` to a tool that takes no input. That rule means a browser on another origin
+can't reach an action with a plain form post.
+
+Only `/api/<a registered tool id>` is claimed. Every other `/api/*` path is
+still yours and falls through to your routes. Set `agent: { api: false }` to
+turn the surface off.
+
 ## Why it matters
 
 Tools are intent-shaped and policy-checked — never auto-generated CRUD. The

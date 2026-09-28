@@ -107,6 +107,7 @@ export type AgentConfig = {
   enabled: boolean; // master switch
   discovery: boolean; // Link header, llms.txt, sitemap, api-catalog, mcp server-card, ai-catalog (ARD), agent skills
   mcp: boolean; // the /mcp execution endpoint
+  api: boolean; // the REST projection: POST /api/<action id> + /openapi.json
   webmcp: boolean; // inject WebMCP tool registrations into the view
   // Optional llms.txt customization for apps built ON June (e.g. the Kura docs framework):
   //   framework — replaces the built-in "canonical names" block so a meta-framework can point
@@ -323,6 +324,7 @@ const DEFAULT_AGENT: AgentConfig = {
   enabled: true,
   discovery: true,
   mcp: true,
+  api: true,
   webmcp: true,
   runtime: DEFAULT_RUNTIME,
 };
@@ -381,7 +383,7 @@ export function resolveAgent(partial?: AgentConfigInput): AgentConfig {
   const merged: AgentConfig = { ...DEFAULT_AGENT, ...(partial ?? {}), runtime };
   // The master switch turns the whole agent surface off (including the runtime).
   if (!merged.enabled) {
-    return { enabled: false, discovery: false, mcp: false, webmcp: false, runtime: { ...runtime, enabled: false } };
+    return { enabled: false, discovery: false, mcp: false, api: false, webmcp: false, runtime: { ...runtime, enabled: false } };
   }
   return merged;
 }

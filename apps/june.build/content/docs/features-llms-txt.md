@@ -17,7 +17,7 @@ from the route graph and your actions — you author none of them:
 | `/llms.txt` | a curated index: every page, grouped by section, described, linking its markdown |
 | `/sitemap.xml`, `/robots.txt` | the classic crawler contract |
 | `/.well-known/api-catalog` | machine-readable API listing ([RFC 9727](https://www.rfc-editor.org/rfc/rfc9727)): each API an `item`, with its description and docs |
-| `/.well-known/ai-catalog.json` (also `/.well-known/ard.json`) | one catalog of the app's agentic resources — its MCP server and its skill — for [ARD](https://agenticresourcediscovery.org/) crawlers ([AI Catalog](https://github.com/Agent-Card/ai-catalog) format) |
+| `/.well-known/ai-catalog.json` (also `/.well-known/ard.json`) | one catalog of the app's agentic resources — its MCP server, its HTTP API, and its skill — for [ARD](https://agenticresourcediscovery.org/) crawlers ([AI Catalog](https://github.com/Agent-Card/ai-catalog) format) |
 | `/.well-known/agent-skills/index.json` | a generated [Agent Skill](https://agentskills.io/) that teaches an agent to use this site ([discovery RFC v0.2.0](https://github.com/cloudflare/agent-skills-discovery-rfc)) |
 | `/mcp` | your actions as MCP tools an agent can call |
 | `/.well-known/mcp/server-card.json` | the MCP server's identity and how to connect (when MCP is on) |

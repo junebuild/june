@@ -2,7 +2,7 @@
 // entry from the AgentDefinition mountAgent mounts; both in-process backends apply it the
 // same way; mountAgent says so when a hand-built runtime entry has drifted.
 
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, spyOn, test } from "bun:test";
 
 import { defineAgent } from "@junejs/core/agent-config";
 import type { InboundEvent, Model, Tool, ToolSpec } from "@junejs/core/agent-runtime";
@@ -25,6 +25,9 @@ const slackEvent: InboundEvent = { source: "slack", kind: "app_mention", channel
 
 const warn = spyOn(console, "warn");
 afterEach(() => warn.mockClear());
+// Restore: bun runs every file in one process, and a later spyOn(console, "warn")
+// returns THIS mock (with every call since) if it is still installed.
+afterAll(() => warn.mockRestore());
 
 describe("toAgentDef (#173)", () => {
   for (const backend of ["native", "memory"] as AgentBackend[]) {

@@ -218,6 +218,12 @@ describe("staticSite() target — agent catalogs", () => {
     const llms = await read("llms.txt");
     const html = await read("index.html");
     for (const f of [md.toString("utf8"), llms]) expect(f).not.toContain("/mcp");
+    // …nor any HTTP API (POST /api/<id>, /openapi.json): that is runtime-only too
+    for (const f of [catalog, JSON.stringify(index), md.toString("utf8"), llms, html]) {
+      expect(f).not.toContain("openapi");
+      expect(f).not.toContain("/api/");
+    }
+    expect(existsSync(join(outDir, "static", "openapi.json"))).toBe(false);
     for (const f of [md.toString("utf8"), llms, html]) expect(f).not.toContain("lookup");
     // (the HTML still names /mcp in its speculation-rules EXCLUSIONS — not an advertisement)
     expect(html).not.toContain("modelContext");

@@ -77,6 +77,7 @@ async function info(root: string): Promise<number> {
       console.log(`             /.well-known/ai-catalog.json · /.well-known/agent-skills/index.json`);
     }
     if (agent.mcp) console.log(`  mcp        /mcp  (tools: ${tools.length ? tools.join(", ") : "none"})`);
+    if (agent.api) console.log(`  api        POST /api/<tool> · /openapi.json`);
   } else {
     console.log(`\nAgent surface: disabled`);
   }

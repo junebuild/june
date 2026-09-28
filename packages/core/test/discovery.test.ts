@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { ACTION_REGISTRY, defineAction } from "@junejs/core/agent";
+import { OPENAPI_MEDIA_TYPE } from "@junejs/core/api";
 import { resolveAgent } from "@junejs/core/config";
 import {
   API_CATALOG_CONTENT_TYPE,
@@ -59,6 +60,19 @@ describe("buildLinkHeader()", () => {
     expect(entry?.type).toBe(MCP_SERVER_CARD_TYPE);
   });
 
+  test("advertises /openapi.json as service-desc, typed as it is served, only when the HTTP API is on", () => {
+    expect(buildLinkHeader(resolveAgent())).toContain(
+      `</openapi.json>; rel="service-desc"; type="${OPENAPI_MEDIA_TYPE}"`,
+    );
+    expect(buildLinkHeader(resolveAgent({ api: false }))).not.toContain("openapi");
+  });
+
+  test("resolveAgent: api defaults on, and the master switch turns it off", () => {
+    expect(resolveAgent().api).toBe(true);
+    expect(resolveAgent({ api: false }).api).toBe(false);
+    expect(resolveAgent({ enabled: false }).api).toBe(false);
+  });
+
   test("returns null when discovery is disabled", () => {
     expect(buildLinkHeader(resolveAgent({ enabled: false }))).toBeNull();
   });
@@ -113,7 +127,7 @@ describe("llmsTxt() with route links (llmstxt.org sections)", () => {
   });
 
   test("groups links under H2 sections in first-seen order, each '- [title](url): description'", () => {
-    const txt = llmsTxt(ORIGIN, [], resolveAgent({ mcp: false }), { name: "Docs" }, [
+    const txt = llmsTxt(ORIGIN, [], resolveAgent({ mcp: false, api: false }), { name: "Docs" }, [
       link("Intro", "Get started", { description: "Start here." }),
       link("Auth", "Concepts"),
       link("Deploy", "Get started"),
@@ -136,6 +150,14 @@ describe("llmsTxt() with route links (llmstxt.org sections)", () => {
     ]);
     expect(txt.indexOf("## Docs")).toBeLessThan(txt.indexOf("## Optional"));
     expect(txt).not.toContain("## Blog"); // an optional link is filed under Optional, not its section
+  });
+
+  test("lists the HTTP API (OpenAPI + POST /api/<tool>) when api is on, even with MCP off", () => {
+    const on = llmsTxt(ORIGIN, [], resolveAgent({ mcp: false }));
+    expect(on).toContain("## HTTP API");
+    expect(on).toContain(`- OpenAPI 3.1: ${ORIGIN}/openapi.json`);
+    expect(on).toContain(`POST ${ORIGIN}/api/<tool>`);
+    expect(llmsTxt(ORIGIN, [], resolveAgent({ api: false }))).not.toContain("## HTTP API");
   });
 
   test('"## Optional" is the file\'s LAST H2 — after the MCP / WebMCP tool sections too', () => {
@@ -258,20 +280,26 @@ describe("robotsTxt() / apiCatalog() / mcpServerCard()", () => {
     const [head, ...apis] = cat.linkset;
     // §4 / Appendix A: the catalog context is anchored at its own well-known URI
     expect(head?.anchor).toBe(`${ORIGIN}/.well-known/api-catalog`);
-    expect(head?.item).toEqual([{ href: `${ORIGIN}/` }, { href: `${ORIGIN}/mcp` }]);
-    // every item has a context of its own with service-doc; MCP adds its service-desc
-    expect(apis.map((a) => a.anchor)).toEqual([`${ORIGIN}/`, `${ORIGIN}/mcp`]);
+    expect(head?.item).toEqual([{ href: `${ORIGIN}/` }, { href: `${ORIGIN}/mcp` }, { href: `${ORIGIN}/api/` }]);
+    // every item has a context of its own with service-doc; MCP and the HTTP API add their service-desc
+    expect(apis.map((a) => a.anchor)).toEqual([`${ORIGIN}/`, `${ORIGIN}/mcp`, `${ORIGIN}/api/`]);
     for (const a of apis) expect(a["service-doc"]?.[0]?.href).toBe(`${ORIGIN}/llms.txt`);
     expect(apis[1]?.["service-desc"]?.[0]?.href).toBe(`${ORIGIN}/.well-known/mcp/server-card.json`);
+    expect(apis[2]?.["service-desc"]).toEqual([{ href: `${ORIGIN}/openapi.json`, type: OPENAPI_MEDIA_TYPE }]);
     expect(API_CATALOG_CONTENT_TYPE).toBe(
       'application/linkset+json; profile="https://www.rfc-editor.org/info/rfc9727"',
     );
   });
 
-  test("api-catalog without mcp lists only the site", () => {
-    const cat = apiCatalog(ORIGIN, resolveAgent({ mcp: false }));
+  test("api-catalog without mcp or the HTTP API lists only the site", () => {
+    const cat = apiCatalog(ORIGIN, resolveAgent({ mcp: false, api: false }));
     expect(cat.linkset[0]?.item).toEqual([{ href: `${ORIGIN}/` }]);
     expect(cat.linkset.some((c) => c["service-desc"])).toBe(false);
+  });
+
+  test("api-catalog with mcp off still lists the HTTP API — its own surface", () => {
+    const cat = apiCatalog(ORIGIN, resolveAgent({ mcp: false }));
+    expect(cat.linkset[0]?.item).toEqual([{ href: `${ORIGIN}/` }, { href: `${ORIGIN}/api/` }]);
   });
 
   test("mcp server card reports the protocol version and tool names", () => {
@@ -398,10 +426,35 @@ describe("agent skills index + generated SKILL.md", () => {
     expect(llmsTxt(ORIGIN, ["/"], resolveAgent())).toContain("actions are MCP tools at `/mcp`");
   });
 
-  test("without mcp the skill covers reading only", () => {
-    const skill = siteSkill(ORIGIN, resolveAgent({ mcp: false }), SITE);
+  test("without mcp or the HTTP API the skill covers reading only", () => {
+    const skill = siteSkill(ORIGIN, resolveAgent({ mcp: false, api: false }), SITE);
     expect(skill.markdown).not.toContain("/mcp");
+    expect(skill.markdown).not.toContain("/api/");
+    expect(skill.markdown).not.toContain("openapi");
     expect(skill.description).not.toContain("MCP");
+  });
+
+  test("the skill teaches the HTTP API when agent.api is on (POST /api/<id> + /openapi.json)", () => {
+    defineAction({
+      id: "search_site",
+      description: "Search pages.",
+      input: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+      run: () => [],
+    });
+    const both = siteSkill(ORIGIN, resolveAgent(), SITE);
+    expect(both.markdown).toContain("## Act (HTTP)");
+    expect(both.markdown).toContain(`${ORIGIN}/openapi.json`);
+    expect(both.markdown).toContain(`POST ${ORIGIN}/api/<tool>`);
+    expect(both.markdown).toContain(`curl -s ${ORIGIN}/api/search_site -H 'content-type: application/json'`);
+    expect(both.description).toContain("over MCP or HTTP");
+    // the tool list appears once — under MCP when MCP is on…
+    expect(both.markdown.split("`search_site(query: string)`").length - 1).toBe(1);
+    // …and under HTTP when only the HTTP API is on
+    const httpOnly = siteSkill(ORIGIN, resolveAgent({ mcp: false }), SITE);
+    expect(httpOnly.markdown).not.toContain(`${ORIGIN}/mcp`);
+    expect(httpOnly.markdown).toContain("`search_site(query: string)` — Search pages.");
+    expect(httpOnly.description).toContain("over HTTP");
+    expect(siteSkill(ORIGIN, resolveAgent({ api: false }), SITE).markdown).not.toContain("## Act (HTTP)");
   });
 
   test("skill names derive from the host and always satisfy the Agent Skills name rules", () => {
@@ -429,12 +482,14 @@ describe("aiCatalog() (ARD / AI Catalog)", () => {
       expect(("url" in e ? 1 : 0) + ("data" in e ? 1 : 0)).toBe(1);
     }
     const types = cat.entries.map((e) => e.type);
-    expect(types).toEqual(["application/mcp-server-card+json", "application/agent-skills+md"]);
+    expect(types).toEqual(["application/mcp-server-card+json", OPENAPI_MEDIA_TYPE, "application/agent-skills+md"]);
     expect(cat.entries[0]?.url).toBe(`${ORIGIN}/.well-known/mcp/server-card.json`);
+    // the HTTP API's entry points at its OpenAPI description, typed as it is served
+    expect(cat.entries[1]).toMatchObject({ identifier: "urn:air:example.com:api:example-com", url: `${ORIGIN}/openapi.json` });
   });
 
-  test("no MCP entry when mcp is off; a port in the host is percent-encoded for did:web", () => {
-    const cat = aiCatalog("http://localhost:3000", resolveAgent({ mcp: false }));
+  test("no MCP or API entry when they are off; a port in the host is percent-encoded for did:web", () => {
+    const cat = aiCatalog("http://localhost:3000", resolveAgent({ mcp: false, api: false }));
     expect(cat.entries.map((e) => e.type)).toEqual(["application/agent-skills+md"]);
     expect(cat.host.identifier).toBe("did:web:localhost%3A3000");
   });

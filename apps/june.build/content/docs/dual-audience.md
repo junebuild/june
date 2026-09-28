@@ -44,17 +44,19 @@ each `defineAction()` is an MCP tool at `/mcp` (and a browser WebMCP tool).
 - `/llms.txt` — route map + the framework's canonical names
 - `/sitemap.xml`, `/robots.txt`, `/.well-known/api-catalog`
 - `/.well-known/ai-catalog.json` (ARD) and `/.well-known/agent-skills/index.json`
-  — the app's MCP server and a generated "how to use this site" skill
+  — the app's MCP server, its HTTP API, and a generated "how to use this site" skill
 - `/mcp` — your `defineAction()`s as MCP tools: one definition is a UI server
   action AND an MCP tool AND a browser WebMCP tool
+- `/openapi.json` + `POST /api/<id>` — the same actions as plain HTTP for
+  OpenAPI and function-calling clients
 - `<link rel="alternate" type="text/markdown">` pointing at a page's `.md`
   twin — on every page whose markdown projection is live (`agent.discovery`
   on, and the route doesn't set `md = false`)
 - `Vary: Accept` on pages — the same URL answers HTML or Markdown (whichever the
   client's `Accept` ranks higher, q-values included), so caches key on the header
 - A 404 an agent can act on: `Accept: text/markdown` (or a `.md` URL) gets a
-  Markdown 404 linking `/llms.txt`, `/sitemap.xml` and `/mcp`; JSON clients get
-  `{ error, code: "not_found", path, hint }`
+  Markdown 404 linking `/llms.txt`, `/sitemap.xml`, `/mcp` and `/openapi.json`;
+  JSON clients get `{ error, code: "not_found", path, hint }`
 
 ## Actions are one gate
 
