@@ -59,6 +59,7 @@
     "isolate-scoped-resources",
     "llms-sections",
     "mcp-server-identity",
+    "mcp-tool-names",
     "model-finish-reason",
     "native-agent-def",
     "native-eviction-review",
