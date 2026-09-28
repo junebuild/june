@@ -16,7 +16,7 @@ import type { Model, ModelDelta, ModelFinish, ModelReply, Msg, ToolSpec } from "
 export type AnthropicBlock =
   | { type: "text"; text: string }
   | { type: "tool_use"; id: string; name: string; input: unknown }
-  | { type: "tool_result"; tool_use_id: string; content: string };
+  | { type: "tool_result"; tool_use_id: string; content: string; is_error?: boolean };
 export type AnthropicMessage = { role: "user" | "assistant"; content: string | AnthropicBlock[] };
 
 // June transcript → Anthropic messages. Consecutive tool results are folded into
@@ -37,7 +37,8 @@ export function toAnthropicMessages(msgs: Msg[]): AnthropicMessage[] {
       // A string result is already the text the model should read — plain prose or JSON the
       // tool serialized itself. Stringifying it again sent an escaped, quoted string (#172).
       const content = typeof m.result === "string" ? m.result : JSON.stringify(m.result);
-      const block: AnthropicBlock = { type: "tool_result", tool_use_id: m.toolCallId, content };
+      // A tool that threw (#232): mark the result as an error so the model reads a failed call.
+      const block: AnthropicBlock = { type: "tool_result", tool_use_id: m.toolCallId, content, ...(m.isError ? { is_error: true } : {}) };
       const prev = out[out.length - 1];
       if (prev && prev.role === "user" && Array.isArray(prev.content)) prev.content.push(block);
       else out.push({ role: "user", content: [block] });

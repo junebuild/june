@@ -428,7 +428,8 @@ export function slackChannel(opts: {
   onInteraction?: (payload: SlackInteraction, ctx: ChannelContext) => void | Promise<void>;
   // Render tool calls as Slack's native task timeline INSIDE the streamed message: map a
   // tool call to a ≤256-char task title (return undefined/"" to hide that call). A call
-  // shows as in_progress on action.requested and complete on action.completed. NOTE: this
+  // shows as in_progress on action.requested, and complete on action.completed — or error
+  // when the tool threw (the model was told and carries on; #232). NOTE: this
   // makes a tool-only turn post a message (the timeline IS content) — a deliberate departure
   // from the lazy-start rule, which is why it is opt-in. Requires stream: true. Task cards
   // render in regular channels too (verified live 2026-07-15 — a `task_card` block).
@@ -672,7 +673,8 @@ export function slackChannel(opts: {
           // a tool call becomes a native task-timeline entry: in_progress when requested,
           // complete when done. The app's mapper names it (or hides it with undefined/"").
           const title = opts.tasks(e.call);
-          if (title) await pushChunk({ type: "task_update", id: e.call.id, title: title.slice(0, 256), status: e.type === "action.requested" ? "in_progress" : "complete" });
+          const status = e.type === "action.requested" ? "in_progress" : e.error !== undefined ? "error" : "complete";
+          if (title) await pushChunk({ type: "task_update", id: e.call.id, title: title.slice(0, 256), status });
         }
         else if (e.type === "turn.completed") finalText = e.text;
         else if (e.type === "turn.failed") { await push("\n_(the turn failed)_"); await finish(); return; }

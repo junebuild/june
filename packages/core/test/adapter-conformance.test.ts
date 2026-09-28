@@ -235,4 +235,18 @@ describe("runAdapterConformance (#105)", () => {
     expect(folded.role).toBe("user");
     expect(Array.isArray(folded.content) && folded.content.filter((b) => b.type === "tool_result")).toHaveLength(2);
   });
+
+  test("a tool result that is an error (the tool threw, #232) is sent with is_error: true; others carry no flag", () => {
+    const msgs: Msg[] = [
+      { role: "user", turnId: "t1", text: "go" },
+      { role: "assistant", turnId: "t1", text: "", toolCalls: [{ id: "c1", name: "fetch", input: {} }, { id: "c2", name: "add", input: {} }] },
+      { role: "tool", turnId: "t1", toolCallId: "c1", name: "fetch", result: { error: "upstream returned 404" }, isError: true },
+      { role: "tool", turnId: "t1", toolCallId: "c2", name: "add", result: { sum: 3 } },
+    ];
+    const [, , folded] = toAnthropicMessages(msgs);
+    expect(folded!.content).toEqual([
+      { type: "tool_result", tool_use_id: "c1", content: '{"error":"upstream returned 404"}', is_error: true },
+      { type: "tool_result", tool_use_id: "c2", content: '{"sum":3}' },
+    ]);
+  });
 });
