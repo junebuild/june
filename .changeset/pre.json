@@ -51,6 +51,7 @@
     "delivered-resume",
     "detach-turn-mode",
     "do-session-identity",
+    "github-app-credentials",
     "global-turn-ids",
     "heading-ids",
     "isolate-scoped-resources",
