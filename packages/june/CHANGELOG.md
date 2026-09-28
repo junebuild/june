@@ -1,5 +1,177 @@
 # @junejs/server
 
+## 1.0.0-dev.31
+
+### Minor Changes
+
+- [#235](https://github.com/junebuild/june/pull/235) [`862a969`](https://github.com/junebuild/june/commit/862a9693cc3ab00cfb5c08e6bc07542590b58349) Thanks [@linyiru](https://github.com/linyiru)! - Actions are now also plain HTTP: `POST /api/<id>` + `/openapi.json`.
+
+  - Every rich `defineAction` (one with a description, the same set `/mcp` lists)
+    is also `POST /api/<id>`: the JSON body is the input and the JSON response is
+    the result. It goes through the same `invokeAction`, with the same
+    `createPipeline({ identity })` principal as `/mcp`, so `requiresPrincipal`
+    and schema validation hold on this surface too. Only an action's canonical
+    path (`/api/` + `encodeURIComponent(id)`) is claimed, and every other
+    `/api/*` path still falls through to the app's routes.
+  - Errors have one shape, `{ error: { code, message, hint? } }`, classified the
+    same way as `/mcp` (via `actionDispatchCode`): `invalid_input` (400) and
+    `unauthorized` (401) are invokeAction's own refusals; anything the action
+    throws — including a nested dispatch refusal it lets escape — is
+    `execution_error` (500, message only, never a stack). Transport codes:
+    `invalid_json` (400), `not_found` (404), `method_not_allowed` (405, with
+    `Allow: POST`), `unsupported_media_type` (415). A JSON `Content-Type` is
+    required (an RFC 9110 media type whose type/subtype is `application/json` or a
+    `+json` type), so a cross-site browser request is always CORS-preflighted and
+    can't reach an action with a simple form post.
+  - `GET /openapi.json` returns an OpenAPI 3.1 document generated from the
+    registry: one POST operation per action, with `operationId` = the action id,
+    `summary`/`description`, the input schema as a required request body (send
+    `{}` when a tool takes no input), and typed 200 and error responses (a shared
+    `Error` schema). An action's MCP `annotations` appear as `x-mcp-annotations`.
+  - The HTTP API is one more `agentServices()` entry, so it is advertised
+    everywhere the MCP server is: the homepage `Link` header
+    (`rel="service-desc"`), the RFC 9727 api-catalog (an `item` with its
+    `service-desc`), the ARD / AI Catalog (an `api` entry), the generated
+    SKILL.md ("Act (HTTP)"), an llms.txt "HTTP API" section, the actionable 404,
+    and `june info`. Its media type is `application/json` everywhere, from one
+    constant (`OPENAPI_MEDIA_TYPE`): IANA registers no OpenAPI media type. A
+    static build projects it out with MCP — no server, nothing advertised.
+  - New `agent.api` flag: on by default, off with `agent.enabled: false`. New
+    subpath: `@junejs/core/api` (`apiHandler`, `apiActionId`, `apiActionPath`,
+    `isRoutableActionId`, `isJsonContentType`, `OPENAPI_MEDIA_TYPE`,
+    `openApiDocument`). An action id that cannot be a URL path segment (`""`,
+    `"."`, `".."`, or one that can't be encoded at all) stays valid for
+    `defineAction` and `/mcp` but is left off this surface, with a one-time
+    warning.
+
+- [#231](https://github.com/junebuild/june/pull/231) [`c54a6f0`](https://github.com/junebuild/june/commit/c54a6f08547413c9a020b673b7181ea9fb496b01) Thanks [@linyiru](https://github.com/linyiru)! - Site identity in JSON-LD, a "When to use" slot in llms.txt, and a sitemap that lists every page.
+
+  - `site.organization` (`{ name?, url?, logo?, email?, telephone?, sameAs?, address? }`):
+    the homepage JSON-LD becomes a schema.org `@graph` with an `Organization`
+    that the `WebSite` names as its publisher. Email/telephone become a
+    `ContactPoint`, `sameAs` merges with the `site.twitter` profile URL, and
+    nothing is emitted until the app declares it.
+  - `site.jsonLd`: extra schema.org nodes (SoftwareApplication, FAQPage, …)
+    appended to the same `@graph` (a node's own top-level `@context` is
+    dropped), referencing the built-in nodes by `@id`: `<site-home>#website` /
+    `<site-home>#organization`, where the site home is the public origin plus
+    any `basePath` (e.g. `https://acme.github.io/docs/#website`).
+  - `agent.llms.whenToUse: string[]` renders as `## When to use` under the
+    llms.txt summary.
+  - `/sitemap.xml` now lists a dynamic route's real pages, not just static
+    routes, and skips resource routes. At runtime those pages come from the
+    route's `llms` entries (the runtime-safe hook `llms.txt` already runs);
+    `staticPaths` stays build-only and is added only to the static() target's
+    prerendered sitemap (outside i18n). `llms = false` keeps a static route in
+    the sitemap; on a dynamic route it removes the route's pages from both
+    llms.txt and the runtime sitemap (a static() build still lists them via
+    `staticPaths`).
+    `LlmsEntry.lastModified` (string or Date) becomes `<lastmod>`; June never
+    fills in the build time.
+
+### Patch Changes
+
+- [#236](https://github.com/junebuild/june/pull/236) [`cde48a2`](https://github.com/junebuild/june/commit/cde48a28d8a532b2d5d549d569894dff28caba39) Thanks [@linyiru](https://github.com/linyiru)! - Agent discovery gains the ARD catalog and an Agent Skills index, and the api-catalog lists its APIs as RFC 9727 items. All derived from the app graph and on with `agent.discovery`.
+
+  - `/.well-known/agent-skills/index.json` (Agent Skills Discovery RFC v0.2.0): one generated skill per app, named after the host (`june.build` → `june-build`), served at `/.well-known/agent-skills/<name>/SKILL.md`. It teaches an agent to use the site: `llms.txt`, Markdown projections, and each MCP tool with its parameters. The index entry carries the `sha256` digest of the exact served bytes.
+  - `/.well-known/ai-catalog.json` and `/.well-known/ard.json`: an AI Catalog (the format ARD crawls) listing the MCP server card and the skill, with `urn:air:<host>:…` identifiers and a `did:web:<host>` host. Served as `application/json` with `Access-Control-Allow-Origin: *`, advertised by `robots.txt` (`Agentmap:`), `<link rel="ai-catalog">` in every page head, and the `Link` header.
+  - `/.well-known/api-catalog` follows RFC 9727:
+    - Per §4, the first linkset context is the catalog itself, listing each API (the site, `/mcp`) as an `item`. Each API then has its own context with `service-desc` / `service-doc`, and the MCP card is typed `application/mcp-server-card+json`.
+    - The response carries the RFC 9727 `profile` parameter.
+    - Per §2, both `GET` and `HEAD` answer with a `Link: </.well-known/api-catalog>; rel="api-catalog"` header.
+    - `agentServices()` is the one list every catalog reads from.
+  - Catalogs are published, and advertised (by `<link rel="ai-catalog">`, the `Link` header relation, and robots `Agentmap:`), only when `agent.discovery` is on, the site owns the domain root (no `basePath`), and it can name its public origin. `buildLinkHeader()` and `robotsTxt()` take `{ catalogs }` for the host's rule. An unmatched path under `/.well-known/agent-skills/` answers 404 while the skills are served, instead of reaching app routing.
+  - The discovery surfaces served by the pipeline (`llms.txt`, `robots.txt`, `sitemap.xml`, the api-catalog, the MCP server card, the ARD catalogs, and the skills) answer `HEAD` as well as `GET`: the same status and headers, no body. The Agent Skills Discovery RFC requires `HEAD` for the skills index and artifacts, and RFC 9727 for the api-catalog; the rest follow for consistency. The MCP card's CORS `access-control-allow-methods` is now `GET, HEAD`.
+  - A static build prerenders the ARD catalog (both paths), the skills index, and the generated `SKILL.md` alongside `llms.txt` and `sitemap.xml`, but only for a root deploy with `site.url` or `deploy.domain`, so no file names the placeholder prerender host. It publishes no `robots.txt`, api-catalog, or MCP card.
+  - Static builds render with MCP projected out, because a static host serves no `/mcp`. `llms.txt` drops its MCP claims, the catalogs and skill list no MCP server, and pages register no WebMCP tools. Previously a static `llms.txt` advertised a `/mcp` endpoint that didn't exist.
+
+- [#230](https://github.com/junebuild/june/pull/230) [`eac1daa`](https://github.com/junebuild/june/commit/eac1daa276c2f2f94ca1d98f2306a83a5a88563f) Thanks [@linyiru](https://github.com/linyiru)! - Agent-ready content negotiation defaults: caches, 404s and markdown metadata.
+
+  - `withAssets` adds `Vary: Accept` to prerendered page responses — both the
+    HTML asset and the Markdown served for `Accept: text/markdown` — merging with
+    any `Vary` the asset layer already set. The same URL answers either body, so a
+    cache that ignored Accept could hand an agent the HTML. Every document the
+    pipeline renders (streamed pages and the 404 included) varies on Accept too.
+  - Accept negotiation honors q-values, and the pipeline and `withAssets` share
+    one decision (`acceptTarget`). Markdown or JSON is served when the client
+    lists it at least as preferred as HTML. A client that ranks HTML higher
+    (`text/html, text/markdown;q=0.5`) gets HTML, where before any mention of
+    `text/markdown` won. A browser's Accept is unaffected. When markdown is
+    preferred but a prerendered page has no `.md` asset (the route sets
+    `md = false`), the worker hands the request to the pipeline, which returns the
+    disabled projection's 404, instead of serving the HTML asset. A malformed q
+    (outside RFC 9110's qvalue grammar) reads as the default 1.
+  - `withAssets` never answers a negotiated projection with the prerendered HTML
+    document:
+    - `Accept: application/json` gets the `.json` asset of a `json()` route, and
+      otherwise the pipeline (derived loader data, or 404 when json is disabled).
+    - The client router's soft-nav fragment request goes to the pipeline's
+      fragment. Before, a soft nav to a prerendered page received the full
+      document, which the router morphed into `[data-june-root]` as inner HTML,
+      nesting a second root plus head tags. Such soft navs now render in the worker
+      instead of hitting the asset cache.
+  - A 404 an agent can act on: an `Accept: text/markdown` (or `.md`) miss returns
+    a Markdown body linking `/llms.txt`, `/sitemap.xml` and `/mcp` (only the
+    surfaces the app serves). The JSON 404 keeps `error` and `path` and adds
+    `code: "not_found"` and a `hint`. Every 404 variant carries `Vary: Accept`.
+  - Pages advertise their markdown twin with
+    `<link rel="alternate" type="text/markdown" href="….md">` (`/index.md` for
+    the home page), gated with the rest of `agent.discovery` and omitted when the
+    route sets `md = false`.
+  - A markdown projection with no frontmatter of its own opens with one built
+    from the page metadata: `title`, `description`, and `canonical`, which follows
+    the same rules as the HTML `<link rel="canonical">`. Authored markdown that
+    already has frontmatter is still served byte-for-byte.
+  - `@junejs/core/document` exports `pageCanonical()`. The Document's canonical
+    now goes through it too.
+
+- [#234](https://github.com/junebuild/june/pull/234) [`18cc523`](https://github.com/junebuild/june/commit/18cc523dabecf56ef510e64ce0b94edf02ce9e02) Thanks [@linyiru](https://github.com/linyiru)! - `/mcp` introduces itself as your app and reports errors the MCP spec's way.
+
+  - `initialize` returns a derived `serverInfo` (`name` = reversed host / short
+    site name, e.g. `build.june/june`; `title` = the site's short name) and
+    `instructions` generated from `site.description`, the tool list, and — with
+    discovery on — the `/llms.txt` and `.md` pointers. Previously every app
+    answered as `{ name: "june", version: "0.0.0" }` with no instructions.
+  - New `agent.mcpServer: { name?, title?, description?, version?, instructions? }`
+    overrides any derived field. `resolveAgent` validates these against the v1
+    Server Card schema (name pattern, title/description ≤ 100 chars, version
+    ≤ 255) and throws a config error naming the field.
+    `mcpServerIdentity(origin, { site, agent })` is exported from
+    `@junejs/core/mcp`; `mcpHandler` takes it as an optional third argument.
+  - `/.well-known/mcp/server-card.json` follows the v1 Server Card schema
+    (SEP-2127): `$schema`, reverse-DNS `name`, `title`, `description`,
+    `websiteUrl`, `icons` (from the site's icon set, resolved like the document's
+    `<link>`), and a `streamable-http` remote. A derived description or title
+    longer than the schema's 100 characters is trimmed at a sentence or word
+    boundary (`fitCardText`), and `instructions` keep the full text. The card is
+    served as `application/mcp-server-card+json` with the spec's CORS headers,
+    `Cache-Control: public, max-age=3600`, and an `OPTIONS` preflight answer. The
+    api-catalog `service-desc` and the `Link` header advertise the card with that
+    same type, through one exported constant, `MCP_SERVER_CARD_TYPE`. The
+    earlier `url` / `protocolVersion` / `capabilities` / `tools` fields stay for
+    existing readers. `mcpServerCard(origin, opts?)` gains an optional
+    `{ site, agent, icons, basePath }`. `withBasePath` is exported from
+    `@junejs/core/document`.
+  - `tools/call` on a tool that isn't listed is now a JSON-RPC `-32602` error
+    naming the available tools (was an `isError` result). This also means bare,
+    description-less actions are no longer callable over `/mcp`: they were never
+    listed.
+  - A failed tool call's `isError` text is now JSON,
+    `{"error":{"code","message"}}`, where `code` is `invalid_input`,
+    `unauthorized`, or `execution_error`. `invokeAction` tags the errors it
+    throws before running with `error.code`, and `actionDispatchCode(error)`
+    (from `@junejs/core/agent`) recognizes only those. Any other `code` an action
+    throws (`ECONNRESET`, say) is reported as `execution_error`. That includes a
+    nested `invokeAction` refusal that escapes the action's `run()`: the marker is
+    cleared at that boundary, on the same error object. A nested refusal the action
+    catches itself keeps its code.
+  - A message without `jsonrpc: "2.0"` or a string `method` gets `-32600 Invalid
+Request`, even without an `id`. Only a valid notification gets the silent `202`.
+    An empty batch `[]` gets one `-32600` error object (id null).
+
+- Updated dependencies [[`862a969`](https://github.com/junebuild/june/commit/862a9693cc3ab00cfb5c08e6bc07542590b58349), [`cde48a2`](https://github.com/junebuild/june/commit/cde48a28d8a532b2d5d549d569894dff28caba39), [`eac1daa`](https://github.com/junebuild/june/commit/eac1daa276c2f2f94ca1d98f2306a83a5a88563f), [`18cc523`](https://github.com/junebuild/june/commit/18cc523dabecf56ef510e64ce0b94edf02ce9e02), [`c54a6f0`](https://github.com/junebuild/june/commit/c54a6f08547413c9a020b673b7181ea9fb496b01)]:
+  - @junejs/core@0.2.0-dev.51
+
 ## 1.0.0-dev.30
 
 ### Patch Changes
