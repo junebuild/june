@@ -21,7 +21,7 @@ from the route graph and your actions — you author none of them:
 | `/.well-known/agent-skills/index.json` | a generated [Agent Skill](https://agentskills.io/) that teaches an agent to use this site ([discovery RFC v0.2.0](https://github.com/cloudflare/agent-skills-discovery-rfc)) |
 | `/mcp` | your actions as MCP tools an agent can call |
 | `/.well-known/mcp/server-card.json` | the MCP server's identity and how to connect (when MCP is on) |
-| `/openapi.json`, `POST /api/<id>` | the same actions as plain HTTP — OpenAPI 3.1 for OpenAPI / function-calling clients |
+| `/openapi.json`, `GET /api`, `POST /api/<id>` | the same actions as plain HTTP — OpenAPI 3.1 for OpenAPI / function-calling clients; `GET /api` indexes them, and any other miss under `/api` is a JSON error, not an HTML page |
 | `Link` response header | discovery advertised on every HTML response |
 
 It's on by default and one switch turns it all off (`agent: { enabled:
