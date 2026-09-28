@@ -185,7 +185,7 @@ type EmailOutbound = {
     providerId: string; messageId?: string;
     recipients: { address: string; outcome: "delivered" | "queued" | "bounced" | "suppressed" | "rejected"; detail?: string }[];
   }>;
-  capabilities: { rawMime: boolean; ownMessageId: boolean; maxBytes: number; maxRecipients: number };
+  capabilities: { rawMime: boolean; ownMessageId: boolean; returnsMessageId: boolean; maxBytes: number; maxRecipients: number };
 };
 ```
 
@@ -198,9 +198,11 @@ delivery state is stored per `(message, recipient)` (§8).
 - **structured**: Cloudflare `env.EMAIL.send({...})` and REST, Resend, Mailgun. The adapter maps
   `OutboundEmail` to the provider's fields and passes `In-Reply-To` / `References` as headers.
 
-`ownMessageId` matters for threading: when June cannot choose the outbound `Message-ID`, a
-reply's `In-Reply-To` cannot be matched to a session by lookup alone, and the signed reply
-address (§6) carries the routing instead.
+`ownMessageId` and `returnsMessageId` matter for threading. A reply's `In-Reply-To` can be
+matched to a thread by lookup when June either chose the outbound `Message-ID` or was told,
+exactly, the one the provider put on the wire — and stored it. When neither holds, only the
+signed reply address (§6) carries the routing. Cloudflare is `ownMessageId: false,
+returnsMessageId: true` (verified, §13).
 
 ### Cloudflare Email Service (read 2026-09-28)
 
@@ -214,10 +216,14 @@ The first provider, and the one June's edge target runs on. From the docs:
   and free on both Workers plans. The docs recommend `postal-mime` for parsing.
 - **Addresses** can be declared in wrangler config (`addresses: ["scout@example.com",
   "*@example.com"]`, Wrangler ≥ 4.113.0), each routed to the Worker. A catch-all is apex-only;
-  on a subdomain every address is listed literally — `june build` can emit the list from the
-  agents' definitions. Limit: 200 routing rules per domain.
+  on a subdomain every address is listed literally. Limit: 200 routing rules per domain.
+  **With an account-owned deploy token, `addresses` fails** (verified 2026-09-28, §13): wrangler
+  calls an undocumented account-level `/email/routing/rules/plan` that no grantable
+  permission tried satisfied. Rules created through the zone API
+  (`POST /zones/{zone}/email/routing/rules`, action `worker`) work with the zone-scoped *Email
+  Routing Rules Write* — so `june deploy` creates the agents' rules that way (§13).
 - **Subaddressing** (`scout+detail@…` matched by the `scout@…` rule, `+detail` preserved in
-  `message.to`) is an account setting that must be turned on. The signed reply address
+  `message.to` with its case — verified, §13) is a zone-wide setting that must be turned on. The signed reply address
   (§6) depends on it; `diagnose()` must check it.
 - **`message.reply()` is not the reply path.** It may be called once, inside the `email()`
   event, only to the original sender, and requires a valid DMARC result. An agent's reply is
@@ -231,8 +237,9 @@ The first provider, and the one June's edge target runs on. From the docs:
   host's path).
 - **Headers are allowlisted.** `In-Reply-To`, `References`, `Auto-Submitted`, `List-*` and any
   `X-*` are settable; **`Message-ID` is platform-controlled** and cannot be set. A disallowed
-  header rejects the whole send. So `ownMessageId: false` for Cloudflare, and threading replies
-  to the agent rely on the signed reply address.
+  header rejects the whole send. But the id `send()` returns is exactly the `Message-ID`
+  header the recipient gets (verified, §13): June stores it, so both the signed reply address
+  and header lookup route replies on Cloudflare.
 - **Sender restriction at the platform**: a `send_email` binding can set
   `allowed_sender_addresses`. `june build` emits one binding per agent restricted to that
   agent's address — the platform enforces that an agent can only send as itself.
@@ -272,9 +279,11 @@ The first provider, and the one June's edge target runs on. From the docs:
   aligned with `From:`, which is what §7.1 needs.
 - **ASCII local parts only.** Email Routing supports internationalized domains but not
   internationalized local parts; agent addresses are validated at configuration time.
-- **REST `send_raw`** takes a full RFC 5322 message plus the envelope. Whether it keeps a
-  caller-set `Message-ID` is undocumented (the header allowlist says `Message-ID` is
-  platform-controlled); it is on the live-test list (§13).
+- **REST `send_raw`** takes a full RFC 5322 message plus the envelope. A caller-set
+  `Message-ID` is accepted and then replaced; the returned `message_id` is the delivered one.
+  The header allowlist is not applied to the raw message as it is to the `headers` field. A
+  caller-set future `Date` left a message `queued` and undelivered — June never sets `Date`
+  (verified, §13).
 
 ### Other providers
 
@@ -389,7 +398,9 @@ Email is reachable by anyone, so these are defaults, not options:
    RFC 8601 prescribes; or **June's own DKIM verification** of the raw message (key over
    DNS-over-HTTPS, signature with Web Crypto) with DMARC alignment computed against `From:`.
    Every other `Authentication-Results` header is ignored. `auth.source` records which one
-   applied; `"none"` never yields a principal.
+   applied; `"none"` never yields a principal. On Cloudflare the receiving hop's `authserv-id`
+   is **`mx.cloudflare.net`**, and a sender-supplied copy arrives below Cloudflare's own
+   (verified, §13).
 2. **Prompt injection.** Message content is untrusted data, never authorization: nothing a
    message says widens what the turn may do. Tool and data authorization (`requiresPrincipal`,
    `authorize`, per-mailbox scoping) stays mandatory on every turn, whatever the send policy.
@@ -789,8 +800,8 @@ export default (env: Env) => emailChannel({
 });
 ```
 
-From the addresses, `june build` emits the wrangler `addresses` entries and a `send_email`
-binding restricted to the agent's own addresses; `june inbox` and, later, the web pages
+From the addresses, `june build` emits a `send_email` binding restricted to the agent's own
+addresses and `june deploy` creates their routing rules through the zone API (§5, §13); `june inbox` and, later, the web pages
 in `.june/routes/` operate it through the same actions; the agent gets `email__search`, `email__list_threads`,
 `email__read_thread`, `email__read_attachment`, `email__draft` and `email__send`.
 
@@ -800,7 +811,7 @@ in `.june/routes/` operate it through the same actions; the agent gets `email__s
 | --- | --- | --- |
 | **P0e** | engine seams: #260, #261, #262, #263; CLI external subcommands | approvals and take-over have something to stand on |
 | **P0** | types, MIME parse/build, thread key, signed reply address, **identity (§7.1) and the send gate (§7.3)**, safety (§7.4–7.5, §7.8 caps and suppression), mailbox store + migrations + search index, `.eml` corpus (multipart, non-UTF-8, encoded headers, auto-replies, bounces, list mail) | the provider-independent core |
-| **P1** | the Cloudflare live tests (§13) first; Cloudflare inbound + outbound — outbound is enabled only once the §7.1 identity check and the §7.3 send gate from P0 are in place, and a turn cannot reach `send` without them; worker `email()` and `queue()` entries; `june build` emits `addresses` + per-agent `send_email`; wrangler pin ≥ 4.113 | the edge target end to end |
+| **P1** | Cloudflare inbound + outbound (live tests done 2026-09-28, §13) — outbound is enabled only once the §7.1 identity check and the §7.3 send gate from P0 are in place, and a turn cannot reach `send` without them; worker `email()` and `queue()` entries; `june build` emits `addresses` + per-agent `send_email`; wrangler pin ≥ 4.113 | the edge target end to end |
 | **P1b** | supervision contract + API (§9.1–9.2), `@junejs/inbox` CLI + `june login`, per-mailbox `authorize` | `approve` works without Slack, from a terminal or a coding agent |
 | **P1c** | `june inbox` TUI, the change feed, compiled binaries | live triage; operators without the repo |
 | **P2** | Resend, SES; Gmail with durable `alarm()` | notify inbound, cursors, SigV4, OAuth, renewal |
@@ -846,24 +857,25 @@ testing split the Slack channel already uses.
 14. **Verified provider numbers and proposed breaker defaults** recorded in §7.7
     (2026-09-28).
 
-## 13. Open questions and live tests
+## 13. Live test results and open questions
 
-Cloudflare is built first, and five of its behaviors are undocumented or account-specific;
-each is settled by a test against a real onboarded domain before P1 code depends on it. The
-domain is **`agents.june.build`**, which June dogfoods for its own support and brand
-mailboxes (decided 2026-09-28) — a sending and routing subdomain kept apart from the
-`june.build` apex, as Cloudflare recommends:
+Cloudflare is built first. Five of its behaviors were undocumented or account-specific; they
+were settled on 2026-09-28 by a probe Worker (`poc/email-probe`, its README has the evidence)
+against **`agents.june.build`** — the subdomain June dogfoods for its own support and brand
+mailboxes, kept apart from the `june.build` apex as Cloudflare recommends.
 
-1. **Does the message `email()` receives carry `Authentication-Results`?** §7.1 derives an
-   operator's identity from aligned DMARC / DKIM. If the header is absent, June verifies DKIM
-   itself over the raw MIME (DNS-over-HTTPS for the key, Web Crypto for the signature).
-2. **Does REST `send_raw` keep a caller-set `Message-ID`?** If it does, header lookup (§6)
-   becomes a reliable second thread key on Cloudflare.
-3. **Is a delivery event's `messageId` the one `send()` returned?** It decides how delivery
-   status is joined to stored messages.
-4. **Do subaddressing and wrangler `addresses` work together** (`scout+<thread>.<mac>@…`
-   reaching the Worker through a literal `scout@…` rule on a subdomain)?
-5. **What daily quota does the account actually start with?**
+| # | question | result | consequence |
+| --- | --- | --- | --- |
+| 1 | Does `email()` see a trustworthy `Authentication-Results`? | Yes: Cloudflare prepends its own, `authserv-id` `mx.cloudflare.net`, plus `ARC-Authentication-Results` and `Received-SPF`. A forged copy in the sent message is delivered below it. | §7.1 as designed: the Cloudflare adapter trusts only the topmost `Authentication-Results` from `mx.cloudflare.net`. June's own DKIM verification is not needed on Cloudflare. |
+| 2 | Does `send_raw` keep a caller-set `Message-ID`? | No — accepted, then replaced. The returned id is the delivered `Message-ID`, for `send_raw` and the binding's `send()` alike. | Store the returned id; header lookup (§6) works on Cloudflare as a second thread key. |
+| 3 | Is a delivery event's `messageId` the one `send()` returned? | Yes, for all seven sends; events are per recipient. | `email_deliveries` joins events on `(messageId, recipient)` directly (§8). |
+| 4 | Do subaddressing and a literal rule work together? | Yes; `+tag` and its case reach `message.to`. wrangler `addresses` itself failed with the account-owned deploy token. | The signed reply address (§6) works. Rules are created through the zone API. |
+| 5 | What daily quota does the account start with? | Not observable without spending it; sending to non-verified recipients works on this account. | Unchanged: learned from `E_DAILY_LIMIT_EXCEEDED` (§5, §7.7). |
 
-Also open: the circuit breaker's defaults (§7.7) are a proposal to be tuned against real
-traffic.
+Still open:
+
+1. **The permission wrangler `addresses` needs.** Tried and refused: zone *Email Routing
+   Rules Write*; account *Email Routing Account Rules Read*; *Email Routing Rules Read* and
+   *Write* on all zones. Worth raising with Cloudflare; until then `june deploy` uses the zone
+   API.
+2. **The circuit breaker's defaults** (§7.7) are a proposal to be tuned against real traffic.
