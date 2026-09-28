@@ -9,11 +9,38 @@
 
 @import url("https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap");
 
+/* Metric-matched fallbacks: until Geist arrives (display=swap), text is set in
+   Arial / Courier New (or their metric twins Arimo / Cousine, Liberation) scaled
+   to Geist's width and given Geist's ascent and descent (hhea 1005 / 295 per
+   1000, every weight) — so the swap changes glyph shapes, not line breaks or
+   line heights. One face per weight band: Geist widens as it gets bolder, and
+   Arial Bold is closer to Geist 600/700 than a synthesized Arial.
+   size-adjust is MEASURED, not derived from advance widths: Chrome sets this
+   site's content/**.md prose on one line in Geist and in the fallback, kerning
+   on, and takes the ratio. Advance-width tables ignore Geist's kerning and came
+   out 2–3% wide. Re-measure if the Geist weights or versions change.
+   Measures are in em, never ch: 1ch is the width of "0" in the CURRENT font —
+   0.663em in Geist 400 (0.683em at 600) but 0.568em in the fallback — so a
+   58ch column would narrow by 14% until Geist arrives and rewrap on the swap.
+   Each "Nch of Geist" below is N × that advance. */
+@font-face { font-family: "Geist Fallback"; font-weight: 100 449; src: local("Arial"), local("ArialMT"), local("Arimo"), local("Liberation Sans");
+  size-adjust: 102.18%; ascent-override: 98.36%; descent-override: 28.87%; line-gap-override: 0%; }
+@font-face { font-family: "Geist Fallback"; font-weight: 450 549; src: local("Arial"), local("ArialMT"), local("Arimo"), local("Liberation Sans");
+  size-adjust: 104.63%; ascent-override: 96.05%; descent-override: 28.19%; line-gap-override: 0%; }
+@font-face { font-family: "Geist Fallback"; font-weight: 550 649; src: local("Arial Bold"), local("Arial-BoldMT"), local("Arimo Bold"), local("Liberation Sans Bold");
+  size-adjust: 99.53%; ascent-override: 100.97%; descent-override: 29.64%; line-gap-override: 0%; }
+@font-face { font-family: "Geist Fallback"; font-weight: 650 900; src: local("Arial Bold"), local("Arial-BoldMT"), local("Arimo Bold"), local("Liberation Sans Bold");
+  size-adjust: 101.80%; ascent-override: 98.72%; descent-override: 28.98%; line-gap-override: 0%; }
+@font-face { font-family: "Geist Mono Fallback"; font-weight: 100 549; src: local("Courier New"), local("CourierNewPSMT"), local("Cousine"), local("Liberation Mono");
+  size-adjust: 99.98%; ascent-override: 100.52%; descent-override: 29.51%; line-gap-override: 0%; }
+@font-face { font-family: "Geist Mono Fallback"; font-weight: 550 900; src: local("Courier New Bold"), local("CourierNewPS-BoldMT"), local("Cousine Bold"), local("Liberation Mono Bold");
+  size-adjust: 99.98%; ascent-override: 100.52%; descent-override: 29.51%; line-gap-override: 0%; }
+
 /* ── Design tokens ─────────────────────────────────────────────────────────── */
 :root {
-  --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+  --font-sans: "Geist", "Geist Fallback", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
     "PingFang TC", "Microsoft JhengHei", "Noto Sans TC", "Noto Sans JP", sans-serif;
-  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --font-mono: "Geist Mono", "Geist Mono Fallback", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 
   --radius-xs: 4px; --radius-sm: 6px; --radius-md: 10px; --radius-lg: 14px; --radius-pill: 999px;
   --ease-out: cubic-bezier(0.22, 0.61, 0.36, 1);
@@ -123,8 +150,8 @@ pre code { background: transparent; }
   color: var(--s-muted); margin: 0 0 18px; display: flex; align-items: center; gap: 10px; }
 .j-eyebrow .j-num { color: var(--s-signal); }
 .j-h2 { font-weight: 600; font-size: clamp(28px, 3.4vw, 40px); line-height: 1.1; letter-spacing: -0.03em;
-  color: var(--s-text); margin: 0 0 16px; max-width: 20ch; text-wrap: balance; }
-.j-lead { font-size: 17px; line-height: 1.6; color: var(--s-body); margin: 0; max-width: 58ch; text-wrap: pretty; }
+  color: var(--s-text); margin: 0 0 16px; max-width: 13.66em; /* 20ch of Geist */ text-wrap: balance; }
+.j-lead { font-size: 17px; line-height: 1.6; color: var(--s-body); margin: 0; max-width: 38.45em; /* 58ch of Geist */ text-wrap: pretty; }
 .j-lead code, .j-codeword { font-size: 0.88em; padding: 1px 5px; border-radius: var(--radius-xs); border: 1px solid var(--s-line); }
 .j-codeword { font-family: var(--font-mono); background: var(--s-bg-subtle); color: var(--s-strong); }
 .j-kbd { font-family: var(--font-mono); font-size: 11px; color: var(--s-muted); border: 1px solid var(--s-line-strong);
@@ -251,7 +278,7 @@ pre code { background: transparent; }
 .j-hero h1 { font-weight: 600; font-size: clamp(44px, 7.2vw, 88px); line-height: 0.98; letter-spacing: -0.045em;
   color: var(--s-text); margin: 0 0 24px; text-wrap: balance; }
 .j-hero h1 .dim { color: var(--s-muted); }
-.j-hero-sub { font-size: clamp(17px, 1.6vw, 19px); line-height: 1.6; color: var(--s-body); margin: 0 0 32px; max-width: 60ch; text-wrap: pretty; }
+.j-hero-sub { font-size: clamp(17px, 1.6vw, 19px); line-height: 1.6; color: var(--s-body); margin: 0 0 32px; max-width: 39.78em; /* 60ch of Geist */ text-wrap: pretty; }
 .j-hero-sub code { font-size: 0.86em; padding: 1px 5px; border-radius: var(--radius-xs); border: 1px solid var(--s-line); }
 .j-hero-cta { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .j-hero-stage { margin-top: 56px; }
@@ -429,12 +456,12 @@ pre code { background: transparent; }
 .j-cta::before { content: ""; position: absolute; inset: 0; background: var(--s-glow); transform: scaleY(-1); pointer-events: none; }
 .j-cta-in { position: relative; width: var(--col-wide); margin: 0 auto; padding: 120px 0; text-align: center; display: flex; flex-direction: column; align-items: center; }
 .j-cta h2 { font-weight: 600; font-size: clamp(36px, 5.4vw, 64px); line-height: 1; letter-spacing: -0.045em; color: var(--s-text); margin: 0 0 18px; text-wrap: balance; }
-.j-cta p { font-size: 17px; color: var(--s-body); margin: 0 0 32px; max-width: 52ch; }
+.j-cta p { font-size: 17px; color: var(--s-body); margin: 0 0 32px; max-width: 34.48em; /* 52ch of Geist */ }
 
 /* ── Footer ────────────────────────────────────────────────────────────────── */
 .j-footer { border-top: 1px solid var(--s-line); background: var(--s-bg-sunken); }
 .j-footer-in { width: var(--col-wide); margin: 0 auto; padding: 56px 0 40px; display: grid; grid-template-columns: 1.6fr repeat(3, 1fr); gap: 32px; }
-.j-footer-tag { font-size: 14px; line-height: 1.55; color: var(--s-secondary); margin: 14px 0 0; max-width: 36ch; }
+.j-footer-tag { font-size: 14px; line-height: 1.55; color: var(--s-secondary); margin: 14px 0 0; max-width: 23.87em; /* 36ch of Geist */ }
 .j-footer-col h4 { font: 500 11.5px var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--s-muted); margin: 0 0 14px; }
 .j-footer-col a { display: block; font-size: 14px; color: var(--s-secondary); text-decoration: none; padding: 4px 0; }
 .j-footer-col a:hover { color: var(--s-text); }
@@ -448,7 +475,7 @@ pre code { background: transparent; }
 .j-pagehead::before { content: ""; position: absolute; inset: 0; background: var(--s-glow); pointer-events: none; }
 .j-pagehead-in { position: relative; width: var(--col-wide); margin: 0 auto; padding: 72px 0 48px; }
 .j-pagehead h1 { font-weight: 600; font-size: clamp(36px, 5vw, 56px); letter-spacing: -0.04em; line-height: 1.02; color: var(--s-text); margin: 0 0 16px; }
-.j-pagehead .j-lead { max-width: 64ch; }
+.j-pagehead .j-lead { max-width: 42.43em; /* 64ch of Geist */ }
 
 /* ── Docs layout ───────────────────────────────────────────────────────────── */
 .j-docs { width: var(--col-wide); margin: 0 auto; display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 56px; }
@@ -520,7 +547,7 @@ pre code { background: transparent; }
 .j-post-meta { font: 12px var(--font-mono); color: var(--s-muted); display: flex; gap: 12px; flex-wrap: wrap; padding-top: 5px; }
 .j-post h3 { font-size: 21px; font-weight: 600; letter-spacing: -0.02em; color: var(--s-text); margin: 0 0 7px; transition: color var(--dur-fast); }
 .j-post:hover h3 { color: var(--s-accent); }
-.j-post p { font-size: 15px; line-height: 1.55; color: var(--s-secondary); margin: 0; max-width: 64ch; }
+.j-post p { font-size: 15px; line-height: 1.55; color: var(--s-secondary); margin: 0; max-width: 42.43em; /* 64ch of Geist */ }
 .j-post-read { width: min(var(--col-prose), 100vw - 32px); margin: 0 auto; padding: 56px 0 96px; }
 .j-post-read h1 { font-size: clamp(32px, 4.4vw, 46px); font-weight: 600; letter-spacing: -0.04em; color: var(--s-text); margin: 16px 0 12px; line-height: 1.06; }
 .j-back { font: 12.5px var(--font-mono); color: var(--s-muted); text-decoration: none; }
