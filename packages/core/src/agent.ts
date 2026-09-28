@@ -190,6 +190,39 @@ export function defineAction<const S extends JsonSchema, O>(def: {
   return action;
 }
 
+// Why a dispatch was refused before the action ran — a stable machine code on the
+// thrown Error (`error.code`), so a surface (/mcp) can report it structurally
+// instead of parsing messages. The code is only trusted through
+// actionDispatchCode(): an action's run() (or a dependency) can throw an error
+// with ANY `code` ("ECONNRESET", even "invalid_input"), and that is an execution
+// failure, not a dispatch refusal — the private marker tells the two apart.
+export type ActionDispatchErrorCode = "unknown_action" | "unauthorized" | "invalid_input";
+const DISPATCH_ERROR = Symbol("june.actionDispatchError");
+function dispatchError(code: ActionDispatchErrorCode, message: string): Error & { code: ActionDispatchErrorCode } {
+  return Object.assign(new Error(message), { code, [DISPATCH_ERROR]: true });
+}
+// The dispatch code of an error invokeAction raised itself; undefined for anything else.
+export function actionDispatchCode(error: unknown): ActionDispatchErrorCode | undefined {
+  if (typeof error !== "object" || error === null || !(DISPATCH_ERROR in error)) return undefined;
+  return (error as unknown as { code: ActionDispatchErrorCode }).code;
+}
+
+// An error escaping an action's run() is an EXECUTION failure of that action —
+// even when it is a dispatch refusal from a NESTED invokeAction the action let
+// propagate (run() awaits invokeAction("missing") → unknown_action). The marker
+// is scoped to the dispatch that raised it; that inner dispatch has finished, and
+// the only reader left is the outer surface, for which "unknown_action" would
+// misreport ITS call. So the marker is cleared here, on the same object: identity,
+// class, message, `code`, and stack stay intact for app code that catches it
+// further out. A nested refusal the action CATCHES never reaches this line.
+// Only an object that refuses the delete (frozen) is wrapped instead, with the
+// original as `cause`.
+function escapedFromRun(error: unknown): unknown {
+  if (actionDispatchCode(error) === undefined) return error;
+  if (Reflect.deleteProperty(error as object, DISPATCH_ERROR)) return error;
+  return new Error((error as Error).message, { cause: error });
+}
+
 // JSON dispatch path (agent / MCP): invoke an action by id with a single input
 // and the request-scoped identity (principal/session). ctx defaults to {} so
 // callers that don't have one (tests, anonymous dispatch) still work.
@@ -199,18 +232,23 @@ export async function invokeAction(
   ctx: ActionContext = {},
 ): Promise<unknown> {
   const action = ACTION_REGISTRY.get(id);
-  if (!action) throw new Error(`Unknown action: ${id}`);
+  if (!action) throw dispatchError("unknown_action", `Unknown action: ${id}`);
   // Identity gate at the SAME boundary as schema validation: every dispatch
   // path funnels through here, so a requiresPrincipal action cannot be reached
   // anonymously via /mcp or a UI POST. (Agent turns enforce the same gate
   // earlier — the tool is hidden from the model's list; see actionToTool.)
   if (action.requiresPrincipal && !ctx.user)
-    throw new Error(`Action "${id}" requires an authenticated principal (ctx.user)`);
+    throw dispatchError("unauthorized", `Action "${id}" requires an authenticated principal (ctx.user)`);
   // Enforce the schema at the dispatch boundary — /mcp is untrusted input. This
   // used to be a no-op (the schema only described, never enforced).
   const invalid = validateInput(action.input, input);
-  if (invalid) throw new Error(`Invalid input for "${id}": ${invalid}`);
-  const result = await action.run(input, ctx);
+  if (invalid) throw dispatchError("invalid_input", `Invalid input for "${id}": ${invalid}`);
+  let result: unknown;
+  try {
+    result = await action.run(input, ctx);
+  } catch (error) {
+    throw escapedFromRun(error);
+  }
 
   // Cache coherence is a property of the ACTION, not of one dispatch path:
   // every table this action wrote invalidates its `table:<name>` tag (plus the

@@ -260,6 +260,13 @@ function siteJsonLd(
   return JSON.stringify({ "@context": "https://schema.org", "@graph": graph }).replace(/</g, "\\u003c");
 }
 
+// basePath: prefix the framework's root-absolute asset URLs so they resolve under
+// a deploy subpath (e.g. GitHub Pages "/openab/docs"). Only single-leading-slash
+// URLs are rewritten (leaves "//cdn", "https://…", relative, and empty basePath untouched).
+export function withBasePath(u: string | null | undefined, basePath: string | undefined): string | undefined {
+  return u && basePath && u.startsWith("/") && !u.startsWith("//") ? basePath + u : u ?? undefined;
+}
+
 export function documentTitle(
   meta: Metadata | undefined,
   site: DocumentConfig["site"],
@@ -320,11 +327,7 @@ export function Document({
   const title = documentTitle(metadata, config.site);
   const description = metadata?.description ?? config.site.description;
   const og = metadata?.openGraph;
-  // basePath: prefix the framework's root-absolute asset URLs so they resolve under
-  // a deploy subpath (e.g. GitHub Pages "/openab/docs"). Only single-leading-slash
-  // URLs are rewritten (leaves "//cdn", "https://…", and empty basePath untouched).
-  const withBase = (u?: string | null): string | undefined =>
-    u && config.basePath && u.startsWith("/") && !u.startsWith("//") ? config.basePath + u : u ?? undefined;
+  const withBase = (u?: string | null): string | undefined => withBasePath(u, config.basePath);
   // Social tags are on for every page, so a link shared from any June app unfurls
   // as a card; metadata.openGraph / metadata.twitter only override the values.
   const origin = publicOrigin(config, pageUrl, onLocaleDomain);

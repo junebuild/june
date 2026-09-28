@@ -2,17 +2,13 @@
 // Home Screen" name, icons, and colours, built from the same config the
 // document renders with. Worker-safe (no node:*): the pipeline serves it like
 // the SVG favicon, so dev, the worker, and the static build all agree.
+import { siteShortName } from "@junejs/core/config";
 import { resolveThemeColor, type DocumentConfig } from "@junejs/core/document";
 
 // The home-screen label: site.shortName, else the site name's leading segment
 // ("June — build agents into real apps" → "June"). Launchers truncate past
 // ~12 characters, and a tagline is never the label anyone wants.
-export function shortName(site: DocumentConfig["site"]): string | undefined {
-  if (site.shortName) return site.shortName;
-  const name = site.name?.trim();
-  if (!name) return undefined;
-  return name.split(/\s+[—–|-]\s+|:\s+/)[0]!.trim() || name;
-}
+export const shortName = (site: DocumentConfig["site"]): string | undefined => siteShortName(site);
 
 export function webManifest(config: DocumentConfig): string {
   const base = config.basePath ?? "";

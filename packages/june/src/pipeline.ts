@@ -29,11 +29,12 @@ import {
   apiCatalog,
   buildLinkHeader,
   llmsTxt,
+  MCP_SERVER_CARD_TYPE,
   mcpServerCard,
   robotsTxt,
   sitemapXml,
 } from "@junejs/core/discovery";
-import { mcpHandler, mcpTools } from "@junejs/core/mcp";
+import { mcpHandler, mcpServerIdentity, mcpTools } from "@junejs/core/mcp";
 import type { Principal, Session } from "@junejs/core/context";
 
 import { ensureScope, runInScope, setRequestLocale } from "@junejs/db";
@@ -243,6 +244,17 @@ export function htmlPath(pathname: string, isHome: boolean): string {
   if (!isHome) return path;
   return path.replace(/\/+$/, "").replace(/\/index$/, "") || "/";
 }
+
+// The MCP Server Card's discovery contract (experimental-ext-server-card
+// docs/discovery.md): its own media type (MCP_SERVER_CARD_TYPE, shared with the
+// api-catalog and Link header), and CORS so browser clients can read it.
+const SERVER_CARD_PATH = "/.well-known/mcp/server-card.json";
+const SERVER_CARD_CORS = {
+  "access-control-allow-origin": "*",
+  "access-control-allow-methods": "GET",
+  "access-control-allow-headers": "Content-Type, If-None-Match",
+  "access-control-expose-headers": "ETag",
+};
 
 type PageProps = { pageUrl: string; isHome: boolean; onLocaleDomain: boolean; markdownHref?: string };
 
@@ -611,8 +623,21 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
         );
       case "/.well-known/api-catalog":
         return text(JSON.stringify(apiCatalog(url.origin, agent)), "application/linkset+json");
-      case "/.well-known/mcp/server-card.json":
-        return agent.mcp ? Response.json(mcpServerCard(url.origin)) : null;
+      case SERVER_CARD_PATH:
+        return agent.mcp
+          ? text(
+              JSON.stringify(
+                mcpServerCard(url.origin, {
+                  site: docConfig.site,
+                  agent,
+                  icons: docConfig.icons,
+                  basePath: docConfig.basePath,
+                }),
+              ),
+              MCP_SERVER_CARD_TYPE,
+              { headers: { ...SERVER_CARD_CORS, "cache-control": "public, max-age=3600" } },
+            )
+          : null;
       default:
         return null;
     }
@@ -629,7 +654,16 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
         // the same principal: requiresPrincipal actions and per-call connection
         // auth are live on this surface. ctx carries identity only — not resources.
         const identity = cfg.identity ? await cfg.identity(request) : undefined;
-        return mcpHandler(request, { request, ...identity });
+        return mcpHandler(
+          request,
+          { request, ...identity },
+          mcpServerIdentity(url.origin, { site: docConfig.site, agent }),
+        );
+      }
+      // The server card is read cross-origin by browser-based MCP clients; its
+      // If-None-Match revalidation is a non-safelisted header → a CORS preflight.
+      if (request.method === "OPTIONS" && agent.discovery && agent.mcp && url.pathname === SERVER_CARD_PATH) {
+        return new Response(null, { status: 204, headers: SERVER_CARD_CORS });
       }
       if (request.method === "GET" && agent.discovery) {
         const d = await discovery(url);

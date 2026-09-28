@@ -3,16 +3,21 @@
 // See docs/agent-discoverability.md.
 
 import { ACTION_REGISTRY } from "./agent";
-import type { AgentConfig } from "./config";
+import type { AgentConfig, SiteConfig } from "./config";
+import { withBasePath, type DocumentConfig } from "./document";
 import { localeAlternates, type I18nConfig } from "./i18n";
-
-const PROTOCOL_VERSION = "2025-06-18";
+import { fitCardText, mcpServerIdentity, PROTOCOL_VERSION } from "./mcp";
 
 function toolNames() {
   return [...ACTION_REGISTRY.values()]
     .filter((a) => a.description)
     .map((a) => a.id);
 }
+
+// The MCP Server Card's media type (experimental-ext-server-card docs/discovery.md).
+// ONE constant for every place the card appears — the response, the api-catalog
+// link, the Link header — so what we advertise never drifts from what we serve.
+export const MCP_SERVER_CARD_TYPE = "application/mcp-server-card+json";
 
 // The homepage Link header advertises the whole discovery tree in one place, so
 // an agent fetching any page finds everything without guessing well-known paths.
@@ -23,7 +28,7 @@ export function buildLinkHeader(agent: AgentConfig): string | null {
     `</llms.txt>; rel="describedby"; type="text/markdown"`,
     `</sitemap.xml>; rel="sitemap"`,
     `</.well-known/api-catalog>; rel="api-catalog"`,
-    `</.well-known/mcp/server-card.json>; rel="mcp-server"`,
+    `</.well-known/mcp/server-card.json>; rel="mcp-server"; type="${MCP_SERVER_CARD_TYPE}"`,
   ];
   if (!agent.mcp) links.pop(); // no MCP server card if MCP is off
   return links.join(", ");
@@ -206,19 +211,75 @@ export function apiCatalog(origin: string, agent: AgentConfig) {
   };
   if (agent.mcp) {
     service["service-desc"] = [
-      { href: `${origin}/.well-known/mcp/server-card.json`, type: "application/json" },
+      { href: `${origin}/.well-known/mcp/server-card.json`, type: MCP_SERVER_CARD_TYPE },
     ];
   }
   return { linkset: [service] };
 }
 
-export function mcpServerCard(origin: string) {
+const ICON_TYPES: Record<string, string> = {
+  svg: "image/svg+xml",
+  png: "image/png",
+  ico: "image/x-icon",
+  webp: "image/webp",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+};
+
+// The card's icons, from the same set the document links: the primary favicon
+// (site.icon, the app's own, else June's letter /favicon.svg), the 32×32 PNG, and
+// June's generated 192/512 PNGs.
+// Every src is resolved the way the document's <link> resolves it: basePath applies
+// to root-relative paths only (withBasePath), then URL resolution against the
+// site root handles absolute, protocol-relative ("//cdn…") and relative ("icon.png").
+function cardIcons(origin: string, site: SiteConfig, docIcons: DocumentConfig["icons"], basePath = "") {
+  const siteRoot = `${origin}${basePath}/`;
+  const abs = (u: string) => new URL(withBasePath(u, basePath)!, siteRoot).href;
+  const icon = (src: string, sizes?: string[]) => {
+    const mimeType = ICON_TYPES[src.split(/[?#]/)[0]!.split(".").pop()!.toLowerCase()];
+    return { src: abs(src), ...(mimeType ? { mimeType } : {}), ...(sizes ? { sizes } : {}) };
+  };
+  const primary = site.icon ?? docIcons?.primary ?? "/favicon.svg";
+  const icons = [icon(primary, primary.endsWith(".svg") ? ["any"] : undefined)];
+  if (docIcons?.png && docIcons.png !== primary) icons.push(icon(docIcons.png, ["32x32"]));
+  if (docIcons?.generated) icons.push(icon("/icon-192.png", ["192x192"]), icon("/icon-512.png", ["512x512"]));
+  return icons;
+}
+
+// The MCP Server Card (SEP-2127, schema v1): identity + where and how to connect,
+// so a client can configure itself before opening a transport. Its identity is the
+// SAME mcpServerIdentity the initialize handshake reports.
+// `url`, `protocolVersion`, `capabilities`, and `tools` predate the v1 schema (which
+// leaves primitives to live tools/list); they stay for clients and scanners that
+// read the earlier draft shape.
+export function mcpServerCard(
+  origin: string,
+  opts: {
+    site?: SiteConfig;
+    agent?: Pick<AgentConfig, "discovery" | "mcpServer">;
+    icons?: DocumentConfig["icons"];
+    basePath?: string;
+  } = {},
+) {
+  const site = opts.site ?? {};
+  const id = mcpServerIdentity(origin, { site, agent: opts.agent });
+  const tools = toolNames();
   return {
-    name: "june",
-    version: "0.0.0",
+    $schema: "https://static.modelcontextprotocol.io/schemas/v1/server-card.schema.json",
+    name: id.name,
+    ...(id.title ? { title: id.title } : {}),
+    version: id.version,
+    // Every path is fitted to the schema's 100 chars: id.description already is,
+    // and the host-based fallback goes through the same fitCardText.
+    description:
+      id.description ??
+      fitCardText(`The MCP server for ${new URL(origin).host}: ${tools.length} tool${tools.length === 1 ? "" : "s"}.`),
+    websiteUrl: `${origin}/`,
+    icons: cardIcons(origin, site, opts.icons, opts.basePath),
+    remotes: [{ type: "streamable-http", url: `${origin}/mcp`, supportedProtocolVersions: [PROTOCOL_VERSION] }],
     url: `${origin}/mcp`,
     protocolVersion: PROTOCOL_VERSION,
     capabilities: { tools: { listChanged: false } },
-    tools: toolNames(),
+    tools,
   };
 }

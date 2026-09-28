@@ -6,6 +6,7 @@ import {
   buildLinkHeader,
   llmsTxt,
   type LlmsLink,
+  MCP_SERVER_CARD_TYPE,
   mcpServerCard,
   robotsTxt,
   sitemapXml,
@@ -36,6 +37,16 @@ describe("buildLinkHeader()", () => {
 
     const noMcp = buildLinkHeader(resolveAgent({ mcp: false }));
     expect(noMcp).not.toContain(`rel="mcp-server"`);
+  });
+
+  test("every advertisement of the server card names the media type it is served with", () => {
+    expect(MCP_SERVER_CARD_TYPE).toBe("application/mcp-server-card+json");
+    expect(buildLinkHeader(resolveAgent())).toContain(
+      `</.well-known/mcp/server-card.json>; rel="mcp-server"; type="${MCP_SERVER_CARD_TYPE}"`,
+    );
+    expect(apiCatalog(ORIGIN, resolveAgent()).linkset[0]?.["service-desc"]).toEqual([
+      { href: `${ORIGIN}/.well-known/mcp/server-card.json`, type: MCP_SERVER_CARD_TYPE },
+    ]);
   });
 
   test("returns null when discovery is disabled", () => {
@@ -246,5 +257,65 @@ describe("robotsTxt() / apiCatalog() / mcpServerCard()", () => {
     expect(card.url).toBe(`${ORIGIN}/mcp`);
     expect(card.protocolVersion).toBe("2025-06-18");
     expect(card.tools).toContain("ping");
+  });
+
+  test("mcp server card follows the v1 server-card schema, with identity from the site", () => {
+    const card = mcpServerCard("https://june.build", {
+      site: { name: "June — build agents into real apps", description: "The agent-native React framework." },
+      icons: { png: "/favicon.png", generated: true },
+    });
+    expect(card).toMatchObject({
+      $schema: "https://static.modelcontextprotocol.io/schemas/v1/server-card.schema.json",
+      name: "build.june/june",
+      title: "June",
+      version: "0.0.0",
+      description: "The agent-native React framework.",
+      websiteUrl: "https://june.build/",
+      remotes: [{ type: "streamable-http", url: "https://june.build/mcp", supportedProtocolVersions: ["2025-06-18"] }],
+    });
+    // reverse-DNS with exactly one slash (schema pattern)
+    expect(card.name).toMatch(/^[a-zA-Z0-9.-]+\/[a-zA-Z0-9._-]+$/);
+    expect(card.icons).toEqual([
+      { src: "https://june.build/favicon.svg", mimeType: "image/svg+xml", sizes: ["any"] },
+      { src: "https://june.build/favicon.png", mimeType: "image/png", sizes: ["32x32"] },
+      { src: "https://june.build/icon-192.png", mimeType: "image/png", sizes: ["192x192"] },
+      { src: "https://june.build/icon-512.png", mimeType: "image/png", sizes: ["512x512"] },
+    ]);
+  });
+
+  test("mcp server card: site.icon wins, basePath prefixes, and a description is always present", () => {
+    const card = mcpServerCard(ORIGIN, { site: { icon: "/brand.png" }, basePath: "/docs" });
+    expect(card.icons).toEqual([{ src: `${ORIGIN}/docs/brand.png`, mimeType: "image/png" }]);
+    expect(card.description).toContain("MCP server for");
+  });
+
+  test("mcp server card icons resolve like the document's <link>: protocol-relative, absolute, relative", () => {
+    const src = (icon: string, basePath?: string) => mcpServerCard(ORIGIN, { site: { icon }, basePath }).icons[0]!.src;
+    expect(src("//cdn.example/i.svg")).toBe("https://cdn.example/i.svg"); // protocol from the origin
+    expect(src("https://cdn.example/i.svg", "/docs")).toBe("https://cdn.example/i.svg"); // untouched
+    expect(src("icon.png")).toBe(`${ORIGIN}/icon.png`);
+    expect(src("icon.png", "/docs")).toBe(`${ORIGIN}/docs/icon.png`); // relative → under the site root
+    expect(src("//cdn.example/i.svg", "/docs")).toBe("https://cdn.example/i.svg"); // basePath never applies
+  });
+
+  test("the no-description fallback is fitted too — a long hostname can't push it past 100", () => {
+    const host = `${"sub".repeat(25)}.example.com`; // 87-char host
+    const card = mcpServerCard(`https://${host}`);
+    expect(Array.from(card.description).length).toBeLessThanOrEqual(100);
+    expect(card.description.startsWith("The MCP server for")).toBe(true);
+  });
+
+  test("mcp server card description and title stay within the v1 schema's 100 chars", () => {
+    const card = mcpServerCard("https://june.build", {
+      site: {
+        name: `${"Very long product name ".repeat(6)}— tagline`,
+        description:
+          "The React framework where an agent is a feature, not a separate runtime: " +
+          "your server actions are its tools, every turn is durable, and routes also serve MCP.",
+      },
+    });
+    expect(Array.from(card.description).length).toBeLessThanOrEqual(100);
+    expect(Array.from(card.title!).length).toBeLessThanOrEqual(100);
+    expect(card.description.endsWith("…")).toBe(true);
   });
 });
