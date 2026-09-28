@@ -56,5 +56,7 @@ export const llms = (): LlmsEntry[] =>
       title: String(d.data.title ?? d.slug),
       description: d.data.description ? String(d.data.description) : undefined,
       section: s.title || "Docs",
+      // → the sitemap's <lastmod>: a doc's `updated`, else its `date`
+      lastModified: (d.data.updated ?? d.data.date) as string | undefined,
     })),
   );

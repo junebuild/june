@@ -135,3 +135,40 @@ describe("staticSite() target — e2e (real juneBuild over an i18n app)", () => 
     expect(await read("de/guide/getting-started/index.html")).toContain('data-locale="de"');
   });
 });
+
+describe("staticSite() — staticPaths feed prerender AND the sitemap (no i18n)", () => {
+  const PKG_DIR = fileURLToPath(new URL("..", import.meta.url));
+  let root: string | undefined;
+  let outDir: string | undefined;
+  afterAll(async () => {
+    for (const d of [root, outDir]) if (d) await rm(d, { recursive: true, force: true });
+  });
+
+  test("a producer runs exactly once; the sitemap lists exactly the prerendered set", async () => {
+    // under the package so the fixture's JSX resolves June's jsx runtime
+    root = await mkdtemp(join(PKG_DIR, ".tmp-static-sp-"));
+    const files: Record<string, string> = {
+      "june.config.ts": `export default { site: { name: "SP" }, deploy: { target: "static" } };\n`,
+      "app/page.tsx": "export default function Home(){return <main>home</main>;}\n",
+      "app/guide/[slug]/page.tsx":
+        "export const staticPaths = () => {\n" +
+        "  (globalThis as any).__juneSpCalls = ((globalThis as any).__juneSpCalls ?? 0) + 1;\n" +
+        "  return ['/guide/a', '/guide/b'];\n" +
+        "};\n" +
+        "export default function G(){return <main>guide</main>;}\n",
+    };
+    for (const [rel, body] of Object.entries(files)) {
+      await mkdir(dirname(join(root, rel)), { recursive: true });
+      await writeFile(join(root, rel), body);
+    }
+    (globalThis as any).__juneSpCalls = 0;
+    outDir = await mkdtemp(join(tmpdir(), "june-static-sp-"));
+    const r = await juneBuild(root, { outDir });
+
+    expect((globalThis as any).__juneSpCalls).toBe(1);
+    const xml = await readFile(join(outDir, "static", "sitemap.xml"), "utf8");
+    const locs = [...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => new URL(m[1]!).pathname);
+    expect(locs.sort()).toEqual([...r.prerendered].sort());
+    expect(locs).toContain("/guide/a");
+  });
+});

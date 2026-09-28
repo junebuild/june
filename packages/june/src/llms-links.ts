@@ -4,7 +4,7 @@
 // template an agent can't fetch — lists each real page it serves, or is skipped.
 // Links point at the markdown projection (<path>.md) unless the route turned md off,
 // so an agent reads the page rather than its HTML (llmstxt.org's recommendation).
-import type { LlmsLink } from "@junejs/core/discovery";
+import type { LlmsLink, SitemapPage } from "@junejs/core/discovery";
 import type { LlmsEntry } from "@junejs/core/route";
 
 import type { RouteResolver } from "./pipeline";
@@ -48,4 +48,49 @@ export async function collectLlmsLinks(origin: string, routes: string[], resolve
     }
   }
   return links;
+}
+
+// /sitemap.xml pages, enumerated like /llms.txt. A static route is one page; a
+// dynamic route lists its real pages via its `llms` entries (their `lastModified`
+// becomes <lastmod>) — the runtime-safe hook /llms.txt already runs. A route
+// that names none stays out: a [param] template isn't a URL. Resource routes
+// (route.*) are machine endpoints, not pages. `llms = false` keeps a static
+// route listed (its URL is known without entries); on a dynamic route it leaves
+// no entries, so its pages drop out of the runtime sitemap too.
+// `staticPaths` join in only when opts.staticPaths is set — the static() build's
+// prerender, the one place the route contract runs them. Even then they're
+// skipped under i18n: they arrive locale-prefixed, while the sitemap derives
+// each page's locale variants from its canonical path.
+export async function collectSitemapPages(
+  routes: string[],
+  resolve: RouteResolver,
+  opts: { i18n?: boolean; staticPaths?: boolean } = {},
+): Promise<SitemapPage[]> {
+  const pages = new Map<string, SitemapPage>();
+  const add = (path: string, lastModified?: string | Date) => {
+    const key = path === "/" ? "/" : path.replace(/\/+$/, "");
+    const prev = pages.get(key);
+    if (!prev) pages.set(key, lastModified ? { path: key, lastModified } : { path: key });
+    else if (lastModified && !prev.lastModified) prev.lastModified = lastModified;
+  };
+  for (const route of routes) {
+    const resolved = await resolve(route);
+    if (!resolved || !("def" in resolved)) continue;
+    const { def } = resolved;
+    const dynamic = route.includes("[");
+    const declared = def.llms ? (typeof def.llms === "function" ? await def.llms() : def.llms) : undefined;
+    const entries: LlmsEntry[] = declared ? (Array.isArray(declared) ? declared : [declared]) : [];
+    // A static route is exactly one URL — its own. An entry naming another path
+    // (an llms.txt pointer elsewhere) is not a page this route serves.
+    if (!dynamic) {
+      add(route, entries.find((e) => (e.path ?? route) === route)?.lastModified);
+      continue;
+    }
+    for (const e of entries) if (e.path) add(e.path, e.lastModified);
+    if (opts.staticPaths && !opts.i18n && def.staticPaths) {
+      const sp = typeof def.staticPaths === "function" ? await def.staticPaths() : def.staticPaths;
+      for (const p of sp) add(p);
+    }
+  }
+  return [...pages.values()];
 }

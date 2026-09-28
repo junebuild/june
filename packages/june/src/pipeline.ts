@@ -50,7 +50,7 @@ import {
 import type { Resources } from "@junejs/core/resources";
 
 import { iconLetter } from "./icon-letter";
-import { collectLlmsLinks } from "./llms-links";
+import { collectLlmsLinks, collectSitemapPages } from "./llms-links";
 import { webManifest } from "./web-manifest";
 import { negotiate, TITLE_HEADER, SEGMENT_HEADER, encodeTitle } from "./negotiate";
 
@@ -122,6 +122,11 @@ export type PipelineConfig = {
   // re-scan the filesystem; the worker returns a frozen array.
   routeList: () => Promise<string[]> | string[];
   resolve: RouteResolver;
+  // True only while the static() build prerenders: /sitemap.xml may then list a
+  // dynamic route's `staticPaths`, which the route contract confines to that
+  // build (they may do build-only or expensive work). At runtime a crawler's
+  // /sitemap.xml enumerates dynamic pages from their `llms` entries alone.
+  staticBuild?: boolean;
   // Opened data resources (db/kv/blob) injected onto ctx before load(). A
   // provider so opening is lazy/memoized; absent → no resources on ctx.
   resources?: () => Promise<Resources> | Resources;
@@ -594,7 +599,14 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
         return text(robotsTxt(url.origin), "text/plain; charset=utf-8");
       case "/sitemap.xml":
         return text(
-          sitemapXml(url.origin, await cfg.routeList(), cfg.i18n),
+          sitemapXml(
+            url.origin,
+            await collectSitemapPages(await cfg.routeList(), cfg.resolve, {
+              i18n: !!cfg.i18n,
+              staticPaths: cfg.staticBuild === true,
+            }),
+            cfg.i18n,
+          ),
           "application/xml; charset=utf-8",
         );
       case "/.well-known/api-catalog":

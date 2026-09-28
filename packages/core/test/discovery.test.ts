@@ -171,6 +171,54 @@ describe("sitemapXml()", () => {
     expect(xml).toContain('<xhtml:link rel="alternate" hreflang="fr" href="https://example.fr/about"/>');
     expect(xml).toContain('hreflang="x-default"');
   });
+
+  test("a page's lastModified becomes <lastmod>; a bad value is dropped, never emitted", () => {
+    const xml = sitemapXml(ORIGIN, [
+      { path: "/a", lastModified: "2026-09-27" },
+      { path: "/b", lastModified: new Date("2026-06-12") }, // YAML `date:` → UTC midnight → plain date
+      { path: "/c", lastModified: new Date("2026-06-12T08:30:00Z") },
+      { path: "/d", lastModified: "last tuesday" },
+      "/e",
+      { path: "/f", lastModified: "2026-02-30" }, // Date.parse would roll this to March 2
+      { path: "/g", lastModified: "2026-13" },
+      { path: "/h", lastModified: "2026-06-12T24:00Z" }, // ISO's next-midnight; W3C hours stop at 23
+      { path: "/i", lastModified: "2026-06-12T10:00+24:00" },
+      { path: "/j", lastModified: "2026-06-12T23:59:59+05:30" },
+    ]);
+    expect(xml).toContain(`<url><loc>${ORIGIN}/h</loc></url>`);
+    expect(xml).toContain(`<url><loc>${ORIGIN}/i</loc></url>`);
+    expect(xml).toContain(`<lastmod>2026-06-12T23:59:59+05:30</lastmod>`);
+    expect(xml).toContain(`<url><loc>${ORIGIN}/f</loc></url>`);
+    expect(xml).toContain(`<url><loc>${ORIGIN}/g</loc></url>`);
+    expect(xml).toContain(`<url><loc>${ORIGIN}/a</loc><lastmod>2026-09-27</lastmod></url>`);
+    expect(xml).toContain(`<url><loc>${ORIGIN}/b</loc><lastmod>2026-06-12</lastmod></url>`);
+    expect(xml).toContain(`<lastmod>2026-06-12T08:30:00.000Z</lastmod>`);
+    expect(xml).toContain(`<url><loc>${ORIGIN}/d</loc></url>`);
+    expect(xml).toContain(`<url><loc>${ORIGIN}/e</loc></url>`);
+  });
+
+  test("with i18n, <lastmod> sits beside <loc>", () => {
+    const xml = sitemapXml(ORIGIN, [{ path: "/about", lastModified: "2026-09-27" }], {
+      defaultLocale: "en",
+      locales: { en: {}, de: { path: "/de" } },
+    });
+    expect(xml).toContain(`<loc>${ORIGIN}/about</loc>\n    <lastmod>2026-09-27</lastmod>`);
+  });
+});
+
+describe("llmsTxt() when-to-use", () => {
+  test("agent.llms.whenToUse renders as ## When to use under the summary, before any other H2", () => {
+    const agent = resolveAgent({ mcp: false, llms: { whenToUse: ["Building a React app with an AI agent", "Serving pages to agents as markdown"] } });
+    const txt = llmsTxt(ORIGIN, ["/"], agent, { name: "Acme", description: "Acme things." });
+    expect(txt).toContain("## When to use\n\n- Building a React app with an AI agent\n- Serving pages to agents as markdown\n");
+    const h2s = [...txt.matchAll(/^## (.+)$/gm)].map((m) => m[1]);
+    expect(h2s[0]).toBe("When to use");
+    expect(txt.indexOf("> Acme things.")).toBeLessThan(txt.indexOf("## When to use"));
+  });
+
+  test("absent → no section", () => {
+    expect(llmsTxt(ORIGIN, ["/"], resolveAgent({ mcp: false }))).not.toContain("When to use");
+  });
 });
 
 describe("robotsTxt() / apiCatalog() / mcpServerCard()", () => {
