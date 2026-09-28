@@ -395,8 +395,10 @@ export function Document({
         {config.aiCatalog ? (
           <link rel="ai-catalog" href={withBase(config.aiCatalog)} type="application/json" />
         ) : null}
+        {/* A same-origin alternate is root-relative, so it lives under the deploy
+            basePath like every other page URL (the sitemap lists the same). */}
         {alternates?.map((a) => (
-          <link key={a.hreflang} rel="alternate" hrefLang={a.hreflang} href={a.href} />
+          <link key={a.hreflang} rel="alternate" hrefLang={a.hreflang} href={withBase(a.href)} />
         ))}
         {metadata?.robots ? <meta name="robots" content={metadata.robots} /> : null}
         <meta property="og:title" content={ogTitle} />

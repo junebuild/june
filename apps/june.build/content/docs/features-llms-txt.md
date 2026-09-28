@@ -158,6 +158,15 @@ every page's `<link rel="ai-catalog">` and `Link` header. Both catalogs name
 absolute URLs, so a static build writes them only when it knows the public
 origin (`site.url` or `deploy.domain`) and deploys at the domain root.
 
+A static build prerenders `llms.txt` and `sitemap.xml` against a placeholder
+host, so both name the public origin instead: `site.url` (its origin), else
+`deploy.domain`, plus the deploy `basePath`. A GitHub Pages project site lists
+`https://user.github.io/repo/…`. With neither configured, `llms.txt` falls back
+to root-relative links, which llmstxt.org allows. The sitemap protocol requires
+absolute URLs, so no `sitemap.xml` is written, and the build prints a warning
+to set `site.url`. A static build writes no `robots.txt`. A `basePath` site
+couldn't use one anyway, because robots rules are only read at the domain root.
+
 A static host serves no `/mcp` either, so a static build renders every
 discovery surface with MCP projected out: `llms.txt` drops its MCP claims,
 the catalogs and skill list no MCP server, and pages register no WebMCP tools.
