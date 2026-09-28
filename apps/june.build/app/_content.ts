@@ -1547,6 +1547,107 @@ export const doc = (slug: string): ContentEntry | null => DOCS.find((p) => p.slu
 export const docs = (_locale?: string): ContentEntry[] => DOCS;
 export const PAGES: ContentEntry[] = [
   {
+    "slug": "about",
+    "data": {
+      "title": "About June",
+      "description": "June is an open-source, MIT-licensed React framework for building agents into real apps, developed in the open on GitHub by June.build."
+    },
+    "body": "## What June is\n\nJune is a React framework for applications that serve two audiences at once:\npeople in a browser and AI agents over HTTP. One route definition renders HTML\nfor people and projects the same data as Markdown and JSON for agents. A server\naction you define with `defineAction()` and give a `description` is also an MCP\ntool at `/mcp` and a WebMCP tool in the browser, and, when its id is\nURL-safe, a plain HTTP operation (`POST /api/<id>`) described by\n`/openapi.json`.\n\nAn agent is a feature of a June app, not a separate runtime. The `agent/`\ndirectory is the manifest: its tools are the app's own actions, exported into\n`agent/tools/`, and its channels (Slack, Crisp, HTTP) are discovered from files.\nEvery turn is recorded step by step as it runs. Backed by a persistent store (a\nSQLite file you mount, or Cloudflare Durable Objects on Workers), a crashed or\nredeployed process resumes where it left off; the default in-memory store keeps\nturns only while the process runs.\n\n## Who builds it\n\nJune is developed in the open by June.build. The source code, issue tracker,\nand release history live at\n[github.com/junebuild/june](https://github.com/junebuild/june), and the\npackages are published to npm under the\n[`@junejs`](https://www.npmjs.com/org/junejs) scope. The canonical package\nnames are `@junejs/core`, `@junejs/server` and `@junejs/cli`, and a new app\nstarts with `npm create june`. Packages named `june` or scoped `@june/*` on npm\nare unrelated projects.\n\n## Licence and status\n\nJune is free software under the MIT licence. It is a `0.0.x` preview: APIs can\nchange between releases, and the [stability page](/docs/stability) lists which\nsurfaces are settled and which are still moving. Releases are cut from the\n`main` branch and published by CI from a version tag.\n\n## This site\n\njune.build is itself a June app, deployed to Cloudflare Workers. Every page\nhere is also available as Markdown (append `.md`, or send\n`Accept: text/markdown`), the site answers MCP at [`/mcp`](/mcp), and\n[`/llms.txt`](/llms.txt) indexes everything for agents. See the\n[contact page](/contact) to reach the project, and the\n[privacy page](/privacy) for what this site does with your requests.\n",
+    "original": "---\ntitle: About June\ndescription: June is an open-source, MIT-licensed React framework for building agents into real apps, developed in the open on GitHub by June.build.\n---\n## What June is\n\nJune is a React framework for applications that serve two audiences at once:\npeople in a browser and AI agents over HTTP. One route definition renders HTML\nfor people and projects the same data as Markdown and JSON for agents. A server\naction you define with `defineAction()` and give a `description` is also an MCP\ntool at `/mcp` and a WebMCP tool in the browser, and, when its id is\nURL-safe, a plain HTTP operation (`POST /api/<id>`) described by\n`/openapi.json`.\n\nAn agent is a feature of a June app, not a separate runtime. The `agent/`\ndirectory is the manifest: its tools are the app's own actions, exported into\n`agent/tools/`, and its channels (Slack, Crisp, HTTP) are discovered from files.\nEvery turn is recorded step by step as it runs. Backed by a persistent store (a\nSQLite file you mount, or Cloudflare Durable Objects on Workers), a crashed or\nredeployed process resumes where it left off; the default in-memory store keeps\nturns only while the process runs.\n\n## Who builds it\n\nJune is developed in the open by June.build. The source code, issue tracker,\nand release history live at\n[github.com/junebuild/june](https://github.com/junebuild/june), and the\npackages are published to npm under the\n[`@junejs`](https://www.npmjs.com/org/junejs) scope. The canonical package\nnames are `@junejs/core`, `@junejs/server` and `@junejs/cli`, and a new app\nstarts with `npm create june`. Packages named `june` or scoped `@june/*` on npm\nare unrelated projects.\n\n## Licence and status\n\nJune is free software under the MIT licence. It is a `0.0.x` preview: APIs can\nchange between releases, and the [stability page](/docs/stability) lists which\nsurfaces are settled and which are still moving. Releases are cut from the\n`main` branch and published by CI from a version tag.\n\n## This site\n\njune.build is itself a June app, deployed to Cloudflare Workers. Every page\nhere is also available as Markdown (append `.md`, or send\n`Accept: text/markdown`), the site answers MCP at [`/mcp`](/mcp), and\n[`/llms.txt`](/llms.txt) indexes everything for agents. See the\n[contact page](/contact) to reach the project, and the\n[privacy page](/privacy) for what this site does with your requests.\n",
+    "html": "<h2 id=\"what-june-is\">What June is</h2>\n<p>June is a React framework for applications that serve two audiences at once:\npeople in a browser and AI agents over HTTP. One route definition renders HTML\nfor people and projects the same data as Markdown and JSON for agents. A server\naction you define with <code>defineAction()</code> and give a <code>description</code> is also an MCP\ntool at <code>/mcp</code> and a WebMCP tool in the browser, and, when its id is\nURL-safe, a plain HTTP operation (<code>POST /api/&lt;id&gt;</code>) described by\n<code>/openapi.json</code>.</p>\n<p>An agent is a feature of a June app, not a separate runtime. The <code>agent/</code>\ndirectory is the manifest: its tools are the app's own actions, exported into\n<code>agent/tools/</code>, and its channels (Slack, Crisp, HTTP) are discovered from files.\nEvery turn is recorded step by step as it runs. Backed by a persistent store (a\nSQLite file you mount, or Cloudflare Durable Objects on Workers), a crashed or\nredeployed process resumes where it left off; the default in-memory store keeps\nturns only while the process runs.</p>\n<h2 id=\"who-builds-it\">Who builds it</h2>\n<p>June is developed in the open by June.build. The source code, issue tracker,\nand release history live at\n<a href=\"https://github.com/junebuild/june\">github.com/junebuild/june</a>, and the\npackages are published to npm under the\n<a href=\"https://www.npmjs.com/org/junejs\"><code>@junejs</code></a> scope. The canonical package\nnames are <code>@junejs/core</code>, <code>@junejs/server</code> and <code>@junejs/cli</code>, and a new app\nstarts with <code>npm create june</code>. Packages named <code>june</code> or scoped <code>@june/*</code> on npm\nare unrelated projects.</p>\n<h2 id=\"licence-and-status\">Licence and status</h2>\n<p>June is free software under the MIT licence. It is a <code>0.0.x</code> preview: APIs can\nchange between releases, and the <a href=\"/docs/stability\">stability page</a> lists which\nsurfaces are settled and which are still moving. Releases are cut from the\n<code>main</code> branch and published by CI from a version tag.</p>\n<h2 id=\"this-site\">This site</h2>\n<p>june.build is itself a June app, deployed to Cloudflare Workers. Every page\nhere is also available as Markdown (append <code>.md</code>, or send\n<code>Accept: text/markdown</code>), the site answers MCP at <a href=\"/mcp\"><code>/mcp</code></a>, and\n<a href=\"/llms.txt\"><code>/llms.txt</code></a> indexes everything for agents. See the\n<a href=\"/contact\">contact page</a> to reach the project, and the\n<a href=\"/privacy\">privacy page</a> for what this site does with your requests.</p>\n",
+    "headings": [
+      {
+        "depth": 2,
+        "text": "What June is",
+        "id": "what-june-is"
+      },
+      {
+        "depth": 2,
+        "text": "Who builds it",
+        "id": "who-builds-it"
+      },
+      {
+        "depth": 2,
+        "text": "Licence and status",
+        "id": "licence-and-status"
+      },
+      {
+        "depth": 2,
+        "text": "This site",
+        "id": "this-site"
+      }
+    ]
+  },
+  {
+    "slug": "contact",
+    "data": {
+      "title": "Contact",
+      "description": "How to reach the June project — GitHub issues for bugs and feature requests, pull requests for changes, and where agents can query this site directly."
+    },
+    "body": "## Bugs and feature requests\n\nThe fastest way to reach the people who build June is the issue tracker at\n[github.com/junebuild/june/issues](https://github.com/junebuild/june/issues).\nSearch the open issues first; if yours is new, include the June version\n(`npm ls @junejs/core`), your runtime and deploy target (Bun, Node, Cloudflare\nWorkers, Vercel, Deno), and the smallest reproduction you can manage. Issues\nare public, so leave out secrets, tokens, and private data.\n\n## Contributing\n\nChanges arrive as pull requests against the `main` branch of\n[junebuild/june](https://github.com/junebuild/june), and each is reviewed before\nit merges. A change to a published `@junejs/*` package carries tests for its\nbehavior and a changeset (`bun run changeset`) describing the release; a\ndocumentation or site-only change needs neither. Documentation fixes\nare welcome too: every page on this site is a Markdown file under\n`apps/june.build/content/` in the same repository.\n\n## Security\n\nPlease do not report a vulnerability in a public issue. Use GitHub's private\nvulnerability reporting on the\n[junebuild/june repository](https://github.com/junebuild/june/security) so the\nreport stays confidential until a fix ships.\n\n## For agents\n\nThis site answers agents directly, no human in the loop required: search it\nwith the `search_site` tool and read any page with `get_page`, over MCP at\n[`/mcp`](/mcp) or over HTTP (`POST /api/search_site`, described by\n[`/openapi.json`](/openapi.json)). [`/llms.txt`](/llms.txt) lists every page.\n",
+    "original": "---\ntitle: Contact\ndescription: How to reach the June project — GitHub issues for bugs and feature requests, pull requests for changes, and where agents can query this site directly.\n---\n## Bugs and feature requests\n\nThe fastest way to reach the people who build June is the issue tracker at\n[github.com/junebuild/june/issues](https://github.com/junebuild/june/issues).\nSearch the open issues first; if yours is new, include the June version\n(`npm ls @junejs/core`), your runtime and deploy target (Bun, Node, Cloudflare\nWorkers, Vercel, Deno), and the smallest reproduction you can manage. Issues\nare public, so leave out secrets, tokens, and private data.\n\n## Contributing\n\nChanges arrive as pull requests against the `main` branch of\n[junebuild/june](https://github.com/junebuild/june), and each is reviewed before\nit merges. A change to a published `@junejs/*` package carries tests for its\nbehavior and a changeset (`bun run changeset`) describing the release; a\ndocumentation or site-only change needs neither. Documentation fixes\nare welcome too: every page on this site is a Markdown file under\n`apps/june.build/content/` in the same repository.\n\n## Security\n\nPlease do not report a vulnerability in a public issue. Use GitHub's private\nvulnerability reporting on the\n[junebuild/june repository](https://github.com/junebuild/june/security) so the\nreport stays confidential until a fix ships.\n\n## For agents\n\nThis site answers agents directly, no human in the loop required: search it\nwith the `search_site` tool and read any page with `get_page`, over MCP at\n[`/mcp`](/mcp) or over HTTP (`POST /api/search_site`, described by\n[`/openapi.json`](/openapi.json)). [`/llms.txt`](/llms.txt) lists every page.\n",
+    "html": "<h2 id=\"bugs-and-feature-requests\">Bugs and feature requests</h2>\n<p>The fastest way to reach the people who build June is the issue tracker at\n<a href=\"https://github.com/junebuild/june/issues\">github.com/junebuild/june/issues</a>.\nSearch the open issues first; if yours is new, include the June version\n(<code>npm ls @junejs/core</code>), your runtime and deploy target (Bun, Node, Cloudflare\nWorkers, Vercel, Deno), and the smallest reproduction you can manage. Issues\nare public, so leave out secrets, tokens, and private data.</p>\n<h2 id=\"contributing\">Contributing</h2>\n<p>Changes arrive as pull requests against the <code>main</code> branch of\n<a href=\"https://github.com/junebuild/june\">junebuild/june</a>, and each is reviewed before\nit merges. A change to a published <code>@junejs/*</code> package carries tests for its\nbehavior and a changeset (<code>bun run changeset</code>) describing the release; a\ndocumentation or site-only change needs neither. Documentation fixes\nare welcome too: every page on this site is a Markdown file under\n<code>apps/june.build/content/</code> in the same repository.</p>\n<h2 id=\"security\">Security</h2>\n<p>Please do not report a vulnerability in a public issue. Use GitHub's private\nvulnerability reporting on the\n<a href=\"https://github.com/junebuild/june/security\">junebuild/june repository</a> so the\nreport stays confidential until a fix ships.</p>\n<h2 id=\"for-agents\">For agents</h2>\n<p>This site answers agents directly, no human in the loop required: search it\nwith the <code>search_site</code> tool and read any page with <code>get_page</code>, over MCP at\n<a href=\"/mcp\"><code>/mcp</code></a> or over HTTP (<code>POST /api/search_site</code>, described by\n<a href=\"/openapi.json\"><code>/openapi.json</code></a>). <a href=\"/llms.txt\"><code>/llms.txt</code></a> lists every page.</p>\n",
+    "headings": [
+      {
+        "depth": 2,
+        "text": "Bugs and feature requests",
+        "id": "bugs-and-feature-requests"
+      },
+      {
+        "depth": 2,
+        "text": "Contributing",
+        "id": "contributing"
+      },
+      {
+        "depth": 2,
+        "text": "Security",
+        "id": "security"
+      },
+      {
+        "depth": 2,
+        "text": "For agents",
+        "id": "for-agents"
+      }
+    ]
+  },
+  {
+    "slug": "privacy",
+    "data": {
+      "title": "Privacy",
+      "description": "What june.build does with your requests — no accounts, no cookies, no analytics; one local theme setting, Google Fonts, and Cloudflare as the host."
+    },
+    "body": "## The short version\n\njune.build has no accounts, sets no cookies, and runs no analytics or\nadvertising scripts. It does not ask for, store, or sell personal information.\n\n## What stays in your browser\n\nThe theme switch remembers your choice (light or dark) in your browser's\n`localStorage` under the key `june-theme`. It never leaves your device, and\nclearing site data removes it.\n\n## What the site processes\n\n- **Page requests.** The site is served by Cloudflare Workers. Like any web\n  host, Cloudflare receives your IP address, user agent and the URL you request\n  in order to deliver the page and protect the network; see\n  [Cloudflare's privacy policy](https://www.cloudflare.com/privacypolicy/).\n  This site does not add its own request logging on top.\n- **\"Ask this site\" searches.** A query typed into the search box is sent to\n  this site's own `/mcp` endpoint, matched against the site's pages in memory,\n  and answered. The query is not stored.\n- **Agent traffic.** Requests to `/mcp`, `/api/*`, `/llms.txt` and the\n  `.md`/`.json` versions of pages are handled the same way as page requests,\n  with nothing retained beyond what the host processes.\n\n## Third parties\n\nPages load the Geist typefaces from Google Fonts, so your browser requests\nthem from Google, which receives your IP address; see\n[Google's privacy policy](https://policies.google.com/privacy). Links to\nGitHub and npm take you to those services, whose own policies apply.\n\n## Changes and questions\n\nThis page lives in the site's public repository, so every change to it is\nvisible in the\n[commit history](https://github.com/junebuild/june/commits/main/apps/june.build/content/pages/privacy.md).\nQuestions go through the [contact page](/contact).\n",
+    "original": "---\ntitle: Privacy\ndescription: What june.build does with your requests — no accounts, no cookies, no analytics; one local theme setting, Google Fonts, and Cloudflare as the host.\n---\n## The short version\n\njune.build has no accounts, sets no cookies, and runs no analytics or\nadvertising scripts. It does not ask for, store, or sell personal information.\n\n## What stays in your browser\n\nThe theme switch remembers your choice (light or dark) in your browser's\n`localStorage` under the key `june-theme`. It never leaves your device, and\nclearing site data removes it.\n\n## What the site processes\n\n- **Page requests.** The site is served by Cloudflare Workers. Like any web\n  host, Cloudflare receives your IP address, user agent and the URL you request\n  in order to deliver the page and protect the network; see\n  [Cloudflare's privacy policy](https://www.cloudflare.com/privacypolicy/).\n  This site does not add its own request logging on top.\n- **\"Ask this site\" searches.** A query typed into the search box is sent to\n  this site's own `/mcp` endpoint, matched against the site's pages in memory,\n  and answered. The query is not stored.\n- **Agent traffic.** Requests to `/mcp`, `/api/*`, `/llms.txt` and the\n  `.md`/`.json` versions of pages are handled the same way as page requests,\n  with nothing retained beyond what the host processes.\n\n## Third parties\n\nPages load the Geist typefaces from Google Fonts, so your browser requests\nthem from Google, which receives your IP address; see\n[Google's privacy policy](https://policies.google.com/privacy). Links to\nGitHub and npm take you to those services, whose own policies apply.\n\n## Changes and questions\n\nThis page lives in the site's public repository, so every change to it is\nvisible in the\n[commit history](https://github.com/junebuild/june/commits/main/apps/june.build/content/pages/privacy.md).\nQuestions go through the [contact page](/contact).\n",
+    "html": "<h2 id=\"the-short-version\">The short version</h2>\n<p>june.build has no accounts, sets no cookies, and runs no analytics or\nadvertising scripts. It does not ask for, store, or sell personal information.</p>\n<h2 id=\"what-stays-in-your-browser\">What stays in your browser</h2>\n<p>The theme switch remembers your choice (light or dark) in your browser's\n<code>localStorage</code> under the key <code>june-theme</code>. It never leaves your device, and\nclearing site data removes it.</p>\n<h2 id=\"what-the-site-processes\">What the site processes</h2>\n<ul>\n<li><strong>Page requests.</strong> The site is served by Cloudflare Workers. Like any web\nhost, Cloudflare receives your IP address, user agent and the URL you request\nin order to deliver the page and protect the network; see\n<a href=\"https://www.cloudflare.com/privacypolicy/\">Cloudflare's privacy policy</a>.\nThis site does not add its own request logging on top.</li>\n<li><strong>&quot;Ask this site&quot; searches.</strong> A query typed into the search box is sent to\nthis site's own <code>/mcp</code> endpoint, matched against the site's pages in memory,\nand answered. The query is not stored.</li>\n<li><strong>Agent traffic.</strong> Requests to <code>/mcp</code>, <code>/api/*</code>, <code>/llms.txt</code> and the\n<code>.md</code>/<code>.json</code> versions of pages are handled the same way as page requests,\nwith nothing retained beyond what the host processes.</li>\n</ul>\n<h2 id=\"third-parties\">Third parties</h2>\n<p>Pages load the Geist typefaces from Google Fonts, so your browser requests\nthem from Google, which receives your IP address; see\n<a href=\"https://policies.google.com/privacy\">Google's privacy policy</a>. Links to\nGitHub and npm take you to those services, whose own policies apply.</p>\n<h2 id=\"changes-and-questions\">Changes and questions</h2>\n<p>This page lives in the site's public repository, so every change to it is\nvisible in the\n<a href=\"https://github.com/junebuild/june/commits/main/apps/june.build/content/pages/privacy.md\">commit history</a>.\nQuestions go through the <a href=\"/contact\">contact page</a>.</p>\n",
+    "headings": [
+      {
+        "depth": 2,
+        "text": "The short version",
+        "id": "the-short-version"
+      },
+      {
+        "depth": 2,
+        "text": "What stays in your browser",
+        "id": "what-stays-in-your-browser"
+      },
+      {
+        "depth": 2,
+        "text": "What the site processes",
+        "id": "what-the-site-processes"
+      },
+      {
+        "depth": 2,
+        "text": "Third parties",
+        "id": "third-parties"
+      },
+      {
+        "depth": 2,
+        "text": "Changes and questions",
+        "id": "changes-and-questions"
+      }
+    ]
+  },
+  {
     "slug": "why",
     "data": {
       "title": "Why June",

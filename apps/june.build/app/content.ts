@@ -6,10 +6,12 @@ import { page } from "./_content";
 
 export type Page = { slug: string; title: string; summary: string; md: string };
 
-function whyPage(): Page {
-  const e = page("why");
-  if (!e) throw new Error("content/pages/why.md is missing — run `june gen`");
-  return { slug: "why", title: String(e.data.title), summary: String(e.data.description), md: e.original };
+// A page authored as content/pages/<slug>.md: title and summary from its frontmatter,
+// the .md projection its source bytes.
+function contentPage(slug: string): Page {
+  const e = page(slug);
+  if (!e) throw new Error(`content/pages/${slug}.md is missing — run \`june gen\``);
+  return { slug, title: String(e.data.title), summary: String(e.data.description), md: e.original };
 }
 
 const benchTables = (RESULTS.sections as Array<{ title: string; rows: Array<Record<string, string>> }>)
@@ -78,9 +80,10 @@ server actions, its API is the \`/mcp\` your app already speaks.
 - Site: june.build · GitHub: github.com/junebuild
 `,
   },
-  // /why is authored once, as content/pages/why.md: the page renders its html, and the
-  // .md projection, search_site and get_page read its source. No second copy to drift.
-  whyPage(),
+  // /why (and /about, /contact, /privacy below) is authored once, as content/pages/<slug>.md:
+  // the page renders its html, and the .md projection, search_site and get_page read its
+  // source. No second copy to drift.
+  contentPage("why"),
   {
     slug: "benchmarks",
     title: "Benchmarks",
@@ -95,6 +98,9 @@ runtime track (not the v0.1 default host).
 ${benchTables}
 `,
   },
+  contentPage("about"),
+  contentPage("contact"),
+  contentPage("privacy"),
 ];
 
 export const bySlug = (slug: string) => PAGES.find((p) => p.slug === slug);

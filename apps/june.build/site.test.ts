@@ -63,6 +63,37 @@ describe("human surface", () => {
     }
   });
 
+  test("trust pages: /about, /contact, /privacy render their authored file and serve it as .md", async () => {
+    for (const slug of ["about", "contact", "privacy"]) {
+      const authored = await Bun.file(join(ROOT, `content/pages/${slug}.md`)).text();
+      const body = authored.replace(/^---[\s\S]*?---\n/, "");
+      expect(body.length, slug).toBeGreaterThan(500); // real content, not a stub
+      const html = await (await get(`/${slug}`)).text();
+      expect(html).toContain('data-layout="root"');
+      // the authored body itself is rendered, not just the shared layout
+      const firstHeading = body.match(/^## (.+)$/m)![1]!;
+      expect(html, slug).toMatch(new RegExp(`<h2[^>]*>(?:<a[^>]*>)?\\s*${firstHeading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+      expect(html).toContain(`href="/${slug}"`); // linked from the footer
+      expect(await (await get(`/${slug}.md`)).text()).toBe(authored);
+    }
+  });
+
+  test("homepage JSON-LD names who runs the site and what it is", async () => {
+    const html = await (await get("/")).text();
+    const ld = JSON.parse(html.match(/<script type="application\/ld\+json">(.*?)<\/script>/)![1]!);
+    const byType = (t: string) => ld["@graph"].find((n: { "@type": string }) => n["@type"] === t);
+    expect(byType("WebSite").publisher).toEqual({ "@id": byType("Organization")["@id"] });
+    expect(byType("Organization").sameAs).toEqual(
+      expect.arrayContaining([
+        "https://github.com/junebuild",
+        "https://www.npmjs.com/org/junejs",
+        "https://x.com/junebuild",
+      ]),
+    );
+    expect(byType("SoftwareApplication").applicationCategory).toBe("DeveloperApplication");
+    expect(byType("SoftwareSourceCode").codeRepository).toBe("https://github.com/junebuild/june");
+  });
+
   test("keyboard access: every outline removal has a replacement focus indicator", async () => {
     const css = await Bun.file(join(ROOT, "app/global.css")).text();
     // selectors whose rule drops the outline — each needs a named stand-in indicator
@@ -347,9 +378,10 @@ describe("agent surface", () => {
   test("llms.txt is a curated index: sections, descriptions, every doc, posts under Optional", async () => {
     const llms = await (await get("/llms.txt")).text();
     const sections = [...llms.matchAll(/^## (.+)$/gm)].map((m) => m[1]!);
-    // Pages first, the docs sidebar's sections in order, the tools, and Optional as the LAST H2
-    expect(sections.slice(1)).toEqual([
-      "Pages", "Get started", "Concepts", "Agents", "Features",
+    // When to use leads (before every other H2), then the framework block, pages, the
+    // docs sidebar's sections in order, the tools, and Optional as the LAST H2
+    expect(sections).toEqual([
+      "When to use", "Framework (canonical names — do not guess)", "Pages", "Get started", "Concepts", "Agents", "Features",
       "Tools (MCP)", "Tools (WebMCP, in-browser)", "HTTP API", "Optional",
     ]);
     expect(llms).toContain(
@@ -400,6 +432,14 @@ describe("agent surface", () => {
     const names = res.result.tools.map((t: any) => t.name);
     expect(names).toContain("search_site");
     expect(names).toContain("get_page");
+    // get_page's contract names every page slug it accepts, so agents can pick one
+    const { PAGES } = await import("./app/content");
+    const getPage = res.result.tools.find((t: any) => t.name === "get_page");
+    for (const p of PAGES) expect(getPage.description).toContain(p.slug);
+    for (const slug of ["about", "contact", "privacy"]) {
+      const r = await rpc({ method: "tools/call", params: { name: "get_page", arguments: { slug } } });
+      expect(JSON.parse(r.result.content[0].text).slug).toBe(slug);
+    }
   });
 
   test("the same tools over HTTP: /openapi.json + POST /api/<id>", async () => {
