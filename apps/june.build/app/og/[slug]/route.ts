@@ -10,12 +10,13 @@ import type { OgOptions } from "../../og-card";
 
 function ogOptions(slug: string): OgOptions {
   const post = POSTS.find((p) => p.slug === slug);
-  if (post) return { title: String(post.data.title), date: String(post.data.date ?? "") };
+  if (post) return { title: String(post.data.title), path: `/blog/${slug}`, kind: "blog", date: String(post.data.date ?? "") };
   const doc = DOCS.find((d) => d.slug === slug);
-  if (doc) return { title: String(doc.data.title), tag: "june.build/docs" };
-  const page = PAGES.find((p) => p.slug === slug);
-  if (page) return { title: page.title, tag: "june.build" };
-  return { title: "June — build agents into real apps", tag: "june.build" };
+  if (doc) return { title: String(doc.data.title), path: `/docs/${slug}`, kind: "docs" };
+  const page = slug === "index" ? undefined : PAGES.find((p) => p.slug === slug);
+  if (page) return { title: page.title, path: `/${slug}` };
+  // the home card (and any unknown slug): the hero's line — the wordmark already says "June"
+  return { title: "Build agents into real apps.", path: "/" };
 }
 
 export default async function og(_request: Request, ctx: RouteContext): Promise<Response> {
