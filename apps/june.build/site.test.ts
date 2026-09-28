@@ -90,6 +90,10 @@ describe("human surface", () => {
         "https://x.com/junebuild",
       ]),
     );
+    expect(byType("Organization").contactPoint).toMatchObject({
+      "@type": "ContactPoint",
+      email: "scout@agents.june.build",
+    });
     expect(byType("SoftwareApplication").applicationCategory).toBe("DeveloperApplication");
     expect(byType("SoftwareSourceCode").codeRepository).toBe("https://github.com/junebuild/june");
   });
