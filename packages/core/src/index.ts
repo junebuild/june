@@ -112,6 +112,9 @@ export { mcpHandler, mcpTools } from "./mcp";
 export {
   apiActionId,
   apiActionPath,
+  apiIndex,
+  apiNamespaceResponse,
+  isApiNamespace,
   apiHandler,
   isJsonContentType,
   isRoutableActionId,

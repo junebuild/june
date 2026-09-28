@@ -224,6 +224,10 @@ describe("staticSite() target — agent catalogs", () => {
       expect(f).not.toContain("/api/");
     }
     expect(existsSync(join(outDir, "static", "openapi.json"))).toBe(false);
+    // …and nothing is prerendered for the /api namespace (no index, no error pages)
+    for (const f of ["api", "api.html", "api.json", "api.md"]) {
+      expect(existsSync(join(outDir, "static", f)), f).toBe(false);
+    }
     for (const f of [md.toString("utf8"), llms, html]) expect(f).not.toContain("lookup");
     // (the HTML still names /mcp in its speculation-rules EXCLUSIONS — not an advertisement)
     expect(html).not.toContain("modelContext");

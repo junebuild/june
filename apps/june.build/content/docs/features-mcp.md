@@ -128,6 +128,26 @@ Only `/api/<a registered tool id>` is claimed. Every other `/api/*` path is
 still yours and falls through to your routes. Set `agent: { api: false }` to
 turn the surface off.
 
+When nothing answers a path under `/api`, whether a tool or one of your routes,
+June treats it as an API miss rather than a missing page:
+
+- `GET /api` (or `/api/`) returns a small JSON index: the `/openapi.json` URL,
+  each tool as `{ id, method: "POST", path, description }`, and the error
+  shape. It carries a `Link: </openapi.json>; rel="service-desc"` header.
+- Any other unmatched `/api/*` path gets the JSON
+  `{ "error": { "code": "not_found", … } }`, for every method and every
+  `Accept`, never an HTML page. There are no invented versions: `/api/v1` is a
+  miss like any other path.
+
+The order under `/api` is:
+
+1. A registered tool's own path, `/api/<id>`, is dispatched to the tool before
+   routing, so a route of yours at that exact path is never reached.
+2. Every other path goes to your routes. A route of yours at `/api` or at any
+   `/api/<path>` that isn't a tool's replaces the index or the error there.
+3. Only a path that neither a tool nor a route claims gets the index (at
+   `/api`) or the JSON 404.
+
 ## Why it matters
 
 Tools are intent-shaped and policy-checked — never auto-generated CRUD. The

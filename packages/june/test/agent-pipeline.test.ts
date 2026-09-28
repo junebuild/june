@@ -198,3 +198,173 @@ describe("/api/<action> + /openapi.json (agent.api)", () => {
     expect(p.matchedPath()).toBe("/openapi");
   });
 });
+
+// ── the /api namespace: June's REST namespace answers misses as the API, after app routes ──
+describe("/api namespace (unmatched paths, the index)", () => {
+  type ErrorBody = { error: { code: string; message: string; hint?: string } };
+  async function nsPipeline(opts: { api?: boolean; appRoutes?: string[] } = {}) {
+    const { defineAction } = await import("@junejs/core/agent");
+    defineAction({
+      id: "search_site",
+      description: "Search pages.",
+      input: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+      run: () => [],
+    });
+    const appRoutes = new Set(opts.appRoutes ?? []);
+    // only the listed paths are app routes; everything else is a routing miss
+    const resolve: RouteResolver = async (pathname) =>
+      appRoutes.has(pathname) ? { def: route({ json: () => ({ app: pathname }) }), params: {}, chain: [] } : null;
+    const agent = resolveAgent(opts.api === undefined ? undefined : { api: opts.api });
+    return createPipeline({ docConfig, agent, routeList: () => [], resolve });
+  }
+  const ACCEPTS = ["text/html", "application/json", "text/markdown", "*/*"];
+
+  test("an unmatched /api path is a JSON 404 for GET and POST, whatever the Accept", async () => {
+    const p = await nsPipeline();
+    for (const path of ["/api/nope", "/api/v1", "/api/v1/users"]) {
+      for (const accept of ACCEPTS) {
+        for (const method of ["GET", "POST"]) {
+          const res = await p.fetch(
+            new Request(`http://x${path}`, {
+              method,
+              headers: { accept, "content-type": "application/json" },
+              ...(method === "POST" ? { body: "{}" } : {}),
+            }),
+          );
+          expect(res.status, `${method} ${path} ${accept}`).toBe(404);
+          expect(res.headers.get("content-type")).toContain("application/json");
+          const { error } = (await res.json()) as ErrorBody;
+          expect(error.code).toBe("not_found");
+          expect(error.hint).toContain("/openapi.json");
+        }
+      }
+    }
+    const head = await p.fetch(new Request("http://x/api/nope", { method: "HEAD" }));
+    expect(head.status).toBe(404);
+    expect(head.body).toBeNull();
+  });
+
+  test("an app route under /api always wins", async () => {
+    const p = await nsPipeline({ appRoutes: ["/api/foo", "/api"] });
+    const res = await p.fetch(new Request("http://x/api/foo", { headers: { accept: "application/json" } }));
+    expect(await res.json()).toEqual({ app: "/api/foo" });
+    // the app owns /api too → no June index there
+    const root = await p.fetch(new Request("http://x/api", { headers: { accept: "application/json" } }));
+    expect(await root.json()).toEqual({ app: "/api" });
+  });
+
+  test("GET /api (and /api/) with no app route is the API index; HEAD has no body; POST is 405", async () => {
+    const p = await nsPipeline();
+    for (const path of ["/api", "/api/"]) {
+      const res = await p.fetch(new Request(`http://x${path}`, { headers: { accept: "text/html" } }));
+      expect(res.status, path).toBe(200);
+      expect(res.headers.get("content-type")).toContain("application/json");
+      expect(res.headers.get("link")).toBe(`</openapi.json>; rel="service-desc"; type="application/json"`);
+      const index = (await res.json()) as {
+        openapi: string;
+        actions: Array<{ id: string; method: string; path: string; description: string }>;
+        errors: { codes: string[] };
+      };
+      expect(index.openapi).toBe("http://x/openapi.json");
+      expect(index.actions).toEqual([
+        { id: "search_site", method: "POST", path: "/api/search_site", description: "Search pages." },
+      ]);
+      expect(index.errors.codes).toContain("not_found");
+    }
+    const head = await p.fetch(new Request("http://x/api", { method: "HEAD" }));
+    expect(head.status).toBe(200);
+    expect(head.headers.get("link")).toContain("service-desc");
+    expect(head.body).toBeNull();
+    const post = await p.fetch(
+      new Request("http://x/api", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }),
+    );
+    expect(post.status).toBe(405);
+    expect(post.headers.get("allow")).toBe("GET, HEAD");
+  });
+
+  test("agent.api off: /api is an ordinary path again (no index, no API errors)", async () => {
+    const p = await nsPipeline({ api: false });
+    const root = await p.fetch(new Request("http://x/api", { headers: { accept: "application/json" } }));
+    expect(root.status).toBe(404);
+    const body = (await root.json()) as Record<string, unknown>;
+    expect(body.code).toBe("not_found"); // the pipeline's generic JSON 404, not the API index
+    expect(body).not.toHaveProperty("openapi");
+    const html = await p.fetch(new Request("http://x/api/nope", { headers: { accept: "text/html" } }));
+    expect(html.headers.get("content-type")).toContain("text/html");
+  });
+
+  test("a malformed percent-escape is a routing miss, not a crash (a resolver's URIError)", async () => {
+    const { defineAction } = await import("@junejs/core/agent");
+    defineAction({ id: "noop", description: "No-op.", input: { type: "object", properties: {} }, run: () => ({}) });
+    // decodes like every real resolver does: a bad escape throws URIError
+    const resolve: RouteResolver = async (pathname) => {
+      const segs = pathname.split("/").filter(Boolean).map(decodeURIComponent);
+      return segs.join("/") === "docs/a b" ? { def: route({ json: () => ({ ok: true }) }), params: {}, chain: [] } : null;
+    };
+    const p = createPipeline({ docConfig, agent: resolveAgent(), routeList: () => [], resolve });
+
+    for (const method of ["GET", "POST"]) {
+      const res = await p.fetch(
+        new Request("http://x/api/%ZZ", {
+          method,
+          headers: { accept: "text/html", "content-type": "application/json" },
+          ...(method === "POST" ? { body: "{}" } : {}),
+        }),
+      );
+      expect(res.status, method).toBe(404);
+      expect(((await res.json()) as ErrorBody).error.code).toBe("not_found");
+    }
+    const page = await p.fetch(new Request("http://x/docs/%ZZ", { headers: { accept: "text/html" } }));
+    expect(page.status).toBe(404);
+    expect(page.headers.get("content-type")).toContain("text/html");
+    // a valid escape still resolves
+    const ok = await p.fetch(new Request("http://x/docs/a%20b", { headers: { accept: "application/json" } }));
+    expect(await ok.json()).toEqual({ ok: true });
+  });
+
+  test("a resolver's own errors propagate — even a URIError on a valid path (e.g. a route module's init)", async () => {
+    let calls = 0;
+    const resolve: RouteResolver = async () => {
+      calls++;
+      throw new URIError("route module init failed");
+    };
+    const p = createPipeline({ docConfig, agent: resolveAgent(), routeList: () => [], resolve });
+    // a decodable path reaches the resolver, and its URIError is NOT turned into a 404
+    await expect(p.fetch(new Request("http://x/docs/a%20b"))).rejects.toThrow("route module init failed");
+    expect(calls).toBe(1);
+    // a malformed path never reaches the resolver: it is a miss before resolving
+    const page = await p.fetch(new Request("http://x/docs/%ZZ", { headers: { accept: "text/html" } }));
+    expect(page.status).toBe(404);
+    const api = await p.fetch(new Request("http://x/api/%ZZ", { headers: { accept: "text/html" } }));
+    expect(api.status).toBe(404);
+    expect(((await api.json()) as ErrorBody).error.code).toBe("not_found");
+    expect(calls).toBe(1);
+
+    const other = createPipeline({
+      docConfig,
+      agent: resolveAgent(),
+      routeList: () => [],
+      resolve: async () => {
+        throw new Error("resolver broke");
+      },
+    });
+    await expect(other.fetch(new Request("http://x/docs/x"))).rejects.toThrow("resolver broke");
+  });
+
+  test("isDecodablePath: every segment must percent-decode", async () => {
+    const { isDecodablePath } = await import("../src/pipeline");
+    for (const ok of ["/", "/docs/a%20b", "/docs/agents%2Doverview", "/%E6%8E%92", "/a/b/c", "/100%25"]) {
+      expect(isDecodablePath(ok), ok).toBe(true);
+    }
+    for (const bad of ["/%ZZ", "/docs/%ZZ", "/blog/%E0%A4%A", "/%", "/a/%E6%8E/b", "/api/%ZZ"]) {
+      expect(isDecodablePath(bad), bad).toBe(false);
+    }
+  });
+
+  test("outside /api nothing changes: an HTML 404 stays HTML", async () => {
+    const p = await nsPipeline();
+    const res = await p.fetch(new Request("http://x/apiary", { headers: { accept: "text/html" } }));
+    expect(res.status).toBe(404);
+    expect(res.headers.get("content-type")).toContain("text/html");
+  });
+});

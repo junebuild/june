@@ -42,7 +42,14 @@ import {
   sitemapXml,
 } from "@junejs/core/discovery";
 import { mcpHandler, mcpServerIdentity, mcpTools } from "@junejs/core/mcp";
-import { apiActionId, apiHandler, OPENAPI_MEDIA_TYPE, openApiDocument } from "@junejs/core/api";
+import {
+  apiActionId,
+  apiHandler,
+  apiNamespaceResponse,
+  isApiNamespace,
+  OPENAPI_MEDIA_TYPE,
+  openApiDocument,
+} from "@junejs/core/api";
 import type { Principal, Session } from "@junejs/core/context";
 
 import { ensureScope, runInScope, setRequestLocale } from "@junejs/db";
@@ -274,6 +281,18 @@ type PageProps = { pageUrl: string; isHome: boolean; onLocaleDomain: boolean; ma
 // ctx — RouteContext is public API, so the pipeline tracks it on the side.
 const routePathOf = new WeakMap<RouteContext, string>();
 
+// Whether every "/"-separated segment of a path percent-decodes (a malformed
+// escape like "%ZZ" or a truncated UTF-8 sequence doesn't). The only thing
+// decodeURIComponent can throw is URIError, so any failure means "no".
+export function isDecodablePath(pathname: string): boolean {
+  try {
+    for (const segment of pathname.split("/")) decodeURIComponent(segment);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function createPipeline(cfg: PipelineConfig): Pipeline {
   const { docConfig, agent } = cfg;
   const NotFound = cfg.notFoundComponent ?? DefaultNotFound;
@@ -467,11 +486,33 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
     return new Response(stream, { status: 200, headers: htmlHeaders() });
   }
 
+  // Route resolution for a request path. Every resolver (the dev tree matcher,
+  // the built worker's dynamic + resource tables) percent-decodes URL segments,
+  // and would throw URIError on a malformed escape (/docs/%ZZ). Such a path can
+  // match no route by definition, so it is refused BEFORE resolving — a miss
+  // (the normal negotiated 404, or the API's JSON 404 under /api) — rather than
+  // catching around cfg.resolve(), which also imports route modules: a genuine
+  // error there, URIError included, must still surface. Checking each segment
+  // suffices for every resolver: their captures are whole segments or runs of
+  // them joined by "/", which decode iff each segment does.
+  async function resolveRoute(pathname: string): ReturnType<RouteResolver> {
+    return isDecodablePath(pathname) ? cfg.resolve(pathname) : null;
+  }
+
   function notFoundResponse(
     target: RenderTarget,
     pathname: string,
     locale?: string,
+    // Passed only when ROUTING found nothing (not when a matched route 404s): an
+    // unmatched path in June's REST namespace (/api) is an API miss, answered
+    // with the API's own JSON error/index whatever Accept negotiated — app
+    // routes under /api were already given their chance.
+    unmatched?: Request,
   ): Promise<Response> | Response {
+    if (unmatched && agent.api) {
+      const url = new URL(unmatched.url);
+      if (isApiNamespace(url.pathname)) return apiNamespaceResponse(unmatched, url.origin);
+    }
     // Agents get a 404 they can act on: Markdown for an Accept: text/markdown (or
     // .md) request, structured JSON for other data clients — both pointing at the
     // discovery surfaces. Humans get the rendered NotFound document. The body
@@ -828,8 +869,8 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
 
       // --- routes ----------------------------------------------------------
       const { target, pathname, speculative } = negotiate(url, request, routeBase);
-      const resolved = await cfg.resolve(pathname);
-      if (!resolved) return notFoundResponse(target, pathname, locale);
+      const resolved = await resolveRoute(pathname);
+      if (!resolved) return notFoundResponse(target, pathname, locale, request);
 
       // ctx is identity/request only; db/kv/blob are ambient (read from the
       // request scope this whole handler runs inside — see runInScope below).

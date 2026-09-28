@@ -419,6 +419,37 @@ describe("agent surface", () => {
     expect(cards.some((c) => c.slug.includes("cold-start"))).toBe(true);
   });
 
+  test("/api is the API root: an index of the tools, and JSON (never HTML) for a miss", async () => {
+    const index = (await (await get("/api", { accept: "text/html" })).json()) as {
+      openapi: string;
+      actions: Array<{ id: string; path: string }>;
+    };
+    expect(index.openapi).toBe("http://june.build/openapi.json");
+    expect(index.actions.map((a) => a.path).sort()).toEqual(["/api/get_page", "/api/search_site"]);
+    const miss = await get("/api/v1", { accept: "text/html" });
+    expect(miss.status).toBe(404);
+    expect(((await miss.json()) as { error: { code: string } }).error.code).toBe("not_found");
+  });
+
+  test("a malformed percent-escape is a 404, never a crash (the dev resolver decodes segments)", async () => {
+    const page = await get("/docs/%ZZ", { accept: "text/html" });
+    expect(page.status).toBe(404);
+    expect(page.headers.get("content-type")).toContain("text/html");
+    for (const method of ["GET", "POST"]) {
+      const res = await app.fetch(
+        new Request("http://june.build/api/%ZZ", {
+          method,
+          headers: { accept: "text/html", "content-type": "application/json" },
+          ...(method === "POST" ? { body: "{}" } : {}),
+        }),
+      );
+      expect(res.status, method).toBe(404);
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe("not_found");
+    }
+    // a valid escape still resolves ("%2D" is "-")
+    expect((await get("/docs/agents%2Doverview", { accept: "text/html" })).status).toBe(200);
+  });
+
   test("WebMCP: pages inject the tool manifest + registration bridge", async () => {
     const html = await (await get("/")).text();
     // the manifest the browser script reads — same tools as /mcp

@@ -209,6 +209,82 @@ function dispatchFailure(id: string, error: unknown): Response {
   }
 }
 
+// --- the /api namespace --------------------------------------------------------
+// June claims /api as its REST namespace: a path there that neither an action nor
+// an app route answers is an API miss, not a page — so it gets this surface's
+// JSON error (whatever the Accept header asked for), and the bare root gets a
+// small machine-readable index. The host calls these only AFTER app routing found
+// nothing, so an app route under /api always wins.
+
+// Whether a (raw, locale-free) pathname is in the /api namespace.
+export function isApiNamespace(pathname: string): boolean {
+  return pathname === "/api" || pathname.startsWith(API_PREFIX);
+}
+
+const API_ROOT = new Set(["/api", "/api/"]);
+const INDEX_METHODS = "GET, HEAD";
+
+// A HEAD response carries the same status + headers as GET, never a body.
+function forMethod(request: Request, res: Response): Response {
+  return request.method === "HEAD" ? new Response(null, { status: res.status, headers: res.headers }) : res;
+}
+
+// The response for an /api path no action and no app route claimed: the index
+// at the root (GET/HEAD), else a JSON 404 pointing at /openapi.json. Versions are
+// never invented — /api/v1 is a miss like any other path.
+export function apiNamespaceResponse(request: Request, origin: string): Response {
+  const { pathname } = new URL(request.url);
+  if (API_ROOT.has(pathname)) {
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      return apiError(
+        405,
+        "method_not_allowed",
+        `${request.method} is not supported on the API index — call an action with POST /api/<id>.`,
+        "GET /api lists the actions; /openapi.json describes them.",
+        { allow: INDEX_METHODS },
+      );
+    }
+    return forMethod(
+      request,
+      Response.json(apiIndex(origin), {
+        headers: {
+          "access-control-allow-origin": "*",
+          // RFC 8288: the index's machine-readable description, typed as served
+          link: `</openapi.json>; rel="service-desc"; type="${OPENAPI_MEDIA_TYPE}"`,
+        },
+      }),
+    );
+  }
+  return forMethod(
+    request,
+    apiError(
+      404,
+      "not_found",
+      `No API endpoint at ${pathname}.`,
+      "Actions are POST /api/<id>; GET /api lists them and /openapi.json describes them.",
+    ),
+  );
+}
+
+// GET /api: where the API is described, what it serves, and how it fails. The
+// OpenAPI document stays the full contract; this is the root an agent or a
+// scanner can verify with one request.
+export function apiIndex(origin: string) {
+  return {
+    openapi: `${origin}/openapi.json`,
+    actions: apiActions().map((a) => ({
+      id: a.id,
+      method: "POST",
+      path: apiActionPath(a.id),
+      description: a.description,
+    })),
+    errors: {
+      shape: { error: { code: "string", message: "string", hint: "string (optional)" } },
+      codes: ERROR_CODES,
+    },
+  };
+}
+
 // --- OpenAPI -----------------------------------------------------------------
 
 const ERROR_CODES: ApiErrorCode[] = [
