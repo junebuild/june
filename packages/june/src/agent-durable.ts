@@ -536,6 +536,9 @@ export class AgentDurableObject {
       if (ifSuspended === "queue" && !wantsDeliver && !detached) {
         return Response.json({ error: `ifSuspended "queue" needs deliver=1 or detach=1: a held turn runs later, when no one is streaming it` }, { status: 400 });
       }
+      if (ifSuspended === "queue" && replace) {
+        return Response.json({ error: `ifSuspended "queue" and replace=1 cannot be combined — replacing would drop held turns that were accepted` }, { status: 400 });
+      }
       let deliverChannel: Channel | undefined;
       if (wantsDeliver) {
         if (!event?.channelId) {
