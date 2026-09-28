@@ -28,7 +28,8 @@ bun harness/installed.ts bun                # also: npm-global, bun-global, bunx
 
 | scenario | checks |
 |---|---|
-| session | renders; feed live; CJK on screen; box borders in the same columns on every row; no stale cells after emoji (Unicode 11 widths); no full-screen clears and ≥ 5 events/s while keys are pressed (a starved event loop drops to ~0); the selected row stays on screen while events are prepended above it (≥ 18 of 20 samples); `$EDITOR` runs with the terminal and the TUI comes back; resize 120x40 and 60x20; `q` exits 0; terminal restored; mounted once, one feed subscription, suspend/resume paired |
+| session | renders; feed live (≥ 10 events — liveness only; throughput is the next check); CJK on screen; box borders in the same columns on every row; no stale cells after emoji (Unicode 11 widths); no full-screen clears and ≥ 5 events/s while keys are pressed (a starved event loop drops to ~0); `$EDITOR` runs with the terminal and the TUI comes back; resize 120x40 and 60x20; `q` exits 0; terminal restored; mounted once, one feed subscription, suspend/resume paired |
+| anchor | with ≥ 30 rows: a middle row, then the last (oldest) row, stays on screen while events are prepended above it (≥ 18 of 20 samples each) |
 | typeahead | `q` sent the instant the process starts, before the first frame: exits 0 and restores the terminal |
 | typeahead nav | `j` sent the instant the process starts: once the list has data, a row is selected (it stays put while events stream in) |
 | ctrl-c, crash, sigterm | exits 130 / 1 / 143 and restores alternate screen, cursor and mouse modes (sigterm skipped on Windows) |
@@ -101,7 +102,11 @@ Also verified by hand: darwin-arm64 (MacBook Air M3) and win32-x64 (starship-win
    with the row inserted. `scrollChildIntoView` in `useLayoutEffect` was off screen 20 of 20:
    at commit time the new rows are not laid out, so it scrolls one row short. Setting `scrollTop`
    from the row's index in `useLayoutEffect` holds it 20 of 20 (six runs). The list also never
-   evicts the selected event at its 500-row cap.
+   evicts the selected event at its 500-row cap. One more edge: with the **last** row selected
+   the target is the new content height minus the viewport, one row past what OpenTUI has laid
+   out at commit time, so `scrollTop` clamps one short — 0 of 20 (`stickyScroll` did not help,
+   also 0 of 20). A spare row of bottom padding on the list keeps the target in range: 20 of 20.
+   The `anchor` scenario checks both a middle and the last row.
 8. **Keys typed during startup are lost unless buffered.** OpenTUI emits keys from the moment the
    renderer exists, but `useKeyboard` subscribes in an effect: a `q` sent before the first frame
    (~80 ms) reached no listener 5 of 5 times, while a listener on `renderer.keyInput` attached
