@@ -1,5 +1,91 @@
 # @junejs/core
 
+## 0.2.0-dev.57
+
+### Minor Changes
+
+- [#259](https://github.com/junebuild/june/pull/259) [`345fbad`](https://github.com/junebuild/june/commit/345fbad23a6cc8d11b822cffc014fe0903b4961d) Thanks [@linyiru](https://github.com/linyiru)! - MCP protocol 2026-07-28, with the 2025 era as a fallback, on both sides.
+
+  **Client (MCP connections).**
+
+  - **Probe first.** It sends a 2026-07-28 `server/discover` and speaks the
+    stateless modern protocol when the server offers it. Each request carries
+    the `_meta` envelope and mirrored `MCP-Protocol-Version` / `Mcp-Method` /
+    `Mcp-Name` headers, plus `Mcp-Param-*` headers for `x-mcp-header`
+    parameters. A tool with invalid annotations is dropped, with a warning.
+  - **Legacy fallback.** Anything a 2025-era server answers to the probe
+    triggers the `initialize` handshake, now done properly:
+    - `notifications/initialized` is sent.
+    - The session's `Mcp-Session-Id` and the `MCP-Protocol-Version` header are
+      sent on every request, and an expired session is re-initialized once.
+    - 2025-11-25, 2025-06-18 and 2025-03-26 are accepted.
+  - **Legacy sessions are per credential.** Every distinct set of resolved
+    headers, so every tenant of a per-caller `auth(ctx)`, gets its own session,
+    and never another tenant's or discovery's. A failed handshake is retried on
+    the next call.
+  - **Server requests on the SSE stream.** A legacy server may send requests
+    on the response stream: `ping` is answered, and anything else gets
+    `-32601`, since June declares no capabilities.
+  - **Broken 2026-07-28 streams.** A broken response stream is re-issued with
+    a new request id, at most twice, as the spec requires.
+  - **The probe accepts only a real `DiscoverResult`:** `supportedVersions`
+    must be all strings and include 2026-07-28, and `capabilities` must be an
+    object.
+  - **Errors, not downgrades.** 401/403, 5xx and network errors, including a
+    probe body that fails while being read, fail the connection rather than
+    downgrading it.
+  - **Responses** may be `application/json` or `text/event-stream` (SSE,
+    parsed by the WHATWG event-stream rules). Any other media type is not an
+    MCP response, even when its body parses as JSON.
+  - **Before this change,** the client sent a 2025-06-18 `initialize` without
+    `Accept`, sessions, the initialized notification or the version header,
+    and read JSON only. Only stateless, JSON-only servers worked.
+
+  **Results.**
+
+  - `structuredContent` is returned when present.
+  - `isError: true` now **throws**, so the model sees a failed call instead of
+    error text returned as data.
+  - A modern `input_required` asking for client input is refused, because June
+    declares no client capabilities. A `requestState`-only retry is echoed, up
+    to three rounds.
+
+  **Server (`/mcp`).**
+
+  - **One endpoint, both eras.** A request whose `params._meta` carries a
+    protocol version is served statelessly as 2026-07-28:
+    - `server/discover` is implemented.
+    - Results carry `resultType`, `ttlMs` and `cacheScope`.
+    - Mismatched or missing mirrored headers get `400` / `-32020`. This
+      includes the `Mcp-Param-*` headers of re-served tools that declare
+      `x-mcp-header`.
+    - An unsupported version gets `400` / `-32022`, and unknown methods get
+      `404` / `-32601`.
+    - A request id that isn't a string or an integer gets `400` / `-32600`.
+    - The validation order follows the official SDK.
+  - **Legacy requests** keep the `initialize` handshake. It now negotiates:
+    a supported version is echoed, otherwise 2025-11-25 is answered.
+  - **JSON-RPC batches** are accepted only without an `MCP-Protocol-Version`
+    header, that is, from 2025-03-26 clients; 2025-06-18 removed batching.
+  - **Server card.** `PROTOCOL_VERSION` is now `2026-07-28`, and the server
+    card's `supportedProtocolVersions` lists every served version.
+  - **The `mcp-protocol-version` response header** is no longer set.
+
+  **Verification.** June's client and server interoperate with the official
+  MCP TypeScript SDK v2 in both directions and both eras; that suite is in CI.
+  They also pass the official conformance suite's protocol scenarios for
+  2026-07-28 and 2025-11-25.
+
+### Patch Changes
+
+- [#273](https://github.com/junebuild/june/pull/273) [`a5b49ed`](https://github.com/junebuild/june/commit/a5b49eda506c1796145bd4e1834dcc3c2c837b23) Thanks [@linyiru](https://github.com/linyiru)! - Static builds no longer publish the placeholder prerender host (`https://prerender.june`) in `llms.txt` or `sitemap.xml` ([#238](https://github.com/junebuild/june/issues/238)).
+
+  - A prerendered discovery file now names the public origin: `site.url`'s origin, else `deploy.domain`, plus the deploy `basePath`. This is the same rule the agent catalogs already used, now shared (`publicOrigin`/`publicBase` in the pipeline), and it also covers robots.txt's `Sitemap:`/`Agentmap:` lines. A GitHub Pages project site's sitemap lists `https://user.github.io/repo/…`, and its hreflang alternates carry the subpath.
+  - With no public origin configured, `llms.txt` uses root-relative links (llmstxt.org allows them). `sitemap.xml`, whose protocol requires absolute URLs, is not written, and `june build` warns to set `site.url`.
+  - Live targets (Workers, Vercel, Deno) are unchanged: they keep using the request's own origin. A live site with a `basePath` now also gets the subpath in these files.
+  - The page head's `<link rel="alternate" hreflang>` links now carry the deploy `basePath`, like the canonical link and the sitemap. On a basePath site they used to point at `/de/about` instead of `/base/de/about`, a 404 that disagreed with the sitemap.
+  - A `static()` build with an i18n locale on its own `domain` now fails with a clear message. One file tree serves one host, so give that locale a path prefix. It used to die with `prerender https://<domain>/ → 404`.
+
 ## 0.2.0-dev.56
 
 ### Patch Changes
