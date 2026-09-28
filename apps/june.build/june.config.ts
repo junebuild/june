@@ -1,5 +1,7 @@
 import { defineJune } from "@junejs/core/config";
 
+import { faqJsonLd } from "./faq";
+
 // Dual-audience is ON by default — this file exists to turn things off, not on.
 //   agent.discovery  llms.txt, sitemap.xml, robots.txt, api-catalog, ai-catalog,
 //                    agent skills, Link header
@@ -19,7 +21,7 @@ export default defineJune({
         "Exposing an app's server actions as tools: a `defineAction()` with a `description` is at once an MCP tool (`/mcp`) and a WebMCP tool, and, when its id is URL-safe, `POST /api/<id>` in `/openapi.json`.",
         "Putting an agent inside an existing app (in-app chat, a Slack or Crisp bot) whose tools are the app actions exported into `agent/tools/`, and whose turns are recorded step by step: with a persistent store (a mounted SQLite file, or Durable Objects on Workers) they survive restarts and redeploys.",
         "Making a docs or content site agent-ready by default: llms.txt, sitemap, Markdown twins, MCP server card, Agent Skills and API catalogs with no extra code.",
-        "Deploying the same app to Cloudflare Workers, Vercel, Deno, Node or Bun, or exporting it as static files.",
+        "Deploying the same app to Cloudflare Workers, Vercel or Deno Deploy, or exporting it as static files (self-hosting on Bun or Node serves the same pipeline; a production `june start` is on the roadmap).",
         "Not a fit: a hosted chatbot builder, a model provider, or a non-React stack.",
       ],
     },
@@ -74,6 +76,8 @@ export default defineJune({
         targetProduct: { "@id": "https://june.build/#software" },
         publisher: { "@id": "https://june.build/#organization" },
       },
+      // The homepage FAQ section, from the same source (faq.ts) as its HTML and .md.
+      faqJsonLd("https://june.build/#faq"),
     ],
   },
 });

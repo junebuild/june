@@ -1,5 +1,6 @@
 import { AgentStage } from "./AgentStage";
 import { AskSite } from "./AskSite";
+import { FAQ } from "../faq";
 import { bySlug } from "./content";
 import { InstallCmd } from "./InstallCmd";
 import { ogImage } from "./og-card";
@@ -589,6 +590,40 @@ function Status() {
   );
 }
 
+// An answer's `code` spans → <code>; the rest is plain text (see ../faq.ts).
+function withCode(text: string) {
+  return text.split(/(`[^`]+`)/).map((part, i) =>
+    part.startsWith("`") ? <code key={i}>{part.slice(1, -1)}</code> : part,
+  );
+}
+
+function Faqs() {
+  return (
+    <section className="j-section" id="faq">
+      <div className="j-section-in">
+        <Head
+          n="08"
+          label="FAQ"
+          title="Questions people (and agents) ask first."
+          lead={
+            <>
+              The same answers are in <a href="/index.md">/index.md</a> and in this page&apos;s FAQPage JSON-LD.
+            </>
+          }
+        />
+        <div className="j-faq">
+          {FAQ.map((f) => (
+            <div key={f.q} className="j-faq-item">
+              <h3>{f.q}</h3>
+              <p>{withCode(f.a)}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function Cta() {
   return (
     <section className="j-cta">
@@ -617,6 +652,7 @@ export default function Home() {
       <AskBand />
       <Foundation />
       <Status />
+      <Faqs />
       <Cta />
     </>
   );

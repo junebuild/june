@@ -450,6 +450,11 @@ pre code { background: transparent; }
 .j-status-col ul { margin: 0; padding: 0; list-style: none; }
 .j-status-col li { font-size: 14px; color: var(--s-body); padding: 6px 0; border-top: 1px dashed var(--s-line); }
 .j-status-col li:first-child { border-top: none; }
+/* FAQ: two columns of question/answer cards, the same raised card as the status grid. */
+.j-faq { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.j-faq-item { border: 1px solid var(--s-line); border-radius: var(--radius-md); padding: 20px; background: var(--s-bg-raised); }
+.j-faq-item h3 { margin: 0 0 8px; font-size: 16px; font-weight: 600; color: var(--s-text); }
+.j-faq-item p { margin: 0; font-size: 14px; line-height: 1.6; color: var(--s-body); }
 
 /* closing CTA */
 .j-cta { position: relative; overflow: hidden; }
@@ -593,7 +598,7 @@ section:first-child > .j-bench-group { margin-top: 0; }
   .j-bento { grid-template-columns: 1fr 1fr; }
   .j-cell.w2, .j-cell.w3, .j-cell.w4 { grid-column: span 2; }
   .j-surf { grid-template-columns: 1fr 1fr; }
-  .j-status, .j-runtimes { grid-template-columns: 1fr; }
+  .j-status, .j-runtimes, .j-faq { grid-template-columns: 1fr; }
   .j-figs { grid-template-columns: 1fr 1fr; }
   .j-fig:nth-child(3) { border-left: none; padding-left: 0; }
   .j-fig:nth-child(n+3) { border-top: 1px solid var(--s-line); margin-top: 20px; }
