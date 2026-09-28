@@ -31,6 +31,8 @@
     "anthropic-bundling",
     "anthropic-client-type",
     "anthropic-sdk-ctor-check",
+    "api-namespace-errors",
+    "breadcrumb-jsonld",
     "cache-bun-import",
     "channel-capabilities",
     "channel-hardening",
