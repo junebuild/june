@@ -1,0 +1,9 @@
+{
+  "request": "GET /repos/junebuild/github-app-live-test/installation",
+  "status": 401,
+  "body": {
+    "message": "A JSON web token could not be decoded",
+    "documentation_url": "https://docs.github.com/rest",
+    "status": "401"
+  }
+}

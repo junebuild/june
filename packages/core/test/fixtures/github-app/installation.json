@@ -1,0 +1,49 @@
+{
+  "request": "GET /repos/junebuild/github-app-live-test/installation",
+  "status": 200,
+  "body": {
+    "id": 165782290,
+    "client_id": "Iv23liN7Mb5IzhlCJLUa",
+    "account": {
+      "login": "junebuild",
+      "id": 292326863,
+      "node_id": "O_kgDOEWyNzw",
+      "avatar_url": "https://avatars.githubusercontent.com/u/292326863?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/junebuild",
+      "html_url": "https://github.com/junebuild",
+      "followers_url": "https://api.github.com/users/junebuild/followers",
+      "following_url": "https://api.github.com/users/junebuild/following{/other_user}",
+      "gists_url": "https://api.github.com/users/junebuild/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/junebuild/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/junebuild/subscriptions",
+      "organizations_url": "https://api.github.com/users/junebuild/orgs",
+      "repos_url": "https://api.github.com/users/junebuild/repos",
+      "events_url": "https://api.github.com/users/junebuild/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/junebuild/received_events",
+      "type": "Organization",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "repository_selection": "selected",
+    "access_tokens_url": "https://api.github.com/app/installations/165782290/access_tokens",
+    "repositories_url": "https://api.github.com/installation/repositories",
+    "html_url": "https://github.com/organizations/junebuild/settings/installations/165782290",
+    "app_id": 5108167,
+    "app_slug": "junebuild-live-test",
+    "target_id": 292326863,
+    "target_type": "Organization",
+    "permissions": {
+      "contents": "read",
+      "metadata": "read"
+    },
+    "events": [],
+    "created_at": "2026-09-28T12:51:26.000Z",
+    "updated_at": "2026-09-28T12:51:37.000Z",
+    "single_file_name": null,
+    "has_multiple_single_files": false,
+    "single_file_paths": [],
+    "suspended_by": null,
+    "suspended_at": null
+  }
+}

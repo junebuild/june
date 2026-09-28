@@ -173,7 +173,8 @@ An agent that works on code needs a GitHub credential. `@junejs/core/github`
 mints GitHub App installation tokens that are short-lived, scoped to one
 repository and limited to the permissions a call names. One exception applies:
 GitHub makes read-only `metadata` mandatory for any App with repository access,
-so a token may carry `metadata: read` even when the call doesn't name it. You
+so every token also carries `metadata: read`, whether the call names it or not.
+You
 don't need a personal access token or any App-auth code of your own:
 
 ```ts
