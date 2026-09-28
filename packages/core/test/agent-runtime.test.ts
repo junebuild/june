@@ -1213,6 +1213,133 @@ describe("suspend / resume (P3 — HITL)", () => {
     expect(await grantAnswer(s, { turnId: "t9", inputId: "approve-1" }, () => true)).toBeUndefined(); // not the parked turn
   });
 
+  // #263 — inbound turns against a parked session: rejected by default, held on request.
+  describe("held inbound turns (#263)", () => {
+    const QUEUE_SCRIPT: ModelReply[] = [
+      { text: "Let me check.", toolCalls: [{ id: "c1", name: "approve", input: {} }] },
+      { text: "Approved — refund sent.", toolCalls: [] },
+      { text: "Got your follow-up.", toolCalls: [] },
+      { text: "Got your third message.", toolCalls: [] },
+    ];
+    const followUp = (ts: string) => ({ source: "email", kind: "message" as const, channelId: "scout", ts, user: { id: "customer@example.com" }, raw: { huge: "mime" } });
+
+    async function parked(store = memStore().store, script = QUEUE_SCRIPT) {
+      const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), scriptedModel(script), [approveTool()], noRuntime);
+      const { turnId } = s.start({ turnId: "t1", userText: "refund please", event: slackEvent });
+      expect(await s.result(turnId)).toMatchObject({ status: "suspended" });
+      return s;
+    }
+
+    test("without ifSuspended the session still rejects a new turn", async () => {
+      const s = await parked();
+      expect(() => s.start({ turnId: "t2", userText: "any news?", event: followUp("m2") })).toThrow(/session is suspended/);
+      expect(s.heldTurns()).toEqual([]);
+    });
+
+    test("queue holds the turn durably (raw stripped), counts it on the park, and runs it once the park resolves", async () => {
+      const s = await parked();
+      expect(s.start({ turnId: "t2", userText: "any news?", event: followUp("m2"), ifSuspended: "queue", hostContext: { deliver: true } })).toEqual({ turnId: "t2", queued: true });
+      expect(s.heldTurns()).toMatchObject([{ turnId: "t2", userText: "any news?", event: { ts: "m2", raw: undefined }, hostContext: { deliver: true } }]);
+      expect(s.pending()).toMatchObject({ turnId: "t1", queued: 1 });
+
+      const dequeued: unknown[] = [];
+      s.onDequeue = (turnId, q) => dequeued.push({ turnId, hostContext: q.hostContext });
+      s.resume("t1", "approve-1", true, { by: "U1" });
+      expect(await s.result("t1")).toMatchObject({ status: "completed" });
+      expect(dequeued).toEqual([{ turnId: "t2", hostContext: { deliver: true } }]); // started as the park's continuation settled
+      expect(await s.result("t2")).toEqual({ status: "completed", text: "Got your follow-up." });
+      expect(s.heldTurns()).toEqual([]);
+      expect(s.transcript().map((t) => t.text)).toEqual(["Approved — refund sent.", "Got your follow-up."]);
+    });
+
+    test("held turns run in arrival order, one at a time; a redelivery is not held twice", async () => {
+      const s = await parked();
+      s.start({ turnId: "t2", userText: "second", event: followUp("m2"), ifSuspended: "queue" });
+      s.start({ turnId: "t2", userText: "second", event: followUp("m2"), ifSuspended: "queue" }); // redelivered
+      s.start({ turnId: "t3", userText: "third", event: followUp("m3"), ifSuspended: "queue" });
+      expect(s.heldTurns().map((q) => q.turnId)).toEqual(["t2", "t3"]);
+
+      s.resume("t1", "approve-1", true, { by: "U1" });
+      await s.result("t1");
+      expect(await s.result("t2")).toMatchObject({ status: "completed", text: "Got your follow-up." });
+      expect(await s.result("t3")).toMatchObject({ status: "completed", text: "Got your third message." });
+      expect(s.transcript().map((t) => t.text)).toEqual(["Approved — refund sent.", "Got your follow-up.", "Got your third message."]);
+    });
+
+    test("a queued turn arriving while earlier ones are still held waits behind them, even if the park is gone", async () => {
+      const store = memStore().store;
+      const s = await parked(store);
+      s.start({ turnId: "t2", userText: "second", event: followUp("m2"), ifSuspended: "queue" });
+      // the park resolves, but before the held turn is started (a restart in between): simulated by
+      // clearing the park directly in the store and building a fresh session on it
+      store.tx(() => { store.delStep("suspended"); store.setStatus("completed"); });
+      const after = new AgentSession("ops", "s1", store, new MemBroadcaster(), scriptedModel([...QUEUE_SCRIPT.slice(0, 2), { text: "(t2 via t1's slot)", toolCalls: [] }, { text: "Got your follow-up.", toolCalls: [] }, { text: "Got your third message.", toolCalls: [] }]), [approveTool()], noRuntime);
+      expect(after.start({ turnId: "t3", userText: "third", event: followUp("m3"), ifSuspended: "queue" })).toEqual({ turnId: "t3", queued: true });
+      // start() drained the head (t2) as it held t3, so t3 is the only one left
+      expect(after.heldTurns().map((q) => q.turnId)).toEqual(["t3"]);
+      await after.result("t2");
+      expect(await after.result("t3")).toMatchObject({ status: "completed" });
+      expect(after.heldTurns()).toEqual([]);
+    });
+
+    test("held turns survive a restart: a rebuilt session drains them after the resume, handing back hostContext", async () => {
+      const store = memStore().store;
+      const s = await parked(store);
+      s.start({ turnId: "t2", userText: "any news?", event: followUp("m2"), ifSuspended: "queue", hostContext: { deliver: true } });
+
+      const rebuilt = new AgentSession("ops", "s1", store, new MemBroadcaster(), scriptedModel(QUEUE_SCRIPT), [approveTool()], noRuntime);
+      const dequeued: unknown[] = [];
+      rebuilt.onDequeue = (turnId, q) => dequeued.push({ turnId, hostContext: q.hostContext });
+      expect(rebuilt.pending()).toMatchObject({ turnId: "t1", queued: 1 });
+      expect(rebuilt.drain()).toBeUndefined(); // still parked: nothing to run yet
+      rebuilt.resume("t1", "approve-1", true, { by: "U1" });
+      await rebuilt.result("t1");
+      expect(dequeued).toEqual([{ turnId: "t2", hostContext: { deliver: true } }]);
+      expect(await rebuilt.result("t2")).toMatchObject({ status: "completed", text: "Got your follow-up." });
+    });
+
+    test("drain() starts a held turn left behind by a restart after the park resolved", async () => {
+      const store = memStore().store;
+      const s = await parked(store);
+      s.start({ turnId: "t2", userText: "any news?", event: followUp("m2"), ifSuspended: "queue" });
+      store.tx(() => { store.delStep("suspended"); store.setStatus("completed"); }); // resolved, then the host died
+
+      const rebuilt = new AgentSession("ops", "s1", store, new MemBroadcaster(), scriptedModel([QUEUE_SCRIPT[0]!, { text: "Got your follow-up.", toolCalls: [] }]), [approveTool()], noRuntime);
+      expect(rebuilt.drain()).toEqual({ turnId: "t2" });
+      expect(await rebuilt.result("t2")).toMatchObject({ status: "completed" });
+      expect(rebuilt.drain()).toBeUndefined();
+    });
+
+    test("a held turn that parks again holds everything behind it", async () => {
+      const script: ModelReply[] = [
+        { text: "Let me check.", toolCalls: [{ id: "c1", name: "approve", input: {} }] },
+        { text: "Approved — refund sent.", toolCalls: [] },
+        { text: "That needs approval too.", toolCalls: [{ id: "c2", name: "approve", input: {} }] },
+        { text: "Second approval done.", toolCalls: [] },
+        { text: "Got your third message.", toolCalls: [] },
+      ];
+      const s = await parked(memStore().store, script);
+      s.start({ turnId: "t2", userText: "and another refund", event: { ...slackEvent, ts: "1.2" }, ifSuspended: "queue" });
+      s.start({ turnId: "t3", userText: "third", event: followUp("m3"), ifSuspended: "queue" });
+
+      s.resume("t1", "approve-1", true, { by: "U1" });
+      await s.result("t1");
+      expect(await s.result("t2")).toMatchObject({ status: "suspended" }); // t2 parked in turn
+      expect(s.heldTurns().map((q) => q.turnId)).toEqual(["t3"]);
+      expect(s.pending()).toMatchObject({ turnId: "t2", queued: 1 });
+
+      s.resume("t2", "approve-1", true, { by: "U1" });
+      await s.result("t2");
+      expect(await s.result("t3")).toMatchObject({ status: "completed", text: "Got your third message." });
+    });
+
+    test("with nothing parked and nothing held, a queue-asking turn simply runs", async () => {
+      const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), scriptedModel([{ text: "Hi.", toolCalls: [] }]), [], noRuntime);
+      expect(s.start({ turnId: "t1", userText: "hello", event: followUp("m1"), ifSuspended: "queue" })).toEqual({ turnId: "t1" });
+      expect(await s.result("t1")).toMatchObject({ status: "completed" });
+    });
+  });
+
   test("resume validates the turnId and the inputId against the pending request", async () => {
     const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), scriptedModel(APPROVE_SCRIPT), [approveTool()], noRuntime);
     const { turnId } = s.start({ turnId: "t1", userText: "refund please" });
