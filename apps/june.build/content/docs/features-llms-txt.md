@@ -44,21 +44,23 @@ A route shapes its entries with an `llms` export:
 ```ts
 // app/docs/[slug]/page.tsx: one link per doc, grouped like the sidebar
 import type { LlmsEntry } from "@junejs/core/route";
-import { DOCS } from "../../_content";
+import { docSections } from "../_sections";
 
 export const llms = (): LlmsEntry[] =>
-  DOCS.map((d) => ({
-    path: `/docs/${d.slug}`,
-    title: String(d.data.title),
-    description: String(d.data.description ?? ""),
-    section: String(d.data.section ?? "Docs"),
-  }));
+  docSections().flatMap((s) =>
+    s.docs.map((d) => ({
+      path: `/docs/${d.slug}`,
+      title: String(d.data.title ?? d.slug),
+      description: d.data.description ? String(d.data.description) : undefined,
+      section: s.title || "Docs",
+    })),
+  );
 ```
 
 ```ts
 // app/blog/[slug]/page.tsx: posts are background, so they go under Optional
 export const llms = (): LlmsEntry[] =>
-  POSTS.map((p) => ({ path: `/blog/${p.slug}`, title: String(p.data.title), optional: true }));
+  POSTS.map((p) => ({ path: `/blog/${p.slug}`, title: String(p.data.title ?? p.slug), optional: true }));
 ```
 
 An entry is `{ path, title?, description?, section?, optional? }`. A static
