@@ -301,8 +301,12 @@ the session's own store (durable across a restart, idempotent per `turnId`,
 run one at a time, oldest first, once the park resolves; a held turn that parks
 again holds the rest behind it. The parked turn's own redelivery is never held —
 it replays and re-parks as before — and a turn that runs now still goes after
-turns a restart left held. `turn()` does not take `ifSuspended`: a held turn has
-no result to await yet, so use `start()`.
+turns a restart left held. A held turn stays held until it settles, so a crash
+while it runs replays it rather than losing it, and a redelivery of a turn that
+has already started is not held again. `ifSuspended: "queue"` cannot be combined
+with `replace` — replacing would drop held turns that were accepted. `turn()`
+does not take `ifSuspended`: a held turn has no result to await yet, so use
+`start()`.
 
 - `hostContext` rides with a held turn and comes back through `session.onDequeue`,
   called as the turn starts — so a host can reattach what the original caller
