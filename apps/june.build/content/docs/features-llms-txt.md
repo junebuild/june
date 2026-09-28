@@ -147,20 +147,22 @@ agent how to use the site: start at `llms.txt`, whose links point at each
 page's Markdown version; read a page as Markdown where it offers one (the page
 advertises it with `<link rel="alternate" type="text/markdown">`; fetch `.md`
 or send `Accept: text/markdown`) or JSON (`.json`) likewise, since a route that
-turns a projection off answers 404 there; and call each tool at `/mcp`, listed
-with its parameters and description. The index next to it carries the
+turns a projection off answers 404 there; and call each tool at `/mcp` —
+listed with its parameters and description — or as `POST /api/<tool>`
+(described by `/openapi.json`). The index next to it carries the
 SKILL.md's `sha256` digest, so an agent can verify what it downloaded.
 
-The AI Catalog lists the same resources for ARD: the MCP server card and the
-skill, each with a `urn:air:<host>:…` identifier, under a
+The AI Catalog lists the same resources for ARD: the MCP server card, the HTTP
+API, and the skill, each with a `urn:air:<host>:…` identifier, under a
 `did:web:<host>` host. `robots.txt` points at it (`Agentmap:`), and so do
 every page's `<link rel="ai-catalog">` and `Link` header. Both catalogs name
 absolute URLs, so a static build writes them only when it knows the public
 origin (`site.url` or `deploy.domain`) and deploys at the domain root.
 
-A static host serves no `/mcp` either, so a static build renders every
-discovery surface with MCP projected out: `llms.txt` drops its MCP claims,
-the catalogs and skill list no MCP server, and pages register no WebMCP tools.
+A static host serves neither `/mcp` nor the HTTP API, so a static build renders
+every discovery surface with both projected out: `llms.txt` drops its MCP and
+HTTP-API sections, the catalogs and skill list no MCP server and no HTTP API,
+and pages register no WebMCP tools.
 
 ## Try it on this site
 
@@ -169,6 +171,7 @@ curl https://june.build/llms.txt
 curl https://june.build/.well-known/api-catalog
 curl https://june.build/.well-known/ai-catalog.json
 curl https://june.build/.well-known/agent-skills/index.json
+curl https://june.build/openapi.json
 curl -sI https://june.build/why | grep -i '^link:'
 ```
 

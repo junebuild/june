@@ -121,8 +121,8 @@ export default defineAction({
 });
 ```
 
-A tool file is a normal `defineAction`, the same object your UI calls and `/mcp`
-lists. When the agent runs it:
+A tool file is a normal `defineAction`, the same object your UI calls, `/mcp`
+lists, and `POST /api/<id>` serves. When the agent runs it:
 
 - **The action's `id` is the tool name, and `description` and `input` are its
   spec.** Two tools with the same name make assembly throw (`duplicate tool
@@ -179,7 +179,7 @@ export default approveRefund;
 `requestInput` works only from an `async` tool. A sync tool commits in one
 transaction and can't park, so calling it there throws. A raw tool isn't a
 `defineAction`, so it isn't in the action registry: it doesn't appear on
-`/mcp` or as a server action. Parking and resuming are covered in
+`/mcp`, on `/api`, or as a server action. Parking and resuming are covered in
 [Durable turns](/docs/agents-durable-turns).
 
 ## skills/
