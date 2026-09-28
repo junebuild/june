@@ -194,6 +194,7 @@ describe("docs", () => {
     for (const [from, to] of [
       ["/docs/05-stability", "/docs/stability"],
       ["/docs/05-stability.md", "/docs/stability.md"],
+      ["/docs/05-stability/", "/docs/stability"],
     ]) {
       const res = await get(from);
       expect(res.status).toBe(301);
