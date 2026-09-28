@@ -1074,6 +1074,67 @@ describe("AgentDurableObject — delivered turns", () => {
     expect(agent.transcript()).toHaveLength(0);         // nothing ran — a caller may re-run safely
   });
 
+  // #263 — a follow-up that arrives while the session is parked is held, then delivered.
+  describe("held turns (#263)", () => {
+    const approve: Tool = {
+      spec: { name: "approve", description: "ask a human", input: { type: "object" } },
+      run: async (_i, ctx) => ({ approved: await ctx.requestInput({ id: "a1", prompt: "Send?", answerers: { user: "U1" } }) }),
+    };
+    const script = () => scriptedModel([
+      { text: "drafting", toolCalls: [{ id: "c1", name: "approve", input: {} }] },
+      { text: "sent", toolCalls: [] },
+      { text: "Got your follow-up.", toolCalls: [] },
+    ]);
+    const post = (agent: AgentDurableObject, path: string, body: unknown) =>
+      agent.fetch(new Request(`https://do${path}`, { method: "POST", headers: { [SESSION_HEADER]: "k1" }, body: JSON.stringify(body) }));
+    const park = async (agent: AgentDurableObject) => {
+      for await (const _ of sseTurnEvents(await post(agent, "/turn", { userText: "refund", turnId: "t1", event: { ...mention, ts: "1.0" } }))) { /* drain to the park */ }
+    };
+    const followUp = { ...mention, ts: "222.2", text: "any news?" };
+
+    test("deliver=1 + ifSuspended queue holds the turn (202 queued), then renders it through its channel once the park resolves", async () => {
+      const { seen, channel } = recordingChannel();
+      const agent = new AgentDurableObject({ storage: await storage() }, { name: "ops", model: script(), tools: [approve], channels: [channel] });
+      await park(agent);
+
+      const held = await post(agent, "/turn?deliver=1", { userText: "any news?", turnId: "t2", event: followUp, ifSuspended: "queue" });
+      expect(held.status).toBe(202);
+      expect(await held.json()).toEqual({ turnId: "t2", queued: true });
+      expect(seen.events).toEqual([]); // nothing runs while the park stands
+
+      for await (const _ of sseTurnEvents(await post(agent, "/resume", { turnId: "t1", inputId: "a1", input: true, by: "U1" }))) { /* the continuation */ }
+      await until(() => seen.done);
+      expect(seen.target).toEqual({ channelId: "C1", threadId: "111.1", recipientUserId: "U1", recipientTeamId: "T9" });
+      expect(seen.events.map((e) => e.type)).toEqual(["turn.started", "message.completed", "turn.completed"]);
+      expect(seen.events.at(-1)).toMatchObject({ turnId: "t2", text: "Got your follow-up." });
+    });
+
+    test("without ifSuspended the parked session still 409s; a streaming caller may not ask to be held (400)", async () => {
+      const { channel } = recordingChannel();
+      const agent = new AgentDurableObject({ storage: await storage() }, { name: "ops", model: script(), tools: [approve], channels: [channel] });
+      await park(agent);
+      expect((await post(agent, "/turn?deliver=1", { userText: "x", turnId: "t2", event: followUp })).status).toBe(409);
+      const streaming = await post(agent, "/turn", { userText: "x", turnId: "t3", event: followUp, ifSuspended: "queue" });
+      expect(streaming.status).toBe(400);
+      expect(((await streaming.json()) as { error: string }).error).toContain("needs deliver=1 or detach=1");
+    });
+
+    test("a held turn survives eviction: the rebuilt object renders it after the resume", async () => {
+      const s = await storage();
+      const first = recordingChannel();
+      const before = new AgentDurableObject({ storage: s }, { name: "ops", model: script(), tools: [approve], channels: [first.channel] });
+      await park(before);
+      expect((await post(before, "/turn?deliver=1", { userText: "any news?", turnId: "t2", event: followUp, ifSuspended: "queue" })).status).toBe(202);
+
+      const second = recordingChannel(); // a new life of the same object: nothing in memory carries over
+      const after = new AgentDurableObject({ storage: s }, { name: "ops", model: script(), tools: [approve], channels: [second.channel] });
+      for await (const _ of sseTurnEvents(await post(after, "/resume", { turnId: "t1", inputId: "a1", input: true, by: "U1" }))) { /* the continuation */ }
+      await until(() => second.seen.done);
+      expect(second.seen.events.at(-1)).toMatchObject({ type: "turn.completed", turnId: "t2", text: "Got your follow-up." });
+      expect(first.seen.events).toEqual([]);
+    });
+  });
+
   test("deliver=1 without an inbound event is a 400 — there is no reply target to derive", async () => {
     const { channel } = recordingChannel();
     const agent = new AgentDurableObject({ storage: await storage() }, { name: "ops", model: gated().model, tools: [], channels: [channel] });

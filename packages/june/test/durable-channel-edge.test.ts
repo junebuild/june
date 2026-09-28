@@ -125,6 +125,34 @@ describe("durableChannelSurface (edge channel routing)", () => {
     expect(body.event.raw).toBeUndefined(); // the unserializable raw was dropped
   });
 
+  test("runDelivered carries ifSuspended to the DO and hands the channel back `queued` (#263)", async () => {
+    let url: string | undefined;
+    let body: unknown;
+    const ns = {
+      idFromName: (name: string) => ({ name }),
+      get: () => ({
+        async fetch(req: Request) {
+          url = req.url;
+          body = await req.json();
+          return Response.json({ turnId: "t2", queued: true }, { status: 202 });
+        },
+      }),
+    } as unknown as DurableObjectNamespace;
+    let result: unknown;
+    const ch = defineChannel({
+      name: "x", path: "/channels/x",
+      async webhook(_req, ctx) {
+        result = await ctx.runDelivered!("any news?", { session: "x:c:t", turnId: "t2", event: { source: "x", kind: "message", channelId: "c", ts: "2" }, ifSuspended: "queue" });
+        return new Response("", { status: 200 });
+      },
+    });
+    const surface = durableChannelSurface(() => ns, { agentName: AGENT, channels: [ch], env: envWith(ns) });
+    await surface(new Request("http://edge/channels/x", { method: "POST", body: "{}" }));
+    expect(url).toContain("/turn?deliver=1");
+    expect(body).toMatchObject({ userText: "any news?", turnId: "t2", ifSuspended: "queue" });
+    expect(result).toEqual({ turnId: "t2", queued: true });
+  });
+
   test("resumeStream fails loudly on a non-serializable input or principal, naming which (never silently drop)", async () => {
     // Unlike event.raw (droppable), `input` IS the human's answer and `principal` IS who gave
     // it — corrupting either would resume the turn wrongly, so both must throw, not be stripped.

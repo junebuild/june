@@ -436,7 +436,39 @@ export class AgentDurableObject {
     if (key !== undefined && key !== "self" && stored === undefined) this.store.setSessionKey(key);
     this.sessionKey = resolved;
     this.session = new AgentSession(this.name, resolved, this.store, this.sink, this.model, this.tools, crossDoUnsupported, this.channelInstructions);
+    // A held turn (#263) that asked for delivery is rendered through its source channel when
+    // it finally runs — possibly in a later life of this object, which is why the ask rides
+    // in the turn's hostContext and this hook is installed on every rebuild.
+    this.session.onDequeue = (heldTurnId, held) => {
+      if ((held.hostContext as { deliver?: boolean } | undefined)?.deliver && held.event) this.deliverHeld(this.session!, heldTurnId, held.event);
+    };
     return this.session;
+  }
+
+  // Render a held turn's reply through its source channel (#263), like /turn?deliver=1 does
+  // for a turn started now. Called from onDequeue, synchronously as the turn starts: the
+  // event subscription is taken HERE, before any event can emit, and buffers until the
+  // (async) resources are ready. Nothing may escape — there is no caller to report to; the
+  // log is the only surfacing path, as for any delivered render.
+  private deliverHeld(session: AgentSession, turnId: string, event: InboundEvent): void {
+    const logRenderFailure = (err: unknown) =>
+      console.error(`[june] agent "${this.name}": delivered render for held turn ${turnId} failed:`, err);
+    try {
+      const channel = this.channels.find((c) => c.name === event.source);
+      if (!channel?.deliver) {
+        logRenderFailure(new Error(`no deliver()-capable channel named "${event.source}" is wired into this DO — the held turn runs, but its reply is not rendered`));
+        return;
+      }
+      const it = observeTurnEvents(session, turnId)[Symbol.asyncIterator]();
+      const events: AsyncIterable<TurnEvent> = { [Symbol.asyncIterator]: () => it };
+      const target = { channelId: event.channelId, threadId: event.threadId, recipientUserId: event.user?.id, recipientTeamId: event.teamId };
+      this.ready()
+        .then((resources) => runInScope({ resources, services: this.services }, () => channel.deliver!(target, events, { session: this.sessionKey })))
+        .catch(logRenderFailure)
+        .finally(() => { void it.return?.(); });
+    } catch (err) {
+      logRenderFailure(err);
+    }
   }
   // Run the whole turn inside a request scope seeded from this DO's env, so ambient
   // `db`/`kv`/`blob` and `currentServices()` resolve inside a tool exactly as in a
@@ -484,7 +516,7 @@ export class AgentDurableObject {
     // hand-rolled fetch → the pre-#75 "self" fallback keeps old callers working.
     const key = req.headers.get(SESSION_HEADER) ?? undefined;
     if (req.method === "POST" && url.pathname.endsWith("/turn")) {
-      const { userText, turnId, event, trigger } = (await req.json()) as { userText: string; turnId?: string; event?: InboundEvent; trigger?: ProactiveTrigger };
+      const { userText, turnId, event, trigger, ifSuspended } = (await req.json()) as { userText: string; turnId?: string; event?: InboundEvent; trigger?: ProactiveTrigger; ifSuspended?: "reject" | "queue" };
       await ensureScope();
       // CANCEL-AND-REPLACE (#129): supersede every unfinished turn on this session before
       // queuing this one (debounce). A mode flag like deliver/detach, so it rides the query
@@ -498,6 +530,12 @@ export class AgentDurableObject {
       // surface: on a pre-start rejection the caller may fall back to consumer-side rendering
       // without double-running the turn.
       const wantsDeliver = url.searchParams.get("deliver") === "1";
+      const detached = url.searchParams.get("detach") === "1";
+      // HOLD (#263): only a caller with no live consumer may ask to be held — a streaming
+      // caller wants the reply now, and a held turn's reply comes after the park resolves.
+      if (ifSuspended === "queue" && !wantsDeliver && !detached) {
+        return Response.json({ error: `ifSuspended "queue" needs deliver=1 or detach=1: a held turn runs later, when no one is streaming it` }, { status: 400 });
+      }
       let deliverChannel: Channel | undefined;
       if (wantsDeliver) {
         if (!event?.channelId) {
@@ -517,15 +555,23 @@ export class AgentDurableObject {
       // BEFORE this block — the section from start() to the subscription stays synchronous.
       const resources = await this.ready();
       let session: AgentSession;
-      let started: { turnId: string };
+      let started: { turnId: string; queued?: true };
       try {
         session = this.resolveSession(key);
-        started = runInScope({ resources, services: this.services }, () => session.start({ userText, turnId, event, trigger, replace }));
+        started = runInScope({ resources, services: this.services }, () => {
+          // A restart may have left held turns whose park already resolved; run them first,
+          // ahead of this turn (#263). A no-op in every other case.
+          session.drain();
+          // `hostContext` tells onDequeue how to finish a held turn: a delivered one is
+          // rendered through its source channel when it runs, exactly as it would be now.
+          return session.start({ userText, turnId, event, trigger, replace, ifSuspended, hostContext: wantsDeliver ? { deliver: true } : undefined });
+        });
       } catch (err) {
         // e.g. the session is suspended awaiting input, or the key mis-matches this
         // object's identity — a client-resolvable conflict, not a crash
         return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 409 });
       }
+      if (started.queued) return Response.json({ turnId: started.turnId, queued: true }, { status: 202 });
       if (wantsDeliver) {
         // Subscribe synchronously (same guarantee sseTurnStream relies on: start() scheduled
         // the turn, no event can have emitted yet), then render under THIS DO's lifetime —
@@ -565,7 +611,7 @@ export class AgentDurableObject {
       // this DO's lifetime (alive while work is pending), so its duration is no longer
       // bounded by however long the CALLER can hold a connection (the edge waitUntil
       // ceiling). Nobody consumes the result; failures surface via the #76 log/hook.
-      if (url.searchParams.get("detach") === "1") return Response.json({ turnId: started.turnId }, { status: 202 });
+      if (detached) return Response.json({ turnId: started.turnId }, { status: 202 });
       return new Response(sseTurnStream(session, started.turnId), { headers: SSE_HEADERS });
     }
     // Provide the input a suspended turn is waiting on and stream its continuation as SSE.
@@ -964,7 +1010,7 @@ export function durableChannelSurface(
         const detail = (await res.text()).slice(0, 200);
         throw new Error(`runDetached: turn was not accepted (status ${res.status}): ${detail}`);
       }
-      return (await res.json()) as { turnId: string };
+      return (await res.json()) as { turnId: string; queued?: true };
     },
     // DELIVERED: runDetached's reply-bearing sibling — the DO runs the turn AND renders its
     // reply through the source channel's deliver() under its OWN lifetime, so a reply-bearing
@@ -988,7 +1034,7 @@ export function durableChannelSurface(
         const detail = (await res.text()).slice(0, 200);
         throw new Error(`runDelivered: delivered turn was not accepted (status ${res.status}): ${detail}`);
       }
-      return (await res.json()) as { turnId: string };
+      return (await res.json()) as { turnId: string; queued?: true };
     },
     // The LIVE path: hand the channel the TurnEvent stream so it can render as the turn runs.
     runStream: async function* (message, o) {
@@ -1086,8 +1132,8 @@ function serializeResume(o: { turnId: string; inputId: string; input: unknown; b
 
 // `trigger` is ProactiveTrigger — plain strings by construction — so only event.raw can make
 // the stringify throw; the fallback that strips it stays sufficient.
-function serializeTurn(userText: string, o?: { turnId?: string; event?: InboundEvent; trigger?: ProactiveTrigger }): string {
-  const payload = { userText, turnId: o?.turnId, event: o?.event, trigger: o?.trigger };
+function serializeTurn(userText: string, o?: { turnId?: string; event?: InboundEvent; trigger?: ProactiveTrigger; ifSuspended?: "reject" | "queue" }): string {
+  const payload = { userText, turnId: o?.turnId, event: o?.event, trigger: o?.trigger, ifSuspended: o?.ifSuspended };
   try {
     return JSON.stringify(payload);
   } catch {
