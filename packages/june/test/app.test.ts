@@ -148,9 +148,53 @@ describe("agent discovery surface", () => {
     expect(((await (await get("/.well-known/api-catalog")).json()) as any).linkset).toBeDefined();
     expect(((await (await get("/.well-known/mcp/server-card.json")).json()) as any).tools).toContain("createUser");
   });
+
+  test("the server card carries the app's identity from june.config site", async () => {
+    const card = (await (await get("/.well-known/mcp/server-card.json")).json()) as any;
+    expect(card.name).toBe("test.june/june-basic");
+    expect(card.title).toBe("June Basic");
+    expect(card.description).toBe("The Phase 2 fixture app — the golden dev/built parity contract.");
+    expect(card.remotes).toEqual([
+      { type: "streamable-http", url: "http://june.test/mcp", supportedProtocolVersions: ["2025-06-18"] },
+    ]);
+  });
+
+  test("the server card is served as application/mcp-server-card+json with CORS + caching", async () => {
+    const res = await get("/.well-known/mcp/server-card.json");
+    expect(res.headers.get("content-type")).toBe("application/mcp-server-card+json");
+    // …and the api-catalog advertises the card with that same type
+    const catalog = (await (await get("/.well-known/api-catalog")).json()) as any;
+    expect(catalog.linkset[0]["service-desc"][0]).toEqual({
+      href: "http://june.test/.well-known/mcp/server-card.json",
+      type: res.headers.get("content-type"),
+    });
+    expect(res.headers.get("access-control-allow-origin")).toBe("*");
+    expect(res.headers.get("access-control-allow-methods")).toBe("GET");
+    expect(res.headers.get("access-control-allow-headers")).toBe("Content-Type, If-None-Match");
+    expect(res.headers.get("access-control-expose-headers")).toBe("ETag");
+    expect(res.headers.get("cache-control")).toBe("public, max-age=3600");
+    // the If-None-Match revalidation header triggers a preflight — answered, not 404'd
+    const pre = await app.fetch(new Request("http://june.test/.well-known/mcp/server-card.json", { method: "OPTIONS" }));
+    expect(pre.status).toBe(204);
+    expect(pre.headers.get("access-control-allow-origin")).toBe("*");
+  });
 });
 
 describe("/mcp endpoint", () => {
+  test("initialize introduces the app (serverInfo + instructions), not an anonymous server", async () => {
+    const res = await app.fetch(
+      new Request("http://june.test/mcp", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize" }),
+      }),
+    );
+    const { result } = (await res.json()) as any;
+    expect(result.serverInfo).toEqual({ name: "test.june/june-basic", title: "June Basic", version: "0.0.0" });
+    expect(result.instructions).toContain("createUser");
+    expect(result.instructions).toContain("http://june.test/llms.txt");
+  });
+
   test("tools/list surfaces the registered action", async () => {
     const res = await app.fetch(
       new Request("http://june.test/mcp", {

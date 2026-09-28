@@ -14,6 +14,8 @@ export const search_site = defineAction({
     properties: { query: { type: "string", description: "Keyword or phrase" } },
     required: ["query"],
   },
+  // Reads this site's own pages, nothing else — clients may auto-approve it.
+  annotations: { title: "Search june.build", readOnlyHint: true, openWorldHint: false },
   run(input: { query: string }) {
     // Terms are runs of letters/digits in any script, so "slack?" or "cold-start"
     // match like "slack" and "cold start". Every term of 2+ chars counts; a title hit
@@ -56,6 +58,7 @@ export const get_page = defineAction({
     properties: { slug: { type: "string", description: "Page slug (e.g. why)" } },
     required: ["slug"],
   },
+  annotations: { title: "Read a june.build page", readOnlyHint: true, openWorldHint: false },
   run(input: { slug: string }) {
     const page = bySlug(input.slug);
     if (page) return { slug: page.slug, title: page.title, markdown: page.md };

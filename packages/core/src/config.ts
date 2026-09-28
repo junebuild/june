@@ -79,6 +79,16 @@ export type SiteOrganization = {
   };
 };
 
+// The site's short label: site.shortName, else the site name's leading segment
+// ("June — build agents into real apps" → "June"). Used wherever a tagline would
+// be wrong — the home-screen label, the MCP server's title.
+export function siteShortName(site: Pick<SiteConfig, "name" | "shortName">): string | undefined {
+  if (site.shortName) return site.shortName;
+  const name = site.name?.trim();
+  if (!name) return undefined;
+  return name.split(/\s+[—–|-]\s+|:\s+/)[0]!.trim() || name;
+}
+
 // DocumentConfig.deployOrigin from the config's deploy domain — the public-origin
 // fallback for prerendered pages, which render against a placeholder host.
 export function deployOrigin(cfg: Pick<JuneConfig, "deploy">): string | undefined {
@@ -107,6 +117,20 @@ export type AgentConfig = {
   //               tools reads it first. Specific use cases, not marketing copy.
   // All plain string arrays so they freeze into the worker manifest as-is.
   llms?: { framework?: string[]; sections?: string[]; whenToUse?: string[] };
+  // The /mcp server's identity — the initialize handshake (serverInfo + instructions)
+  // and the server card. Every field is optional; unset ones are derived from `site`
+  // and the app's tools (see mcpServerIdentity in ./mcp):
+  //   name          serverInfo.name and the card's reverse-DNS name. Default
+  //                 "<reversed host>/<short name slug>" (june.build → "build.june/june").
+  //   title         the display name. Default: the site's short name.
+  //   description   the server card's one-liner (≤ 100 chars, the v1 schema's limit).
+  //                 Default: site.description, trimmed at a sentence or word boundary.
+  //   version       Default "0.0.0" — set it to your app's release version.
+  //   instructions  the usage guidance clients hand the model. Default: generated from
+  //                 the FULL site.description, the tool list, and the llms.txt / .md pointers.
+  // Overrides are validated against the v1 Server Card schema when the config resolves
+  // (see validateMcpServer), so a bad value fails the build, not a client.
+  mcpServer?: { name?: string; title?: string; description?: string; version?: string; instructions?: string };
   // The durable agent runtime (opt-in). Resolved to full shape below.
   runtime: AgentRuntimeConfig;
 };
@@ -313,7 +337,42 @@ export function defineJune(config: JuneConfig): JuneConfig {
   return config;
 }
 
+// The v1 MCP Server Card schema's identity constraints (static.modelcontextprotocol.io
+// /schemas/v1/server-card.schema.json). The derived identity always satisfies them;
+// explicit agent.mcpServer values are checked against them here.
+export const MCP_SERVER_NAME = /^[a-zA-Z0-9.-]+\/[a-zA-Z0-9._-]+$/; // namespace/name, one slash
+export const MCP_SERVER_NAME_SEGMENT = /^[a-zA-Z0-9._-]+$/; // a bare name, namespaced by host
+export const MCP_CARD_TEXT_MAX = 100; // title and description
+const MCP_VERSION_MAX = 255;
+
+// Throws a config error naming the field, the value, and the rule it breaks.
+export function validateMcpServer(server: AgentConfig["mcpServer"]): void {
+  if (!server) return;
+  const fail = (field: string, rule: string) => {
+    throw new Error(`june.config agent.mcpServer.${field} ${rule}`);
+  };
+  const { name, title, description, version } = server;
+  // JSON Schema's minLength/maxLength count code points, not UTF-16 units — an
+  // emoji is 1, not 2 (same measure as fitCardText).
+  const len = (v: string) => Array.from(v).length;
+  if (name !== undefined) {
+    if (name.includes("/")) {
+      if (!MCP_SERVER_NAME.test(name) || len(name) > 200)
+        fail("name", `"${name}" is not a valid MCP server name: use "namespace/name" with exactly one slash, [a-zA-Z0-9.-] before it and [a-zA-Z0-9._-] after it, at most 200 characters.`);
+    } else if (!MCP_SERVER_NAME_SEGMENT.test(name) || len(name) > 100) {
+      fail("name", `"${name}" is not a valid MCP server name: a bare name (namespaced by your host) may use only [a-zA-Z0-9._-], at most 100 characters.`);
+    }
+  }
+  for (const [field, value] of [["title", title], ["description", description]] as const) {
+    if (value !== undefined && (len(value) < 1 || len(value) > MCP_CARD_TEXT_MAX))
+      fail(field, `must be 1–${MCP_CARD_TEXT_MAX} characters (the MCP Server Card limit); got ${len(value)}.`);
+  }
+  if (version !== undefined && (len(version) < 1 || len(version) > MCP_VERSION_MAX))
+    fail("version", `must be 1–${MCP_VERSION_MAX} characters; got ${len(version)}.`);
+}
+
 export function resolveAgent(partial?: AgentConfigInput): AgentConfig {
+  validateMcpServer(partial?.mcpServer);
   const runtime: AgentRuntimeConfig = {
     ...DEFAULT_RUNTIME,
     ...(partial?.runtime ?? {}),

@@ -97,6 +97,7 @@ export {
   sitemapXml,
   apiCatalog,
   mcpServerCard,
+  MCP_SERVER_CARD_TYPE,
   type SitemapPage,
 } from "./discovery";
 
