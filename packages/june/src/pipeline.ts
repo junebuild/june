@@ -24,14 +24,21 @@ import {
   type RenderTarget,
   type RouteContext,
 } from "@junejs/core/route";
-import { Document, documentTitle, pageCanonical, type DocumentConfig } from "@junejs/core/document";
+import { Document, documentTitle, pageCanonical, PRERENDER_ORIGIN, type DocumentConfig } from "@junejs/core/document";
 import {
+  AGENT_SKILLS_INDEX_PATH,
+  AI_CATALOG_PATH,
+  API_CATALOG_CONTENT_TYPE,
+  ARD_PATH,
+  agentSkillsIndex,
+  aiCatalog,
   apiCatalog,
   buildLinkHeader,
   llmsTxt,
   MCP_SERVER_CARD_TYPE,
   mcpServerCard,
   robotsTxt,
+  siteSkill,
   sitemapXml,
 } from "@junejs/core/discovery";
 import { mcpHandler, mcpServerIdentity, mcpTools } from "@junejs/core/mcp";
@@ -177,6 +184,9 @@ const DefaultNotFound: React.ComponentType<{ pathname: string }> = ({ pathname }
     React.createElement("p", null, pathname),
   );
 
+// Catalogs crawlers and browser-based agents fetch cross-origin (ARD requires it).
+const CORS = { "access-control-allow-origin": "*" };
+
 function text(body: string, contentType: string, init?: ResponseInit) {
   const headers = new Headers(init?.headers);
   headers.set("content-type", contentType);
@@ -251,7 +261,8 @@ export function htmlPath(pathname: string, isHome: boolean): string {
 const SERVER_CARD_PATH = "/.well-known/mcp/server-card.json";
 const SERVER_CARD_CORS = {
   "access-control-allow-origin": "*",
-  "access-control-allow-methods": "GET",
+  // HEAD too: the discovery gate answers it on every surface (same headers, no body).
+  "access-control-allow-methods": "GET, HEAD",
   "access-control-allow-headers": "Content-Type, If-None-Match",
   "access-control-expose-headers": "ETag",
 };
@@ -265,12 +276,18 @@ const routePathOf = new WeakMap<RouteContext, string>();
 export function createPipeline(cfg: PipelineConfig): Pipeline {
   const { docConfig, agent } = cfg;
   const NotFound = cfg.notFoundComponent ?? DefaultNotFound;
+  // The origin-independent half of catalogOrigin() below — all a response header
+  // can know (a static build publishes no headers, so the prerender-origin half
+  // never applies to one).
+  const publishesCatalogs = agent.discovery && !docConfig.basePath;
 
   function htmlHeaders(): Headers {
     // Every pipeline document is one variant of an Accept-negotiated URL (its .md
     // and .json answer at the same path) — including streamed pages and the 404.
     const headers = new Headers({ "content-type": "text/html; charset=utf-8", vary: "accept" });
-    const links = [buildLinkHeader(agent), ...(cfg.earlyHints ?? [])].filter(Boolean) as string[];
+    const links = [buildLinkHeader(agent, { catalogs: publishesCatalogs }), ...(cfg.earlyHints ?? [])].filter(
+      Boolean,
+    ) as string[];
     if (links.length) headers.set("link", links.join(", "));
     if (cfg.htmlCacheControl) headers.set("cache-control", cfg.htmlCacheControl);
     return headers;
@@ -338,7 +355,7 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
     );
     const stream = await renderToReadableStream(
       React.createElement(Document, {
-        config: docConfigForRender(),
+        config: docConfigForRender(page?.pageUrl),
         metadata,
         children: wrapped,
         shellKey: boundaryKey, // stamps data-june-shell on [data-june-root]
@@ -397,9 +414,17 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
   // WebMCP: register the app's actions as browser tools. Computed per render
   // from the live registry (stable after warmup), gated on agent.webmcp + mcp
   // (execute proxies to /mcp). No actions → no script → page stays zero-JS.
-  function docConfigForRender(): DocumentConfig {
+  function docConfigForRender(pageUrl?: string): DocumentConfig {
     const webmcpTools = agent.webmcp && agent.mcp ? mcpTools() : null;
-    return webmcpTools?.length ? { ...docConfig, webmcpTools } : docConfig;
+    // <link rel="ai-catalog"> — the AI Catalog spec's in-page pointer (ARD) —
+    // only where this pipeline actually serves the catalog for the page's origin
+    // (never under a basePath, never on a static build without a public origin).
+    const servesCatalog = !!pageUrl && catalogOrigin(new URL(pageUrl)) !== null;
+    return {
+      ...docConfig,
+      ...(webmcpTools?.length ? { webmcpTools } : {}),
+      ...(servesCatalog ? { aiCatalog: AI_CATALOG_PATH } : {}),
+    };
   }
 
   // Streaming Suspense: the shell (layout chain + the loading.tsx fallback)
@@ -426,7 +451,7 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
     const metadata = typeof def.metadata === "object" ? def.metadata : undefined;
     const stream = await renderToReadableStream(
       React.createElement(Document, {
-        config: docConfigForRender(),
+        config: docConfigForRender(ctx.url.href),
         metadata,
         children: wrapped,
         shellKey: boundaryKey, // stamps data-june-shell on [data-june-root]
@@ -599,7 +624,50 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
     return renderDocument(node, meta, 200, chain, ctx.locale, boundaryKey, alternatesFor(ctx), pageProps(ctx, def));
   }
 
+  // The origin the agent catalogs name, or null when this site publishes none —
+  // the single rule for serving them, prerendering them, and advertising them
+  // (head link, Link header, robots Agentmap):
+  //   • agent.discovery off → no discovery surface at all;
+  //   • a basePath site doesn't own the domain root, where /.well-known lives;
+  //   • a static build renders against the placeholder prerender host, which must
+  //     never reach a published file: use the configured public origin (site.url,
+  //     else deploy.domain) there, and publish nothing when neither is set.
+  function catalogOrigin(url: URL): string | null {
+    if (!publishesCatalogs) return null;
+    if (url.origin !== PRERENDER_ORIGIN) return url.origin;
+    return docConfig.site.url ? new URL(docConfig.site.url).origin : (docConfig.deployOrigin ?? null);
+  }
+
+  // The agent catalogs: Agent Skills (index + the generated SKILL.md) and the
+  // ARD / AI Catalog. CORS-open — crawlers and browser agents fetch them cross-origin.
+  async function agentCatalog(url: URL): Promise<Response | null> {
+    const { pathname } = url;
+    if (!pathname.startsWith("/.well-known/")) return null;
+    const origin = catalogOrigin(url);
+    if (!origin) return null;
+    if (pathname === AGENT_SKILLS_INDEX_PATH) {
+      return Response.json(await agentSkillsIndex(origin, agent, docConfig.site), { headers: CORS });
+    }
+    if (pathname === AI_CATALOG_PATH || pathname === ARD_PATH) {
+      return Response.json(aiCatalog(origin, agent, docConfig.site), { headers: CORS });
+    }
+    // The skill's path carries its name; only the generated skill's own path answers.
+    const skill = siteSkill(origin, agent, docConfig.site);
+    if (pathname === new URL(skill.url).pathname) {
+      return text(skill.markdown, "text/markdown; charset=utf-8", { headers: CORS });
+    }
+    // The skills directory is ours while we serve it: any other path under it is
+    // a skill that doesn't exist, a 404 the RFC requires — never handed to app
+    // routing, where a catch-all would answer 200.
+    if (pathname.startsWith("/.well-known/agent-skills/")) {
+      return Response.json({ error: "Not Found", path: pathname }, { status: 404, headers: CORS });
+    }
+    return null;
+  }
+
   async function discovery(url: URL): Promise<Response | null> {
+    const catalog = await agentCatalog(url);
+    if (catalog) return catalog;
     switch (url.pathname) {
       case "/llms.txt": {
         const routes = await cfg.routeList();
@@ -608,7 +676,7 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
         return text(llmsTxt(url.origin, routes, agent, docConfig.site, links), "text/markdown; charset=utf-8");
       }
       case "/robots.txt":
-        return text(robotsTxt(url.origin), "text/plain; charset=utf-8");
+        return text(robotsTxt(url.origin, { catalogs: catalogOrigin(url) !== null }), "text/plain; charset=utf-8");
       case "/sitemap.xml":
         return text(
           sitemapXml(
@@ -622,7 +690,11 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
           "application/xml; charset=utf-8",
         );
       case "/.well-known/api-catalog":
-        return text(JSON.stringify(apiCatalog(url.origin, agent)), "application/linkset+json");
+        // RFC 9727 §2: a HEAD here SHALL carry a Link with rel="api-catalog". The
+        // gate answers HEAD with this GET's headers, so both carry it.
+        return text(JSON.stringify(apiCatalog(url.origin, agent)), API_CATALOG_CONTENT_TYPE, {
+          headers: { link: `</.well-known/api-catalog>; rel="api-catalog"` },
+        });
       case SERVER_CARD_PATH:
         return agent.mcp
           ? text(
@@ -665,9 +737,11 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
       if (request.method === "OPTIONS" && agent.discovery && agent.mcp && url.pathname === SERVER_CARD_PATH) {
         return new Response(null, { status: 204, headers: SERVER_CARD_CORS });
       }
-      if (request.method === "GET" && agent.discovery) {
+      // GET and HEAD (Agent Skills Discovery RFC v0.2.0 requires both): a HEAD
+      // gets the same status and headers, no body.
+      if ((request.method === "GET" || request.method === "HEAD") && agent.discovery) {
         const d = await discovery(url);
-        if (d) return d;
+        if (d) return request.method === "HEAD" ? new Response(null, { status: d.status, headers: d.headers }) : d;
       }
 
       // --- durable agent surface (chat + channels) -------------------------

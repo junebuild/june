@@ -50,6 +50,9 @@ export type DocumentConfig = {
   // that registers each via navigator.modelContext.registerTool() so an
   // in-browser agent can call them (each tool's execute proxies to /mcp).
   webmcpTools?: Array<{ name: string; description?: string; inputSchema?: unknown }> | null;
+  // URL of the app's AI Catalog (ARD) — set by the host when agent discovery is
+  // on; the document advertises it with <link rel="ai-catalog">.
+  aiCatalog?: string | null;
   // Public-path prefix the whole site is served under (JuneConfig.basePath), e.g.
   // "/openab/docs" for a GitHub Pages project subpath. When set, the framework asset
   // URLs below (favicon/styles/moduleStyles/clientScript) — which are root-absolute
@@ -364,6 +367,9 @@ export function Document({
         {description ? <meta name="description" content={description} /> : null}
         {canonical ? <link rel="canonical" href={canonical} /> : null}
         {markdownHref ? <link rel="alternate" type="text/markdown" href={withBase(markdownHref)} /> : null}
+        {config.aiCatalog ? (
+          <link rel="ai-catalog" href={withBase(config.aiCatalog)} type="application/json" />
+        ) : null}
         {alternates?.map((a) => (
           <link key={a.hreflang} rel="alternate" hrefLang={a.hreflang} href={a.href} />
         ))}

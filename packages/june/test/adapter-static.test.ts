@@ -9,6 +9,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { PRERENDER_ORIGIN } from "@junejs/core/document";
+
 import { staticSite } from "../src/adapter";
 import { juneBuild, normalizeBase } from "../src/build";
 
@@ -170,5 +172,67 @@ describe("staticSite() — staticPaths feed prerender AND the sitemap (no i18n)"
     const locs = [...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => new URL(m[1]!).pathname);
     expect(locs.sort()).toEqual([...r.prerendered].sort());
     expect(locs).toContain("/guide/a");
+  });
+});
+
+describe("staticSite() target — agent catalogs", () => {
+  const ROOT = dirname(fileURLToPath(new URL("./fixtures/static-root-app/app", import.meta.url)));
+  const BASE_ROOT = dirname(fileURLToPath(new URL("./fixtures/static-app/app", import.meta.url)));
+  const OFF_ROOT = dirname(fileURLToPath(new URL("./fixtures/static-nodiscovery-app/app", import.meta.url)));
+  const dirs: string[] = [];
+
+  afterAll(async () => {
+    for (const d of dirs) await rm(d, { recursive: true, force: true });
+    for (const r of [ROOT, BASE_ROOT, OFF_ROOT]) await rm(join(r, ".june"), { recursive: true, force: true });
+  });
+
+  test("agent.discovery off publishes no catalog file, even with a catch-all route that answers any path", async () => {
+    const outDir = await mkdtemp(join(tmpdir(), "june-static-catalogs-off-"));
+    dirs.push(outDir);
+    await juneBuild(OFF_ROOT, { outDir });
+    expect(existsSync(join(outDir, "static", ".well-known"))).toBe(false);
+    expect(await readFile(join(outDir, "static", "index.html"), "utf8")).not.toContain('rel="ai-catalog"');
+  });
+
+  test("a root deploy prerenders the ARD catalog + skills naming the public origin, never the prerender host", async () => {
+    const outDir = await mkdtemp(join(tmpdir(), "june-static-catalogs-"));
+    dirs.push(outDir);
+    await juneBuild(ROOT, { outDir });
+    const read = (rel: string) => readFile(join(outDir, "static", rel), "utf8");
+
+    const catalog = await read(".well-known/ai-catalog.json");
+    expect(await read(".well-known/ard.json")).toBe(catalog);
+    expect(JSON.parse(catalog).host.identifier).toBe("did:web:static.example");
+
+    const index = JSON.parse(await read(".well-known/agent-skills/index.json"));
+    const entry = index.skills[0];
+    expect(entry.url).toBe("https://static.example/.well-known/agent-skills/static-example/SKILL.md");
+    const md = await readFile(join(outDir, "static", ".well-known/agent-skills/static-example/SKILL.md"));
+    expect(entry.digest).toBe(`sha256:${new Bun.CryptoHasher("sha256").update(md).digest("hex")}`);
+
+    for (const f of [catalog, JSON.stringify(index), md.toString("utf8")]) expect(f).not.toContain(PRERENDER_ORIGIN);
+
+    // A static host runs no /mcp: the app's tool is projected out of everything
+    // published — the catalog, the skill, llms.txt, and the pages' WebMCP script.
+    expect(JSON.parse(catalog).entries.map((e: { type: string }) => e.type)).toEqual(["application/agent-skills+md"]);
+    const llms = await read("llms.txt");
+    const html = await read("index.html");
+    for (const f of [md.toString("utf8"), llms]) expect(f).not.toContain("/mcp");
+    for (const f of [md.toString("utf8"), llms, html]) expect(f).not.toContain("lookup");
+    // (the HTML still names /mcp in its speculation-rules EXCLUSIONS — not an advertisement)
+    expect(html).not.toContain("modelContext");
+    // the page links the catalog it ships with
+    expect(html).toContain('<link rel="ai-catalog" href="/.well-known/ai-catalog.json"');
+  });
+
+  test("a basePath deploy publishes no /.well-known catalogs (it doesn't own the domain root)", async () => {
+    const outDir = await mkdtemp(join(tmpdir(), "june-static-catalogs-base-"));
+    dirs.push(outDir);
+    await juneBuild(BASE_ROOT, { outDir });
+    expect(existsSync(join(outDir, "static", ".well-known", "ai-catalog.json"))).toBe(false);
+    expect(existsSync(join(outDir, "static", ".well-known", "agent-skills"))).toBe(false);
+    // …and no page advertises the catalog it doesn't ship
+    const html = await readFile(join(outDir, "static", "index.html"), "utf8");
+    expect(html).not.toContain('rel="ai-catalog"');
   });
 });

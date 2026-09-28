@@ -21,16 +21,19 @@ export const MCP_SERVER_CARD_TYPE = "application/mcp-server-card+json";
 
 // The homepage Link header advertises the whole discovery tree in one place, so
 // an agent fetching any page finds everything without guessing well-known paths.
-export function buildLinkHeader(agent: AgentConfig): string | null {
+// `catalogs: false` drops the ai-catalog relation — the host passes its catalog
+// publication rule (e.g. a basePath site publishes no /.well-known catalog).
+export function buildLinkHeader(agent: AgentConfig, opts: { catalogs?: boolean } = {}): string | null {
   if (!agent.discovery) return null;
   const links = [
     `</llms.txt>; rel="llms-txt"`,
     `</llms.txt>; rel="describedby"; type="text/markdown"`,
     `</sitemap.xml>; rel="sitemap"`,
     `</.well-known/api-catalog>; rel="api-catalog"`,
-    `</.well-known/mcp/server-card.json>; rel="mcp-server"; type="${MCP_SERVER_CARD_TYPE}"`,
   ];
-  if (!agent.mcp) links.pop(); // no MCP server card if MCP is off
+  // ai-catalog is the relation the AI Catalog spec defines for Link-header discovery.
+  if (opts.catalogs !== false) links.push(`<${AI_CATALOG_PATH}>; rel="ai-catalog"; type="application/json"`);
+  if (agent.mcp) links.push(`</.well-known/mcp/server-card.json>; rel="mcp-server"; type="${MCP_SERVER_CARD_TYPE}"`);
   return links.join(", ");
 }
 
@@ -88,7 +91,7 @@ export function llmsTxt(
     "",
     ...(site?.description ? [`> ${site.description}`, ""] : []),
     "> Server-rendered React app. Every route also answers as Markdown",
-    "> (`.md`) and JSON (`.json`); actions are MCP tools at `/mcp`.",
+    agent.mcp ? "> (`.md`) and JSON (`.json`); actions are MCP tools at `/mcp`." : "> (`.md`) and JSON (`.json`).",
     "",
     // App-authored "when to reach for this site" guidance sits right under the
     // summary: the first thing an agent choosing between tools should read.
@@ -133,7 +136,8 @@ export function llmsTxt(
   return lines.join("\n") + "\n";
 }
 
-export function robotsTxt(origin: string) {
+// `catalogs: false` drops the Agentmap line, like buildLinkHeader's option.
+export function robotsTxt(origin: string, opts: { catalogs?: boolean } = {}) {
   return (
     [
       "User-agent: *",
@@ -141,6 +145,8 @@ export function robotsTxt(origin: string) {
       // Cloudflare-style content signals: how AI may use this content.
       "Content-Signal: search=yes, ai-train=yes, ai-input=yes",
       `Sitemap: ${origin}/sitemap.xml`,
+      // ARD (agenticresourcediscovery.org): where the agent-resource catalog lives.
+      ...(opts.catalogs === false ? [] : [`Agentmap: ${origin}${AI_CATALOG_PATH}`]),
     ].join("\n") + "\n"
   );
 }
@@ -203,18 +209,268 @@ export function sitemapXml(origin: string, routes: Array<string | SitemapPage>, 
   return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset ${ns}>\n${urls}\n</urlset>\n`;
 }
 
-// RFC 9727 API Catalog (linkset+json).
-export function apiCatalog(origin: string, agent: AgentConfig) {
-  const service: Record<string, unknown> = {
-    anchor: `${origin}/`,
-    "service-doc": [{ href: `${origin}/llms.txt`, type: "text/markdown" }],
-  };
+// --- the agent services this app exposes -----------------------------------
+// ONE list feeds every catalog (RFC 9727 api-catalog, the ARD/AI Catalog), so a
+// surface added here shows up in all of them. A new surface (e.g. a REST/OpenAPI
+// projection of the actions) is one more entry, gated on its own config flag.
+export type AgentService = {
+  // Stable short name of the surface ("site", "mcp").
+  id: string;
+  // The service endpoint itself (the RFC 9727 `item` and linkset anchor).
+  endpoint: string;
+  // Its machine-readable description (RFC 9727 `service-desc`), when it has one.
+  desc?: { href: string; type: string };
+  // Its human/agent documentation (RFC 9727 `service-doc`).
+  doc: { href: string; type: string };
+  // The AI Catalog entry for it; absent → the service is listed in the
+  // api-catalog only (it is an HTTP API, not an AI artifact).
+  catalog?: { namespace: string; type: string; url: string; displayName: string };
+};
+
+function siteLabel(origin: string, site?: { name?: string }) {
+  return site?.name ?? new URL(origin).host;
+}
+
+export function agentServices(
+  origin: string,
+  agent: AgentConfig,
+  site?: { name?: string },
+): AgentService[] {
+  const llms = { href: `${origin}/llms.txt`, type: "text/markdown" };
+  // The site itself is an API: every route answers as Markdown (.md) and JSON
+  // (.json), indexed by llms.txt.
+  const services: AgentService[] = [{ id: "site", endpoint: `${origin}/`, doc: llms }];
   if (agent.mcp) {
-    service["service-desc"] = [
-      { href: `${origin}/.well-known/mcp/server-card.json`, type: MCP_SERVER_CARD_TYPE },
-    ];
+    const card = `${origin}/.well-known/mcp/server-card.json`;
+    services.push({
+      id: "mcp",
+      endpoint: `${origin}/mcp`,
+      desc: { href: card, type: MCP_SERVER_CARD_TYPE },
+      doc: llms,
+      catalog: {
+        namespace: "mcp",
+        type: MCP_SERVER_CARD_TYPE,
+        url: card,
+        displayName: `${siteLabel(origin, site)} MCP server`,
+      },
+    });
   }
-  return { linkset: [service] };
+  return services;
+}
+
+// RFC 9727 API Catalog (linkset+json). The first context is the catalog itself
+// (anchor = its own well-known URI) listing each API as an `item`; each API then
+// gets its own context carrying its service-desc / service-doc (RFC 9727 §4 and
+// Appendix A).
+export const API_CATALOG_CONTENT_TYPE =
+  'application/linkset+json; profile="https://www.rfc-editor.org/info/rfc9727"';
+
+type Link = { href: string; type?: string };
+export type LinksetContext = {
+  anchor: string;
+  item?: Link[];
+  "service-desc"?: Link[];
+  "service-doc"?: Link[];
+};
+
+export function apiCatalog(origin: string, agent: AgentConfig): { linkset: LinksetContext[] } {
+  const services = agentServices(origin, agent);
+  const describe = (s: AgentService): LinksetContext => ({
+    anchor: s.endpoint,
+    ...(s.desc ? { "service-desc": [s.desc] } : {}),
+    "service-doc": [s.doc],
+  });
+  return {
+    linkset: [
+      { anchor: `${origin}/.well-known/api-catalog`, item: services.map((s) => ({ href: s.endpoint })) },
+      ...services.map(describe),
+    ],
+  };
+}
+
+// --- Agent Skills (Agent Skills Discovery RFC v0.2.0) ------------------------
+// Every June app publishes one generated skill: "how to use this site" — read it
+// as Markdown, call its tools over MCP. Served at
+// /.well-known/agent-skills/<name>/SKILL.md and listed (with a sha256 digest of
+// the exact served bytes) in /.well-known/agent-skills/index.json.
+export const AGENT_SKILLS_INDEX_PATH = "/.well-known/agent-skills/index.json";
+const AGENT_SKILLS_SCHEMA = "https://schemas.agentskills.io/discovery/0.2.0/schema.json";
+
+// Agent Skills names: 1-64 chars of [a-z0-9-], no leading/trailing/double hyphen.
+// Derived from the HOST, not site.name: a host is stable, unique to the site and
+// always ASCII (an IDN arrives as punycode), where a site name is often a tagline
+// or in a non-Latin script that has no faithful ASCII slug.
+export function skillName(origin: string): string {
+  const host = new URL(origin).hostname.replace(/^www\./, "");
+  const slug = host
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64)
+    .replace(/-+$/, "");
+  return slug || "site";
+}
+
+// JSON strings are valid YAML double-quoted scalars — safe for any description.
+const yamlString = (s: string) => JSON.stringify(s);
+
+function paramList(input: unknown): string {
+  const props = (input as { properties?: Record<string, { type?: unknown }> } | undefined)?.properties;
+  if (!props) return "";
+  const required = new Set((input as { required?: string[] }).required ?? []);
+  return Object.entries(props)
+    .map(([k, v]) => `${k}${required.has(k) ? "" : "?"}: ${typeof v?.type === "string" ? v.type : "any"}`)
+    .join(", ");
+}
+
+export type AgentSkill = { name: string; description: string; url: string; markdown: string };
+
+export function siteSkill(
+  origin: string,
+  agent: AgentConfig,
+  site?: { name?: string; description?: string },
+): AgentSkill {
+  const name = skillName(origin);
+  const host = new URL(origin).host;
+  const label = siteLabel(origin, site);
+  const tools = agent.mcp ? [...ACTION_REGISTRY.values()].filter((a) => a.description) : [];
+  const about = site?.description?.replace(/\s+/g, " ").trim().replace(/[.。]$/, "");
+  const description = (
+    `Use ${host}${about ? `: ${about}` : ""}. ` +
+    `Read its pages as Markdown` +
+    (tools.length ? ` and call its ${tools.length} tool${tools.length === 1 ? "" : "s"} over MCP` : "") +
+    `. Use when a task needs information from ${host}` +
+    (tools.length ? ` or actions on it.` : ".")
+  ).slice(0, 1024);
+
+  const lines = [
+    "---",
+    `name: ${name}`,
+    `description: ${yamlString(description)}`,
+    "---",
+    "",
+    `# ${label}`,
+    "",
+    ...(site?.description ? [`> ${site.description}`, ""] : []),
+    "## Read",
+    "",
+    `- Start at ${origin}/llms.txt — every page, grouped and described. Its links point at each page's Markdown version where the page has one.`,
+    "- Markdown: a page that offers it says so with `<link rel=\"alternate\" type=\"text/markdown\" href=\"…\">` in its head — fetch that URL, append `.md` to the page's URL, or request the page with `Accept: text/markdown`. A page whose route turned Markdown off has no such link and answers 404 there: read the HTML instead.",
+    "- JSON: likewise, append `.json` for the page's data where the page offers it (404 where it doesn't).",
+    `- Full page list: ${origin}/sitemap.xml`,
+  ];
+  if (agent.mcp) {
+    lines.push(
+      "",
+      "## Act (MCP)",
+      "",
+      `- Endpoint: ${origin}/mcp — MCP over Streamable HTTP: POST JSON-RPC \`initialize\`, \`tools/list\`, \`tools/call\`.`,
+      "- Each tool's full input schema comes back from `tools/list`.",
+    );
+    if (tools.length) {
+      lines.push("", "Tools:", "");
+      for (const t of tools) {
+        const gate = t.requiresPrincipal ? " (requires a signed-in user)" : "";
+        lines.push(`- \`${t.id}(${paramList(t.input)})\`${gate} — ${t.description.replace(/\s+/g, " ").trim()}`);
+      }
+      const first = tools[0]!;
+      lines.push(
+        "",
+        "Call a tool:",
+        "",
+        "```sh",
+        `curl -s ${origin}/mcp -H 'content-type: application/json' \\`,
+        `  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"${first.id}","arguments":{}}}'`,
+        "```",
+        "",
+        "(Fill `arguments` per the tool's input schema.)",
+      );
+    }
+  }
+  return {
+    name,
+    description,
+    url: `${origin}/.well-known/agent-skills/${name}/SKILL.md`,
+    markdown: lines.join("\n") + "\n",
+  };
+}
+
+// sha256:{64 lowercase hex} of the UTF-8 bytes — the digest a client verifies the
+// downloaded SKILL.md against, so it MUST be computed over the served string.
+export async function sha256Digest(text: string): Promise<string> {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return "sha256:" + [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+export async function agentSkillsIndex(
+  origin: string,
+  agent: AgentConfig,
+  site?: { name?: string; description?: string },
+) {
+  const skill = siteSkill(origin, agent, site);
+  return {
+    $schema: AGENT_SKILLS_SCHEMA,
+    skills: [
+      {
+        name: skill.name,
+        type: "skill-md",
+        description: skill.description,
+        url: skill.url,
+        digest: await sha256Digest(skill.markdown),
+      },
+    ],
+  };
+}
+
+// --- ARD / AI Catalog ---------------------------------------------------------
+// One catalog of the app's agentic resources (MCP server, skills), per the AI
+// Catalog data model (github.com/Agent-Card/ai-catalog) that ARD
+// (agenticresourcediscovery.org) crawls. Served at BOTH /.well-known/ai-catalog.json
+// (AI Catalog's well-known path) and /.well-known/ard.json (ARD's), as
+// application/json with CORS open — the shape ARD's publishing guide prescribes.
+// representativeQueries are omitted: they are optional, and a framework cannot
+// write honest example queries for an app it knows only by its tool list.
+export const AI_CATALOG_PATH = "/.well-known/ai-catalog.json";
+export const ARD_PATH = "/.well-known/ard.json";
+
+export function aiCatalog(
+  origin: string,
+  agent: AgentConfig,
+  site?: { name?: string; description?: string },
+) {
+  const host = new URL(origin).host;
+  const hostname = new URL(origin).hostname;
+  const urn = (namespace: string, name: string) => `urn:air:${hostname}:${namespace}:${name}`;
+  const entries: Array<Record<string, unknown>> = [];
+  for (const s of agentServices(origin, agent, site)) {
+    if (!s.catalog) continue;
+    entries.push({
+      // the site's own name within the namespace: urn:air:june.build:mcp:june-build
+      identifier: urn(s.catalog.namespace, skillName(origin)),
+      displayName: s.catalog.displayName,
+      type: s.catalog.type,
+      url: s.catalog.url,
+      ...(site?.description ? { description: site.description } : {}),
+    });
+  }
+  const skill = siteSkill(origin, agent, site);
+  entries.push({
+    identifier: urn("skill", skill.name),
+    displayName: `Using ${siteLabel(origin, site)}`,
+    type: "application/agent-skills+md",
+    url: skill.url,
+    description: skill.description,
+  });
+  return {
+    specVersion: "1.0",
+    host: {
+      displayName: siteLabel(origin, site),
+      // did:web encodes a port's colon as %3A (did:web spec §3.1).
+      identifier: `did:web:${host.replace(":", "%3A")}`,
+      documentationUrl: `${origin}/llms.txt`,
+    },
+    entries,
+  };
 }
 
 const ICON_TYPES: Record<string, string> = {

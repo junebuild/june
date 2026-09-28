@@ -164,12 +164,13 @@ describe("agent discovery surface", () => {
     expect(res.headers.get("content-type")).toBe("application/mcp-server-card+json");
     // …and the api-catalog advertises the card with that same type
     const catalog = (await (await get("/.well-known/api-catalog")).json()) as any;
-    expect(catalog.linkset[0]["service-desc"][0]).toEqual({
+    const mcp = catalog.linkset.find((c: any) => c.anchor === "http://june.test/mcp");
+    expect(mcp["service-desc"][0]).toEqual({
       href: "http://june.test/.well-known/mcp/server-card.json",
       type: res.headers.get("content-type"),
     });
     expect(res.headers.get("access-control-allow-origin")).toBe("*");
-    expect(res.headers.get("access-control-allow-methods")).toBe("GET");
+    expect(res.headers.get("access-control-allow-methods")).toBe("GET, HEAD");
     expect(res.headers.get("access-control-allow-headers")).toBe("Content-Type, If-None-Match");
     expect(res.headers.get("access-control-expose-headers")).toBe("ETag");
     expect(res.headers.get("cache-control")).toBe("public, max-age=3600");
@@ -177,6 +178,56 @@ describe("agent discovery surface", () => {
     const pre = await app.fetch(new Request("http://june.test/.well-known/mcp/server-card.json", { method: "OPTIONS" }));
     expect(pre.status).toBe(204);
     expect(pre.headers.get("access-control-allow-origin")).toBe("*");
+    // HEAD (answered by the discovery gate) carries the same media type + CORS, no body
+    const h = await app.fetch(new Request("http://june.test/.well-known/mcp/server-card.json", { method: "HEAD" }));
+    expect(h.status).toBe(200);
+    expect(h.headers.get("content-type")).toBe("application/mcp-server-card+json");
+    expect(h.headers.get("access-control-allow-origin")).toBe("*");
+    expect(h.headers.get("access-control-allow-methods")).toBe("GET, HEAD");
+    expect(await h.text()).toBe("");
+  });
+
+  test("api-catalog carries the RFC 9727 profile, and a rel=api-catalog Link on GET and HEAD (§2)", async () => {
+    const res = await get("/.well-known/api-catalog");
+    expect(res.headers.get("content-type")).toBe(
+      'application/linkset+json; profile="https://www.rfc-editor.org/info/rfc9727"',
+    );
+    const LINK = '</.well-known/api-catalog>; rel="api-catalog"';
+    expect(res.headers.get("link")).toBe(LINK);
+    const head = await app.fetch(new Request("http://june.test/.well-known/api-catalog", { method: "HEAD" }));
+    expect(head.status).toBe(200);
+    expect(head.headers.get("link")).toBe(LINK);
+    expect(await head.text()).toBe("");
+  });
+
+  test("agent skills: the index's digest verifies the served SKILL.md bytes", async () => {
+    const res = await get("/.well-known/agent-skills/index.json");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("application/json");
+    const index = (await res.json()) as any;
+    const entry = index.skills[0];
+    const md = await get(new URL(entry.url).pathname);
+    expect(md.status).toBe(200);
+    expect(md.headers.get("content-type")).toBe("text/markdown; charset=utf-8");
+    const bytes = new Uint8Array(await md.arrayBuffer());
+    expect(entry.digest).toBe(`sha256:${new Bun.CryptoHasher("sha256").update(bytes).digest("hex")}`);
+    expect(new TextDecoder().decode(bytes)).toContain("createUser");
+    // only the generated skill's own path answers
+    expect((await get("/.well-known/agent-skills/other/SKILL.md")).status).toBe(404);
+  });
+
+  test("ARD catalog at both well-known paths, CORS-open, advertised in the page head", async () => {
+    for (const p of ["/.well-known/ai-catalog.json", "/.well-known/ard.json"]) {
+      const res = await get(p);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toContain("application/json");
+      expect(res.headers.get("access-control-allow-origin")).toBe("*");
+      const cat = (await res.json()) as any;
+      expect(cat.specVersion).toBe("1.0");
+      expect(cat.entries.length).toBeGreaterThan(0);
+    }
+    const html = await (await get("/")).text();
+    expect(html).toContain('<link rel="ai-catalog" href="/.well-known/ai-catalog.json" type="application/json"/>');
   });
 });
 

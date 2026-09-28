@@ -43,6 +43,9 @@ const SURFACES = [
   "/robots.txt",
   "/.well-known/api-catalog",
   "/.well-known/mcp/server-card.json",
+  "/.well-known/ai-catalog.json",
+  "/.well-known/ard.json",
+  "/.well-known/agent-skills/index.json",
   "/__extra/ping",
   "/favicon.svg",
   // /favicon.ico is not here: dev renders the real ICO, and a built app ships it

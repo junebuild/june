@@ -10,7 +10,7 @@ or `Bun.*` (enforced by `test/purity.test.ts`).
 | `@junejs/core/config` | config schema + pure resolvers (`defineJune`, `resolveAgent`, speculation rules) |
 | `@junejs/core/document` | the shared HTML shell — one document drives dev + built worker (charset lives here) |
 | `@junejs/core/agent` | the unified action registry: `defineAction`, `manifest`, `invokeAction` |
-| `@junejs/core/discovery` | llms.txt (with the canonical-names stanza), sitemap, api-catalog, MCP card, Link header |
+| `@junejs/core/discovery` | llms.txt (with the canonical-names stanza), sitemap, api-catalog, MCP card, ARD ai-catalog, agent skills index, Link header |
 | `@junejs/core/mcp` | the Web-standard MCP endpoint (`mcpHandler`) |
 | `@junejs/core/cache` | `cache()` / `invalidate()` + the `CacheStore` seam (memory built in) |
 | `@junejs/core/instrumentation` | request tracing; the host installs the async-context provider |

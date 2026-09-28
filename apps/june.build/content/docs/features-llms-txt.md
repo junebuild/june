@@ -1,7 +1,7 @@
 ---
 title: "Built-in llms.txt"
 nav: "llms.txt"
-description: The agent discovery surface — llms.txt, sitemap, robots, api-catalog, and per-route manifests — derives from your routes automatically.
+description: The agent discovery surface — llms.txt, sitemap, robots, api-catalog, the ARD catalog, a generated agent skill, and per-route manifests — derives from your routes automatically.
 date: 2026-06-12
 section: Features
 order: "29"
@@ -16,7 +16,9 @@ from the route graph and your actions — you author none of them:
 | --- | --- |
 | `/llms.txt` | a curated index: every page, grouped by section, described, linking its markdown |
 | `/sitemap.xml`, `/robots.txt` | the classic crawler contract |
-| `/.well-known/api-catalog` | machine-readable API listing |
+| `/.well-known/api-catalog` | machine-readable API listing ([RFC 9727](https://www.rfc-editor.org/rfc/rfc9727)): each API an `item`, with its description and docs |
+| `/.well-known/ai-catalog.json` (also `/.well-known/ard.json`) | one catalog of the app's agentic resources — its MCP server and its skill — for [ARD](https://agenticresourcediscovery.org/) crawlers ([AI Catalog](https://github.com/Agent-Card/ai-catalog) format) |
+| `/.well-known/agent-skills/index.json` | a generated [Agent Skill](https://agentskills.io/) that teaches an agent to use this site ([discovery RFC v0.2.0](https://github.com/cloudflare/agent-skills-discovery-rfc)) |
 | `/mcp` | your actions as MCP tools an agent can call |
 | `/.well-known/mcp/server-card.json` | the MCP server's identity and how to connect (when MCP is on) |
 | `Link` response header | discovery advertised on every HTML response |
@@ -136,11 +138,32 @@ export const llms = (): LlmsEntry[] =>
   }));
 ```
 
+## The generated skill and the catalog
+
+Every app publishes one skill, named after its host (`june.build` →
+`june-build`), at `/.well-known/agent-skills/<name>/SKILL.md`. It tells an
+agent how to use the site: start at `llms.txt`, whose links point at each
+page's Markdown version; read a page as Markdown where it offers one (the page
+advertises it with `<link rel="alternate" type="text/markdown">`; fetch `.md`
+or send `Accept: text/markdown`) or JSON (`.json`) likewise, since a route that
+turns a projection off answers 404 there; and call each tool at `/mcp`, listed
+with its parameters and description. The index next to it carries the
+SKILL.md's `sha256` digest, so an agent can verify what it downloaded.
+
+The AI Catalog lists the same resources for ARD: the MCP server card and the
+skill, each with a `urn:air:<host>:…` identifier, under a
+`did:web:<host>` host. `robots.txt` points at it (`Agentmap:`), and so do
+every page's `<link rel="ai-catalog">` and `Link` header. Both catalogs name
+absolute URLs, so a static build writes them only when it knows the public
+origin (`site.url` or `deploy.domain`) and deploys at the domain root.
+
 ## Try it on this site
 
 ```bash
 curl https://june.build/llms.txt
 curl https://june.build/.well-known/api-catalog
+curl https://june.build/.well-known/ai-catalog.json
+curl https://june.build/.well-known/agent-skills/index.json
 curl -sI https://june.build/why | grep -i '^link:'
 ```
 

@@ -99,6 +99,10 @@ export {
   mcpServerCard,
   MCP_SERVER_CARD_TYPE,
   type SitemapPage,
+  agentServices,
+  aiCatalog,
+  agentSkillsIndex,
+  siteSkill,
 } from "./discovery";
 
 // The Web-standard MCP endpoint
