@@ -155,7 +155,7 @@ describe("agent discovery surface", () => {
     expect(card.title).toBe("June Basic");
     expect(card.description).toBe("The Phase 2 fixture app — the golden dev/built parity contract.");
     expect(card.remotes).toEqual([
-      { type: "streamable-http", url: "http://june.test/mcp", supportedProtocolVersions: ["2025-06-18"] },
+      { type: "streamable-http", url: "http://june.test/mcp", supportedProtocolVersions: ["2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26"] },
     ]);
   });
 

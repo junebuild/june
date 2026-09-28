@@ -7,7 +7,7 @@ import { apiActionPath, isRoutableActionId, OPENAPI_MEDIA_TYPE } from "./api";
 import type { AgentConfig, SiteConfig } from "./config";
 import { withBasePath, type DocumentConfig } from "./document";
 import { localeAlternates, type I18nConfig } from "./i18n";
-import { fitCardText, mcpServerIdentity, PROTOCOL_VERSION } from "./mcp";
+import { fitCardText, mcpServerIdentity, PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS } from "./mcp";
 
 function toolNames() {
   return [...ACTION_REGISTRY.values()]
@@ -594,7 +594,7 @@ export function mcpServerCard(
       fitCardText(`The MCP server for ${new URL(origin).host}: ${tools.length} tool${tools.length === 1 ? "" : "s"}.`),
     websiteUrl: `${origin}/`,
     icons: cardIcons(origin, site, opts.icons, opts.basePath),
-    remotes: [{ type: "streamable-http", url: `${origin}/mcp`, supportedProtocolVersions: [PROTOCOL_VERSION] }],
+    remotes: [{ type: "streamable-http", url: `${origin}/mcp`, supportedProtocolVersions: [...SUPPORTED_PROTOCOL_VERSIONS] }],
     url: `${origin}/mcp`,
     protocolVersion: PROTOCOL_VERSION,
     capabilities: { tools: { listChanged: false } },

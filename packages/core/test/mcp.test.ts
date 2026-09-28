@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { ACTION_REGISTRY, actionDispatchCode, defineAction, invokeAction } from "@junejs/core/agent";
 import { resolveAgent } from "@junejs/core/config";
 import { fitCardText, mcpHandler, mcpServerIdentity } from "@junejs/core/mcp";
+import { encodeHeaderValue } from "../src/mcp-protocol";
 
 // Empty registry per test, restored after — see discovery.test.ts: a cleared
 // registry cannot be repopulated by re-import (module cache), which breaks
@@ -31,11 +32,24 @@ describe("mcpHandler()", () => {
     expect(res.headers.get("allow")).toBe("POST");
   });
 
+  test("initialize (legacy era) negotiates: a version June speaks is echoed, anything else gets the latest legacy one", async () => {
+    for (const [requested, answered] of [
+      ["2025-06-18", "2025-06-18"],
+      ["2025-03-26", "2025-03-26"],
+      ["2024-11-05", "2025-11-25"],
+      [undefined, "2025-11-25"],
+    ] as const) {
+      const res = await mcpHandler(rpc({ jsonrpc: "2.0", id: 1, method: "initialize", params: requested ? { protocolVersion: requested } : {} }));
+      expect(((await res.json()) as any).result.protocolVersion).toBe(answered);
+    }
+  });
+
   test("initialize returns the protocol version and serverInfo", async () => {
-    const res = await mcpHandler(rpc({ jsonrpc: "2.0", id: 1, method: "initialize" }));
-    expect(res.headers.get("mcp-protocol-version")).toBe("2025-06-18");
+    const res = await mcpHandler(rpc({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-11-25" } }));
+    // Stateless: no session is minted.
+    expect(res.headers.get("mcp-session-id")).toBeNull();
     const json = (await res.json()) as any;
-    expect(json.result.protocolVersion).toBe("2025-06-18");
+    expect(json.result.protocolVersion).toBe("2025-11-25");
     // no config → identity from the request's host, never an anonymous "june"
     expect(json.result.serverInfo).toEqual({ name: "com.example/mcp", version: "0.0.0" });
     expect(typeof json.result.instructions).toBe("string");
@@ -303,6 +317,291 @@ describe("mcpHandler()", () => {
   test("a notification (no id) gets a 202 with no body", async () => {
     const res = await mcpHandler(rpc({ jsonrpc: "2.0", method: "initialized" }));
     expect(res.status).toBe(202);
+  });
+});
+
+describe("mcpHandler() — modern era (2026-07-28)", () => {
+  // A modern request: the `_meta` envelope in the body AND the mirrored headers,
+  // exactly as the spec's wire examples show them.
+  const META = {
+    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+    "io.modelcontextprotocol/clientInfo": { name: "test", version: "1" },
+    "io.modelcontextprotocol/clientCapabilities": {},
+  };
+  function modern(method: string, params: Record<string, unknown> = {}, opts: { headers?: Record<string, string | null>; meta?: Record<string, unknown>; id?: number } = {}) {
+    const name = method === "tools/call" ? (params.name as string) : undefined;
+    const headers: Record<string, string | null> = {
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+      "mcp-protocol-version": "2026-07-28",
+      "mcp-method": method,
+      ...(name !== undefined ? { "mcp-name": name } : {}),
+      ...opts.headers,
+    };
+    return new Request("https://example.com/mcp", {
+      method: "POST",
+      headers: Object.fromEntries(Object.entries(headers).filter(([, v]) => v !== null)) as Record<string, string>,
+      body: JSON.stringify({ jsonrpc: "2.0", id: opts.id ?? 1, method, params: { ...params, _meta: opts.meta ?? META } }),
+    });
+  }
+  const tool = () =>
+    defineAction({ id: "echo", description: "Echo", input: { type: "object", properties: { text: { type: "string" } } }, run: (i: { text?: string }) => ({ echoed: i.text ?? "" }) });
+
+  test("server/discover advertises 2026-07-28, the tools capability, instructions, cache hints and serverInfo", async () => {
+    const res = await mcpHandler(modern("server/discover"));
+    expect(res.status).toBe(200);
+    const { result } = (await res.json()) as any;
+    expect(result).toMatchObject({
+      resultType: "complete",
+      supportedVersions: ["2026-07-28"],
+      capabilities: { tools: {} },
+      ttlMs: 0,
+      cacheScope: "public",
+      _meta: { "io.modelcontextprotocol/serverInfo": { name: "com.example/mcp", version: "0.0.0" } },
+    });
+    expect(typeof result.instructions).toBe("string");
+  });
+
+  test("tools/list carries resultType + ttlMs + cacheScope (CacheableResult)", async () => {
+    tool();
+    const { result } = (await (await mcpHandler(modern("tools/list"))).json()) as any;
+    expect(result.resultType).toBe("complete");
+    expect(result.tools.map((t: { name: string }) => t.name)).toEqual(["echo"]);
+    expect(result.ttlMs).toBe(0);
+    expect(result.cacheScope).toBe("public");
+  });
+
+  test("tools/call runs under the injected ctx and answers resultType complete", async () => {
+    tool();
+    const res = await mcpHandler(modern("tools/call", { name: "echo", arguments: { text: "hi" } }), { user: { id: "u1" } });
+    const { result } = (await res.json()) as any;
+    expect(result.resultType).toBe("complete");
+    expect(JSON.parse(result.content[0].text)).toEqual({ echoed: "hi" });
+  });
+
+  test("an encoded Mcp-Name (non-ASCII tool id) is decoded before comparing", async () => {
+    defineAction({ id: "天気", description: "Weather", input: { type: "object", properties: {} }, run: () => "sunny" });
+    const res = await mcpHandler(modern("tools/call", { name: "天気", arguments: {} }, { headers: { "mcp-name": encodeHeaderValue("天気") } }));
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as any).result.content[0].text).toBe('"sunny"');
+  });
+
+  const mismatches: [string, Record<string, string | null>][] = [
+    ["MCP-Protocol-Version missing", { "mcp-protocol-version": null }],
+    ["MCP-Protocol-Version disagreeing with _meta", { "mcp-protocol-version": "2027-01-01" }],
+    ["Mcp-Method missing", { "mcp-method": null }],
+    ["Mcp-Method disagreeing with the body", { "mcp-method": "tools/list" }],
+    ["Mcp-Name missing on tools/call", { "mcp-name": null }],
+    ["Mcp-Name naming another tool", { "mcp-name": "other" }],
+    ["Mcp-Name with a broken Base64 sentinel", { "mcp-name": "=?base64?%%?=" }],
+  ];
+  for (const [name, headers] of mismatches) {
+    test(`${name} → 400 + -32020 HeaderMismatch, and the tool does not run`, async () => {
+      let ran = false;
+      defineAction({ id: "echo", description: "Echo", input: { type: "object", properties: {} }, run: () => (ran = true) });
+      const res = await mcpHandler(modern("tools/call", { name: "echo", arguments: {} }, { headers }));
+      expect(res.status).toBe(400);
+      const json = (await res.json()) as any;
+      expect(json.error.code).toBe(-32020);
+      expect(json.id).toBe(1);
+      expect(ran).toBe(false);
+    });
+  }
+
+  test("an unsupported modern version → 400 + -32022 listing the modern versions (what server/discover advertises)", async () => {
+    const res = await mcpHandler(modern("tools/list", {}, { meta: { ...META, "io.modelcontextprotocol/protocolVersion": "2027-01-01" }, headers: { "mcp-protocol-version": "2027-01-01" } }));
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as any).error).toEqual({
+      code: -32022,
+      message: "Unsupported protocol version",
+      data: { supported: ["2026-07-28"], requested: "2027-01-01" },
+    });
+  });
+
+  test("header vs body is checked BEFORE version support: disagreeing versions are -32020, not -32022", async () => {
+    const res = await mcpHandler(modern("tools/list", {}, { meta: { ...META, "io.modelcontextprotocol/protocolVersion": "2027-01-01" } }));
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as any).error.code).toBe(-32020);
+  });
+
+  test("a missing clientCapabilities → 400 + -32602", async () => {
+    const res = await mcpHandler(modern("tools/list", {}, { meta: { "io.modelcontextprotocol/protocolVersion": "2026-07-28" } }));
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as any).error.code).toBe(-32602);
+  });
+
+  test("legacy-only methods (initialize, ping) and unknown ones → 404 + -32601", async () => {
+    for (const method of ["initialize", "ping", "resources/list"]) {
+      const res = await mcpHandler(modern(method));
+      expect(res.status).toBe(404);
+      expect(((await res.json()) as any).error.code).toBe(-32601);
+    }
+  });
+
+  test("an unknown tool stays an in-band -32602 (HTTP 200), as in the legacy era", async () => {
+    const res = await mcpHandler(modern("tools/call", { name: "nope", arguments: {} }));
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as any).error.code).toBe(-32602);
+  });
+
+  test("a modern MCP-Protocol-Version header without the body envelope → 400 + -32602, not legacy", async () => {
+    const res = await mcpHandler(
+      new Request("https://example.com/mcp", {
+        method: "POST",
+        headers: { "content-type": "application/json", "mcp-protocol-version": "2026-07-28", "mcp-method": "tools/list" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+      }),
+    );
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as any).error.code).toBe(-32602);
+  });
+
+  test("the legacy era still works on the same endpoint, with the version header or without", async () => {
+    tool();
+    for (const headers of [{}, { "mcp-protocol-version": "2025-11-25" }, { "mcp-protocol-version": "2025-06-18" }] as Record<string, string>[]) {
+      const res = await mcpHandler(
+        new Request("https://example.com/mcp", { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) }),
+      );
+      const json = (await res.json()) as any;
+      expect(json.result.tools.map((t: { name: string }) => t.name)).toEqual(["echo"]);
+      expect(json.result.resultType).toBeUndefined(); // legacy results have no resultType
+    }
+  });
+
+  test("a legacy request with an unsupported MCP-Protocol-Version → 400", async () => {
+    const res = await mcpHandler(
+      new Request("https://example.com/mcp", { method: "POST", headers: { "content-type": "application/json", "mcp-protocol-version": "2024-11-05" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) }),
+    );
+    expect(res.status).toBe(400);
+  });
+
+  for (const [name, id] of [["null", null], ["an object", { a: 1 }], ["a boolean", true], ["a fractional number", 1.5]] as const) {
+    test(`a request id that is ${name} → 400 + -32600 with a null error id (ids are strings or integers)`, async () => {
+      const res = await mcpHandler(
+        new Request("https://example.com/mcp", {
+          method: "POST",
+          headers: { "content-type": "application/json", "mcp-protocol-version": "2026-07-28", "mcp-method": "tools/list" },
+          body: JSON.stringify({ jsonrpc: "2.0", id, method: "tools/list", params: { _meta: META } }),
+        }),
+      );
+      expect(res.status).toBe(400);
+      const json = (await res.json()) as any;
+      expect(json.error.code).toBe(-32600);
+      expect(json.id).toBeNull();
+    });
+  }
+
+  test("string ids are accepted", async () => {
+    const req = modern("tools/list");
+    const body = JSON.parse(await req.text());
+    const res = await mcpHandler(new Request(req.url, { method: "POST", headers: req.headers, body: JSON.stringify({ ...body, id: "req-7" }) }));
+    expect(((await res.json()) as any).id).toBe("req-7");
+  });
+
+  test("validation order follows the official SDK: a PRESENT disagreeing Mcp-Method beats an unsupported version (-32020)…", async () => {
+    const res = await mcpHandler(
+      modern("tools/list", {}, { meta: { ...META, "io.modelcontextprotocol/protocolVersion": "2027-01-01" }, headers: { "mcp-protocol-version": "2027-01-01", "mcp-method": "tools/call" } }),
+    );
+    expect(((await res.json()) as any).error.code).toBe(-32020);
+  });
+
+  test("…while a MISSING header is checked after version support (-32022), as the SDK's serveModern does", async () => {
+    const res = await mcpHandler(
+      modern("tools/list", {}, { meta: { ...META, "io.modelcontextprotocol/protocolVersion": "2027-01-01" }, headers: { "mcp-protocol-version": "2027-01-01", "mcp-method": null } }),
+    );
+    expect(((await res.json()) as any).error.code).toBe(-32022);
+  });
+
+  test("a notification is exempt from the required-header checks (202)", async () => {
+    const res = await mcpHandler(
+      new Request("https://example.com/mcp", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/whatever", params: { _meta: META } }),
+      }),
+    );
+    expect(res.status).toBe(202);
+  });
+
+  describe("Mcp-Param-* on a re-served tool that declares x-mcp-header", () => {
+    let ran: unknown[] = [];
+    const sqlTool = () => {
+      ran = [];
+      defineAction({
+        id: "execute_sql",
+        description: "Execute SQL",
+        // A connection tool re-served from a remote keeps the remote's schema, annotations included.
+        input: {
+          type: "object",
+          properties: { region: { type: "string", "x-mcp-header": "Region" }, limit: { type: "integer", "x-mcp-header": "Limit" }, query: { type: "string" } },
+        } as never,
+        run: (i: unknown) => {
+          ran.push(i);
+          return "ok";
+        },
+      });
+    };
+    const call = (args: Record<string, unknown>, headers: Record<string, string | null>) => mcpHandler(modern("tools/call", { name: "execute_sql", arguments: args }, { headers }));
+
+    test("matching headers (Base64-decoded, integers compared numerically) → the tool runs", async () => {
+      sqlTool();
+      const res = await call({ region: "東京", limit: 42, query: "select 1" }, { "mcp-param-region": encodeHeaderValue("東京"), "mcp-param-limit": "42.0" });
+      expect(res.status).toBe(200);
+      expect(ran).toHaveLength(1);
+    });
+
+    const bad: [string, Record<string, unknown>, Record<string, string | null>][] = [
+      ["a missing header for a present argument", { region: "us-west1", query: "q" }, {}],
+      ["a disagreeing value", { region: "us-west1", query: "q" }, { "mcp-param-region": "eu-west1" }],
+      ["a header for an absent argument", { query: "q" }, { "mcp-param-region": "us-west1" }],
+      ["a broken Base64 sentinel", { region: "x", query: "q" }, { "mcp-param-region": "=?base64?%%?=" }],
+      ["a non-numeric integer header", { limit: 5, query: "q" }, { "mcp-param-limit": "five" }],
+      // Outside the JS-safe range both sides round to 9007199254740992 and would
+      // compare equal although they are different integers.
+      ["an integer beyond the safe range", { limit: 9007199254740993, query: "q" }, { "mcp-param-limit": "9007199254740993" }],
+      ["a header integer beyond the safe range for a safe body value", { limit: 5, query: "q" }, { "mcp-param-limit": "9007199254740993" }],
+    ];
+    for (const [name, args, headers] of bad) {
+      test(`${name} → 400 + -32020, and the tool does not run`, async () => {
+        sqlTool();
+        const res = await call(args, headers);
+        expect(res.status).toBe(400);
+        expect(((await res.json()) as any).error.code).toBe(-32020);
+        expect(ran).toHaveLength(0);
+      });
+    }
+
+    test("an absent argument needs no header — the tool runs", async () => {
+      sqlTool();
+      const res = await call({ query: "q" }, {});
+      expect(res.status).toBe(200);
+      expect(ran).toHaveLength(1);
+    });
+
+    test("a null argument needs no header either (it passes the header check; the schema then judges it)", async () => {
+      sqlTool();
+      const res = await call({ region: null, query: "q" }, {});
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as any).error).toBeUndefined();
+    });
+  });
+
+  test("a batch carrying MCP-Protocol-Version (2025-06-18+, which removed batching) → 400; without it (2025-03-26) it runs", async () => {
+    tool();
+    const batch = [{ jsonrpc: "2.0", id: 1, method: "tools/list" }];
+    const withHeader = await mcpHandler(
+      new Request("https://example.com/mcp", { method: "POST", headers: { "content-type": "application/json", "mcp-protocol-version": "2025-06-18" }, body: JSON.stringify(batch) }),
+    );
+    expect(withHeader.status).toBe(400);
+    expect(((await withHeader.json()) as any).error.code).toBe(-32600);
+    const without = await mcpHandler(rpc(batch));
+    expect(Array.isArray(await without.json())).toBe(true);
+  });
+
+  test("a batch can't carry a modern request", async () => {
+    const res = await mcpHandler(rpc([{ jsonrpc: "2.0", id: 1, method: "tools/list", params: { _meta: META } }]));
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as any).error.code).toBe(-32600);
   });
 });
 

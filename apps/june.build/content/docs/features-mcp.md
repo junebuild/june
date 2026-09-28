@@ -5,7 +5,7 @@ description: Every June app is an MCP server — defineAction() is simultaneousl
 date: 2026-06-12
 section: Features
 order: "28"
-sources: [packages/core/src/mcp.ts]
+sources: [packages/core/src/mcp.ts, packages/core/src/mcp-protocol.ts]
 ---
 ## The feature
 
@@ -39,10 +39,39 @@ refused — UI POST and `/mcp` dispatch reject it before `run`, and agent turns
 hide the tool entirely — so an agent can never do anything your UI's
 authorization wouldn't allow.
 
+## Protocol versions
+
+`/mcp` serves both MCP protocol eras on one endpoint, statelessly:
+
+- **2026-07-28 (modern).** A request whose `params._meta` carries
+  `io.modelcontextprotocol/protocolVersion` is served on its own. There is no
+  handshake: `server/discover` advertises the version, the `tools`
+  capability, the instructions and `serverInfo`. `tools/list` and
+  `server/discover` results carry `resultType`, `ttlMs` and `cacheScope`.
+  - **Mirrored headers are checked.** The `MCP-Protocol-Version`,
+    `Mcp-Method` and `Mcp-Name` headers must match the body; a missing or
+    disagreeing header gets `400` with `-32020` (HeaderMismatch).
+  - **Mirrored tool parameters are checked too.** When a re-served connection
+    tool declares `x-mcp-header` parameters, their `Mcp-Param-*` headers must
+    match the arguments, or the call gets `-32020`.
+  - **Unsupported versions** get `400` with `-32022`, which lists the
+    supported versions.
+  - **`initialize`, `ping` and unknown methods** get `404` with `-32601`.
+- **2025-11-25, 2025-06-18 and 2025-03-26 (legacy).** Any other request
+  follows the `initialize` handshake. June answers with the version the
+  client asked for when it supports it, and otherwise with 2025-11-25. No
+  session id is minted. JSON-RPC batches are accepted only from 2025-03-26
+  clients, which send no `MCP-Protocol-Version` header; 2025-06-18 removed
+  batching.
+
+Most MCP clients still connect with the legacy handshake by default (the
+official SDK's client does), so both eras stay on. The server card
+advertises every version.
+
 ## Identity and errors
 
 The server introduces itself as your app, not as an anonymous "june". The
-`initialize` handshake's `serverInfo` and `instructions`, and the server card
+`server/discover` and `initialize` results' `serverInfo` and `instructions`, and the server card
 at `/.well-known/mcp/server-card.json` (the v1 Server Card schema), are all
 derived from your config:
 
