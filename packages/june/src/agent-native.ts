@@ -13,6 +13,7 @@ import {
   withSystem,
   type ChannelPolicy,
   type EventSink,
+  type InputAnnouncement,
   type TurnEvent,
   type Model,
   type Msg,
@@ -120,7 +121,25 @@ class InProcEventSink implements EventSink {
 
 // `instructions` (the agent's system prompt) is injected into the model per turn
 // by the runtime (withSystem) — single-sourced on the def, not baked into `model`.
-export type AgentDef = { model: Model; tools: Tool[]; instructions?: string; channelInstructions?: Record<string, string | ChannelPolicy> };
+export type AgentDef = {
+  model: Model;
+  tools: Tool[];
+  instructions?: string;
+  channelInstructions?: Record<string, string | ChannelPolicy>;
+  // The app's receiver for input announcements (#260), installed on every session this
+  // runtime builds; undelivered announcements from an earlier process are flushed then.
+  onInputAnnouncement?: (a: InputAnnouncement) => void | Promise<void>;
+};
+
+// Install the announcement hook on a freshly built session and deliver what an earlier life
+// of it recorded but never delivered (#260). The flush never rejects; it logs.
+function wireAnnouncements(session: AgentSession, def: AgentDef): AgentSession {
+  if (def.onInputAnnouncement) {
+    session.onAnnounce = def.onInputAnnouncement;
+    void session.flushAnnouncements();
+  }
+  return session;
+}
 
 // The runtime-side def for an assembled AgentDefinition (#173): the tools (channel
 // capability tools and read_skill included), the system prompt (instructions + the
@@ -134,6 +153,7 @@ export function toAgentDef(agent: AgentDefinition, model: Model): AgentDef {
     tools: agent.tools,
     instructions: buildSystemPrompt(agent),
     ...(agent.channelInstructions ? { channelInstructions: agent.channelInstructions } : {}),
+    ...(agent.onInputAnnouncement ? { onInputAnnouncement: agent.onInputAnnouncement } : {}),
   };
 }
 
@@ -188,7 +208,7 @@ export class NativeRuntime implements Runtime {
     if (!def) throw new Error(`unknown agent: ${agent}`);
     const model = def.instructions ? withSystem(def.model, def.instructions) : def.model;
     const sink = new InProcEventSink();
-    const session = new AgentSession(agent, id, new SqliteSessionStore(this.db, key), sink, model, def.tools, this, def.channelInstructions);
+    const session = wireAnnouncements(new AgentSession(agent, id, new SqliteSessionStore(this.db, key), sink, model, def.tools, this, def.channelInstructions), def);
     this.evictIdle();
     this.actors.set(key, { session, sink });
     return session;
@@ -272,7 +292,7 @@ export class MemoryRuntime implements Runtime {
       this.stores.set(key, store);
       // Same def handling as NativeRuntime: switching backend must not change behavior.
       const model = def.instructions ? withSystem(def.model, def.instructions) : def.model;
-      a = new AgentSession(agent, id, store, new InProcEventSink(), model, def.tools, this, def.channelInstructions);
+      a = wireAnnouncements(new AgentSession(agent, id, store, new InProcEventSink(), model, def.tools, this, def.channelInstructions), def);
       this.actors.set(key, a);
     }
     return a;

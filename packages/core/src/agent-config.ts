@@ -7,7 +7,7 @@
 // this module is the pure config layer it produces.
 
 import type { AnyAction } from "./agent";
-import type { AuthorizeAnswer, ChannelPolicy, InboundEvent, ProactiveTrigger, Tool, ToolContext, ToolSpec, TurnEvent } from "./agent-runtime";
+import type { AuthorizeAnswer, ChannelPolicy, InputAnnouncement, InboundEvent, ProactiveTrigger, Tool, ToolContext, ToolSpec, TurnEvent } from "./agent-runtime";
 import type { Principal } from "./context";
 import { connectAll, type Connection, type ConnectionReport } from "./connections";
 
@@ -322,6 +322,10 @@ export type AgentConfigFile = {
   // Decides a { policy } answerer of a parked requestInput at resume time (#261) — e.g.
   // "is this principal an operator of mailbox scout". See AuthorizeAnswer.
   authorizeAnswer?: AuthorizeAnswer;
+  // Receives every InputAnnouncement of this agent's sessions (#260) — parked, held,
+  // resolved — to keep a cross-session index of what waits on a person. At-least-once:
+  // dedupe on the announcement's id. Hosts run it after the state change commits.
+  onInputAnnouncement?: (a: InputAnnouncement) => void | Promise<void>;
 };
 
 // A fully-assembled agent, ready to mount on a runtime (tools already adapted).
@@ -345,6 +349,8 @@ export type AgentDefinition = {
   connections: ConnectionReport[];
   // The app's rule for { policy } answerers (#261); hosts evaluate it before a resume.
   authorizeAnswer?: AuthorizeAnswer;
+  // The app's receiver for input announcements (#260); hosts install it on every session.
+  onInputAnnouncement?: (a: InputAnnouncement) => void | Promise<void>;
 };
 
 // Bridge a `defineAction` into a runtime Tool. The action's run(input, ctx)
@@ -423,6 +429,7 @@ export function defineAgent(config: {
   channelInstructions?: Record<string, string | ChannelPolicy>;
   connections?: ConnectionReport[];
   authorizeAnswer?: AuthorizeAnswer;
+  onInputAnnouncement?: (a: InputAnnouncement) => void | Promise<void>;
 }): AgentDefinition {
   const skills = config.skills ?? [];
   const channels = config.channels ?? [];
@@ -463,6 +470,7 @@ export function defineAgent(config: {
     }),
     connections: config.connections ?? [],
     authorizeAnswer: config.authorizeAnswer,
+    onInputAnnouncement: config.onInputAnnouncement,
   };
 }
 
@@ -561,6 +569,7 @@ export async function assembleAgent(mod: AgentModule, env?: unknown): Promise<Ag
     channelInstructions: Object.keys(mod.channelInstructions).length ? mod.channelInstructions : undefined,
     connections: report,
     authorizeAnswer: mod.config.authorizeAnswer,
+    onInputAnnouncement: mod.config.onInputAnnouncement,
   });
 }
 
@@ -586,6 +595,7 @@ export function assembleDurable(mod: AgentModule): {
   channels: (Channel | ChannelFactory)[];
   connections: Connection[];
   authorizeAnswer?: AuthorizeAnswer;
+  onInputAnnouncement?: (a: InputAnnouncement) => void | Promise<void>;
 } {
   const tools: Tool[] = flattenTools(mod.tools).map((t) => (isTool(t) ? t : actionToTool(t)));
   if (mod.skills.length) tools.push(readSkillTool(mod.skills));
@@ -617,5 +627,6 @@ export function assembleDurable(mod: AgentModule): {
     channels: Object.values(mod.channels),
     connections: mod.connections,
     ...(mod.config.authorizeAnswer ? { authorizeAnswer: mod.config.authorizeAnswer } : {}),
+    ...(mod.config.onInputAnnouncement ? { onInputAnnouncement: mod.config.onInputAnnouncement } : {}),
   };
 }

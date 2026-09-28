@@ -281,6 +281,54 @@ describe("AgentDurableObject", () => {
     expect(seenServices).toEqual([{ operators: ["ops-1"] }, { operators: ["ops-1"] }, { operators: ["ops-1"] }]); // hook ran in scope
   });
 
+  test("onInputAnnouncement: parked and resolved, delivered inside the request scope (#260)", async () => {
+    const s = await storage();
+    const approve: Tool = {
+      spec: { name: "approve", description: "ask a human", input: { type: "object" } },
+      run: async (_i, ctx) => ({ approved: await ctx.requestInput({ id: "a1", prompt: "Send?", answerers: { user: "U1" } }) }),
+    };
+    const model = scriptedModel([{ text: "drafting", toolCalls: [{ id: "c1", name: "approve", input: {} }] }, { text: "sent", toolCalls: [] }]);
+    const index: { kind: string; scoped: unknown }[] = [];
+    const agent = new AgentDurableObject({ storage: s }, {
+      name: "scout", model, tools: [approve], services: { index: "pending_actions" },
+      onInputAnnouncement: (a) => { index.push({ kind: a.kind, scoped: currentServices() }); },
+    });
+    const post = (path: string, body: unknown) => agent.fetch(new Request(`https://do${path}`, { method: "POST", body: JSON.stringify(body) }));
+    for await (const _ of sseTurnEvents(await post("/turn", { userText: "refund", turnId: "t1" }))) { /* to the park */ }
+    for await (const _ of sseTurnEvents(await post("/resume", { turnId: "t1", inputId: "a1", input: true, by: "U1" }))) { /* the continuation */ }
+    for (let i = 0; i < 100 && index.length < 2; i++) await new Promise((r) => setTimeout(r, 5));
+    expect(index).toEqual([
+      { kind: "parked", scoped: { index: "pending_actions" } },
+      { kind: "resolved", scoped: { index: "pending_actions" } },
+    ]);
+  });
+
+  test("a rebuilt object delivers announcements an earlier life committed but never delivered (#260)", async () => {
+    const s = await storage();
+    const approve: Tool = {
+      spec: { name: "approve", description: "ask a human", input: { type: "object" } },
+      run: async (_i, ctx) => ({ approved: await ctx.requestInput({ id: "a1", prompt: "Send?", answerers: { user: "U1" } }) }),
+    };
+    const model = () => scriptedModel([{ text: "drafting", toolCalls: [{ id: "c1", name: "approve", input: {} }] }, { text: "sent", toolCalls: [] }]);
+    const errors = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const before = new AgentDurableObject({ storage: s }, { name: "scout", model: model(), tools: [approve], onInputAnnouncement: () => { throw new Error("index down"); } });
+      const res = await before.fetch(new Request("https://do/turn", { method: "POST", body: JSON.stringify({ userText: "refund", turnId: "t1" }) }));
+      for await (const _ of sseTurnEvents(res)) { /* to the park — its announcement is committed, never delivered */ }
+
+      const got: string[] = [];
+      const after = new AgentDurableObject({ storage: s }, { name: "scout", model: model(), tools: [approve], onInputAnnouncement: (a) => { got.push(`${a.kind}:${a.turnId}`); } });
+      // a request that announces nothing itself — a new turn, refused by the park (409) — still
+      // rebuilds the session in this new life, and building it delivers the old park
+      const refused = await after.fetch(new Request("https://do/turn", { method: "POST", body: JSON.stringify({ userText: "hello?", turnId: "t2" }) }));
+      expect(refused.status).toBe(409);
+      for (let i = 0; i < 100 && got.length < 1; i++) await new Promise((r) => setTimeout(r, 5));
+      expect(got).toEqual(["parked:t1"]);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
   test("/resume: an authorizeAnswer that throws is a 500, not a 409, and the answer is not applied", async () => {
     const s = await storage();
     const approve: Tool = {
