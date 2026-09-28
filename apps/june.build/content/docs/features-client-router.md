@@ -26,6 +26,22 @@ Transitions. History (`pushState`/back-forward) just works. There is no
 client route table and no [Flight payload](/docs/features-rsc): the
 full-HTML-per-URL contract *is* the navigation transport.
 
+## Two appliers: morph and Flight
+
+`clientRouter` picks how a soft navigation applies the next page:
+
+- **`true` or `"morph"`**: fetches the next URL's HTML fragment and morphs it
+  into the page. Islands are treated as opaque, so their state survives.
+- **`"flight"` (not active yet)**: asks for the next URL as a React Flight
+  payload and renders it into one persistent React root, so React reconciles
+  page to page. The client half is written, but **the server doesn't render a
+  flight projection yet**. The request negotiates away and the page
+  hard-navigates, so setting it is safe, but today it behaves like no client
+  router. It loads `react-server-dom` on the client only when chosen.
+
+Flight is reachable only by naming `"flight"`, so the common
+`clientRouter: true` never becomes Flight silently.
+
 ## Persist a live island
 
 Because June composes layouts into the page itself, a normal swap would tear

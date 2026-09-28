@@ -2,6 +2,7 @@
 // tests assert BOTH surfaces. Run: bun test apps/june.build
 // Regenerate content first if posts/docs changed: bun packages/cli/src/june.ts gen apps/june.build
 import { beforeAll, describe, expect, test } from "bun:test";
+import { createSlugger } from "@junejs/core/slug";
 import { join } from "node:path";
 
 import { createApp, loadJuneConfig, type JuneApp } from "@junejs/server";
@@ -108,6 +109,24 @@ describe("human surface", () => {
         expect(ids.has(target!), `/docs/${d.slug}: href="#${target}" has no matching id`).toBe(true);
       }
     }
+  });
+
+  test("/why has ONE source: the page, its .md, and get_page all come from content/pages/why.md", async () => {
+    const authored = await Bun.file(join(ROOT, "content/pages/why.md")).text();
+    expect(await (await get("/why.md")).text()).toBe(authored); // the authored bytes, verbatim
+
+    // every section of the file is on the page, as a linkable heading — nothing hand-copied
+    const html = await (await get("/why")).text();
+    const sections = [...authored.matchAll(/^## (.+)$/gm)].map((m) => m[1]!);
+    expect(sections.length).toBeGreaterThan(2);
+    // compared as literal strings (no heading text is ever read as a regex): the page's h2s,
+    // in order, are exactly the file's sections, each with the id June's slugger gives it
+    const slug = createSlugger();
+    const onPage = [...html.matchAll(/<h2 id="([^"]+)">([\s\S]*?)<a class="j-anchor"/g)].map((m) => [m[1], m[2]]);
+    expect(onPage).toEqual(sections.map((s) => [slug(s), s]));
+
+    const res = await rpc({ method: "tools/call", params: { name: "get_page", arguments: { slug: "why" } } });
+    expect(JSON.parse(res.result.content[0].text).markdown).toBe(authored);
   });
 
   test("each page gets its own templated title", async () => {

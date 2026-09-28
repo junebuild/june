@@ -21,15 +21,21 @@ order: "12"
 - **One render core, everywhere.** Dev and the deployed worker render through
   the same pipeline; our parity suite asserts the output byte-for-byte.
 
-## What June does NOT do yet
+## What's opt-in, and what isn't here yet
 
 Stated plainly, because RSC claims are easy to inflate:
 
-- **No streamed Suspense fallbacks** — pages flush fully resolved (the
-  pipeline waits for `allReady`). Out-of-order streaming is on the roadmap.
-- **No Flight-payload navigation** — navigations are full documents made
+- **Streaming is opt-in, not the default.** A route streams only when it has
+  a `loading.tsx`: the shell and that fallback flush first, then the view
+  streams in once `load()` resolves. It also needs static metadata, since a
+  data-derived `<title>` can't be known before the data is. Every other page
+  flushes fully resolved (the pipeline waits for `allReady`).
+- **No Flight-payload navigation yet.** Navigations are full documents made
   instant by Speculation-Rules prerendering
-  ([Navigation](/docs/features-navigation)), not RSC payload diffs.
+  ([Navigation](/docs/features-navigation)), not RSC payload diffs. The
+  client half is written (`clientRouter: "flight"`), but the server doesn't
+  render a flight projection yet. Until it does, that setting falls back to a
+  full navigation ([Client Router](/docs/features-client-router)).
 - **Live RSC (server-push re-render)** exists and is measured on the
   experimental native runtime track — its push loop is the machinery behind
   the 73ms HMR number — but it is not part of the v0.1 host.
