@@ -5,7 +5,7 @@ description: The agent discovery surface — llms.txt, sitemap, robots, api-cata
 date: 2026-06-12
 section: Features
 order: "29"
-sources: [packages/core/src/discovery.ts, packages/core/src/route.ts, packages/june/src/llms-links.ts]
+sources: [packages/core/src/discovery.ts, packages/core/src/route.ts, packages/june/src/llms-links.ts, packages/june/src/pipeline.ts, packages/june/src/build.ts]
 ---
 ## The feature
 
@@ -156,6 +156,10 @@ skill, each with a `urn:air:<host>:…` identifier, under a
 every page's `<link rel="ai-catalog">` and `Link` header. Both catalogs name
 absolute URLs, so a static build writes them only when it knows the public
 origin (`site.url` or `deploy.domain`) and deploys at the domain root.
+
+A static host serves no `/mcp` either, so a static build renders every
+discovery surface with MCP projected out: `llms.txt` drops its MCP claims,
+the catalogs and skill list no MCP server, and pages register no WebMCP tools.
 
 ## Try it on this site
 
