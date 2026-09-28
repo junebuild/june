@@ -197,8 +197,9 @@ Without infrastructure as code, the same policies go to
 string); set `expires_on` for a token meant only for a test window.
 
 Status: **verified 2026-09-28** — a deploy token with exactly these policies was created
-through the API (expiring after the test window); it can upload Workers, read and write
-routing rules and queues, and is refused on DNS records.
+through the API for the test window, then again from the OpenTofu template above
+(`cloudflare_account_token`); the IaC-made one deployed the probe Worker, reads and writes
+routing rules and queues, and is refused on DNS records and on token management.
 
 ## 7. Wrangler configuration and routing rules
 
