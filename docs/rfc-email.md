@@ -601,7 +601,7 @@ CLI's only contract is `Authorization: Bearer <token>`; how the token is obtaine
 discovery document says email is enabled.
 
 ```
-june inbox                                    # no subcommand: the TUI
+june inbox                                    # no subcommand: the TUI (text off a TTY)
 june inbox login <app-url> [--token]          # also reachable as `june login`
 june inbox pending [--agent scout] [--source email|slack] [--json]
 june inbox approve <pending> [--edit]         # --edit opens the draft in $EDITOR
@@ -640,6 +640,13 @@ toolchain; it needs `bun >= 1.3` or `node >= 26.4` and React ≥ 19.2; it instal
 5.4 MB native package for the host; and `bun build --compile` of an OpenTUI program produced
 a 74 MB darwin-arm64 binary that rendered and exited cleanly when copied to a directory with
 no `node_modules`.
+
+`june inbox` opens the TUI only when **both stdin and stdout are TTYs**; otherwise it prints
+the `pending` listing and exits, so a pipe, a CI job or a coding agent gets text, and a
+redirected or closed stdin never leaves a full-screen UI that cannot read keys. The toolkit
+comparison, the other terminal conventions (alternate screen and restore, `$EDITOR` via
+`renderer.suspend()` / `resume()`, CJK width, `NO_COLOR`) and the spike that gates P1c are in
+`docs/rfc-tui.md`.
 
 **Why the TUI is not in `@junejs/cli`.** Every June project would install OpenTUI's native
 packages whether or not it has an agent to supervise; and the native `june` planned in
