@@ -558,14 +558,11 @@ export class AgentDurableObject {
       let started: { turnId: string; queued?: true };
       try {
         session = this.resolveSession(key);
-        started = runInScope({ resources, services: this.services }, () => {
-          // A restart may have left held turns whose park already resolved; run them first,
-          // ahead of this turn (#263). A no-op in every other case.
-          session.drain();
-          // `hostContext` tells onDequeue how to finish a held turn: a delivered one is
-          // rendered through its source channel when it runs, exactly as it would be now.
-          return session.start({ userText, turnId, event, trigger, replace, ifSuspended, hostContext: wantsDeliver ? { deliver: true } : undefined });
-        });
+        // `hostContext` tells onDequeue how to finish a held turn (#263): a delivered one is
+        // rendered through its source channel when it runs, exactly as it would be now.
+        // start() itself runs turns a restart left held ahead of this one.
+        started = runInScope({ resources, services: this.services }, () =>
+          session.start({ userText, turnId, event, trigger, replace, ifSuspended, hostContext: wantsDeliver ? { deliver: true } : undefined }));
       } catch (err) {
         // e.g. the session is suspended awaiting input, or the key mis-matches this
         // object's identity — a client-resolvable conflict, not a crash

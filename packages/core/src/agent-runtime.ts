@@ -26,7 +26,10 @@ import type { Principal } from "./context";
 // Bump ONLY when the server↔core runtime contract changes shape (a seam signature,
 // an event/store type the server constructs against) — not on every release.
 // v2: AgentSession.idle() (#174) — NativeRuntime calls it to decide eviction.
-export const RUNTIME_API_VERSION = 2;
+// v3: grantAnswer / AgentSession.pending() (#261) — the hosts decide { policy } answerers
+//     with them; AgentSession.onDequeue / drain() (#263) — the Durable Object renders
+//     held turns with them.
+export const RUNTIME_API_VERSION = 3;
 
 // `providerState` (#92) is OPAQUE round-trip state a model adapter may attach to a
 // tool call: some providers require it replayed verbatim (Gemini 3+ returns a
@@ -952,11 +955,23 @@ export class AgentSession {
     const turnId = input.turnId ?? mintTurnId();
     // HOLD (#263): against a parked session — or behind turns already held, so arrival order
     // holds — an inbound turn that asked to queue is recorded durably instead of rejected.
-    if (input.ifSuspended === "queue" && !this.pendingReset && (this.parkedBy(turnId) || this.heldTurns().length > 0)) {
+    // Never the parked turn itself: its redelivery replays and re-parks, as it always has
+    // (holding it would run it a second time behind the held turns).
+    const parked = this.parkedTurnId();
+    if (input.ifSuspended === "queue" && !this.pendingReset && turnId !== parked && (parked !== undefined || this.heldTurns().length > 0)) {
       this.hold(turnId, input);
       this.drain(); // no-op while parked; runs the head if the park resolved in between
       return { turnId, queued: true };
     }
+    // A turn that runs now still goes after turns a restart left held once their park
+    // resolved (a no-op in every other case) — so held turns keep their place in line.
+    if (parked === undefined) this.drain();
+    return this.begin(turnId, input);
+  }
+
+  // Schedule a turn on the chain. start() decides whether it runs now; drain() starts held
+  // turns through here directly, so starting one cannot re-enter drain() and start the next.
+  private begin(turnId: string, input: TurnInput): { turnId: string } {
     // While a turn is parked awaiting input, the transcript ends in its dangling tool call —
     // running a NEW turn on it would corrupt both (the resumed replay would adopt the new
     // turn's tail as its own result). Reject loudly; redelivering the SAME parked turn is
@@ -1162,16 +1177,15 @@ export class AgentSession {
       this.store.delStep(INBOUND_QUEUE);
       if (rest.length) this.store.putStep(INBOUND_QUEUE, rest);
     });
-    const started = this.start({ turnId: head.turnId, userText: head.userText, event: head.event, trigger: head.trigger });
+    const started = this.begin(head.turnId, { turnId: head.turnId, userText: head.userText, event: head.event, trigger: head.trigger });
     this.onDequeue?.(started.turnId, head);
     return started;
   }
 
-  // Whether a turn OTHER than `turnId` is parked on this session.
-  private parkedBy(turnId: string): boolean {
-    if (this.store.getStatus() !== "suspended") return false;
-    const s = this.store.getStep("suspended") as SuspendedCheckpoint | undefined;
-    return !!s && s.turnId !== turnId;
+  // The turn this session is parked on, if any.
+  private parkedTurnId(): string | undefined {
+    if (this.store.getStatus() !== "suspended") return undefined;
+    return (this.store.getStep("suspended") as SuspendedCheckpoint | undefined)?.turnId;
   }
 
   // Record an inbound turn durably (#263). Idempotent per turnId, like any inbound delivery:
@@ -1219,8 +1233,11 @@ export class AgentSession {
   // Sugar: run a turn and await its final text. Explicitly the NON-INTERACTIVE convenience
   // (CLI, tests, simple cases) — it throws if the turn fails; use start()+observe()+result()
   // for liveness/interaction.
-  turn(input: TurnInput): Promise<string> {
-    return this.running.get(this.start(input).turnId)!;
+  // Not for held turns (#263): a held turn has no result to await yet — use start().
+  turn(input: Omit<TurnInput, "ifSuspended" | "hostContext">): Promise<string> {
+    const started = this.start(input);
+    if (started.queued) return Promise.reject(new Error(`turn(): turn ${started.turnId} was held, not run — use start() for ifSuspended "queue"`));
+    return this.running.get(started.turnId)!;
   }
 
   // Subscribe to this session's TurnEvent stream. Scope to one turn with `turnId`; with
