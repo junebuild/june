@@ -17,14 +17,23 @@ beforeAll(() => {
 });
 afterAll(() => rmSync(workdir, { recursive: true, force: true }));
 
+// Write a bundle to import, each in its own fresh directory: Bun caches a
+// directory's entries on the first import from it, so a second module written
+// into the same directory afterwards fails "Cannot find module" (Bun 1.3.14 and
+// 1.4.2). Run alone, this file failed the round-trip test; the full suite masked it.
+function writeModule(name: string, code: string): string {
+  const file = join(mkdtempSync(join(workdir, "m-")), name);
+  writeFileSync(file, code);
+  return file;
+}
+
 async function loadServer(): Promise<{
   renderWithAction: () => Promise<string>;
   callAdd: (body: string | FormData) => Promise<unknown>;
   code: string;
 }> {
   const code = await bundleServerGraph(join(FIX, "server-entry.tsx"), REPO);
-  const file = join(workdir, "us-server.mjs");
-  writeFileSync(file, code);
+  const file = writeModule("us-server.mjs", code);
   const mod = (await import(file)) as {
     renderWithAction: () => Promise<string>;
     callAdd: (body: string | FormData) => Promise<unknown>;
@@ -44,8 +53,7 @@ describe('"use server" machinery (feasibility)', () => {
   test("client→server round trip: encodeReply (client graph) → decodeReply + invoke (server graph)", async () => {
     // Client graph encodes the call args (normal-react / edge conditions).
     const clientCode = await bundleSsrGraph(join(FIX, "client-entry.ts"), REPO);
-    const clientFile = join(workdir, "us-client.mjs");
-    writeFileSync(clientFile, clientCode);
+    const clientFile = writeModule("us-client.mjs", clientCode);
     const { encode } = (await import(clientFile)) as {
       encode: (a: unknown[]) => Promise<string | FormData>;
     };
