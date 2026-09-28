@@ -614,6 +614,17 @@ ${doClass}`;
 
   // Locale variants a static route is emitted at: no i18n → [path]; with i18n → one
   // per locale (defaultLocale keeps the bare path, others get their localeHref prefix).
+  // A static build is ONE file tree on ONE host: a locale on its own domain has no
+  // path in it (and a basePath can't apply there), so say so instead of failing
+  // later with a prerender 404.
+  if (isStatic && i18n) {
+    const onDomain = Object.keys(i18n.locales).filter((l) => i18n.locales[l]!.domain);
+    if (onDomain.length) {
+      throw new Error(
+        `[june build] the static() target serves one host, so i18n locales with their own domain are not supported (${onDomain.join(", ")}). Give them a path prefix instead, e.g. { path: "/${onDomain[0]}" }.`,
+      );
+    }
+  }
   const localeVariants = (path: string): string[] =>
     isStatic && i18n
       ? [...new Set(Object.keys(i18n.locales).map((l) => localeHref(i18n, path, l)))]
@@ -648,6 +659,14 @@ ${doClass}`;
       ["/llms.txt", "llms.txt"],
       ["/sitemap.xml", "sitemap.xml"],
     ];
+    // A sitemap needs absolute URLs, and the prerender host is a placeholder: with
+    // no public origin configured the pipeline answers 404 for it (and the loop
+    // below skips it), so say why rather than silently ship no sitemap.
+    if (manifest.agent.discovery && !manifest.document.site.url && !manifest.document.deployOrigin) {
+      console.warn(
+        "[june build] no sitemap.xml: set site.url (or deploy.domain) in june.config.ts so its URLs are absolute.",
+      );
+    }
     // The agent catalogs (ARD, Agent Skills) — JSON/Markdown files a static host
     // can serve as-is — only when this site publishes them: agent discovery on, a
     // root deploy (a basePath site doesn't own /.well-known), and a known public

@@ -744,9 +744,25 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
   //     never reach a published file: use the configured public origin (site.url,
   //     else deploy.domain) there, and publish nothing when neither is set.
   function catalogOrigin(url: URL): string | null {
-    if (!publishesCatalogs) return null;
+    return publishesCatalogs ? publicOrigin(url) : null;
+  }
+
+  // The public origin that published discovery files (llms.txt, sitemap.xml,
+  // robots.txt, the agent catalogs) name. Live, it is the request's own origin.
+  // A prerender runs against the placeholder host, which must never reach a
+  // published file, so it uses the configured public origin: site.url's origin,
+  // else the deploy domain. null → unknown: publish no absolute URL at all.
+  function publicOrigin(url: URL): string | null {
     if (url.origin !== PRERENDER_ORIGIN) return url.origin;
     return docConfig.site.url ? new URL(docConfig.site.url).origin : (docConfig.deployOrigin ?? null);
+  }
+
+  // Where the site's pages live: the public origin plus the deploy basePath, so
+  // every absolute URL a discovery file lists resolves (a GitHub Pages project
+  // site is https://user.github.io/repo/…). null when the origin is unknown.
+  function publicBase(url: URL): string | null {
+    const origin = publicOrigin(url);
+    return origin === null ? null : origin + (docConfig.basePath ?? "");
   }
 
   // The agent catalogs: Agent Skills (index + the generated SKILL.md) and the
@@ -782,16 +798,27 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
     switch (url.pathname) {
       case "/llms.txt": {
         const routes = await cfg.routeList();
+        // With no known public origin (a static build without site.url or a deploy
+        // domain) the links are root-relative — llmstxt.org allows it — never the
+        // prerender placeholder.
+        const base = publicBase(url) ?? docConfig.basePath ?? "";
         // sections, descriptions, and Optional come from each route's `llms` export
-        const links = await collectLlmsLinks(url.origin, routes, cfg.resolve);
-        return text(llmsTxt(url.origin, routes, agent, docConfig.site, links), "text/markdown; charset=utf-8");
+        const links = await collectLlmsLinks(base, routes, cfg.resolve);
+        return text(llmsTxt(base, routes, agent, docConfig.site, links), "text/markdown; charset=utf-8");
       }
-      case "/robots.txt":
-        return text(robotsTxt(url.origin, { catalogs: catalogOrigin(url) !== null }), "text/plain; charset=utf-8");
-      case "/sitemap.xml":
+      case "/robots.txt": {
+        const base = publicBase(url);
+        if (base === null) return text("Not Found\n", "text/plain; charset=utf-8", { status: 404 });
+        return text(robotsTxt(base, { catalogs: catalogOrigin(url) !== null }), "text/plain; charset=utf-8");
+      }
+      case "/sitemap.xml": {
+        // The sitemap protocol requires absolute <loc>s: with no known public origin
+        // there is no correct sitemap, so none (the static build warns).
+        const base = publicBase(url);
+        if (base === null) return text("Not Found\n", "text/plain; charset=utf-8", { status: 404 });
         return text(
           sitemapXml(
-            url.origin,
+            base,
             await collectSitemapPages(await cfg.routeList(), cfg.resolve, {
               i18n: !!cfg.i18n,
               staticPaths: cfg.staticBuild === true,
@@ -800,6 +827,7 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
           ),
           "application/xml; charset=utf-8",
         );
+      }
       case "/.well-known/api-catalog":
         // RFC 9727 §2: a HEAD here SHALL carry a Link with rel="api-catalog". The
         // gate answers HEAD with this GET's headers, so both carry it.

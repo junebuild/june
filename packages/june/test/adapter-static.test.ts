@@ -4,7 +4,7 @@
 // (i18n + a dynamic catch-all with staticPaths) and asserts the published tree.
 import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,6 +13,32 @@ import { PRERENDER_ORIGIN } from "@junejs/core/document";
 
 import { staticSite } from "../src/adapter";
 import { juneBuild, normalizeBase } from "../src/build";
+
+// Every file a static build publishes, relative to dist/static.
+async function publishedFiles(outDir: string): Promise<string[]> {
+  const root = join(outDir, "static");
+  const out: string[] = [];
+  const walk = async (dir: string) => {
+    for (const e of await readdir(dir, { withFileTypes: true })) {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) await walk(p);
+      else out.push(p.slice(root.length + 1));
+    }
+  };
+  await walk(root);
+  return out;
+}
+
+// The regression guard for #238: the prerender host is a placeholder and must
+// never reach a published file — pages, projections, feeds, discovery files.
+async function expectNoPrerenderHost(outDir: string) {
+  const leaks: string[] = [];
+  for (const rel of await publishedFiles(outDir)) {
+    const body = await readFile(join(outDir, "static", rel), "utf8");
+    if (body.includes(new URL(PRERENDER_ORIGIN).host)) leaks.push(rel);
+  }
+  expect(leaks).toEqual([]);
+}
 
 describe("staticSite() adapter — units", () => {
   test("declares static capabilities + a portable edge-light condition (no server)", () => {
@@ -136,6 +162,38 @@ describe("staticSite() target — e2e (real juneBuild over an i18n app)", () => 
     expect(en).toContain('data-locale="en"');
     expect(await read("de/guide/getting-started/index.html")).toContain('data-locale="de"');
   });
+
+  test("discovery files name the public origin + basePath, never the prerender host (#238)", async () => {
+    const PUBLIC = "https://user.example.io/base";
+    const xml = await read("sitemap.xml");
+    const locs = [...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1]!);
+    expect(locs.length).toBeGreaterThan(0);
+    for (const loc of locs) expect(loc.startsWith(`${PUBLIC}/`)).toBe(true);
+    expect(locs).toContain(`${PUBLIC}/about`);
+    // i18n alternates resolve under the subpath too
+    const alternates = [...xml.matchAll(/hreflang="([^"]+)" href="([^"]+)"/g)].map((m) => [m[1], m[2]]);
+    expect(alternates).toContainEqual(["de", `${PUBLIC}/de/about`]);
+    for (const [, href] of alternates) expect(href!.startsWith(`${PUBLIC}/`)).toBe(true);
+
+    const llms = await read("llms.txt");
+    const links = [...llms.matchAll(/\]\(([^)]+)\)/g)].map((m) => m[1]!);
+    expect(links.length).toBeGreaterThan(0);
+    for (const l of links) expect(l.startsWith(`${PUBLIC}/`)).toBe(true);
+    // robots.txt belongs at the domain root, which a basePath site doesn't own
+    expect(has("robots.txt")).toBe(false);
+
+    // the page head's hreflang alternates agree with the sitemap: under the subpath
+    const html = await read("about/index.html");
+    const head = [...html.matchAll(/<link rel="alternate" hrefLang="([^"]+)" href="([^"]+)"/g)].map((m) => [m[1], m[2]]);
+    expect(head).toContainEqual(["de", "/base/de/about"]);
+    expect(head).toContainEqual(["en", "/base/about"]);
+    for (const [lang, href] of head) {
+      if (lang === "x-default") continue;
+      expect(alternates).toContainEqual([lang, `https://user.example.io${href}`]);
+    }
+
+    await expectNoPrerenderHost(outDir!);
+  });
 });
 
 describe("staticSite() — staticPaths feed prerender AND the sitemap (no i18n)", () => {
@@ -150,7 +208,7 @@ describe("staticSite() — staticPaths feed prerender AND the sitemap (no i18n)"
     // under the package so the fixture's JSX resolves June's jsx runtime
     root = await mkdtemp(join(PKG_DIR, ".tmp-static-sp-"));
     const files: Record<string, string> = {
-      "june.config.ts": `export default { site: { name: "SP" }, deploy: { target: "static" } };\n`,
+      "june.config.ts": `export default { site: { name: "SP", url: "https://sp.example" }, deploy: { target: "static" } };\n`,
       "app/page.tsx": "export default function Home(){return <main>home</main>;}\n",
       "app/guide/[slug]/page.tsx":
         "export const staticPaths = () => {\n" +
@@ -172,6 +230,70 @@ describe("staticSite() — staticPaths feed prerender AND the sitemap (no i18n)"
     const locs = [...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => new URL(m[1]!).pathname);
     expect(locs.sort()).toEqual([...r.prerendered].sort());
     expect(locs).toContain("/guide/a");
+    expect(xml).toContain("<loc>https://sp.example/guide/a</loc>");
+    await expectNoPrerenderHost(outDir);
+  });
+});
+
+describe("staticSite() — a locale on its own domain", () => {
+  const PKG_DIR = fileURLToPath(new URL("..", import.meta.url));
+  let root: string | undefined;
+  let outDir: string | undefined;
+  afterAll(async () => {
+    for (const d of [root, outDir]) if (d) await rm(d, { recursive: true, force: true });
+  });
+
+  test("is refused with a clear message (one file tree serves one host), not a prerender 404", async () => {
+    root = await mkdtemp(join(PKG_DIR, ".tmp-static-domain-"));
+    const files: Record<string, string> = {
+      "june.config.ts":
+        `export default { site: { name: "D", url: "https://example.com" }, basePath: "/repo", ` +
+        `i18n: { defaultLocale: "en", locales: { en: {}, fr: { domain: "example.fr" } } }, deploy: { target: "static" } };\n`,
+      "app/page.tsx": "export default function H(){return <main>h</main>;}\n",
+    };
+    for (const [rel, body] of Object.entries(files)) {
+      await mkdir(dirname(join(root, rel)), { recursive: true });
+      await writeFile(join(root, rel), body);
+    }
+    outDir = await mkdtemp(join(tmpdir(), "june-static-domain-"));
+    await expect(juneBuild(root, { outDir })).rejects.toThrow(/own domain are not supported \(fr\)/);
+  });
+});
+
+describe("staticSite() — no public origin configured (#238)", () => {
+  const PKG_DIR = fileURLToPath(new URL("..", import.meta.url));
+  let root: string | undefined;
+  let outDir: string | undefined;
+  afterAll(async () => {
+    for (const d of [root, outDir]) if (d) await rm(d, { recursive: true, force: true });
+  });
+
+  test("llms.txt links are root-relative, no sitemap.xml is written (with a warning), nothing names the prerender host", async () => {
+    root = await mkdtemp(join(PKG_DIR, ".tmp-static-noorigin-"));
+    const files: Record<string, string> = {
+      "june.config.ts": `export default { site: { name: "No Origin" }, deploy: { target: "static" } };\n`,
+      "app/page.tsx": "export default function Home(){return <main>home</main>;}\n",
+      "app/about/page.tsx": "export default function About(){return <main>about</main>;}\n",
+    };
+    for (const [rel, body] of Object.entries(files)) {
+      await mkdir(dirname(join(root, rel)), { recursive: true });
+      await writeFile(join(root, rel), body);
+    }
+    outDir = await mkdtemp(join(tmpdir(), "june-static-noorigin-"));
+    const warnings: string[] = [];
+    const warn = console.warn;
+    console.warn = (...a: unknown[]) => void warnings.push(a.map(String).join(" "));
+    try {
+      await juneBuild(root, { outDir });
+    } finally {
+      console.warn = warn;
+    }
+
+    expect(existsSync(join(outDir, "static", "sitemap.xml"))).toBe(false);
+    expect(warnings.some((w) => w.includes("no sitemap.xml") && w.includes("site.url"))).toBe(true);
+    const llms = await readFile(join(outDir, "static", "llms.txt"), "utf8");
+    expect(llms).toContain("](/about.md)");
+    await expectNoPrerenderHost(outDir);
   });
 });
 
@@ -233,6 +355,11 @@ describe("staticSite() target — agent catalogs", () => {
     expect(html).not.toContain("modelContext");
     // the page links the catalog it ships with
     expect(html).toContain('<link rel="ai-catalog" href="/.well-known/ai-catalog.json"');
+
+    // #238: the root deploy's llms.txt and sitemap name the deploy domain
+    expect(llms).toContain("(https://static.example/");
+    expect(await read("sitemap.xml")).toContain("<loc>https://static.example/</loc>");
+    await expectNoPrerenderHost(outDir);
   });
 
   test("a basePath deploy publishes no /.well-known catalogs (it doesn't own the domain root)", async () => {
