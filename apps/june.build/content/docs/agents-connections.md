@@ -48,17 +48,37 @@ All three are exported from `@junejs/core/connections`.
 | factory | fields | tools come from |
 |---|---|---|
 | `defineMcpConnection` | `name`, `url`, `headers?`, `auth?`, `requiresPrincipal?` | `initialize` + `tools/list` on the server |
-| `defineOpenapiConnection` | `name`, `url` (the OpenAPI doc), `baseUrl?`, `headers?`, `auth?`, `requiresPrincipal?` | each path × method in the doc |
+| `defineOpenapiConnection` | `name`, `url` (the OpenAPI doc), `baseUrl?`, `headers?`, `auth?`, `requiresPrincipal?`, `include?`, `docAuth?` | each path × method in the doc, or those `include` selects |
 | `defineProviderConnection` | `name`, `connect`, `url?`, `requiresPrincipal?` | whatever `connect()` returns |
 
 - **MCP** — the tool's description is prefixed `[<name>]` and its
   `annotations` (`readOnlyHint`, `destructiveHint`, …) carry through when
   June re-serves it. A call's first text content block is parsed as JSON,
   falling back to the raw text.
-- **OpenAPI** — a minimal subset: the tool id is `<name>__<operationId>`
-  (or one built from the method and path when there is none); query/path parameters and a
-  JSON request body's properties form the input schema. The base URL is
-  `baseUrl`, else `servers[0].url`, else the doc's origin.
+- **OpenAPI** — a minimal subset of OpenAPI 3:
+  - **Tool ids** are `<name>__<operationId>`, or an id built from the method
+    and path when an operation has none. Characters outside `[A-Za-z0-9_-]`
+    become `_`, and ids are cut to 128 characters, which is the tool-name rule
+    of the Claude API. For example, GitHub's `issues/list-for-repo` becomes
+    `github__issues_list-for-repo`.
+  - **The input schema** is built from the path, query and header
+    parameters, including path-level ones, plus the properties of a JSON
+    request body.
+  - **`$ref`s are followed** when they point inside the document
+    (`#/components/…`). They are inlined up to three levels deep, and a cyclic
+    or remote ref becomes an open schema. Cookie parameters, and parameters
+    whose ref can't be resolved, are left out.
+  - **The base URL** is `baseUrl`, else `servers[0].url`, else the document's
+    origin.
+  - **Errors:** a non-2xx response throws, with its status and the start of
+    its body. An empty 2xx body returns `null`, and a body that isn't JSON
+    returns its text.
+- **Choosing operations (`include`)** — large APIs describe hundreds of
+  operations; GitHub's has 1224. Each one becomes a tool, and every tool is
+  offered to the model on every turn. `include` takes operationIds or tags
+  (`["issues/create", "pulls"]`), or a predicate that receives
+  `{ operationId, method, path, tags }`. When a connection without `include`
+  produces more than 100 tools, June logs a warning.
 - **Provider** — the escape hatch for transports the generic clients can't
   express (multipart uploads, `alt=media` downloads, path→id lookups).
   `connect({ requiresPrincipal })` returns `defineAction`s; when the connection
@@ -78,6 +98,15 @@ MCP and OpenAPI connections also call `auth()` with no `ctx` during discovery
 (`initialize`, `tools/list`, fetching the OpenAPI doc), before any turn exists.
 An identity-dependent `auth` must return a discovery-scoped credential when
 `ctx` is `undefined`.
+
+**The OpenAPI document fetch sends no credentials unless it has to.**
+Documents often live on a different host from the API: GitHub's is on
+`raw.githubusercontent.com`, and others sit on a CDN or a docs site. So
+`headers` and `auth` go with the document request only when `baseUrl` is set
+and has the same origin as `url`. Set `docAuth: true` to send them anyway, for
+a protected document on another host, or `docAuth: false` to never send them.
+If a document fetched without credentials answers 401 or 403, the connection
+fails with an error that names both options.
 
 ## Errors and the report
 

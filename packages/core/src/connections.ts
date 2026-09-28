@@ -42,7 +42,17 @@ export type OpenapiConnection = {
   headers?: Headers;
   auth?: Auth;
   requiresPrincipal?: boolean;
+  // Whether the DOCUMENT fetch carries `headers` + `auth`. They are the API's
+  // credentials, and documents often live elsewhere (a CDN, raw.githubusercontent.com),
+  // so by default they are sent only when `baseUrl` is set and shares the
+  // document's origin. `true` always sends them, `false` never does.
+  docAuth?: boolean;
+  // Which operations become tools. Large APIs describe hundreds (GitHub: 1224),
+  // far more than a model can choose between. Strings match an operationId or
+  // a tag; a function sees each operation. Unset registers every operation.
+  include?: string[] | ((op: OpenapiOperation) => boolean);
 };
+export type OpenapiOperation = { operationId?: string; method: string; path: string; tags: string[] };
 // A PROVIDER connection is the escape hatch for a remote whose transport the
 // generic mcp/openapi clients can't express (multipart uploads, alt=media
 // downloads, compound path→id operations — Google Drive is the first). It brings
@@ -147,59 +157,179 @@ async function connectMcp(c: McpConnection): Promise<AnyAction[]> {
 
 // --- OpenAPI client (minimal, honest subset) ----------------------------------
 
-type OpenApiDoc = { servers?: { url: string }[]; paths: Record<string, Record<string, Operation>> };
+type Json = Record<string, unknown>;
+type OpenApiDoc = { servers?: { url: string }[]; paths?: Record<string, Json>; components?: Json };
+type Parameter = { name?: string; in?: string; required?: boolean; schema?: Json; description?: string };
 type Operation = {
   operationId?: string;
   summary?: string;
-  parameters?: { name: string; in: "query" | "path"; required?: boolean; schema?: { type?: string }; description?: string }[];
-  requestBody?: { content?: { "application/json"?: { schema?: JsonSchema } } };
+  tags?: string[];
+  parameters?: Parameter[];
+  requestBody?: { content?: { "application/json"?: { schema?: Json } } };
 };
 
+const HTTP_METHODS = new Set(["get", "put", "post", "delete", "options", "head", "patch", "trace"]);
+// A connection this large without `include` is almost certainly unintended:
+// every tool's schema is sent to the model on every turn.
+const MANY_OPERATIONS = 100;
+// How many $ref hops a schema is inlined through before the rest is left open
+// ({}): enough for a request body's nested objects, bounded against both cycles
+// and the size blow-up of deeply linked vendor schemas.
+const MAX_REF_DEPTH = 3;
+// The Claude API's tool-name rule (other providers are no looser).
+const TOOL_NAME_MAX = 128;
+
+// Resolve a LOCAL JSON pointer ("#/components/parameters/owner"); remote refs
+// ("other.yaml#/…") are not fetched and resolve to undefined.
+function resolvePointer(doc: OpenApiDoc, ref: string): unknown {
+  if (!ref.startsWith("#/")) return undefined;
+  let node: unknown = doc;
+  for (const raw of ref.slice(2).split("/")) {
+    const key = raw.replace(/~1/g, "/").replace(/~0/g, "~");
+    if (!node || typeof node !== "object") return undefined;
+    node = (node as Json)[key];
+  }
+  return node;
+}
+
+// Inline every $ref in a node (a parameter, a schema), guarding cycles and depth.
+// An unresolvable or too-deep ref becomes {} — an open schema — never a dangling
+// "$ref" a model API would reject.
+function inline(doc: OpenApiDoc, node: unknown, seen: readonly string[] = []): unknown {
+  if (Array.isArray(node)) return node.map((n) => inline(doc, n, seen));
+  if (!node || typeof node !== "object") return node;
+  const ref = (node as Json).$ref;
+  if (typeof ref === "string") {
+    if (seen.includes(ref) || seen.length >= MAX_REF_DEPTH) return {};
+    const target = resolvePointer(doc, ref);
+    return target === undefined ? {} : inline(doc, target, [...seen, ref]);
+  }
+  const out: Json = {};
+  for (const [k, v] of Object.entries(node as Json)) out[k] = inline(doc, v, seen);
+  return out;
+}
+
+function property(p: Parameter): { type: string; description?: string } {
+  const schema = p.schema ?? {};
+  const composite = "oneOf" in schema || "anyOf" in schema || "allOf" in schema || "enum" in schema;
+  return {
+    ...schema,
+    ...(schema.type || composite ? {} : { type: "string" }),
+    ...(p.description ? { description: p.description } : {}),
+  } as { type: string; description?: string };
+}
+
+// `<connection>__<operationId>`, reduced to the tool-name alphabet
+// (^[a-zA-Z0-9_-]{1,128}$): GitHub's operationIds are "issues/list-for-repo".
+function toolId(connection: string, opName: string, taken: Set<string>): string {
+  const base = `${connection}__${opName.replace(/[^A-Za-z0-9_-]/g, "_")}`.slice(0, TOOL_NAME_MAX);
+  let id = base;
+  for (let n = 2; taken.has(id); n++) id = `${base.slice(0, TOOL_NAME_MAX - String(n).length - 1)}_${n}`;
+  taken.add(id);
+  return id;
+}
+
+function includes(c: OpenapiConnection, op: OpenapiOperation): boolean {
+  if (!c.include) return true;
+  if (typeof c.include === "function") return c.include(op);
+  return c.include.some((s) => s === op.operationId || op.tags.includes(s));
+}
+
+async function fetchOpenapiDoc(c: OpenapiConnection): Promise<OpenApiDoc> {
+  const sameOrigin = c.baseUrl !== undefined && new URL(c.baseUrl, c.url).origin === new URL(c.url).origin;
+  const withCredentials = c.docAuth ?? sameOrigin;
+  // Discovery credentials (auth with no ctx) only when they are going to the API itself.
+  const res = await fetch(c.url, withCredentials ? { headers: await resolveHeaders(c) } : {});
+  if (!res.ok) {
+    const hint =
+      (res.status === 401 || res.status === 403) && !withCredentials && (c.auth || c.headers)
+        ? " The document was fetched WITHOUT the connection's credentials: set `baseUrl` to the API origin if the document is served by the API, or `docAuth: true` to send them regardless."
+        : "";
+    throw new Error(`OpenAPI document ${c.url} → ${res.status}.${hint}`);
+  }
+  return (await res.json()) as OpenApiDoc;
+}
+
 async function connectOpenapi(c: OpenapiConnection): Promise<AnyAction[]> {
-  const doc = (await (await fetch(c.url, { headers: await resolveHeaders(c) })).json()) as OpenApiDoc;
-  const baseUrl = c.baseUrl ?? doc.servers?.[0]?.url ?? new URL(c.url).origin;
+  const doc = await fetchOpenapiDoc(c);
+  const baseUrl = (c.baseUrl ?? doc.servers?.[0]?.url ?? new URL(c.url).origin).replace(/\/$/, "");
 
   const actions: AnyAction[] = [];
-  for (const [path, methods] of Object.entries(doc.paths)) {
-    for (const [method, op] of Object.entries(methods)) {
-      const opId = op.operationId ?? `${method}_${path.replace(/[/{}]/g, "_")}`;
+  const taken = new Set<string>();
+  for (const [path, item] of Object.entries(doc.paths ?? {})) {
+    const pathItem = inline(doc, item) as Json;
+    // Path-level parameters apply to every operation; an operation's own
+    // parameter with the same (name, in) overrides one.
+    const shared = ((pathItem.parameters as Parameter[] | undefined) ?? []).filter((p) => p && p.name && p.in);
+    for (const [method, raw] of Object.entries(pathItem)) {
+      if (!HTTP_METHODS.has(method)) continue; // "parameters", "summary", "servers", …
+      const op = raw as Operation;
+      const meta: OpenapiOperation = { method, path, tags: op.tags ?? [], ...(op.operationId ? { operationId: op.operationId } : {}) };
+      if (!includes(c, meta)) continue;
+
+      const own = (op.parameters ?? []).filter((p) => p && p.name && p.in);
+      const params = [...shared.filter((s) => !own.some((o) => o.name === s.name && o.in === s.in)), ...own].filter(
+        (p) => p.in === "path" || p.in === "query" || p.in === "header", // cookie params: not supported
+      );
       const properties: JsonSchema["properties"] = {};
       const required: string[] = [];
-      for (const p of op.parameters ?? []) {
-        properties[p.name] = { type: p.schema?.type ?? "string", description: p.description };
-        if (p.required) required.push(p.name);
+      for (const p of params) {
+        properties[p.name!] = property(p);
+        if (p.required || p.in === "path") required.push(p.name!);
       }
-      const bodySchema = op.requestBody?.content?.["application/json"]?.schema;
+      const bodySchema = op.requestBody?.content?.["application/json"]?.schema as
+        | { properties?: JsonSchema["properties"]; required?: string[] }
+        | undefined;
       if (bodySchema?.properties) {
         Object.assign(properties, bodySchema.properties);
         for (const r of bodySchema.required ?? []) required.push(r);
       }
 
+      const opName = op.operationId ?? `${method}_${path}`;
       actions.push(
         defineAction({
-          id: `${c.name}__${opId}`,
-          description: `[${c.name}] ${op.summary ?? opId}`,
-          input: { type: "object", properties, ...(required.length ? { required } : {}) },
+          id: toolId(c.name, opName, taken),
+          description: `[${c.name}] ${op.summary ?? opName}`,
+          input: { type: "object", properties, ...(required.length ? { required: [...new Set(required)] } : {}) },
           ...(c.requiresPrincipal ? { requiresPrincipal: true } : {}),
           run: async (input: Record<string, unknown>, ctx: ActionContext) => {
             let url = baseUrl + path;
             const query = new URLSearchParams();
+            const headers = await resolveHeaders(c, ctx);
             const body: Record<string, unknown> = { ...input };
-            for (const p of op.parameters ?? []) {
-              if (!(p.name in input)) continue;
-              if (p.in === "path") url = url.replace(`{${p.name}}`, encodeURIComponent(String(input[p.name])));
-              else query.set(p.name, String(input[p.name]));
-              delete body[p.name];
+            for (const p of params) {
+              const name = p.name!;
+              if (!(name in input)) continue;
+              const value = String(input[name]);
+              if (p.in === "path") url = url.replace(`{${name}}`, encodeURIComponent(value));
+              else if (p.in === "header") headers[name.toLowerCase()] = value;
+              else query.set(name, value);
+              delete body[name];
             }
             const qs = query.toString();
             if (qs) url += `?${qs}`;
-            const init: RequestInit = { method: method.toUpperCase(), headers: await resolveHeaders(c, ctx) };
-            if (method.toUpperCase() !== "GET" && bodySchema) init.body = JSON.stringify(body);
-            return (await fetch(url, init)).json();
+            const init: RequestInit = { method: method.toUpperCase(), headers };
+            if (method !== "get" && method !== "head" && bodySchema) init.body = JSON.stringify(body);
+            const res = await fetch(url, init);
+            const text = await res.text();
+            // A non-2xx must not read as data: throw, so the model sees an error
+            // with the status (and the start of the body), not a JSON blob.
+            if (!res.ok) throw new Error(`${c.name}: ${init.method} ${path} failed (${res.status})${text ? `: ${text.slice(0, 500)}` : ""}`);
+            if (!text) return null;
+            try {
+              return JSON.parse(text);
+            } catch {
+              return text;
+            }
           },
         }),
       );
     }
+  }
+  if (!c.include && actions.length > MANY_OPERATIONS) {
+    console.warn(
+      `[june] connection "${c.name}": ${actions.length} OpenAPI operations became tools, and every one is offered to the model on every turn. Narrow them with \`include\` (operationIds or tags).`,
+    );
   }
   return actions;
 }
