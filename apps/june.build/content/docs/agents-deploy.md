@@ -104,7 +104,7 @@ long-running host.
 ### Version guard
 
 `idle()` is part of the server↔core runtime contract, now at
-`RUNTIME_API_VERSION = 2`. `NativeRuntime`, `MemoryRuntime`, and
+`RUNTIME_API_VERSION = 3`. `NativeRuntime`, `MemoryRuntime`, and
 `AgentDurableObject` check it at construction. If a package manager nests a
 second, older `@junejs/core` under `@junejs/server`, you get an error naming both
 versions at startup, not a failure in the middle of a turn. Dedupe to one core.
