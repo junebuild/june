@@ -18,6 +18,7 @@ from the route graph and your actions — you author none of them:
 | `/sitemap.xml`, `/robots.txt` | the classic crawler contract |
 | `/.well-known/api-catalog` | machine-readable API listing |
 | `/mcp` | your actions as MCP tools an agent can call |
+| `/.well-known/mcp/server-card.json` | the MCP server's identity and how to connect (when MCP is on) |
 | `Link` response header | discovery advertised on every HTML response |
 
 It's on by default and one switch turns it all off (`agent: { enabled:
