@@ -162,6 +162,12 @@
       "types": "./dist/google-drive.d.ts",
       "default": "./dist/google-drive.js"
     },
+    "./github": {
+      "source": "./src/github.ts",
+      "bun": "./src/github.ts",
+      "types": "./dist/github.d.ts",
+      "default": "./dist/github.js"
+    },
     "./mcp": {
       "source": "./src/mcp.ts",
       "bun": "./src/mcp.ts",

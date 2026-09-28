@@ -5,7 +5,7 @@ description: A connection is an agent's outbound edge — an MCP server, an Open
 date: 2026-09-27
 section: Agents
 order: "16.3"
-sources: [packages/core/src/connections.ts, packages/core/src/google-drive.ts, packages/core/src/agent-config.ts, packages/june/src/connection-auth.ts, packages/june/src/agent-durable.ts, packages/june/src/agent-discover.ts, docs/google-drive-integration.md, packages/core/CHANGELOG.md]
+sources: [packages/core/src/connections.ts, packages/core/src/google-drive.ts, packages/core/src/github.ts, packages/core/src/agent-config.ts, packages/june/src/connection-auth.ts, packages/june/src/agent-durable.ts, packages/june/src/agent-discover.ts, docs/google-drive-integration.md, packages/core/CHANGELOG.md]
 ---
 ## The shape
 
@@ -166,6 +166,93 @@ Because they throw without a principal, these helpers suit provider
 connections. An MCP or OpenAPI connection that needs auth for discovery gets
 called with no `ctx`, so a fail-closed helper would leave it with zero tools.
 Give those a discovery-scoped credential instead.
+
+## GitHub App tokens
+
+An agent that works on code needs a GitHub credential. `@junejs/core/github`
+mints GitHub App installation tokens that are short-lived, scoped to one
+repository and limited to the permissions a call names. One exception applies:
+GitHub makes read-only `metadata` mandatory for any App with repository access,
+so a token may carry `metadata: read` even when the call doesn't name it. You
+don't need a personal access token or any App-auth code of your own:
+
+```ts
+// agent/connections/github.ts
+import { defineMcpConnection } from "@junejs/core/connections";
+import { githubApp } from "@junejs/core/github";
+
+export const gh = githubApp({
+  appId: process.env.GITHUB_APP_ID!,
+  privateKey: process.env.GITHUB_APP_PRIVATE_KEY!,
+});
+
+// Your mapping from the caller to the org whose installation to use.
+const orgOf = (user: { id: string }) => `acme-${user.id}`;
+
+// A connection's `auth`, scoped by the caller.
+export default defineMcpConnection({
+  name: "github",
+  url: "https://mcp.example.com/mcp",
+  // Tenant-scoped auth ⇒ gate the tools: without it, an anonymous call (no
+  // ctx.user) would get the discovery credential below.
+  requiresPrincipal: true,
+  auth: gh.auth((ctx) =>
+    ctx?.user
+      ? { owner: orgOf(ctx.user), repo: "widgets", permissions: { issues: "write" } }
+      : // Discovery (initialize, tools/list) runs with no ctx: read-only.
+        { owner: "acme", repo: "widgets", permissions: { metadata: "read" } },
+  ),
+});
+```
+
+Anywhere server-side, such as inside an action, `gh.token(...)` returns the
+token as a string:
+
+```ts
+const token = await gh.token({ owner: "acme", repo: "widgets", permissions: { contents: "read" } });
+```
+
+- **What it does:** it signs an RS256 App JWT with WebCrypto, looks up the
+  repo's installation, and then exchanges it for a token narrowed to
+  `repositories: [repo]` and your `permissions`. Tokens are cached per
+  `(owner, repo, permissions)` until five minutes before they expire, and
+  concurrent calls for the same scope share one exchange. It needs no
+  `node:*` modules, so it also runs on the edge.
+- **The private key** can be PKCS#1, which is what GitHub gives you
+  (`BEGIN RSA PRIVATE KEY`), or PKCS#8. Literal `\n` escapes, CRLF line
+  endings, surrounding quotes and a base64-wrapped PEM are all accepted.
+- **`permissions` is required.** An exchange without it would carry every
+  permission the installation has. Least privilege is your policy. For
+  example, `contents: "read"` to clone, and `write` only after a human
+  approves.
+- **Errors** are `GitHubAppError`s with a `code`:
+
+  | `code` | meaning |
+  |---|---|
+  | `not_installed` | The App isn't installed on the repo. A public repo can still be read anonymously. |
+  | `permission_denied` | The App lacks a permission, or GitHub granted less than you asked for. It fails closed. |
+  | `unauthorized` | GitHub rejected the JWT: check the `appId`, the key and the clock. |
+  | `rate_limited` | GitHub hit a primary or secondary rate limit. This is transient; `retryAfter` gives the seconds to wait when GitHub says. |
+  | `network` | `fetch` itself failed (DNS, connection, TLS). The original error is the `cause`. |
+  | `invalid_key` | The private key could not be parsed or imported. |
+  | `invalid_request` | The owner, repo or permissions are malformed. |
+  | `http` | Any other error response, or a success response missing what GitHub documents (such as the token). |
+
+  If GitHub later answers 401 to a cached token, call `gh.invalidate(req)`.
+- **Other options:** `apiBaseUrl` for GitHub Enterprise Server
+  (`https://<host>/api/v3`), `userAgent`, `fetch` and `now`.
+
+**Where the token goes is your decision.** Never hand an installation token
+to an environment the model controls, such as a sandbox shell, an env var a
+tool can print, or a git remote or credential helper inside that sandbox. Code
+running there can read the token from the environment, from a git hook, or
+through a replaced binary. Clone and push from a server-side action instead,
+and give the sandbox only the working tree.
+
+With the function form of `auth`, the resolver also runs with no `ctx` during
+an MCP connection's discovery. Return the narrowest request you can for that
+case, and set `requiresPrincipal: true`. Anonymous tool calls also arrive with
+no `ctx.user`, and without the gate they would receive the discovery credential.
 
 ## Why it matters
 
