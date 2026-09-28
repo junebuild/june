@@ -145,13 +145,15 @@ x64 agree except where noted):
 - [x] Falls back to text when stdout is not a TTY, and when stdin is redirected under a TTY
       stdout.
 - [x] `$EDITOR` round-trip: the editor gets the terminal, the TUI comes back, mounted once with
-      one feed subscription. **Still by hand:** vim, and VS Code with `code --wait`.
+      one feed subscription. By hand (2026-09-28): vim works. **Not tried:** VS Code with
+      `code --wait`.
 - [x] CJK and borders on every target; emoji as described in §4.
 - [x] No full-screen clears while streaming; the feed keeps 17–19 events/s while keys are
       pressed (the fake feed emits 20/s, ~16/s on Windows). On Bun 1.4.2 frames average
       1.1–5.5 ms across two runs, against 5–8 ms on 1.3.14. The Intel macOS runner is the
-      outlier and varies run to run: 4–23 ms average, worst frames from 37 to 533 ms. **Still
-      by hand:** flicker by eye in real terminals, including an older Intel Mac.
+      outlier and varies run to run: 4–23 ms average, worst frames from 37 to 533 ms. By hand
+      (2026-09-28): no visible flicker in a real terminal. **Not tried:** an older Intel Mac —
+      skipped by decision; the Intel macOS CI runner is the only x64 macOS evidence.
 - [x] A selected row stays on screen while events are prepended above it — once it is scrolled
       from the data in a layout effect (spike README, finding 7); the obvious `useEffect` /
       `scrollChildIntoView` versions lose it.
