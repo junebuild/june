@@ -60,6 +60,7 @@ export {
   viewTransitionCss,
   PREFETCH_FALLBACK,
   type DocumentConfig,
+  type Breadcrumb,
 } from "./document";
 
 // Segment-scoped swap boundary — opt a layout into being a persistent shell

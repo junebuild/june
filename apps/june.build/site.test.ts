@@ -94,6 +94,32 @@ describe("human surface", () => {
     expect(byType("SoftwareSourceCode").codeRepository).toBe("https://github.com/junebuild/june");
   });
 
+  test("docs and blog pages place themselves in the site: June › Docs|Blog › <page>", async () => {
+    const trail = async (path: string) => {
+      const html = await (await get(path)).text();
+      const ld = JSON.parse(html.match(/<script type="application\/ld\+json">(.*?)<\/script>/)![1]!);
+      const list = ld["@graph"].find((n: { "@type": string }) => n["@type"] === "BreadcrumbList");
+      return list.itemListElement.map((i: { name: string; item: string }) => [i.name, i.item]);
+    };
+    const { DOCS, POSTS } = await import("./app/_content");
+    const d = DOCS[0]!;
+    expect(await trail(`/docs/${d.slug}`)).toEqual([
+      ["June", "https://june.build/"],
+      ["Docs", "https://june.build/docs"],
+      [String(d.data.title), `https://june.build/docs/${d.slug}`],
+    ]);
+    const p = POSTS[0]!;
+    expect(await trail(`/blog/${p.slug}`)).toEqual([
+      ["June", "https://june.build/"],
+      ["Blog", "https://june.build/blog"],
+      [String(p.data.title), `https://june.build/blog/${p.slug}`],
+    ]);
+    expect(await trail("/why")).toEqual([
+      ["June", "https://june.build/"],
+      ["Why June", "https://june.build/why"],
+    ]);
+  });
+
   test("keyboard access: every outline removal has a replacement focus indicator", async () => {
     const css = await Bun.file(join(ROOT, "app/global.css")).text();
     // selectors whose rule drops the outline — each needs a named stand-in indicator

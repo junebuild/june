@@ -120,12 +120,20 @@ describe("/api/<action> + /openapi.json (agent.api)", () => {
     });
     let matched: string | undefined;
     const resolve: RouteResolver = async (pathname) => {
-      matched = pathname;
+      // the request's own match — a rendered page then also resolves its
+      // breadcrumb ancestors (/api for /api/x), which must not overwrite it
+      matched ??= pathname;
       return { def: route({ json: () => ({ route: pathname }) }), params: {}, chain: [] };
     };
     const agent = resolveAgent(opts.api === undefined ? undefined : { api: opts.api });
     const p = createPipeline({ docConfig, agent, routeList: () => [], resolve, identity: opts.identity });
-    return { fetch: (r: Request) => p.fetch(r), matchedPath: () => matched };
+    return {
+      fetch: (r: Request) => {
+        matched = undefined; // per request: the first resolve is the request's own match
+        return p.fetch(r);
+      },
+      matchedPath: () => matched,
+    };
   }
 
   test("POST /api/<id> dispatches with the cfg.identity principal (same as /mcp)", async () => {

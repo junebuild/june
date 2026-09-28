@@ -61,6 +61,8 @@ needed for a link to unfurl as a card:
   `summary`. `site.twitter` adds `twitter:site`.
 - JSON-LD on the homepage, including a locale's home (`/de`): a schema.org
   `@graph` with the `WebSite`. See [Who runs the site](#who-runs-the-site).
+  Every other page gets a `BreadcrumbList` instead. See
+  [Where a page sits](#where-a-page-sits).
 - `theme-color` (the mobile toolbar colour) from `site.themeColor`: one colour,
   or `{ light, dark }` for a page that follows the system scheme. Unset, June
   uses its starter background only when the starter look is the page's whole
@@ -133,6 +135,46 @@ site: {
   },
 },
 ```
+
+## Where a page sits
+
+Every page except the home carries a schema.org `BreadcrumbList`, so search
+engines and agents see where it sits in the site. June builds the trail from
+the URL:
+
+- **Home first.** The first crumb is the site's home, named by the short part
+  of `site.name` (`"Acme — tools for builders"` becomes `Acme`). On a locale's
+  pages it's that locale's home (`/de`).
+- **Then each ancestor that is a page.** For `/docs/guides/intro`, June
+  resolves `/docs` and `/docs/guides`. An ancestor gets a crumb only if it
+  matches a route with no params, so it's a page by declaration. A path that
+  matches nothing is skipped. So is a dynamic match (`/blog/[slug]` for
+  `/blog/2026`), because only its data says whether it exists, and June won't
+  run a loader just to name a crumb.
+- **Then the page itself**, named by its title.
+
+An ancestor is named by its route's static `metadata.title`. When the title
+needs data (a `metadata` function), the crumb uses the URL segment instead:
+`getting-started` becomes `Getting started`. The link is still real (the route
+resolved), and only the label is derived.
+
+To set the trail yourself, for example a product page whose category comes
+from its data, set `metadata.breadcrumb` to the crumbs after the home, ending
+with the page. Set it to `false` to emit none:
+
+```ts
+export const metadata = ({ product }: Loaded<typeof loader>) => ({
+  title: product.name,
+  breadcrumb: [
+    { name: product.category.name, path: `/c/${product.category.slug}` },
+    { name: product.name, path: `/p/${product.slug}` },
+  ],
+});
+```
+
+The trail follows the same rules as the canonical URL: it needs a public
+origin, and `noindex` pages get none. Paths are root-relative, and a deploy
+`basePath` is added for you.
 
 ## Why it matters
 

@@ -45,6 +45,14 @@ export type Metadata = {
     card?: "summary" | "summary_large_image"; // default: large when there's an image
     creator?: string; // the author's handle, e.g. "@jane"
   };
+  // The page's schema.org BreadcrumbList (JSON-LD), emitted on every non-home page.
+  // Unset → derived from the URL: the site home, each ancestor path that is itself
+  // a page (a route matched with no params — a dynamic match's existence depends on
+  // its data, so it is skipped rather than guessed), then this page. `false` → none.
+  // An array → the trail after the site home, in order, ending with this page;
+  // `path` is root-relative (the deploy basePath is added), e.g. for a product page
+  // whose category comes from data: [{ name: "Shoes", path: "/c/shoes" }, …].
+  breadcrumb?: false | Array<{ name: string; path: string }>;
 };
 
 export type RouteContext<

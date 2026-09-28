@@ -24,7 +24,14 @@ import {
   type RenderTarget,
   type RouteContext,
 } from "@junejs/core/route";
-import { Document, documentTitle, pageCanonical, PRERENDER_ORIGIN, type DocumentConfig } from "@junejs/core/document";
+import {
+  Document,
+  documentTitle,
+  pageCanonical,
+  PRERENDER_ORIGIN,
+  type Breadcrumb,
+  type DocumentConfig,
+} from "@junejs/core/document";
 import {
   AGENT_SKILLS_INDEX_PATH,
   AI_CATALOG_PATH,
@@ -53,7 +60,7 @@ import {
 import type { Principal, Session } from "@junejs/core/context";
 
 import { ensureScope, runInScope, setRequestLocale } from "@junejs/db";
-import type { AgentConfig } from "@junejs/core/config";
+import { siteShortName, type AgentConfig } from "@junejs/core/config";
 import {
   LOCALE_COOKIE,
   localeAlternates,
@@ -275,7 +282,26 @@ const SERVER_CARD_CORS = {
   "access-control-expose-headers": "ETag",
 };
 
-type PageProps = { pageUrl: string; isHome: boolean; onLocaleDomain: boolean; markdownHref?: string };
+type PageProps = {
+  pageUrl: string;
+  isHome: boolean;
+  onLocaleDomain: boolean;
+  markdownHref?: string;
+  breadcrumbs?: Breadcrumb[];
+};
+
+// A URL segment as a crumb label, for a page whose title isn't static: decoded,
+// "-"/"_" as spaces, first letter capitalized (scripts without case are unchanged).
+function humanizeSegment(segment: string): string {
+  let s = segment;
+  try {
+    s = decodeURIComponent(segment);
+  } catch {
+    // an undecodable segment never reaches here (resolveRoute refuses the path)
+  }
+  s = s.replace(/[-_]+/g, " ").trim();
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
 
 // A request's matched route pathname (locale stripped, /index → /), keyed by its
 // ctx — RouteContext is public API, so the pipeline tracks it on the side.
@@ -349,6 +375,43 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
       // the rest of discovery). A disabled md projection gets no link to a 404.
       markdownHref: agent.discovery && def.md !== false ? markdownPath(ctx.url.pathname, isHome) : undefined,
     };
+  }
+
+  // The page's breadcrumb trail (Metadata.breadcrumb): home first, this page last.
+  // Derived from the URL unless the route declares its own (or false). An ancestor
+  // path gets a crumb only if it RESOLVES to a page matched with no params — a
+  // static route, or an optional segment's bare match: a page that exists by
+  // declaration. A dynamic match (/docs/[slug] for /docs/x) exists only if its data
+  // does, which would take a load to know, so it is skipped, never guessed. Each
+  // ancestor costs one route resolve (no load); its label is the route's static
+  // metadata.title, else its humanized URL segment — the URL is verified, only the
+  // label is derived, and a gap in the trail would misstate the hierarchy more.
+  // Paths are request paths: a locale prefix (/de/…) carries through, so the
+  // home crumb is the locale's home.
+  async function breadcrumbsFor(ctx: RouteContext, meta: Metadata | undefined): Promise<Breadcrumb[] | undefined> {
+    const routePath = routePathOf.get(ctx);
+    if (!routePath || routePath === "/" || meta?.breadcrumb === false) return undefined;
+    const urlPath = ctx.url.pathname.replace(/\/+$/, "") || "/";
+    const route = routePath.replace(/\/+$/, "");
+    // The request path minus the route path = the locale prefix ("" on the default
+    // locale or a locale's own domain).
+    const prefix = urlPath.endsWith(route) ? urlPath.slice(0, urlPath.length - route.length) : "";
+    const home: Breadcrumb = {
+      name: siteShortName(docConfig.site) ?? documentTitle(undefined, docConfig.site),
+      path: prefix || "/",
+    };
+    if (Array.isArray(meta?.breadcrumb)) return [home, ...meta.breadcrumb];
+    const segments = route.split("/").filter(Boolean);
+    const trail: Breadcrumb[] = [home];
+    for (let i = 1; i < segments.length; i++) {
+      const ancestor = "/" + segments.slice(0, i).join("/");
+      const r = await resolveRoute(ancestor);
+      if (!r || "handler" in r || Object.keys(r.params).length > 0) continue;
+      const title = typeof r.def.metadata === "object" ? r.def.metadata?.title : undefined;
+      trail.push({ name: title || humanizeSegment(segments[i - 1]!), path: prefix + ancestor });
+    }
+    trail.push({ name: meta?.title || humanizeSegment(segments[segments.length - 1]!), path: urlPath });
+    return trail;
   }
 
   function onLocaleDomain(ctx: RouteContext): boolean {
@@ -456,6 +519,7 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
     resolved: Resolved,
     loadPromise: Promise<unknown>,
     ctx: RouteContext,
+    breadcrumbs: Breadcrumb[] | undefined,
   ): Promise<Response> {
     const { def, chain, loading: Loading, boundaryKey } = resolved;
     const leaf = React.createElement(StreamedView, { loadPromise, def, ctx });
@@ -469,6 +533,8 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
       boundary,
     );
     const metadata = typeof def.metadata === "object" ? def.metadata : undefined;
+    // No await between here and React taking loadPromise (see the caller); the
+    // breadcrumb trail is resolved before load() starts.
     const stream = await renderToReadableStream(
       React.createElement(Document, {
         config: docConfigForRender(ctx.url.href),
@@ -477,6 +543,7 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
         shellKey: boundaryKey, // stamps data-june-shell on [data-june-root]
         alternates: alternatesFor(ctx),
         ...pageProps(ctx, def),
+        breadcrumbs,
         ...langDir(ctx.locale),
       }),
       { onError: (e: unknown) => console.error("[june] streaming render error:", e) },
@@ -664,7 +731,8 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
     // renders the whole chain (a hard load of the URL is never segment-scoped) —
     // but it stamps the shell key so the client knows which shell is mounted.
     if (target === "fragment") return renderFragment(node, meta, chain, boundaryIndex, boundaryKey);
-    return renderDocument(node, meta, 200, chain, ctx.locale, boundaryKey, alternatesFor(ctx), pageProps(ctx, def));
+    const page = { ...pageProps(ctx, def), breadcrumbs: await breadcrumbsFor(ctx, meta) };
+    return renderDocument(node, meta, 200, chain, ctx.locale, boundaryKey, alternatesFor(ctx), page);
   }
 
   // The origin the agent catalogs name, or null when this site publishes none —
@@ -891,10 +959,16 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
       // static metadata flushes the shell + fallback before load() resolves.
       // (data-derived metadata can't stream — the <head> needs the title.)
       if (target === "view" && resolved.loading && typeof resolved.def.metadata !== "function") {
+        // Everything the shell awaits happens BEFORE load() starts: once the load
+        // promise exists, it must reach React (use()) with no await in between, or
+        // a load that rejects meanwhile is an unhandled rejection (fatal on a Node
+        // host with --unhandled-rejections=throw). Metadata is static on this path,
+        // so the breadcrumb trail doesn't depend on the load.
+        const breadcrumbs = await breadcrumbsFor(ctx, resolved.def.metadata);
         const loadPromise = Promise.resolve(
           resolved.def.load ? resolved.def.load(ctx) : undefined,
         );
-        return renderStreamingDocument(resolved, loadPromise, ctx);
+        return renderStreamingDocument(resolved, loadPromise, ctx, breadcrumbs);
       }
 
       let data: unknown;
