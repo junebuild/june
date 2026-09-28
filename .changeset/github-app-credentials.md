@@ -8,7 +8,7 @@ GitHub App credentials: short-lived, per-repo installation tokens (`@junejs/core
   repository and the `permissions` a call names:
   `await gh.token({ owner, repo, permissions: { contents: "read" } })`. GitHub
   makes read-only `metadata` mandatory for Apps with repository access, so the
-  token may also carry `metadata: read` when the call doesn't name it. It signs
+  token also carries `metadata: read` whether the call names it or not. It signs
   the RS256 App JWT with WebCrypto (no `node:*`, so it runs on the edge), looks
   up the installation, and narrows the exchange to `repositories: [repo]`.
 - `gh.auth(req | (ctx) => req)` plugs into any connection's `auth`, so the

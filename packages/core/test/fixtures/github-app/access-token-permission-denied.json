@@ -1,0 +1,9 @@
+{
+  "request": "POST /app/installations/165782290/access_tokens {\"repositories\":[\"github-app-live-test\"],\"permissions\":{\"administration\":\"write\"}}",
+  "status": 422,
+  "body": {
+    "message": "The permissions requested are not granted to this installation.",
+    "documentation_url": "https://docs.github.com/rest/reference/apps#create-an-installation-access-token-for-an-app",
+    "status": "422"
+  }
+}

@@ -1,7 +1,8 @@
 // github.test.ts — githubApp mints short-lived, per-repo installation tokens.
 // Keys are generated in the test (PKCS#1 as GitHub hands them out, and PKCS#8);
 // every JWT the module sends is verified against the public key. A small fake
-// stands in for GitHub's two endpoints, and an injected clock drives the cache.
+// stands in for GitHub's two endpoints, answering with REAL captured responses
+// (fixtures/github-app/), and an injected clock drives the cache.
 
 import { generateKeyPairSync, verify, type KeyObject } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -9,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { ACTION_REGISTRY, invokeAction } from "@junejs/core/agent";
 import { connectAll, defineMcpConnection } from "@junejs/core/connections";
 import { githubApp, GitHubAppError, type GitHubAppConfig } from "@junejs/core/github";
+import { CREDENTIAL } from "./fixtures/github-app/credential";
 
 function rsaKeys(modulusLength: number) {
   const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength });
@@ -35,8 +37,27 @@ function checkJwt(jwt: string, publicKey: KeyObject) {
   return { header: b64urlJson(h!), payload: b64urlJson(p!) };
 }
 
+// REAL GitHub responses, captured from a throwaway App and scrubbed of the token
+// (fixtures/github-app/capture.ts refreshes them). The fake answers with these
+// shapes and only overrides what varies per request — so what it returns is what
+// GitHub returns: the mandatory metadata:read grant, the 390-char `ghs_` token
+// format, second-precision expires_at, and GitHub's own error bodies.
+type Fixture = { request: string; status: number; body: Record<string, unknown> };
+const fixture = (name: string): Fixture =>
+  JSON.parse(readFileSync(new URL(`./fixtures/github-app/${name}.json`, import.meta.url), "utf8"));
+const FX = {
+  installation: fixture("installation"),
+  accessToken: fixture("access-token"),
+  permissionDenied: fixture("access-token-permission-denied"),
+  notFound: fixture("installation-not-found"),
+  badJwt: fixture("bad-jwt"),
+};
+const fixtureResponse = (fx: Fixture) => Response.json(fx.body, { status: fx.status });
+// GitHub's timestamps carry no milliseconds (2026-09-28T13:59:23Z).
+const githubTime = (ms: number) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z");
+
 // A fake GitHub: installations by owner/repo, a token per exchange. Tweak
-// `responses` to force a status for a path.
+// `overrides` to force a response for a path.
 function makeFakeGitHub(opts: { expiresInMs?: number; clock: () => number }) {
   const seen: Seen[] = [];
   const installed = new Map<string, number>([["acme/widgets", 42]]);
@@ -53,15 +74,26 @@ function makeFakeGitHub(opts: { expiresInMs?: number; clock: () => number }) {
     let m: RegExpMatchArray | null;
     if ((m = path.match(/^\/repos\/([^/]+)\/([^/]+)\/installation$/))) {
       const id = installed.get(`${m[1]}/${m[2]}`.toLowerCase());
-      if (id === undefined) return Response.json({ message: "Not Found" }, { status: 404 });
-      return Response.json({ id });
+      if (id === undefined) return fixtureResponse(FX.notFound);
+      return Response.json({ ...FX.installation.body, id });
     }
     if ((m = path.match(/^\/app\/installations\/(\d+)\/access_tokens$/))) {
+      if (![...installed.values()].includes(Number(m[1]))) return fixtureResponse(FX.notFound);
       minted++;
-      const expires = new Date(opts.clock() + (opts.expiresInMs ?? 60 * 60 * 1000)).toISOString();
-      return Response.json({ token: `ghs_token${minted}`, expires_at: expires, permissions: body?.permissions ?? {} }, { status: 201 });
+      const [repoTemplate] = FX.accessToken.body.repositories as Record<string, unknown>[];
+      return Response.json(
+        {
+          ...FX.accessToken.body,
+          token: `ghs_token${minted}`,
+          expires_at: githubTime(opts.clock() + (opts.expiresInMs ?? 60 * 60 * 1000)),
+          // GitHub always adds metadata:read beside what was asked (verified live).
+          permissions: { ...(body?.permissions ?? FX.installation.body.permissions), metadata: "read" },
+          repositories: (body?.repositories ?? []).map((name: string) => ({ ...repoTemplate, name })),
+        },
+        { status: FX.accessToken.status },
+      );
     }
-    return Response.json({ message: "Not Found" }, { status: 404 });
+    return fixtureResponse(FX.notFound);
   }) as typeof globalThis.fetch;
   return { fetch, seen, installed, overrides, minted: () => minted };
 }
@@ -193,14 +225,14 @@ describe("the exchange", () => {
 
   test("422 (permission the App lacks) is permission_denied and carries GitHub's message", async () => {
     const { gh, app } = setup();
-    gh.overrides.set("/app/installations/42/access_tokens", () =>
-      Response.json({ message: "The permissions requested are not granted to this installation." }, { status: 422 }),
-    );
+    gh.overrides.set("/app/installations/42/access_tokens", () => fixtureResponse(FX.permissionDenied));
     const err = (await app.token(READ).catch((e) => e)) as GitHubAppError;
     expect(err.code).toBe("permission_denied");
     expect(err.message).toContain("not granted to this installation");
   });
 
+  // Not captured (a real rate limit can't be triggered safely); the header
+  // semantics follow GitHub's rate-limit docs.
   const limits: [string, () => Response, number | undefined][] = [
     [
       "a primary limit (x-ratelimit-remaining: 0), retryAfter from x-ratelimit-reset",
@@ -268,7 +300,7 @@ describe("the exchange", () => {
 
   test("401 means the JWT was rejected: unauthorized, pointing at appId/key/clock", async () => {
     const { gh, app } = setup();
-    gh.overrides.set("/repos/acme/widgets/installation", () => Response.json({ message: "Bad credentials" }, { status: 401 }));
+    gh.overrides.set("/repos/acme/widgets/installation", () => fixtureResponse(FX.badJwt));
     const err = (await app.token(READ).catch((e) => e)) as GitHubAppError;
     expect(err.code).toBe("unauthorized");
     expect(err.message).toMatch(/appId.*clock/);
@@ -282,15 +314,27 @@ describe("the exchange", () => {
     expect(err.status).toBe(502);
   });
 
-  test("GitHub's mandatory metadata:read alongside the requested scope is accepted", async () => {
+  test("GitHub's real grant — the requested scope plus mandatory metadata:read — is accepted", async () => {
     const { gh, app } = setup();
-    gh.overrides.set("/app/installations/42/access_tokens", () =>
-      Response.json(
-        { token: "ghs_meta", expires_at: new Date(clock + 3600_000).toISOString(), permissions: { contents: "read", metadata: "read" } },
-        { status: 201 },
-      ),
-    );
-    expect(await app.token(READ)).toBe("ghs_meta");
+    expect(await app.token(READ)).toBe("ghs_token1");
+    // The fake answers like GitHub did live: metadata rides along unasked.
+    const res = await gh.fetch("https://api.github.com/app/installations/42/access_tokens", {
+      method: "POST",
+      body: JSON.stringify({ repositories: ["widgets"], permissions: { contents: "read" } }),
+    });
+    expect(((await res.json()) as { permissions: object }).permissions).toEqual({ contents: "read", metadata: "read" });
+  });
+
+  test("the captured 201 verbatim (390-char ghs_ token, second-precision expires_at) is returned as-is", async () => {
+    const { gh, app } = setup();
+    clock = Date.parse(FX.accessToken.body.expires_at as string) - 60 * 60 * 1000;
+    gh.overrides.set("/app/installations/42/access_tokens", () => fixtureResponse(FX.accessToken));
+    const token = await app.token(READ);
+    expect(token).toBe(FX.accessToken.body.token as string);
+    expect(token).toHaveLength(390);
+    // And it was cached: its expires_at parsed as a real instant.
+    expect(await app.token(READ)).toBe(token);
+    expect(gh.seen.filter((s) => s.url.endsWith("/access_tokens"))).toHaveLength(1);
   });
 
   test("fails closed when GitHub grants less than was requested", async () => {
@@ -308,7 +352,7 @@ describe("the exchange", () => {
     const { gh, app } = setup();
     await app.token(READ);
     gh.installed.set("acme/widgets", 77);
-    gh.overrides.set("/app/installations/42/access_tokens", () => Response.json({ message: "Not Found" }, { status: 404 }));
+    gh.overrides.set("/app/installations/42/access_tokens", () => fixtureResponse(FX.notFound));
     await app.token({ ...READ, permissions: { issues: "read" } });
     expect(gh.seen.slice(2).map((s) => new URL(s.url).pathname)).toEqual([
       "/app/installations/42/access_tokens",
@@ -319,7 +363,7 @@ describe("the exchange", () => {
 
   test("an installation 404 that persists after the re-lookup surfaces as an error, no loop", async () => {
     const { gh, app } = setup();
-    gh.overrides.set("/app/installations/42/access_tokens", () => Response.json({ message: "Not Found" }, { status: 404 }));
+    gh.overrides.set("/app/installations/42/access_tokens", () => fixtureResponse(FX.notFound));
     const err = (await app.token(READ).catch((e) => e)) as GitHubAppError;
     expect(err.code).toBe("http");
     expect(gh.seen).toHaveLength(4);
@@ -557,6 +601,22 @@ describe("as a connection auth", () => {
       globalThis.fetch = origFetch;
     }
   });
+});
+
+test("the committed fixtures carry no credential (the token is a placeholder)", () => {
+  expect(FX.accessToken.body.token).toMatch(/^ghs_x+$/);
+  for (const fx of Object.values(FX)) expect(JSON.stringify(fx, null, 2)).not.toMatch(CREDENTIAL);
+});
+
+test("the credential guard catches every GitHub token shape — and only spares the placeholder", () => {
+  // A real-format installation token (the 201 body a mis-permissioned App would
+  // return from the "denied" capture) must be refused, not written.
+  const liveShaped = `ghs_${"Ab3".repeat(128)}q`;
+  expect(JSON.stringify({ token: liveShaped, expires_at: "2026-09-28T13:59:23Z" }, null, 2)).toMatch(CREDENTIAL);
+  for (const leak of ["gho_abcdEFGH1234", "ghu_abcdEFGH1234", "ghp_abcdEFGH1234", "ghr_abcdEFGH1234", "github_pat_11ABC", "eyJhbGciOiJSUzI1NiJ9", "-----BEGIN RSA PRIVATE KEY-----"]) {
+    expect(`"${leak}"`).toMatch(CREDENTIAL);
+  }
+  expect(JSON.stringify({ token: FX.accessToken.body.token }, null, 2)).not.toMatch(CREDENTIAL);
 });
 
 test("src/github.ts stays web-standard (no node:* imports) so it runs on the edge", () => {

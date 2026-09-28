@@ -1,0 +1,9 @@
+{
+  "request": "GET /repos/octocat/Hello-World/installation",
+  "status": 404,
+  "body": {
+    "message": "Not Found",
+    "documentation_url": "https://docs.github.com/rest/apps/apps#get-a-repository-installation-for-the-authenticated-app",
+    "status": "404"
+  }
+}

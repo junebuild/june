@@ -63,9 +63,10 @@ export type GitHubAppConfig = {
 export type GitHubAuth = (ctx?: ActionContext) => Promise<{ token: string }>;
 
 export type GitHubApp = {
-  // A token for one repo with `permissions` (plus, possibly, read-only
-  // `metadata`, which GitHub makes mandatory for any App with repository
-  // access — the grant check only ever compares the names asked for). Cached per
+  // A token for one repo with `permissions`, plus read-only `metadata`: GitHub
+  // makes it mandatory for any App with repository access and grants it on
+  // every token, asked for or not (the grant check only compares the names
+  // asked for). Cached per
   // (owner, repo, permissions) until 5 minutes before it expires; concurrent
   // calls for the same key share one exchange.
   token(req: GitHubTokenRequest): Promise<string>;
