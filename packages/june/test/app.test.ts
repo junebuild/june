@@ -107,8 +107,23 @@ describe("agent discovery surface", () => {
     const txt = await (await get("/llms.txt")).text();
     expect(txt).toContain("# June Basic");
     expect(txt).toContain("`@junejs/core`");
-    expect(txt).toContain("- [/users](/users)");
+    // static routes under "Pages": the static metadata title, linking the .md projection
+    expect(txt).toContain("## Pages");
+    expect(txt).toContain("- [Users](http://june.test/users.md)");
+    expect(txt).toContain("- [June Basic](http://june.test/index.md)"); // "/" → /index.md
+    expect(txt).not.toMatch(/\]\([^)]*\[/); // a dynamic template without `llms` is never linked
     expect(txt).toContain("- tool: createUser");
+  });
+
+  test("every page linked from /llms.txt actually answers (the .md projections exist)", async () => {
+    const txt = await (await get("/llms.txt")).text();
+    const urls = [...txt.matchAll(/\]\((http:\/\/june\.test[^)]+)\)/g)].map((m) => m[1]!);
+    expect(urls.length).toBeGreaterThan(3);
+    for (const u of urls) {
+      const res = await get(new URL(u).pathname);
+      expect(res.status, u).toBe(200);
+      expect(res.headers.get("content-type"), u).toContain("text/markdown");
+    }
   });
 
   test("/sitemap.xml lists static routes and skips the [slug] template", async () => {

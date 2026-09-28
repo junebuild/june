@@ -29,11 +29,37 @@ export function buildLinkHeader(agent: AgentConfig): string | null {
   return links.join(", ");
 }
 
+// One resolved /llms.txt link — what the host hands llmsTxt after reading each
+// route's `llms` declaration (see LlmsEntry in ./route). `url` is absolute and
+// already points at the page's markdown projection where there is one.
+export type LlmsLink = { title: string; url: string; description?: string; section: string; optional: boolean };
+
+// Render links as llmstxt.org file lists: one H2 per section in first-seen order,
+// each link "- [title](url): description", and the "Optional" section — links an
+// agent can skip when context is short — always last.
+function linkSections(links: LlmsLink[]): string[] {
+  const item = (l: LlmsLink) =>
+    `- [${l.title.replace(/[[\]]/g, "\\$&")}](${l.url})${l.description ? `: ${l.description}` : ""}`;
+  const bySection = new Map<string, LlmsLink[]>();
+  for (const l of links.filter((x) => !x.optional)) {
+    if (!bySection.has(l.section)) bySection.set(l.section, []);
+    bySection.get(l.section)!.push(l);
+  }
+  const out: string[] = [];
+  for (const [section, ls] of bySection) out.push("", `## ${section}`, ...ls.map(item));
+  const optional = links.filter((x) => x.optional);
+  if (optional.length) out.push("", "## Optional", ...optional.map(item));
+  return out;
+}
+
 export function llmsTxt(
   origin: string,
   routes: string[],
   agent: AgentConfig,
   site?: { name?: string; description?: string },
+  // The routes' resolved llms.txt links (the host collects them). Absent → the
+  // legacy flat "## Routes" list of static paths, for callers that pass only paths.
+  links?: LlmsLink[],
 ) {
   // Canonical names travel with EVERY June app's llms.txt — the grounding artifact agents fetch
   // first; never let them guess npm names. An app built ON June (e.g. Kura) can override this
@@ -57,11 +83,22 @@ export function llmsTxt(
     "> (`.md`) and JSON (`.json`); actions are MCP tools at `/mcp`.",
     "",
     ...framework,
-    "",
-    "## Routes",
-    ...staticRoutes.map((r) => `- [${r}](${r})`),
-    ...(agent.llms?.sections?.length ? ["", ...agent.llms.sections] : []),
   ];
+  if (links) {
+    // app-authored agent.llms.sections sit with the regular sections, before Optional
+    const sections = linkSections(links);
+    const optionalAt = sections.indexOf("## Optional");
+    const custom = agent.llms?.sections?.length ? ["", ...agent.llms.sections] : [];
+    if (optionalAt < 0) lines.push(...sections, ...custom);
+    else lines.push(...sections.slice(0, optionalAt - 1), ...custom, ...sections.slice(optionalAt - 1));
+  } else {
+    lines.push(
+      "",
+      "## Routes",
+      ...staticRoutes.map((r) => `- [${r}](${r})`),
+      ...(agent.llms?.sections?.length ? ["", ...agent.llms.sections] : []),
+    );
+  }
   if (agent.mcp) {
     lines.push("", "## Tools (MCP)", `- MCP server: ${origin}/mcp`);
     for (const name of toolNames()) lines.push(`- tool: ${name}`);

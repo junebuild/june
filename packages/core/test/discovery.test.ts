@@ -5,6 +5,7 @@ import {
   apiCatalog,
   buildLinkHeader,
   llmsTxt,
+  type LlmsLink,
   mcpServerCard,
   robotsTxt,
   sitemapXml,
@@ -78,6 +79,58 @@ describe("llmsTxt()", () => {
     // webmcp off → no WebMCP stanza (gating mirrors the document injection)
     const off = llmsTxt(ORIGIN, ["/posts"], resolveAgent({ webmcp: false }));
     expect(off).not.toContain("WebMCP");
+  });
+});
+
+describe("llmsTxt() with route links (llmstxt.org sections)", () => {
+  const link = (title: string, section: string, extra: Partial<LlmsLink> = {}): LlmsLink => ({
+    title,
+    url: `${ORIGIN}/${title.toLowerCase()}.md`,
+    section,
+    optional: false,
+    ...extra,
+  });
+
+  test("groups links under H2 sections in first-seen order, each '- [title](url): description'", () => {
+    const txt = llmsTxt(ORIGIN, [], resolveAgent({ mcp: false }), { name: "Docs" }, [
+      link("Intro", "Get started", { description: "Start here." }),
+      link("Auth", "Concepts"),
+      link("Deploy", "Get started"),
+    ]);
+    const body = txt.slice(txt.indexOf("## Get started"));
+    expect(body).toBe(
+      "## Get started\n" +
+        `- [Intro](${ORIGIN}/intro.md): Start here.\n` +
+        `- [Deploy](${ORIGIN}/deploy.md)\n` +
+        "\n## Concepts\n" +
+        `- [Auth](${ORIGIN}/auth.md)\n`,
+    );
+    expect(txt).not.toContain("## Routes"); // the legacy flat list is replaced, not duplicated
+  });
+
+  test('"## Optional" is always last among the link sections, even when seen first', () => {
+    const txt = llmsTxt(ORIGIN, [], resolveAgent({ mcp: false }), undefined, [
+      link("Post", "Blog", { optional: true }),
+      link("Intro", "Docs"),
+    ]);
+    expect(txt.indexOf("## Docs")).toBeLessThan(txt.indexOf("## Optional"));
+    expect(txt).not.toContain("## Blog"); // an optional link is filed under Optional, not its section
+  });
+
+  test("app-authored agent.llms.sections still appear — before Optional (Kura's compat path)", () => {
+    const agent = resolveAgent({ mcp: false, llms: { sections: ["## Custom", "- [x](/x)"] } });
+    const txt = llmsTxt(ORIGIN, [], agent, undefined, [link("Intro", "Docs"), link("Post", "Blog", { optional: true })]);
+    const docs = txt.indexOf("## Docs");
+    const custom = txt.indexOf("## Custom");
+    const optional = txt.indexOf("## Optional");
+    expect(docs).toBeGreaterThan(-1);
+    expect(docs).toBeLessThan(custom);
+    expect(custom).toBeLessThan(optional);
+  });
+
+  test("brackets in a title are escaped so the markdown link stays intact", () => {
+    const txt = llmsTxt(ORIGIN, [], resolveAgent({ mcp: false }), undefined, [link("Use [slug] routes", "Docs")]);
+    expect(txt).toContain("- [Use \\[slug\\] routes](");
   });
 });
 
