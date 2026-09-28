@@ -51,6 +51,7 @@
     "global-turn-ids",
     "heading-ids",
     "isolate-scoped-resources",
+    "llms-sections",
     "model-finish-reason",
     "native-agent-def",
     "native-eviction-review",
