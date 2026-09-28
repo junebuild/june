@@ -299,7 +299,10 @@ email, say, where a follow-up arrives while a draft awaits approval. Pass
 the session's own store (durable across a restart, idempotent per `turnId`,
 `event.raw` stripped) and `start()` returns `{ turnId, queued: true }`. Held turns
 run one at a time, oldest first, once the park resolves; a held turn that parks
-again holds the rest behind it.
+again holds the rest behind it. The parked turn's own redelivery is never held —
+it replays and re-parks as before — and a turn that runs now still goes after
+turns a restart left held. `turn()` does not take `ifSuspended`: a held turn has
+no result to await yet, so use `start()`.
 
 - `hostContext` rides with a held turn and comes back through `session.onDequeue`,
   called as the turn starts — so a host can reattach what the original caller
