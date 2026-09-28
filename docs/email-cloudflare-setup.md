@@ -144,15 +144,18 @@ account), limited to one account and one zone:
 | account | Workers Scripts Write | `e086da7e2179491d91ee5f35b3ca210a` | upload the Worker |
 | account | Email Sending Write | `5df633d6b41c42bcaf5b4a62b9d14b64` | the `send_email` binding and REST `send` / `send_raw`; also reads suppressions |
 | account | Queues Write | `366f57075ffc42689627bcf8242a1b6d` | the delivery-event queue |
-| account | Workers Tail Read | `05880cd1bdc24d8bae0be2136972816b` | `wrangler tail` while testing |
 | account | Account Settings Read | `c1fde68c7bcc44588cbb6ddbc16d6480` | account lookups during deploy |
-| zone | Email Routing Rules Write | `79b3ec0d10ce4148a8f8bdc0cc5f97f2` | wrangler `addresses` creates the Worker's routing rules |
+| zone | Email Routing Rules Write | `79b3ec0d10ce4148a8f8bdc0cc5f97f2` | create the Worker's routing rules through the zone API (step 7) |
 | zone | Zone Read | `c8fed203ed3043cba015a93ad1616f1f` | resolve the zone |
 
 Permission-group ids are global; they were read from
-`GET /accounts/{account}/tokens/permission_groups` on 2026-09-28. No group named for event
-subscriptions exists in that list; whether *Queues Write* covers creating one is checked when
-the delivery-event subscription is first created.
+`GET /accounts/{account}/tokens/permission_groups` on 2026-09-28. No group is named for event
+subscriptions; *Queues Write* with *Email Sending Write* is enough to create one (verified in
+step 8).
+
+`wrangler tail` needs account *Workers Tail Read* (`05880cd1bdc24d8bae0be2136972816b`). Keep
+it out of the long-lived deploy token — it lets whoever holds the token read the Worker's
+logs — and mint a separate short-lived token (`expires_on`) when you need to tail.
 
 As infrastructure as code (Cloudflare provider 5.x, `cloudflare_account_token`). Running it
 needs a token with *Account API Tokens Write*, which can mint any token — keep that bootstrap
@@ -170,7 +173,6 @@ resource "cloudflare_account_token" "agents_deploy" {
         { id = "e086da7e2179491d91ee5f35b3ca210a" }, # Workers Scripts Write
         { id = "5df633d6b41c42bcaf5b4a62b9d14b64" }, # Email Sending Write
         { id = "366f57075ffc42689627bcf8242a1b6d" }, # Queues Write
-        { id = "05880cd1bdc24d8bae0be2136972816b" }, # Workers Tail Read
         { id = "c1fde68c7bcc44588cbb6ddbc16d6480" }, # Account Settings Read
       ]
       resources = jsonencode({ "com.cloudflare.api.account.${var.cloudflare_account_id}" = "*" })
@@ -196,9 +198,9 @@ Without infrastructure as code, the same policies go to
 `POST /accounts/{account}/tokens` as JSON (`resources` as an object rather than an encoded
 string); set `expires_on` for a token meant only for a test window.
 
-Status: **verified 2026-09-28** — a deploy token with exactly these policies was created
-through the API for the test window, then again from the OpenTofu template above
-(`cloudflare_account_token`); the IaC-made one deployed the probe Worker, reads and writes
+Status: **verified 2026-09-28** — a deploy token with these policies, plus *Workers Tail Read*
+(since moved to its own token, above), was created through the API for the test window, then
+again from the OpenTofu template above (`cloudflare_account_token`); the IaC-made one deployed the probe Worker, reads and writes
 routing rules and queues, and is refused on DNS records and on token management.
 
 ## 7. Wrangler configuration and routing rules
