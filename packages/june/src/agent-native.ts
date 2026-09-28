@@ -9,6 +9,7 @@
 
 import {
   AgentSession,
+  grantAnswer,
   withSystem,
   type ChannelPolicy,
   type EventSink,
@@ -363,7 +364,10 @@ export function mountAgent(
     // HITL: answer a parked turn and stream its continuation (the approval-button path).
     resumeStream: async function* (o) {
       const session = runtime.session(agent.name, o.session ?? "default");
-      const { turnId } = session.resume(o.turnId, o.inputId, o.input, { by: o.by });
+      // A { policy } answerer is the app's call (#261): decided here, before the synchronous
+      // resume, so resume-then-subscribe stays free of awaits.
+      const granted = await grantAnswer(session, o, agent.authorizeAnswer);
+      const { turnId } = session.resume(o.turnId, o.inputId, o.input, { by: o.by, granted });
       yield* observeTurnEvents(session, turnId);
     },
     // SESSION RESET (#129): same seam as durableChannelSurface — the in-process runtimes'

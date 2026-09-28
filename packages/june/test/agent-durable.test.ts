@@ -243,6 +243,44 @@ describe("AgentDurableObject", () => {
     expect(r.at(-1)).toMatchObject({ type: "turn.completed", text: "done" }); // resumed to completion
   });
 
+  test("/resume decides a { policy } answerer with the def's authorizeAnswer, in the request scope (#261)", async () => {
+    const s = await storage();
+    const approve: Tool = {
+      spec: { name: "approve", description: "ask an operator", input: { type: "object" } },
+      run: async (_i, ctx) => ({ approved: await ctx.requestInput({ id: "a1", prompt: "Send?", answerers: { policy: "mailbox-operator", scope: { agent: "scout" } } }) }),
+    };
+    const model = scriptedModel([
+      { text: "drafting", toolCalls: [{ id: "c1", name: "approve", input: {} }] },
+      { text: "sent", toolCalls: [] },
+    ]);
+    const seenServices: unknown[] = [];
+    const agent = new AgentDurableObject({ storage: s }, {
+      name: "scout",
+      model,
+      tools: [approve],
+      services: { operators: ["ops-1"] },
+      authorizeAnswer: (a) => {
+        const services = currentServices() as { operators: string[] };
+        seenServices.push(services);
+        return services.operators.includes(a.principal?.id ?? "");
+      },
+    });
+    const post = (path: string, body: unknown) => agent.fetch(new Request(`https://do${path}`, { method: "POST", body: JSON.stringify(body) }));
+
+    // an email turn: the speaker is not attested, so only the tool's policy can answer
+    const event = { source: "email", kind: "message", channelId: "scout", ts: "m1", user: { id: "customer@example.com" } };
+    for await (const _ of sseTurnEvents(await post("/turn", { userText: "refund me", turnId: "t1", event }))) { /* drain to the park */ }
+
+    expect((await post("/resume", { turnId: "t1", inputId: "a1", input: true, by: "customer@example.com" })).status).toBe(403); // the correspondent
+    expect((await post("/resume", { turnId: "t1", inputId: "a1", input: true, principal: { id: "someone" } })).status).toBe(403); // refused by the rule
+
+    const ok = await post("/resume", { turnId: "t1", inputId: "a1", input: true, principal: { id: "ops-1" } });
+    const events: TurnEvent[] = [];
+    for await (const e of sseTurnEvents(ok)) events.push(e);
+    expect(events.at(-1)).toMatchObject({ type: "turn.completed", text: "sent" });
+    expect(seenServices).toEqual([{ operators: ["ops-1"] }, { operators: ["ops-1"] }, { operators: ["ops-1"] }]); // hook ran in scope
+  });
+
   test("/resume and /turn map suspension conflicts to 4xx, not a crash (P3)", async () => {
     const s = await storage();
     const approve: Tool = {

@@ -17,8 +17,10 @@
 
 import {
   AgentSession,
+  grantAnswer,
   ResumeAuthorizationError,
   withSystem,
+  type AuthorizeAnswer,
   type ChannelPolicy,
   type EventSink,
   type TurnEvent,
@@ -32,6 +34,7 @@ import {
   type TurnError,
   type TurnFailurePhase,
 } from "@junejs/core/agent-runtime";
+import type { Principal } from "@junejs/core/context";
 import type { Resources } from "@junejs/core/resources";
 import { observeTurnEvents } from "./turn-events";
 import {
@@ -238,6 +241,9 @@ export type DoAgentDef = {
   // emitted mid-turn and ALS propagates), but that is NOT contract — don't rely on
   // ambient db/services; close over what you need.
   onTurnError?: (failure: { turnId: string; error: TurnError; phase?: TurnFailurePhase; step?: string }) => void | Promise<void>;
+  // Decides a { policy } answerer of a parked requestInput at /resume (#261) — the same hook
+  // an AgentDefinition carries natively; assembleDurable passes agent.ts's through.
+  authorizeAnswer?: AuthorizeAnswer;
 };
 
 // The agent runtime INSIDE a Durable Object. A plain class (constructor takes the
@@ -280,6 +286,7 @@ export class AgentDurableObject {
   private connectionsOpened: Promise<void> | undefined;
   private readonly doEnv: unknown;
   private readonly services: unknown;
+  private readonly authorizeAnswer?: AuthorizeAnswer;
   private resolveResources(): Promise<Resources> {
     return (this.resourcesOpened ??= Promise.resolve(
       typeof this.resourcesInput === "function" ? this.resourcesInput(this.doEnv) : (this.resourcesInput ?? {}),
@@ -321,6 +328,7 @@ export class AgentDurableObject {
     this.connectionsInput = def.connections;
     this.doEnv = def.env;
     this.services = def.services;
+    this.authorizeAnswer = def.authorizeAnswer;
     const name = def.name ?? "agent";
     // Failure observability (#76): a turn that dies after the fast-ACK has no other
     // observable surface on the edge — the webhook already 200'd and runBackground
@@ -564,8 +572,8 @@ export class AgentDurableObject {
     // VERIFIED identity, so the app must authenticate it upstream (e.g. take the user id from a
     // signature-checked Slack interaction payload), never expose this endpoint raw to clients.
     if (req.method === "POST" && url.pathname.endsWith("/resume")) {
-      const { turnId, inputId, input, by, source, target } = (await req.json()) as {
-        turnId: string; inputId: string; input: unknown; by?: string;
+      const { turnId, inputId, input, by, principal, source, target } = (await req.json()) as {
+        turnId: string; inputId: string; input: unknown; by?: string; principal?: Principal;
         source?: string; target?: ResumeDeliveryTarget;
       };
       await ensureScope();
@@ -595,7 +603,11 @@ export class AgentDurableObject {
       let session: AgentSession;
       try {
         session = this.resolveSession(key);
-        runInScope({ resources, services: this.services }, () => session.resume(turnId, inputId, input, { by }));
+        // A { policy } answerer is the app's call (#261), made before the synchronous
+        // resume-then-subscribe section and inside the request scope (the hook may read the db).
+        const granted = await runInScope({ resources, services: this.services }, () =>
+          grantAnswer(session, { turnId, inputId, by, principal }, this.authorizeAnswer));
+        runInScope({ resources, services: this.services }, () => session.resume(turnId, inputId, input, { by, granted }));
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         // 403: the resumer may not answer; 409: not suspended / wrong turn / wrong input id / key mismatch
@@ -1046,9 +1058,9 @@ export function durableChannelSurface(
 // (third-party) host could hand us something JSON.stringify chokes on (BigInt, circular).
 // Unlike serializeTurn's `raw`, `input` is essential: silently dropping it would resume the
 // turn with the wrong answer. So fail loudly with a clear message rather than corrupt the resume.
-function serializeResume(o: { turnId: string; inputId: string; input: unknown; by?: string; source?: string; target?: ResumeDeliveryTarget }): string {
+function serializeResume(o: { turnId: string; inputId: string; input: unknown; by?: string; principal?: Principal; source?: string; target?: ResumeDeliveryTarget }): string {
   try {
-    return JSON.stringify({ turnId: o.turnId, inputId: o.inputId, input: o.input, by: o.by, source: o.source, target: o.target });
+    return JSON.stringify({ turnId: o.turnId, inputId: o.inputId, input: o.input, by: o.by, principal: o.principal, source: o.source, target: o.target });
   } catch (err) {
     // API-neutral prefix: this serializer backs both resumeStream and resumeDelivered.
     throw new Error(`resume: input is not JSON-serializable (${(err as Error).message}) — a resume answer must round-trip to the DO`);

@@ -7,7 +7,8 @@
 // this module is the pure config layer it produces.
 
 import type { AnyAction } from "./agent";
-import type { ChannelPolicy, InboundEvent, ProactiveTrigger, Tool, ToolContext, ToolSpec, TurnEvent } from "./agent-runtime";
+import type { AuthorizeAnswer, ChannelPolicy, InboundEvent, ProactiveTrigger, Tool, ToolContext, ToolSpec, TurnEvent } from "./agent-runtime";
+import type { Principal } from "./context";
 import { connectAll, type Connection, type ConnectionReport } from "./connections";
 
 export type { ChannelPolicy } from "./agent-runtime";
@@ -99,9 +100,11 @@ export type ChannelContext = {
   // Resume a turn that was parked by ctx.requestInput (HITL): provide the answer and get the
   // continuation's TurnEvent stream, so a channel can render the resumed turn to completion.
   // `by` is the VERIFIED resumer identity (e.g. the user id from a signature-checked Slack
-  // interaction) — the engine enforces it against the request's answererId. Optional, like
-  // runStream: provided by the edge Durable Object and the native mountAgent.
-  resumeStream?: (opts: { session?: string; turnId: string; inputId: string; input: unknown; by?: string }) => AsyncIterable<TurnEvent>;
+  // interaction) — the engine enforces it against the request's answerers. `principal` is the
+  // resumer's app identity when the calling surface resolved one; the host hands it to the
+  // agent's authorizeAnswer for a { policy } answerer (#261). Optional, like runStream:
+  // provided by the edge Durable Object and the native mountAgent.
+  resumeStream?: (opts: { session?: string; turnId: string; inputId: string; input: unknown; by?: string; principal?: Principal }) => AsyncIterable<TurnEvent>;
   // DELIVERED resume (the reply-bearing sibling of resumeStream, mirroring runDelivered):
   // apply the human's answer and have the TURN'S HOST render the continuation through the
   // channel's own deliverResume() — 202 on acceptance, nothing held open, so a long
@@ -111,7 +114,7 @@ export type ChannelContext = {
   // DeliverUnsupportedError BEFORE applying the input (safe to fall back to resumeStream
   // without double-answering); an engine rejection (unauthorized clicker, stale/double
   // click) surfaces as an ordinary error exactly as resumeStream's first pull would.
-  resumeDelivered?: (opts: { session?: string; turnId: string; inputId: string; input: unknown; by?: string; source: string; target: ResumeDeliveryTarget }) => Promise<{ turnId: string }>;
+  resumeDelivered?: (opts: { session?: string; turnId: string; inputId: string; input: unknown; by?: string; principal?: Principal; source: string; target: ResumeDeliveryTarget }) => Promise<{ turnId: string }>;
   // SESSION RESET (#129): terminally retire a session's accumulated history — unfinished
   // turns are superseded, then messages/steps/status are ARCHIVED under the session's
   // current generation and the live state starts fresh (empty transcript, no initiator,
@@ -312,6 +315,9 @@ export type AgentConfigFile = {
   // Per-surface mechanics (#149): keyed by inbound event source; composes with
   // the discovered instructions.<source>.md variants. See SurfaceConfig.
   surfaces?: Record<string, SurfaceConfig>;
+  // Decides a { policy } answerer of a parked requestInput at resume time (#261) — e.g.
+  // "is this principal an operator of mailbox scout". See AuthorizeAnswer.
+  authorizeAnswer?: AuthorizeAnswer;
 };
 
 // A fully-assembled agent, ready to mount on a runtime (tools already adapted).
@@ -333,6 +339,8 @@ export type AgentDefinition = {
   channelInstructions?: Record<string, string | ChannelPolicy>;
   // report of external connections wired in (their tools are already in `tools`)
   connections: ConnectionReport[];
+  // The app's rule for { policy } answerers (#261); hosts evaluate it before a resume.
+  authorizeAnswer?: AuthorizeAnswer;
 };
 
 // Bridge a `defineAction` into a runtime Tool. The action's run(input, ctx)
@@ -410,6 +418,7 @@ export function defineAgent(config: {
   surfaceInstructions?: Record<string, string>;
   channelInstructions?: Record<string, string | ChannelPolicy>;
   connections?: ConnectionReport[];
+  authorizeAnswer?: AuthorizeAnswer;
 }): AgentDefinition {
   const skills = config.skills ?? [];
   const channels = config.channels ?? [];
@@ -449,6 +458,7 @@ export function defineAgent(config: {
       channelNames: channels.map((c) => c.name),
     }),
     connections: config.connections ?? [],
+    authorizeAnswer: config.authorizeAnswer,
   };
 }
 
@@ -546,6 +556,7 @@ export async function assembleAgent(mod: AgentModule, env?: unknown): Promise<Ag
     surfaceInstructions: mod.surfaceInstructions,
     channelInstructions: Object.keys(mod.channelInstructions).length ? mod.channelInstructions : undefined,
     connections: report,
+    authorizeAnswer: mod.config.authorizeAnswer,
   });
 }
 
@@ -570,6 +581,7 @@ export function assembleDurable(mod: AgentModule): {
   channelInstructions?: Record<string, string | ChannelPolicy>;
   channels: (Channel | ChannelFactory)[];
   connections: Connection[];
+  authorizeAnswer?: AuthorizeAnswer;
 } {
   const tools: Tool[] = flattenTools(mod.tools).map((t) => (isTool(t) ? t : actionToTool(t)));
   if (mod.skills.length) tools.push(readSkillTool(mod.skills));
@@ -600,5 +612,6 @@ export function assembleDurable(mod: AgentModule): {
     ...(policies ? { channelInstructions: policies } : {}),
     channels: Object.values(mod.channels),
     connections: mod.connections,
+    ...(mod.config.authorizeAnswer ? { authorizeAnswer: mod.config.authorizeAnswer } : {}),
   };
 }

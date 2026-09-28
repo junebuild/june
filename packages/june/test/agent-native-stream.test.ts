@@ -73,6 +73,38 @@ describe("native mountAgent streaming (#169)", () => {
     expect(rt.session("ops", "s1").transcript()[0]!.steps).toEqual([{ name: "approve", done: true, result: { approved: true } }]);
   });
 
+  test("ctx.resumeStream decides a { policy } answerer through the agent's authorizeAnswer (#261)", async () => {
+    const operatorApproval: Tool = {
+      spec: { name: "approve", description: "", input: { type: "object" } },
+      run: async (_input, ctx) => ({ approved: await ctx.requestInput({ id: "a1", prompt: "Send?", answerers: { policy: "mailbox-operator", scope: { agent: "scout" } } }) }),
+    };
+    const asked: unknown[] = [];
+    const agent = defineAgent({
+      name: "scout",
+      instructions: "",
+      authorizeAnswer: (a) => (asked.push({ policy: a.policy, scope: a.scope, principal: a.principal }), a.principal?.id === "ops-1"),
+    });
+    const rt = await createNativeRuntime({ scout: { model: model({ approve: true }), tools: [operatorApproval] } });
+    const { ctx } = mountAgent(agent, rt);
+    const email = { source: "email", kind: "message" as const, channelId: "scout", ts: "m1", user: { id: "customer@example.com" } };
+
+    const parked = await collect(ctx.runStream!("refund me", { session: "s1", event: email }));
+    const requested = parked.at(-1)!;
+    expect(requested).toMatchObject({ type: "input.requested", request: { answerers: { policy: "mailbox-operator" } } });
+
+    // the correspondent, and a principal the rule refuses, cannot answer
+    await expect(collect(ctx.resumeStream!({ session: "s1", turnId: requested.turnId, inputId: "a1", input: true, by: "customer@example.com" }))).rejects.toThrow(/not authorized/);
+    await expect(collect(ctx.resumeStream!({ session: "s1", turnId: requested.turnId, inputId: "a1", input: true, principal: { id: "someone" } }))).rejects.toThrow(/not authorized/);
+
+    const resumed = await collect(ctx.resumeStream!({ session: "s1", turnId: requested.turnId, inputId: "a1", input: true, principal: { id: "ops-1" } }));
+    expect(resumed.at(-1)).toMatchObject({ type: "turn.completed" });
+    expect(asked).toEqual([
+      { policy: "mailbox-operator", scope: { agent: "scout" }, principal: undefined },
+      { policy: "mailbox-operator", scope: { agent: "scout" }, principal: { id: "someone" } },
+      { policy: "mailbox-operator", scope: { agent: "scout" }, principal: { id: "ops-1" } },
+    ]);
+  });
+
   test("a refused start surfaces on the first pull, not as a hung stream", async () => {
     const agent = defineAgent({ name: "ops", instructions: "" });
     const rt = await createNativeRuntime({ ops: { model: model({ approve: true }), tools: [approveTool] } });
