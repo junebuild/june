@@ -1119,6 +1119,15 @@ describe("AgentDurableObject — delivered turns", () => {
       expect(((await streaming.json()) as { error: string }).error).toContain("needs deliver=1 or detach=1");
     });
 
+    test("queue with replace=1 is a 400: replacing would drop accepted held turns", async () => {
+      const { channel } = recordingChannel();
+      const agent = new AgentDurableObject({ storage: await storage() }, { name: "ops", model: script(), tools: [approve], channels: [channel] });
+      await park(agent);
+      const res = await post(agent, "/turn?deliver=1&replace=1", { userText: "x", turnId: "t2", event: followUp, ifSuspended: "queue" });
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: string }).error).toContain("cannot be combined");
+    });
+
     test("a held turn survives eviction: the rebuilt object renders it after the resume", async () => {
       const s = await storage();
       const first = recordingChannel();

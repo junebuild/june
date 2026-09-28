@@ -953,6 +953,11 @@ export class AgentSession {
   // Durable Object this is blockConcurrencyWhile; here it's a promise chain.)
   start(input: TurnInput): { turnId: string; queued?: true } {
     const turnId = input.turnId ?? mintTurnId();
+    // `replace` supersedes unfinished turns; for held turns that would mean silently dropping
+    // messages someone sent and was told were accepted. The combination is refused.
+    if (input.ifSuspended === "queue" && input.replace) {
+      throw new Error(`start(): ifSuspended "queue" and replace cannot be combined — replacing would drop held turns that were accepted`);
+    }
     // HOLD (#263): against a parked session — or behind turns already held, so arrival order
     // holds — an inbound turn that asked to queue is recorded durably instead of rejected.
     // Never the parked turn itself: its redelivery replays and re-parks, as it always has
@@ -1077,7 +1082,12 @@ export class AgentSession {
     // that throws (a store error) must not become an unhandled rejection of this bookkeeping.
     const settle = () => {
       clear();
-      try { this.drain(); } catch (err) { console.error(`[june] agent "${this.agent}" session "${this.id}": starting a held turn failed:`, err); }
+      try {
+        this.release(turnId);
+        this.drain();
+      } catch (err) {
+        console.error(`[june] agent "${this.agent}" session "${this.id}": starting a held turn failed:`, err);
+      }
     };
     p.then(settle, settle);
   }
@@ -1169,17 +1179,30 @@ export class AgentSession {
   // settles (track), because a turn that parks again must hold everything behind it. Hosts
   // call it after rebuilding a session (a restart between a park resolving and its held turns
   // starting leaves them in the store); every other drain is automatic.
+  // The entry stays held while its turn runs and is released only when the turn settles
+  // (release) — so a crash anywhere in between leaves it held, and the next drain starts the
+  // same turnId again, which replays from its checkpoints (an opening already recorded is not
+  // recorded twice). Removing it here instead would lose the turn on a crash before its
+  // opening is committed.
   drain(): { turnId: string } | undefined {
     if (this.pendingReset || this.store.getStatus() === "suspended" || this.running.size > 0) return undefined;
-    const [head, ...rest] = this.heldTurns();
+    const [head] = this.heldTurns();
     if (!head) return undefined;
+    const started = this.begin(head.turnId, { turnId: head.turnId, userText: head.userText, event: head.event, trigger: head.trigger });
+    this.onDequeue?.(started.turnId, head);
+    return started;
+  }
+
+  // A held turn is released when its turn settles — completed, failed, cancelled, or parked
+  // (the park then owns it; resume continues it). A no-op for turns that were never held.
+  private release(turnId: string): void {
+    const held = this.heldTurns();
+    if (!held.some((q) => q.turnId === turnId)) return;
+    const rest = held.filter((q) => q.turnId !== turnId);
     this.store.tx(() => {
       this.store.delStep(INBOUND_QUEUE);
       if (rest.length) this.store.putStep(INBOUND_QUEUE, rest);
     });
-    const started = this.begin(head.turnId, { turnId: head.turnId, userText: head.userText, event: head.event, trigger: head.trigger });
-    this.onDequeue?.(started.turnId, head);
-    return started;
   }
 
   // The turn this session is parked on, if any.
@@ -1189,11 +1212,12 @@ export class AgentSession {
   }
 
   // Record an inbound turn durably (#263). Idempotent per turnId, like any inbound delivery:
-  // a redelivered event that is already held is not held twice. putStep is insert-only, so
-  // the list is replaced (delete + put) inside one transaction.
+  // a redelivery is not held again if the turn is already held OR has already started here (its
+  // opening is in the log) — re-running a turn that already ran would render another turn's
+  // tail as its reply. putStep is insert-only, so the list is replaced (delete + put) in a tx.
   private hold(turnId: string, input: TurnInput): void {
     const held = this.heldTurns();
-    if (held.some((q) => q.turnId === turnId)) return;
+    if (held.some((q) => q.turnId === turnId) || this.store.hasOpeningMessage(turnId)) return;
     const event = input.event ? { ...input.event, raw: undefined } : undefined;
     const entry: QueuedTurn = { turnId, userText: input.userText, event, trigger: input.trigger, hostContext: input.hostContext, queuedAt: new Date().toISOString() };
     this.store.tx(() => {

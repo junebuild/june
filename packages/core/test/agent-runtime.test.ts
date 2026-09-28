@@ -1275,8 +1275,8 @@ describe("suspend / resume (P3 — HITL)", () => {
       store.tx(() => { store.delStep("suspended"); store.setStatus("completed"); });
       const after = new AgentSession("ops", "s1", store, new MemBroadcaster(), scriptedModel([...QUEUE_SCRIPT.slice(0, 2), { text: "(t2 via t1's slot)", toolCalls: [] }, { text: "Got your follow-up.", toolCalls: [] }, { text: "Got your third message.", toolCalls: [] }]), [approveTool()], noRuntime);
       expect(after.start({ turnId: "t3", userText: "third", event: followUp("m3"), ifSuspended: "queue" })).toEqual({ turnId: "t3", queued: true });
-      // start() drained the head (t2) as it held t3, so t3 is the only one left
-      expect(after.heldTurns().map((q) => q.turnId)).toEqual(["t3"]);
+      // start() drained the head (t2) as it held t3; t2 stays held while it runs (crash safety)
+      expect(after.heldTurns().map((q) => q.turnId)).toEqual(["t2", "t3"]);
       await after.result("t2");
       expect(await after.result("t3")).toMatchObject({ status: "completed" });
       expect(after.heldTurns()).toEqual([]);
@@ -1376,6 +1376,56 @@ describe("suspend / resume (P3 — HITL)", () => {
       const s = await parked();
       const asked = { turnId: "t2", userText: "any news?", event: followUp("m2"), ifSuspended: "queue" as const };
       await expect(s.turn(asked as Parameters<AgentSession["turn"]>[0])).rejects.toThrow(/turn t2 was held, not run — use start\(\)/);
+    });
+
+    test("a held turn stays held until it settles: a crash mid-turn replays it once, it is not lost", async () => {
+      const store = memStore().store;
+      const s = await parked(store);
+      s.start({ turnId: "t2", userText: "any news?", event: followUp("m2"), ifSuspended: "queue" });
+      store.tx(() => { store.delStep("suspended"); store.setStatus("completed"); });
+
+      // this life starts t2, records its opening, then hangs in the model call — and dies there
+      const hung: Model = () => (async function* (): AsyncGenerator<ModelDelta> { await new Promise(() => {}); })();
+      const doomed = new AgentSession("ops", "s1", store, new MemBroadcaster(), hung, [approveTool()], noRuntime);
+      expect(doomed.drain()).toEqual({ turnId: "t2" });
+      expect(store.hasOpeningMessage("t2")).toBe(false); // not yet: a crash here must not lose it…
+      expect(doomed.heldTurns().map((q) => q.turnId)).toEqual(["t2"]); // …and it is still held
+      await new Promise((r) => setTimeout(r, 0));
+      expect(store.hasOpeningMessage("t2")).toBe(true);
+      expect(doomed.heldTurns().map((q) => q.turnId)).toEqual(["t2"]);
+
+      const next = new AgentSession("ops", "s1", store, new MemBroadcaster(), scriptedModel([QUEUE_SCRIPT[0]!, { text: "Got your follow-up.", toolCalls: [] }]), [approveTool()], noRuntime);
+      expect(next.drain()).toEqual({ turnId: "t2" });
+      expect(await next.result("t2")).toMatchObject({ status: "completed", text: "Got your follow-up." });
+      expect(next.heldTurns()).toEqual([]);
+      expect(store.messages().filter((m) => m.turnId === "t2" && m.role === "user")).toHaveLength(1); // opened once
+    });
+
+    test("a redelivery of a held turn that already ran is not held again during a later park", async () => {
+      const script: ModelReply[] = [
+        { text: "Let me check.", toolCalls: [{ id: "c1", name: "approve", input: {} }] },
+        { text: "Approved — refund sent.", toolCalls: [] },
+        { text: "Got your follow-up.", toolCalls: [] },
+        { text: "Another approval.", toolCalls: [{ id: "c3", name: "approve", input: {} }] }, // t3 parks
+      ];
+      const s = await parked(memStore().store, script);
+      s.start({ turnId: "t2", userText: "any news?", event: followUp("m2"), ifSuspended: "queue" });
+      s.resume("t1", "approve-1", true, { by: "U1" });
+      await s.result("t1");
+      expect(await s.result("t2")).toMatchObject({ status: "completed" });
+
+      s.start({ turnId: "t3", userText: "refund again", event: { ...slackEvent, ts: "1.3" } });
+      expect(await s.result("t3")).toMatchObject({ status: "suspended" }); // a later park
+      // the webhook retries t2, which already ran: acknowledged, but not held to run again
+      expect(s.start({ turnId: "t2", userText: "any news?", event: followUp("m2"), ifSuspended: "queue" })).toEqual({ turnId: "t2", queued: true });
+      expect(s.heldTurns()).toEqual([]);
+      expect(s.pending()).toMatchObject({ turnId: "t3", queued: 0 });
+    });
+
+    test("ifSuspended queue with replace is refused — replacing would drop accepted held turns", async () => {
+      const s = await parked();
+      expect(() => s.start({ turnId: "t2", userText: "x", event: followUp("m2"), ifSuspended: "queue", replace: true })).toThrow(/cannot be combined/);
+      expect(s.heldTurns()).toEqual([]);
     });
 
     test("with nothing parked and nothing held, a queue-asking turn simply runs", async () => {
