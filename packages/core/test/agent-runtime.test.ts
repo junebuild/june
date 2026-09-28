@@ -6,6 +6,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   AgentSession,
+  grantAnswer,
   replyStream,
   mintTurnId,
   serializeTurnError,
@@ -21,6 +22,8 @@ import {
   type ModelFinish,
   type SessionStore,
   type Tool,
+  type Answerers,
+  type AuthorizeAnswer,
 } from "@junejs/core/agent-runtime";
 
 // ── an in-memory SessionStore (pure). `app` is the side-effect target a local
@@ -1061,7 +1064,7 @@ describe("TurnEvent stream (P1)", () => {
       { text: "Approved.", toolCalls: [] },
     ];
     const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), scriptedModel(script), [approve], noRuntime);
-    s.start({ turnId: "t1", userText: "refund please", event: { source: "slack", kind: "message", channelId: "C1", ts: "1.1", user: { id: "U1" }, raw: {} } });
+    s.start({ turnId: "t1", userText: "refund please", event: { source: "slack", kind: "message", channelId: "C1", ts: "1.1", user: { id: "U1", attested: true }, raw: {} } });
     expect(await s.result("t1")).toMatchObject({ status: "suspended" });
 
     const replayed: TurnEvent[] = [];
@@ -1095,7 +1098,7 @@ describe("suspend / resume (P3 — HITL)", () => {
     { text: "Let me check.", toolCalls: [{ id: "c1", name: "approve", input: {} }] },
     { text: "Approved — refund sent.", toolCalls: [] },
   ];
-  const slackEvent = { source: "slack", kind: "message" as const, channelId: "C1", ts: "1.1", user: { id: "U1" }, raw: {} };
+  const slackEvent = { source: "slack", kind: "message" as const, channelId: "C1", ts: "1.1", user: { id: "U1", attested: true }, raw: {} };
 
   test("a tool suspends the turn for input, then resume() runs it to completion", async () => {
     const modelCalls = { n: 0 };
@@ -1104,7 +1107,7 @@ describe("suspend / resume (P3 — HITL)", () => {
     s.observe((e) => events.push(e));
 
     const { turnId } = s.start({ turnId: "t1", userText: "refund please", event: slackEvent });
-    expect(await s.result(turnId)).toEqual({ status: "suspended", request: { id: "approve-1", prompt: "Approve the refund?", answererId: "U1" } });
+    expect(await s.result(turnId)).toEqual({ status: "suspended", request: { id: "approve-1", prompt: "Approve the refund?", answerers: { user: "U1" } } });
     expect(events.at(-1)).toMatchObject({ type: "input.requested", request: { id: "approve-1" } });
     const asked = modelCalls.n; // the model was asked once (the tool-call step)
 
@@ -1122,13 +1125,13 @@ describe("suspend / resume (P3 — HITL)", () => {
       spec: { name: "approve", description: "ask a manager to approve", input: { type: "object" } },
       run: async (_input, ctx) => {
         principals.push(ctx.principal);
-        return { approved: await ctx.requestInput({ id: "approve-1", prompt: "Refund?", answererId: "U-maya" }) };
+        return { approved: await ctx.requestInput({ id: "approve-1", prompt: "Refund?", answerers: { user: "U-maya" } }) };
       },
     };
     const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), scriptedModel(APPROVE_SCRIPT), [managerApproval], noRuntime);
-    const fromDana = { ...slackEvent, user: { id: "U-dana" }, principal: { id: "dana" } };
+    const fromDana = { ...slackEvent, user: { id: "U-dana", attested: true }, principal: { id: "dana" } };
     const { turnId } = s.start({ turnId: "t1", userText: "refund please", event: fromDana });
-    expect(await s.result(turnId)).toMatchObject({ status: "suspended", request: { answererId: "U-maya" } });
+    expect(await s.result(turnId)).toMatchObject({ status: "suspended", request: { answerers: { user: "U-maya" } } });
 
     expect(() => s.resume(turnId, "approve-1", true, { by: "U-dana" })).toThrow(/not authorized/); // the sender can't self-approve
     s.resume(turnId, "approve-1", true, { by: "U-maya" });
@@ -1137,10 +1140,10 @@ describe("suspend / resume (P3 — HITL)", () => {
     expect(principals).toEqual([{ id: "dana" }, { id: "dana" }]);
   });
 
-  test("resume enforces the answererId (defaults to the trigger user; absent `by` is denied)", async () => {
+  test("resume enforces a { user } answerer (defaults to the attested trigger user; absent `by` is denied)", async () => {
     const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), scriptedModel(APPROVE_SCRIPT), [approveTool()], noRuntime);
     const { turnId } = s.start({ turnId: "t1", userText: "refund please", event: slackEvent });
-    await s.result(turnId); // suspended, answererId = U1
+    await s.result(turnId); // suspended, answerers = { user: "U1" }
 
     expect(() => s.resume(turnId, "approve-1", true, { by: "U2" })).toThrow(/not authorized/);
     expect(() => s.resume(turnId, "approve-1", true)).toThrow(/not authorized/); // default-deny: no verified resumer
@@ -1148,10 +1151,71 @@ describe("suspend / resume (P3 — HITL)", () => {
     expect(await s.result(turnId)).toMatchObject({ status: "completed" });
   });
 
+  // #261 — who may answer when the speaker is not attested (an email From: anyone can forge).
+  const emailEvent = { source: "email", kind: "message" as const, channelId: "scout", ts: "m1", user: { id: "customer@example.com" }, raw: {} };
+  function operatorApproval(answerers?: Answerers): Tool {
+    return {
+      spec: { name: "approve", description: "ask an operator to approve the send", input: { type: "object" } },
+      run: async (_input, ctx) => ({ approved: await ctx.requestInput({ id: "approve-1", prompt: "Send the reply?", ...(answerers ? { answerers } : {}) }) }),
+    };
+  }
+
+  test("an unattested speaker is never the default answerer: the park is refused, loudly", async () => {
+    const s = new AgentSession("scout", "s1", memStore().store, new MemBroadcaster(), scriptedModel(APPROVE_SCRIPT), [operatorApproval()], noRuntime);
+    const { turnId } = s.start({ turnId: "t1", userText: "please refund me", event: emailEvent });
+    const result = await s.result(turnId);
+    expect(result.status).not.toBe("suspended");
+    expect(JSON.stringify(result)).toContain("is not attested by its channel");
+    expect(s.pending()).toBeUndefined();
+  });
+
+  test("a { policy } answerer needs the host's grant; `by` alone never answers it", async () => {
+    const policy: Answerers = { policy: "mailbox-operator", scope: { agent: "scout" } };
+    const s = new AgentSession("scout", "s1", memStore().store, new MemBroadcaster(), scriptedModel(APPROVE_SCRIPT), [operatorApproval(policy)], noRuntime);
+    const { turnId } = s.start({ turnId: "t1", userText: "please refund me", event: emailEvent });
+    expect(await s.result(turnId)).toMatchObject({ status: "suspended", request: { answerers: policy } });
+    expect(s.pending()).toMatchObject({ turnId, request: { id: "approve-1", answerers: policy } });
+
+    expect(() => s.resume(turnId, "approve-1", true)).toThrow(/not authorized/);
+    expect(() => s.resume(turnId, "approve-1", true, { by: "customer@example.com" })).toThrow(/not authorized/); // the correspondent
+    expect(() => s.resume(turnId, "approve-1", true, { by: "ops", granted: { policy: "mailbox-operator", scope: { agent: "other" } } })).toThrow(/not authorized/);
+
+    const seen: unknown[] = [];
+    const refuse: AuthorizeAnswer = (a) => (seen.push(a), false);
+    expect(await grantAnswer(s, { turnId, inputId: "approve-1", by: "U-ops" }, refuse)).toBeUndefined();
+    expect(await grantAnswer(s, { turnId, inputId: "approve-1", by: "U-ops" }, undefined)).toBeUndefined(); // no hook → no grant
+    expect(seen).toEqual([{ policy: "mailbox-operator", scope: { agent: "scout" }, by: "U-ops", principal: undefined, agent: "scout", session: "s1", request: { id: "approve-1", prompt: "Send the reply?", answerers: policy } }]);
+
+    const operator = { id: "ops-1" };
+    const allow: AuthorizeAnswer = async (a) => a.policy === "mailbox-operator" && a.principal?.id === "ops-1";
+    const granted = await grantAnswer(s, { turnId, inputId: "approve-1", principal: operator }, allow);
+    expect(granted).toEqual(policy);
+    s.resume(turnId, "approve-1", true, { granted });
+    expect(await s.result(turnId)).toMatchObject({ status: "completed" });
+    expect(s.pending()).toBeUndefined();
+  });
+
+  test("a grant matches its policy by value, not by key order", async () => {
+    const s = new AgentSession("scout", "s1", memStore().store, new MemBroadcaster(), scriptedModel(APPROVE_SCRIPT), [operatorApproval({ policy: "tenant-admin", scope: { tenant: "t1", region: "eu" } })], noRuntime);
+    const { turnId } = s.start({ turnId: "t1", userText: "x", event: emailEvent });
+    await s.result(turnId);
+    s.resume(turnId, "approve-1", true, { granted: { scope: { region: "eu", tenant: "t1" }, policy: "tenant-admin" } });
+    expect(await s.result(turnId)).toMatchObject({ status: "completed" });
+  });
+
+  test("a grant does not answer a { user } answerer, and grantAnswer grants only the parked input", async () => {
+    const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), scriptedModel(APPROVE_SCRIPT), [approveTool()], noRuntime);
+    const { turnId } = s.start({ turnId: "t1", userText: "refund please", event: slackEvent });
+    await s.result(turnId); // answerers = { user: "U1" }
+    expect(() => s.resume(turnId, "approve-1", true, { granted: { user: "U1" } })).toThrow(/not authorized/);
+    expect(await grantAnswer(s, { turnId, inputId: "approve-1", by: "U1" }, () => true)).toBeUndefined(); // nothing to grant
+    expect(await grantAnswer(s, { turnId: "t9", inputId: "approve-1" }, () => true)).toBeUndefined(); // not the parked turn
+  });
+
   test("resume validates the turnId and the inputId against the pending request", async () => {
     const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), scriptedModel(APPROVE_SCRIPT), [approveTool()], noRuntime);
     const { turnId } = s.start({ turnId: "t1", userText: "refund please" });
-    await s.result(turnId); // suspended (no event → no answererId)
+    await s.result(turnId); // suspended (no event → no answerers)
 
     expect(() => s.resume("t9", "approve-1", true)).toThrow(/t9 is not suspended/);
     expect(() => s.resume(turnId, "wrong-id", true)).toThrow(/awaiting input "approve-1", not "wrong-id"/);
