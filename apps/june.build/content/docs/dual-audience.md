@@ -48,7 +48,8 @@ each `defineAction()` is an MCP tool at `/mcp` (and a browser WebMCP tool).
 - `/mcp` — your `defineAction()`s as MCP tools: one definition is a UI server
   action AND an MCP tool AND a browser WebMCP tool
 - `/openapi.json` + `POST /api/<id>` — the same actions as plain HTTP for
-  OpenAPI and function-calling clients
+  OpenAPI and function-calling clients; `GET /api` indexes them, and a miss
+  under `/api` is a JSON error, never an HTML page
 - `<link rel="alternate" type="text/markdown">` pointing at a page's `.md`
   twin — on every page whose markdown projection is live (`agent.discovery`
   on, and the route doesn't set `md = false`)
