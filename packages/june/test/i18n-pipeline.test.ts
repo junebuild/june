@@ -228,6 +228,12 @@ describe("document social tags under i18n", () => {
     expect(await get("https://example.com/de/page")).not.toContain("ld+json");
   });
 
+  test("the home JSON-LD's inLanguage is the resolved locale, not the site default", async () => {
+    const get = socialPipeline();
+    expect(await get("https://example.com/de")).toContain(`"inLanguage":"de"`);
+    expect(await get("https://example.com/")).toContain(`"inLanguage":"en"`);
+  });
+
   test("a locale's own domain is its public origin, over site.url", async () => {
     const get = socialPipeline();
     expect(await get("https://example.fr/page")).toContain(`rel="canonical" href="https://example.fr/page"`);

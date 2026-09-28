@@ -313,6 +313,75 @@ describe("Document social tags (on by default)", () => {
     expect(render({ pageUrl: "https://acme.com/posts" })).not.toContain("ld+json");
   });
 
+  const jsonLd = (html: string) =>
+    JSON.parse(html.match(/<script type="application\/ld\+json">(.*?)<\/script>/)![1]!) as {
+      "@context": string;
+      "@graph": Record<string, any>[];
+    };
+
+  test("no organization declared → the @graph is the WebSite alone (nothing invented)", () => {
+    const ld = jsonLd(render({ config: { ...baseConfig, site: { ...baseConfig.site, twitter: "@acme" } }, pageUrl: "https://acme.com/", isHome: true }));
+    expect(ld["@context"]).toBe("https://schema.org");
+    expect(ld["@graph"].map((n) => n["@type"])).toEqual(["WebSite"]);
+    expect(ld["@graph"][0]!.publisher).toBeUndefined();
+  });
+
+  test("site.organization → an Organization the WebSite names as publisher", () => {
+    const ld = jsonLd(
+      render({
+        config: {
+          ...baseConfig,
+          site: {
+            ...baseConfig.site,
+            name: "Acme",
+            icon: "/logo.svg",
+            twitter: "@acme",
+            organization: {
+              email: "hi@acme.com",
+              sameAs: ["https://github.com/acme", "https://x.com/acme"],
+              address: { addressLocality: "Springfield", addressCountry: "US" },
+            },
+            jsonLd: { "@context": "https://schema.org", "@type": "SoftwareApplication", name: "Acme CLI", publisher: { "@id": "https://acme.com/#organization" } },
+          },
+        },
+        pageUrl: "https://acme.com/",
+        isHome: true,
+      }),
+    );
+    const [site, org, app] = ld["@graph"];
+    expect(site!.publisher).toEqual({ "@id": "https://acme.com/#organization" });
+    expect(org).toMatchObject({
+      "@type": "Organization",
+      "@id": "https://acme.com/#organization",
+      name: "Acme",
+      url: "https://acme.com/",
+      logo: "https://acme.com/logo.svg",
+      // declared profiles + the twitter handle's, deduped
+      sameAs: ["https://github.com/acme", "https://x.com/acme"],
+      contactPoint: { "@type": "ContactPoint", contactType: "customer support", email: "hi@acme.com" },
+      address: { "@type": "PostalAddress", addressLocality: "Springfield", addressCountry: "US" },
+    });
+    // app-authored nodes join the graph; their own @context is dropped
+    expect(app).toEqual({ "@type": "SoftwareApplication", name: "Acme CLI", publisher: { "@id": "https://acme.com/#organization" } });
+  });
+
+  test("under a basePath, the @ids are site-home-based but the organization's url defaults to the origin", () => {
+    const ld = jsonLd(
+      render({
+        config: {
+          ...baseConfig,
+          basePath: "/docs",
+          site: { ...baseConfig.site, url: "https://acme.github.io", organization: { name: "Acme" } },
+        },
+        pageUrl: "https://prerender.june/",
+        isHome: true,
+      }),
+    );
+    const [site, org] = ld["@graph"];
+    expect(site).toMatchObject({ "@id": "https://acme.github.io/docs/#website", url: "https://acme.github.io/docs/" });
+    expect(org).toMatchObject({ "@id": "https://acme.github.io/docs/#organization", url: "https://acme.github.io/" });
+  });
+
   test("basePath is part of the public URL", () => {
     const html = render({
       config: { ...baseConfig, basePath: "/docs", site: { ...baseConfig.site, url: "https://acme.github.io" } },

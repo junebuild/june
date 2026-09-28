@@ -59,7 +59,8 @@ needed for a link to unfurl as a card:
   string. `metadata.canonical` overrides it; `noindex` pages get none.
 - `twitter:card` — `summary_large_image` when the page has an image, else
   `summary`. `site.twitter` adds `twitter:site`.
-- WebSite JSON-LD on the homepage, including a locale's home (`/de`).
+- JSON-LD on the homepage, including a locale's home (`/de`): a schema.org
+  `@graph` with the `WebSite`. See [Who runs the site](#who-runs-the-site).
 - `theme-color` (the mobile toolbar colour) from `site.themeColor`: one colour,
   or `{ light, dark }` for a page that follows the system scheme. Unset, June
   uses its starter background only when the starter look is the page's whole
@@ -83,6 +84,55 @@ export const metadata = {
 
 `imageAlt` defaults to the og:title; set `imageWidth`/`imageHeight` so
 unfurlers can lay the card out before the PNG arrives.
+
+## Who runs the site
+
+Search engines and agents check a site's structured data to tell it apart
+from lookalikes before they cite or recommend it. June can't know who runs
+your site, so it emits the `WebSite` node alone until you say. Add
+`site.organization` and the homepage's `@graph` gains an `Organization`, which
+the `WebSite` names as its publisher:
+
+```ts
+// june.config.ts
+export default defineJune({
+  site: {
+    name: "Acme",
+    twitter: "@acme",
+    organization: {
+      email: "support@acme.com",
+      sameAs: ["https://github.com/acme", "https://www.linkedin.com/company/acme"],
+    },
+  },
+});
+```
+
+- `name` defaults to `site.name`, `url` to the public origin, and `logo` to
+  `site.icon`. Relative URLs resolve against the origin.
+- `email` and `telephone` become a `ContactPoint`
+  (`contactType: "customer support"`). `address` becomes a `PostalAddress`.
+  There's no address unless you give one.
+- `sameAs` lists your official profiles. June adds your `site.twitter`
+  handle's profile URL for you.
+
+To say what the site is (a `SoftwareApplication`, a `Product`, an `FAQPage`),
+add nodes with `site.jsonLd`. They're appended to the same `@graph`. A node's
+own top-level `@context` is dropped, because the graph already carries one.
+They can point at the built-in nodes by `@id`: `<site-home>#website` and
+`<site-home>#organization`. The site home is the public origin plus any
+`basePath`, for example `https://acme.github.io/docs/#organization`.
+
+```ts
+site: {
+  jsonLd: {
+    "@type": "SoftwareApplication",
+    name: "Acme CLI",
+    applicationCategory: "DeveloperApplication",
+    offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
+    publisher: { "@id": "https://acme.com/#organization" },
+  },
+},
+```
 
 ## Why it matters
 

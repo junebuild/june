@@ -85,6 +85,11 @@ export function llmsTxt(
     "> Server-rendered React app. Every route also answers as Markdown",
     "> (`.md`) and JSON (`.json`); actions are MCP tools at `/mcp`.",
     "",
+    // App-authored "when to reach for this site" guidance sits right under the
+    // summary: the first thing an agent choosing between tools should read.
+    ...(agent.llms?.whenToUse?.length
+      ? ["## When to use", "", ...agent.llms.whenToUse.map((w) => `- ${w}`), ""]
+      : []),
     ...framework,
   ];
   // "## Optional" is the part an agent may drop when context is short, so it is the
@@ -135,20 +140,56 @@ export function robotsTxt(origin: string) {
   );
 }
 
-export function sitemapXml(origin: string, routes: string[], i18n?: I18nConfig) {
-  const enumerable = routes.filter((r) => !r.includes("[")); // skip dynamic templates
+// One sitemap page: its pathname and, when the app knows it, when its content
+// last changed. A bare string is a page with no known date.
+export type SitemapPage = { path: string; lastModified?: string | Date };
+
+// <lastmod> wants a W3C datetime. A Date at UTC midnight (a YAML `date: 2026-06-12`
+// frontmatter value) prints as the plain date; any other Date as a full ISO
+// timestamp. A string passes only if it already looks like a W3C date — an
+// unparseable value is dropped, never emitted as a broken tag.
+function w3cDate(v: string | Date | undefined): string | undefined {
+  if (v instanceof Date) {
+    if (Number.isNaN(v.getTime())) return undefined;
+    const iso = v.toISOString();
+    return iso.endsWith("T00:00:00.000Z") ? iso.slice(0, 10) : iso;
+  }
+  if (typeof v !== "string") return undefined;
+  const t = v.trim();
+  // W3C datetime: hh 00–23, mm/ss 00–59, TZD Z or ±hh:mm. The ranges live in the
+  // pattern because Date.parse accepts ISO's "24:00" (next midnight).
+  const m =
+    /^(\d{4})(?:-(\d{2})(?:-(\d{2})(T([01]\d|2[0-3]):[0-5]\d(:[0-5]\d(\.\d+)?)?(Z|[+-]([01]\d|2[0-3]):[0-5]\d))?)?)?$/.exec(t);
+  if (!m || Number.isNaN(Date.parse(t))) return undefined;
+  // Date.parse rolls an impossible day over ("2026-02-30" → March 2), so the
+  // calendar part must survive a round trip through a real UTC date.
+  const [, y, mo = "01", d = "01"] = m;
+  const day = new Date(Date.UTC(Number(y), Number(mo) - 1, Number(d)));
+  return day.toISOString().slice(0, 10) === `${y}-${mo}-${d}` ? t : undefined;
+}
+
+const xmlEscape = (s: string) =>
+  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+export function sitemapXml(origin: string, routes: Array<string | SitemapPage>, i18n?: I18nConfig) {
+  const pages = routes
+    .map((r) => (typeof r === "string" ? { path: r } : r))
+    .filter((p) => !p.path.includes("[")); // skip dynamic templates
   // With i18n, each page carries xhtml:link rel="alternate" hreflang for its
   // locale variants (the SEO content surface; llms.txt / /mcp stay canonical).
   const host = i18n ? new URL(origin).host : "";
   const protocol = i18n ? new URL(origin).protocol.replace(":", "") : "";
   const abs = (href: string) => (href.startsWith("http") ? href : `${origin}${href}`);
-  const urls = enumerable
-    .map((r) => {
-      if (!i18n) return `  <url><loc>${origin}${r}</loc></url>`;
+  const urls = pages
+    .map(({ path: r, lastModified }) => {
+      const loc = `<loc>${xmlEscape(origin + r)}</loc>`;
+      const date = w3cDate(lastModified);
+      const lastmod = date ? `<lastmod>${date}</lastmod>` : "";
+      if (!i18n) return `  <url>${loc}${lastmod}</url>`;
       const links = localeAlternates(i18n, r, { currentHost: host, protocol })
-        .map((a) => `    <xhtml:link rel="alternate" hreflang="${a.hreflang}" href="${abs(a.href)}"/>`)
+        .map((a) => `    <xhtml:link rel="alternate" hreflang="${a.hreflang}" href="${xmlEscape(abs(a.href))}"/>`)
         .join("\n");
-      return `  <url>\n    <loc>${origin}${r}</loc>\n${links}\n  </url>`;
+      return `  <url>\n    ${loc}${lastmod ? `\n    ${lastmod}` : ""}\n${links}\n  </url>`;
     })
     .join("\n");
   const ns =

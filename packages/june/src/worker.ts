@@ -126,8 +126,11 @@ function compilePattern(pattern: string): { regex: RegExp; names: string[] } {
   return { regex: new RegExp(allOptional ? `^(?:${source}|/)$` : `^${source}$`), names };
 }
 
+// opts.staticBuild: set only by the static() build's in-process prerender worker
+// (see PipelineConfig.staticBuild) — never by a deployed entry.
 export function createWorker(
   manifest: WorkerManifest,
+  opts: { staticBuild?: boolean } = {},
 ): { fetch(request: Request, env?: unknown, ctx?: WorkerExecutionContext): Promise<Response> } {
   const dynamic: Compiled[] = (manifest.dynamicRoutes ?? []).map((d) => ({
     ...compilePattern(d.pattern),
@@ -213,6 +216,7 @@ export function createWorker(
     agentSurface,
     i18n: manifest.i18n,
     routeList: () => routeList,
+    staticBuild: opts.staticBuild,
     earlyHints: manifest.earlyHints,
     htmlCacheControl: manifest.htmlCacheControl,
     notFoundComponent: manifest.notFound,

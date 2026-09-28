@@ -10,6 +10,8 @@ import { fileURLToPath } from "node:url";
 
 import { createApp, type JuneApp } from "../src/app";
 import { loadJuneConfig } from "../src/config-loader";
+import { buildManifest } from "../src/manifest";
+import { createWorker } from "../src/worker";
 
 const APP_DIR = fileURLToPath(new URL("../../../examples/basic/app", import.meta.url));
 
@@ -236,6 +238,76 @@ describe("generated routes in .june/routes/ (dev/build parity)", () => {
     const res = await createApp({ appDir: join(root, "app") }).fetch(new Request("http://june.test/gen"));
     expect(res.status).toBe(200);
     expect(await res.text()).toContain("generated route body");
+  });
+
+  test("/sitemap.xml lists a dynamic route's llms pages with lastmod; staticPaths never run at runtime", async () => {
+    const root = fixture({
+      "app/page.tsx": "export default function Home(){return <main>home</main>;}\n",
+      // llms = false drops a page from llms.txt, not from the sitemap
+      "app/about/page.tsx":
+        "export default function A(){return <main>about</main>;}\nexport const llms = false;\n",
+      // a static route is its own URL only: an entry naming another path is an
+      // llms.txt pointer, not a page it serves; its own entry's date still counts
+      "app/changelog/page.tsx":
+        "export default function C(){return <main>log</main>;}\n" +
+        "export const llms = [{ lastModified: '2026-09-01' }, { path: '/elsewhere' }];\n",
+      "app/docs/[slug]/page.tsx":
+        "export default function D(){return <main>doc</main>;}\n" +
+        "export const llms = () => [{ path: '/docs/intro', lastModified: new Date('2026-06-12') }, { path: '/docs/setup' }];\n" +
+        // staticPaths are build-only (route contract): a live crawler must not trigger them
+        "export const staticPaths = () => { throw new Error('staticPaths ran at runtime'); };\n",
+      "app/tags/[tag]/page.tsx": "export default function T(){return <main>tag</main>;}\n", // enumerates nothing
+    });
+    const res = await createApp({ appDir: join(root, "app") }).fetch(new Request("http://june.test/sitemap.xml"));
+    expect(res.status).toBe(200);
+    const xml = await res.text();
+    expect(xml).toContain("<url><loc>http://june.test/</loc></url>");
+    expect(xml).toContain("<url><loc>http://june.test/about</loc></url>");
+    expect(xml).toContain("<url><loc>http://june.test/docs/intro</loc><lastmod>2026-06-12</lastmod></url>");
+    expect(xml).toContain("<url><loc>http://june.test/docs/setup</loc></url>");
+    expect(xml).not.toContain("[");
+    expect(xml).not.toContain("/tags");
+    expect(xml).toContain("<url><loc>http://june.test/changelog</loc><lastmod>2026-09-01</lastmod></url>");
+    expect(xml).not.toContain("/elsewhere");
+  });
+
+  test("the built worker runs staticPaths for the sitemap only when created for the static() build", async () => {
+    const root = fixture({
+      "app/page.tsx": "export default function Home(){return <main>home</main>;}\n",
+      "app/docs/[slug]/page.tsx":
+        "export default function D(){return <main>doc</main>;}\n" +
+        "export const llms = () => [{ path: '/docs/intro' }];\n" +
+        "export const staticPaths = ['/docs/intro', '/docs/extra'];\n",
+    });
+    const manifest = await buildManifest(root);
+    const sitemap = async (w: ReturnType<typeof createWorker>) =>
+      (await w.fetch(new Request("http://june.test/sitemap.xml"))).text();
+    const deployed = await sitemap(createWorker(manifest));
+    expect(deployed).toContain("<loc>http://june.test/docs/intro</loc>");
+    expect(deployed).not.toContain("/docs/extra");
+    const prerender = await sitemap(createWorker(manifest, { staticBuild: true }));
+    expect(prerender).toContain("<loc>http://june.test/docs/extra</loc>");
+    expect(prerender.match(/docs\/intro</g)).toHaveLength(1); // deduped across llms + staticPaths
+  });
+
+  // (the static-build + i18n staticPaths skip is covered in llms-links.test.ts)
+  test("with i18n, canonical llms pages get locale alternates; prefixed staticPaths never become <loc>s", async () => {
+    const root = fixture({
+      "app/page.tsx": "export default function Home(){return <main>home</main>;}\n",
+      "app/docs/[slug]/page.tsx":
+        "export default function D(){return <main>doc</main>;}\n" +
+        "export const llms = () => [{ path: '/docs/intro' }];\n" +
+        // the static() producer hands over every locale × slug, already prefixed
+        "export const staticPaths = ['/docs/intro', '/de/docs/intro', '/docs/only-static'];\n",
+    });
+    const i18n = { defaultLocale: "en", locales: { en: {}, de: { path: "/de" } } };
+    const app = createApp({ appDir: join(root, "app"), config: { i18n } });
+    const xml = await (await app.fetch(new Request("http://june.test/sitemap.xml"))).text();
+    expect(xml).toContain("<loc>http://june.test/docs/intro</loc>");
+    expect(xml).toContain('<xhtml:link rel="alternate" hreflang="de" href="http://june.test/de/docs/intro"/>');
+    // staticPaths never become <loc>s under i18n: neither a prefixed copy nor a static-only page
+    expect(xml).not.toContain("<loc>http://june.test/de/docs/intro</loc>");
+    expect(xml).not.toContain("only-static");
   });
 
   test("app/ wins on a path collision with .june/routes/", async () => {

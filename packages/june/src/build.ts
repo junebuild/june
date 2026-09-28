@@ -506,7 +506,9 @@ ${doClass}`;
   if (cssAsset) manifest.document.styles = `/${cssAsset}`; // prerendered HTML links the hashed sheet
   if (clientAsset) manifest.document.clientScript = `/${clientAsset}`;
   if (moduleCssAsset) manifest.document.moduleStyles = `/${moduleCssAsset}`;
-  const worker = createWorker(manifest);
+  // The static() target prerenders its sitemap too; that build is where the
+  // route contract lets `staticPaths` run, so its sitemap lists those pages.
+  const worker = createWorker(manifest, { staticBuild: adapter.capabilities.runtime === "static" });
   let hasAssets = false;
 
   // ---- public/ → assets/ : verbatim static files (favicon, images, fonts) ----
@@ -624,6 +626,9 @@ ${doClass}`;
       const sp = dyn.def.staticPaths;
       if (!sp) continue;
       const paths = typeof sp === "function" ? await sp() : sp;
+      // Resolve a producer ONCE: the prerendered sitemap below reads this same
+      // def, so it lists exactly the set prerendered here without a second call.
+      dyn.def.staticPaths = paths;
       for (const p of paths) await prerenderOne(p, dyn.def);
     }
     // Framework surfaces the worker would otherwise generate on the fly. Guarded on

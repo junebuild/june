@@ -68,12 +68,70 @@ export const llms = (): LlmsEntry[] =>
   }));
 ```
 
-An entry is `{ path, title?, description?, section?, optional? }`. A static
+An entry is `{ path, title?, description?, section?, optional?,
+lastModified? }`. A static
 route can export a single object (`export const llms = { section: "Project" }`)
 to change its section, and `export const llms = false` leaves a route out.
 Sections appear in the order they're first seen, and `## Optional` is always
 last, after the tool sections. `Optional` is llmstxt.org's reserved name, so an
 entry filed under a section called `Optional` counts as optional too.
+
+## When to use
+
+An agent choosing between ten tools picks the one that says what it's for.
+June can't write that for you, but it gives the answer a fixed place:
+`agent.llms.whenToUse` renders as a `## When to use` list right under the
+summary, before any other section.
+
+```ts
+// june.config.ts
+export default defineJune({
+  agent: {
+    llms: {
+      whenToUse: [
+        "You need an invoice PDF from an order id: call `render_invoice`.",
+        "You're reconciling payouts: read /payouts.md for the schedule and fees.",
+      ],
+    },
+  },
+});
+```
+
+Write jobs, not slogans: each line should name a task an agent might be doing
+and what to use for it.
+
+## The sitemap lists every page
+
+`/sitemap.xml` uses the same page list as `llms.txt`. A static route is one
+URL. A dynamic route contributes the pages its `llms` entries name, which is
+the same runtime-safe hook `llms.txt` runs. A `[slug]` template that names no
+pages stays out, because a template isn't a URL.
+
+`llms = false` behaves differently for the two kinds of route. On a static
+route it only takes the page out of `llms.txt`; the page stays in the
+sitemap. On a dynamic route it removes the route's pages from both
+`llms.txt` and the runtime sitemap, because the `llms` entries were the only
+list of those pages. A `static()` build still lists them through
+`staticPaths`.
+
+`staticPaths` stays a build-time hook, so a crawler fetching `/sitemap.xml`
+never triggers it. The one exception is the `static()` target, which already
+runs `staticPaths` to prerender. Its prerendered sitemap lists those pages too,
+except with i18n, where they arrive locale-prefixed.
+
+An entry's `lastModified` becomes that page's `<lastmod>`: a `"2026-09-27"`
+string, a full ISO timestamp, or a `Date` (a YAML `date:` field works as-is).
+June never substitutes the build time. A page with no date gets no
+`<lastmod>`, because a wrong date tells crawlers to re-read (or skip) the
+wrong pages.
+
+```ts
+export const llms = (): LlmsEntry[] =>
+  DOCS.map((d) => ({
+    path: `/docs/${d.slug}`,
+    lastModified: d.data.updated ?? d.data.date,
+  }));
+```
 
 ## Try it on this site
 

@@ -48,4 +48,6 @@ export const llms = (): LlmsEntry[] =>
     title: String(p.data.title ?? p.slug),
     description: p.data.description ? String(p.data.description) : undefined,
     optional: true,
+    // → the sitemap's <lastmod>: a post's `updated`, else its publication date
+    lastModified: (p.data.updated ?? p.data.date) as string | undefined,
   }));

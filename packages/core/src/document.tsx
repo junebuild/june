@@ -201,16 +201,63 @@ function ogLocale(lang: string): string {
   return lang.replace("-", "_");
 }
 
-// JSON-LD is raw script text: escape "<" so a description can't close the tag.
-function websiteJsonLd(site: SiteConfig, url: string): string {
-  const data = {
-    "@context": "https://schema.org",
-    "@type": "WebSite",
-    name: site.name,
-    url,
-    description: site.description,
-  };
-  return JSON.stringify(data).replace(/</g, "\\u003c");
+// The homepage's JSON-LD: one @graph naming the WebSite and — only when the app
+// declares it — the Organization behind it, plus any app-authored nodes. The
+// nodes carry stable @ids ("<home>#website", "<home>#organization") so they can
+// reference each other. `url` is the site's home URL; `abs` resolves a
+// root-relative URL against the public origin. JSON-LD is raw script text:
+// escape "<" so a description can't close the tag.
+// `lang` is the document's resolved language, so a locale's home says its own.
+function siteJsonLd(
+  site: SiteConfig,
+  url: string,
+  lang: string,
+  abs: (u?: string) => string | undefined,
+): string {
+  const websiteId = `${url}#website`;
+  const orgId = `${url}#organization`;
+  const org = site.organization;
+  const graph: Record<string, unknown>[] = [
+    {
+      "@type": "WebSite",
+      "@id": websiteId,
+      name: site.name,
+      url,
+      description: site.description,
+      inLanguage: lang,
+      ...(org ? { publisher: { "@id": orgId } } : {}),
+    },
+  ];
+  if (org) {
+    const handle = site.twitter?.trim().replace(/^@/, "");
+    const sameAs = [...new Set([...(org.sameAs ?? []), ...(handle ? [`https://x.com/${handle}`] : [])])];
+    const contact = org.email || org.telephone;
+    graph.push({
+      "@type": "Organization",
+      "@id": orgId,
+      name: org.name ?? site.name,
+      // The organization lives at the origin, not under a deploy basePath (the
+      // @ids above stay site-home-based: they name this site's nodes).
+      url: abs(org.url) ?? `${new URL(url).origin}/`,
+      logo: abs(org.logo ?? site.icon),
+      ...(sameAs.length ? { sameAs } : {}),
+      ...(contact
+        ? {
+            contactPoint: {
+              "@type": "ContactPoint",
+              contactType: "customer support",
+              email: org.email,
+              telephone: org.telephone,
+            },
+          }
+        : {}),
+      ...(org.address ? { address: { "@type": "PostalAddress", ...org.address } } : {}),
+    });
+  }
+  const extra = site.jsonLd ? (Array.isArray(site.jsonLd) ? site.jsonLd : [site.jsonLd]) : [];
+  // A standalone node's own @context is redundant inside the @graph.
+  for (const node of extra) graph.push(Object.fromEntries(Object.entries(node).filter(([k]) => k !== "@context")));
+  return JSON.stringify({ "@context": "https://schema.org", "@graph": graph }).replace(/</g, "\\u003c");
 }
 
 export function documentTitle(
@@ -335,11 +382,12 @@ export function Document({
         />
         {config.site.twitter ? <meta name="twitter:site" content={config.site.twitter} /> : null}
         {metadata?.twitter?.creator ? <meta name="twitter:creator" content={metadata.twitter.creator} /> : null}
-        {/* The homepage names the site for search engines (schema.org WebSite). */}
+        {/* The homepage names the site — and, when declared, who runs it — for
+            search engines and agents (schema.org WebSite + Organization). */}
         {isHome && origin ? (
           <script
             type="application/ld+json"
-            dangerouslySetInnerHTML={{ __html: websiteJsonLd(config.site, origin + (withBase("/") ?? "/")) }}
+            dangerouslySetInnerHTML={{ __html: siteJsonLd(config.site, origin + (withBase("/") ?? "/"), docLang, absolute) }}
           />
         ) : null}
         <meta name="viewport" content="width=device-width, initial-scale=1" />

@@ -119,6 +119,14 @@ export type RouteDefinition<TData = unknown> = {
 //   • description one line after the link. Default: static metadata description.
 //   • section     the H2 it's grouped under. Default: "Pages".
 //   • optional    true → listed under "## Optional" (e.g. blog posts, changelogs).
+//   • lastModified when the page's content last changed (a W3C date/datetime string
+//                 like "2026-09-27", or a Date) → the page's sitemap <lastmod>.
+//                 Absent → no <lastmod>; June never substitutes the build time.
+// The same entries enumerate a dynamic route's pages for /sitemap.xml (at
+// runtime the only source: staticPaths stay build-only). So `llms = false`
+// keeps a STATIC route in the sitemap, but on a DYNAMIC route drops its pages
+// from both llms.txt and the runtime sitemap (a static() build still lists
+// them via staticPaths).
 // Each link points at the page's markdown projection (<path>.md) unless the route
 // disables md, so an agent reads the page, not its HTML.
 export type LlmsEntry = {
@@ -127,6 +135,7 @@ export type LlmsEntry = {
   description?: string;
   section?: string;
   optional?: boolean;
+  lastModified?: string | Date;
 };
 export type LlmsDeclaration =
   | false

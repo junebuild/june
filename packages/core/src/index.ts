@@ -97,6 +97,7 @@ export {
   sitemapXml,
   apiCatalog,
   mcpServerCard,
+  type SitemapPage,
 } from "./discovery";
 
 // The Web-standard MCP endpoint

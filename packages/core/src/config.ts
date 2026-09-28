@@ -31,6 +31,18 @@ import type { JuneDb, ResourceConfig } from "./resources";
 //            page's look (see Document), else no tag.
 //   shortName  the home-screen label in the generated web manifest. Unset → the
 //            part of `name` before a " — ", " - ", " | ", or ": " separator.
+//   organization  who runs the site → an Organization node in the homepage JSON-LD
+//            (the WebSite's publisher): the machine-readable identity agents and
+//            search engines verify a site against. `email` becomes a ContactPoint;
+//            `sameAs` lists official profiles (GitHub, LinkedIn, …) and is merged
+//            with the `twitter` handle's profile URL. Unset → no Organization node:
+//            June never invents who runs a site.
+//   jsonLd   extra schema.org nodes (SoftwareApplication, FAQPage, Product, …)
+//            appended to the homepage's JSON-LD @graph (a node's own top-level
+//            @context is dropped; the graph carries one). They can reference the
+//            built-in nodes by @id: "<site-home>#website", "<site-home>#organization",
+//            where <site-home> is the public origin + basePath + "/"
+//            (e.g. "https://acme.github.io/docs/#website").
 export type SiteConfig = {
   name?: string;
   shortName?: string;
@@ -41,6 +53,30 @@ export type SiteConfig = {
   url?: string;
   twitter?: string;
   themeColor?: string | { light: string; dark: string };
+  organization?: SiteOrganization;
+  jsonLd?: JsonLdNode | JsonLdNode[];
+};
+
+// A schema.org node, as plain JSON (it freezes into the worker manifest).
+export type JsonLdNode = { "@type": string | string[] } & Record<string, unknown>;
+
+// The Organization behind a site. Every field is optional: `name` defaults to
+// site.name, `url` to the site's public origin, `logo` to site.icon. Relative
+// URLs resolve against the public origin.
+export type SiteOrganization = {
+  name?: string;
+  url?: string;
+  logo?: string;
+  email?: string; // → contactPoint { contactType: "customer support", email }
+  telephone?: string; // → the same ContactPoint
+  sameAs?: string[];
+  address?: {
+    streetAddress?: string;
+    addressLocality?: string;
+    addressRegion?: string;
+    postalCode?: string;
+    addressCountry?: string;
+  };
 };
 
 // DocumentConfig.deployOrigin from the config's deploy domain — the public-origin
@@ -66,8 +102,11 @@ export type AgentConfig = {
   //   framework — replaces the built-in "canonical names" block so a meta-framework can point
   //               agents at ITS scaffold/scope instead of June's.
   //   sections  — extra Markdown lines appended (e.g. a list of every doc page + its `.md`).
-  // Both are plain string arrays so they freeze into the worker manifest as-is.
-  llms?: { framework?: string[]; sections?: string[] };
+  //   whenToUse — the jobs this site/product is the right tool for, one bullet each, rendered
+  //               as "## When to use" right under the summary: an agent choosing between
+  //               tools reads it first. Specific use cases, not marketing copy.
+  // All plain string arrays so they freeze into the worker manifest as-is.
+  llms?: { framework?: string[]; sections?: string[]; whenToUse?: string[] };
   // The durable agent runtime (opt-in). Resolved to full shape below.
   runtime: AgentRuntimeConfig;
 };

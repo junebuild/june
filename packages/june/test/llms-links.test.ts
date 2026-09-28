@@ -3,7 +3,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { route, type BrandedRoute } from "@junejs/core/route";
-import { collectLlmsLinks } from "../src/llms-links";
+import { collectLlmsLinks, collectSitemapPages } from "../src/llms-links";
 import type { RouteResolver } from "../src/pipeline";
 
 const ORIGIN = "https://site.test";
@@ -88,5 +88,62 @@ describe("collectLlmsLinks", () => {
       "/b/[s]": route({ view, llms: [{ path: "/a", title: "A again" }] }),
     }));
     expect(links.map((l) => l.title)).toEqual(["A"]);
+  });
+});
+
+describe("collectSitemapPages", () => {
+  const docs = () =>
+    resolverOf({
+      "/": route({ view }),
+      "/docs/[slug]": route({
+        view,
+        llms: [{ path: "/docs/intro", lastModified: "2026-06-12" }],
+        // the static() producer hands over every locale × slug, already prefixed
+        staticPaths: ["/docs/intro", "/docs/extra", "/de/docs/intro"],
+      }),
+    });
+
+  test("runtime (the default): dynamic pages come from llms entries only; staticPaths never run", async () => {
+    let ran = false;
+    const resolve = resolverOf({
+      "/docs/[slug]": route({
+        view,
+        llms: [{ path: "/docs/intro" }],
+        staticPaths: () => {
+          ran = true;
+          return ["/docs/extra"];
+        },
+      }),
+    });
+    expect(await collectSitemapPages(["/docs/[slug]"], resolve)).toEqual([{ path: "/docs/intro" }]);
+    expect(ran).toBe(false);
+  });
+
+  test("llms = false keeps a static route; on a dynamic route it drops its pages at runtime (static build: staticPaths)", async () => {
+    const resolve = resolverOf({
+      "/about": route({ view, llms: false }),
+      "/notes/[id]": route({ view, llms: false, staticPaths: ["/notes/1"] }),
+    });
+    const routes = ["/about", "/notes/[id]"];
+    expect(await collectSitemapPages(routes, resolve)).toEqual([{ path: "/about" }]);
+    expect(await collectSitemapPages(routes, resolve, { staticPaths: true })).toEqual([
+      { path: "/about" },
+      { path: "/notes/1" },
+    ]);
+  });
+
+  test("static build: staticPaths join the llms pages, deduped", async () => {
+    const pages = await collectSitemapPages(["/", "/docs/[slug]"], docs(), { staticPaths: true });
+    expect(pages).toEqual([
+      { path: "/" },
+      { path: "/docs/intro", lastModified: "2026-06-12" },
+      { path: "/docs/extra" },
+      { path: "/de/docs/intro" },
+    ]);
+  });
+
+  test("static build with i18n: locale-prefixed staticPaths are skipped; canonical llms pages stay", async () => {
+    const pages = await collectSitemapPages(["/", "/docs/[slug]"], docs(), { staticPaths: true, i18n: true });
+    expect(pages.map((p) => p.path)).toEqual(["/", "/docs/intro"]);
   });
 });

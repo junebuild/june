@@ -376,6 +376,25 @@ describe("agent surface", () => {
     expect((await get("/.well-known/api-catalog")).status).toBe(200);
   });
 
+  test("the sitemap lists every doc and post, each with its frontmatter date as <lastmod>", async () => {
+    const xml = await (await get("/sitemap.xml")).text();
+    // pathname → its <lastmod> (undefined when the url carries none)
+    const entries = new Map(
+      [...xml.matchAll(/<url><loc>([^<]+)<\/loc>(?:<lastmod>([^<]+)<\/lastmod>)?<\/url>/g)].map((m) => [
+        new URL(m[1]!).pathname,
+        m[2],
+      ]),
+    );
+    const expected = [
+      ...DOCS.map((d) => [`/docs/${d.slug}`, d.data.updated ?? d.data.date] as const),
+      ...POSTS.map((p) => [`/blog/${p.slug}`, p.data.updated ?? p.data.date] as const),
+    ];
+    for (const [path, date] of expected) {
+      expect(entries.has(path), path).toBe(true);
+      expect(entries.get(path), path).toBe(date as string | undefined);
+    }
+  });
+
   test("/mcp lists the site tools", async () => {
     const res = await rpc({ method: "tools/list", params: {} });
     const names = res.result.tools.map((t: any) => t.name);
