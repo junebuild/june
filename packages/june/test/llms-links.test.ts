@@ -75,6 +75,13 @@ describe("collectLlmsLinks", () => {
     expect(links.map((l) => l.url)).toEqual([`${ORIGIN}/raw`]);
   });
 
+  test("paths that render the same URL (/a and /a/ → /a.md) are one page", async () => {
+    const links = await collectLlmsLinks(ORIGIN, ["/x/[s]"], resolverOf({
+      "/x/[s]": route({ view, llms: [{ path: "/a", title: "A" }, { path: "/a/", title: "A slash" }] }),
+    }));
+    expect(links.map((l) => [l.title, l.url])).toEqual([["A", `${ORIGIN}/a.md`]]);
+  });
+
   test("the same page listed twice (e.g. by two routes) appears once", async () => {
     const links = await collectLlmsLinks(ORIGIN, ["/a", "/b/[s]"], resolverOf({
       "/a": route({ view, metadata: { title: "A" } }),

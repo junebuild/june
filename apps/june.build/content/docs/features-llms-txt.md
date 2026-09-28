@@ -72,7 +72,8 @@ An entry is `{ path, title?, description?, section?, optional? }`. A static
 route can export a single object (`export const llms = { section: "Project" }`)
 to change its section, and `export const llms = false` leaves a route out.
 Sections appear in the order they're first seen, and `## Optional` is always
-last.
+last, after the tool sections. `Optional` is llmstxt.org's reserved name, so an
+entry filed under a section called `Optional` counts as optional too.
 
 ## Try it on this site
 

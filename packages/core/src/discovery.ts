@@ -35,21 +35,24 @@ export function buildLinkHeader(agent: AgentConfig): string | null {
 export type LlmsLink = { title: string; url: string; description?: string; section: string; optional: boolean };
 
 // Render links as llmstxt.org file lists: one H2 per section in first-seen order,
-// each link "- [title](url): description", and the "Optional" section — links an
-// agent can skip when context is short — always last.
-function linkSections(links: LlmsLink[]): string[] {
+// each link "- [title](url): description". The Optional links come back SEPARATELY,
+// so the caller can place them last — the split is structural, never found by
+// searching rendered text. "Optional" is llmstxt.org's reserved name for skippable
+// links, so a link filed under a section literally named "Optional" is optional too.
+const OPTIONAL = "Optional";
+function linkSections(links: LlmsLink[]): { regular: string[]; optional: string[] } {
   const item = (l: LlmsLink) =>
     `- [${l.title.replace(/[[\]]/g, "\\$&")}](${l.url})${l.description ? `: ${l.description}` : ""}`;
+  const isOptional = (l: LlmsLink) => l.optional || l.section === OPTIONAL;
   const bySection = new Map<string, LlmsLink[]>();
-  for (const l of links.filter((x) => !x.optional)) {
+  for (const l of links.filter((x) => !isOptional(x))) {
     if (!bySection.has(l.section)) bySection.set(l.section, []);
     bySection.get(l.section)!.push(l);
   }
-  const out: string[] = [];
-  for (const [section, ls] of bySection) out.push("", `## ${section}`, ...ls.map(item));
-  const optional = links.filter((x) => x.optional);
-  if (optional.length) out.push("", "## Optional", ...optional.map(item));
-  return out;
+  const regular: string[] = [];
+  for (const [section, ls] of bySection) regular.push("", `## ${section}`, ...ls.map(item));
+  const opt = links.filter(isOptional);
+  return { regular, optional: opt.length ? ["", `## ${OPTIONAL}`, ...opt.map(item)] : [] };
 }
 
 export function llmsTxt(
@@ -89,11 +92,9 @@ export function llmsTxt(
   let optional: string[] = [];
   if (links) {
     const sections = linkSections(links);
-    const optionalAt = sections.indexOf("## Optional");
-    const regular = optionalAt < 0 ? sections : sections.slice(0, optionalAt - 1);
-    optional = optionalAt < 0 ? [] : sections.slice(optionalAt - 1);
+    optional = sections.optional;
     // app-authored agent.llms.sections sit with the regular sections
-    lines.push(...regular, ...(agent.llms?.sections?.length ? ["", ...agent.llms.sections] : []));
+    lines.push(...sections.regular, ...(agent.llms?.sections?.length ? ["", ...agent.llms.sections] : []));
   } else {
     lines.push(
       "",

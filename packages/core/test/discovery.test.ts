@@ -124,6 +124,16 @@ describe("llmsTxt() with route links (llmstxt.org sections)", () => {
     expect(h2s.at(-1)).toBe("Optional"); // …and still come before the skippable section
   });
 
+  test('a section literally named "Optional" is the reserved Optional section — never mid-file', () => {
+    // optional: false, but filed under llmstxt.org's reserved name — and seen FIRST
+    const txt = llmsTxt(ORIGIN, [], resolveAgent(), undefined, [link("Aside", "Optional"), link("Intro", "Docs")]);
+    const h2s = [...txt.matchAll(/^## (.+)$/gm)].map((m) => m[1]);
+    expect(h2s.filter((h) => h === "Optional")).toHaveLength(1); // one Optional, not two
+    expect(h2s.at(-1)).toBe("Optional");
+    expect(h2s.indexOf("Docs")).toBeLessThan(h2s.indexOf("Optional"));
+    expect(txt.slice(txt.indexOf("## Optional"))).toContain("[Aside]");
+  });
+
   test("app-authored agent.llms.sections still appear — before Optional (Kura's compat path)", () => {
     const agent = resolveAgent({ mcp: false, llms: { sections: ["## Custom", "- [x](/x)"] } });
     const txt = llmsTxt(ORIGIN, [], agent, undefined, [link("Intro", "Docs"), link("Post", "Blog", { optional: true })]);

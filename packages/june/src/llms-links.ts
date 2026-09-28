@@ -32,12 +32,15 @@ export async function collectLlmsLinks(origin: string, routes: string[], resolve
 
     for (const entry of entries) {
       const path = entry.path ?? (dynamic ? undefined : route);
-      if (!path || seen.has(path)) continue; // a dynamic entry must name its page
-      seen.add(path);
+      if (!path) continue; // a dynamic entry must name its page
+      const url = origin + (def.md === false ? path : mdPath(path));
+      // dedupe on the FINAL url: "/a" and "/a/" both render /a.md, so they're one page
+      if (seen.has(url)) continue;
+      seen.add(url);
       const own = path === route; // the route's own page → its metadata describes it
       links.push({
         title: entry.title ?? (own ? meta?.title : undefined) ?? path,
-        url: origin + (def.md === false ? path : mdPath(path)),
+        url,
         description: entry.description ?? (own ? meta?.description : undefined),
         section: entry.section ?? DEFAULT_SECTION,
         optional: entry.optional === true,
