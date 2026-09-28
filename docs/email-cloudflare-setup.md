@@ -123,21 +123,81 @@ verification mail. Sends to verified destinations are free on every plan and do 
 toward quotas. Infrastructure as code: `cloudflare_email_routing_address`; creating one sends
 the verification mail, and forwarding to it works only after the link is clicked.
 
-Status: address created 2026-09-28; verification click not yet confirmed.
+Status: **verified 2026-09-28** — the destination address was confirmed, and the `dmarc@`
+forwarding rule to it is present and enabled (`GET /zones/{zone}/email/routing/rules`).
 
 ## 6. An API token for deploys
 
-Two tokens, with different jobs:
+Two tokens, with different jobs. Keep them apart: the token that onboards DNS never needs to
+deploy code, and the token that deploys code never needs to touch DNS.
 
-- **Onboarding** (steps 1–5, usually infrastructure as code) — used successfully on
-  2026-09-28 with: zone-level *Zone Write*, *DNS Write*, *Zone Settings Write*, *Email Routing
-  Rules Write*; account-level *Email Sending Write*, *Email Routing Addresses Write*.
-- **Deploying the Worker** — needs to edit Workers scripts and Email Routing rules
-  (`addresses` in wrangler config creates rules owned by the Worker), and to use Email
-  Sending; delivery events additionally need Queues and event subscriptions. Record the exact
-  permission names here once a deploy has succeeded with it.
+**Onboarding** (steps 1–5, usually infrastructure as code) — used successfully on 2026-09-28
+with: zone *Zone Write*, *DNS Write*, *Zone Settings Write*, *Email Routing Rules Write*;
+account *Email Sending Write*, *Email Routing Addresses Write*.
 
-Status: onboarding token verified 2026-09-28; deploy token not yet created.
+**Deploying the Worker** — an **account-owned** token (it outlives any one person's user
+account), limited to one account and one zone:
+
+| scope | permission group | id | why |
+| --- | --- | --- | --- |
+| account | Workers Scripts Write | `e086da7e2179491d91ee5f35b3ca210a` | upload the Worker |
+| account | Email Sending Write | `5df633d6b41c42bcaf5b4a62b9d14b64` | the `send_email` binding and REST `send` / `send_raw`; also reads suppressions |
+| account | Queues Write | `366f57075ffc42689627bcf8242a1b6d` | the delivery-event queue |
+| account | Workers Tail Read | `05880cd1bdc24d8bae0be2136972816b` | `wrangler tail` while testing |
+| account | Account Settings Read | `c1fde68c7bcc44588cbb6ddbc16d6480` | account lookups during deploy |
+| zone | Email Routing Rules Write | `79b3ec0d10ce4148a8f8bdc0cc5f97f2` | wrangler `addresses` creates the Worker's routing rules |
+| zone | Zone Read | `c8fed203ed3043cba015a93ad1616f1f` | resolve the zone |
+
+Permission-group ids are global; they were read from
+`GET /accounts/{account}/tokens/permission_groups` on 2026-09-28. No group named for event
+subscriptions exists in that list; whether *Queues Write* covers creating one is checked when
+the delivery-event subscription is first created.
+
+As infrastructure as code (Cloudflare provider 5.x, `cloudflare_account_token`). Running it
+needs a token with *Account API Tokens Write*, which can mint any token — keep that bootstrap
+credential out of the stacks that manage DNS or code, and note that the new token's value is
+stored in state, so the state backend must be treated as a secret store:
+
+```hcl
+resource "cloudflare_account_token" "agents_deploy" {
+  account_id = var.cloudflare_account_id
+  name       = "agents-deploy"
+  policies = [
+    {
+      effect = "allow"
+      permission_groups = [
+        { id = "e086da7e2179491d91ee5f35b3ca210a" }, # Workers Scripts Write
+        { id = "5df633d6b41c42bcaf5b4a62b9d14b64" }, # Email Sending Write
+        { id = "366f57075ffc42689627bcf8242a1b6d" }, # Queues Write
+        { id = "05880cd1bdc24d8bae0be2136972816b" }, # Workers Tail Read
+        { id = "c1fde68c7bcc44588cbb6ddbc16d6480" }, # Account Settings Read
+      ]
+      resources = jsonencode({ "com.cloudflare.api.account.${var.cloudflare_account_id}" = "*" })
+    },
+    {
+      effect = "allow"
+      permission_groups = [
+        { id = "79b3ec0d10ce4148a8f8bdc0cc5f97f2" }, # Email Routing Rules Write
+        { id = "c8fed203ed3043cba015a93ad1616f1f" }, # Zone Read
+      ]
+      resources = jsonencode({ "com.cloudflare.api.account.zone.${var.zone_id}" = "*" })
+    },
+  ]
+}
+
+output "agents_deploy_token" {
+  value     = cloudflare_account_token.agents_deploy.value
+  sensitive = true
+}
+```
+
+Without infrastructure as code, the same policies go to
+`POST /accounts/{account}/tokens` as JSON (`resources` as an object rather than an encoded
+string); set `expires_on` for a token meant only for a test window.
+
+Status: **verified 2026-09-28** — a deploy token with exactly these policies was created
+through the API (expiring after the test window); it can upload Workers, read and write
+routing rules and queues, and is refused on DNS records.
 
 ## 7. Wrangler configuration
 
