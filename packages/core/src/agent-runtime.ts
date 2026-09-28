@@ -69,7 +69,12 @@ export type InboundEvent = {
   teamId?: string;                              // workspace/tenant the event belongs to (slack team_id) —
                                                 // chat.startStream needs it as recipient_team_id in channels
   ts: string;                                   // this event's message ts
-  user?: { id: string; name?: string };         // WHO the platform CLAIMS is speaking (untrusted)
+  user?: { id: string; name?: string; attested?: boolean };
+                                                // WHO the platform CLAIMS is speaking. `attested`: the
+                                                // platform vouches for `id` cryptographically (a signed
+                                                // Slack event) — unlike a claim anyone can forge (an
+                                                // email From:). Only an attested user is a default answerer
+                                                // of the turn's requestInput (see Answerers).
   // WHO the app VERIFIED is speaking — resolved by a channel identity seam (e.g.
   // crispChannel's resolveIdentity) from platform-verified evidence, never from the
   // payload alone. The same Principal the UI/MCP paths carry (ActionContext.user), so
@@ -185,8 +190,9 @@ export interface ToolContext {
   // First call throws SuspendSignal to park the turn (durably); on the replay after resume it
   // returns the stored answer. Only usable from an ASYNC tool — a sync (local) tool commits in
   // the same tx and cannot park, so calling it there throws a plain Error (the turn fails
-  // loudly). `answererId` defaults to the trigger user (ctx.event.user.id).
-  requestInput(req: { id: string; prompt: string; schema?: unknown; answererId?: string }): Promise<unknown>;
+  // loudly). `answerers` says who may answer (see Answerers); it defaults to the turn's
+  // speaker only when the channel attests that identity.
+  requestInput(req: { id: string; prompt: string; schema?: unknown; answerers?: Answerers }): Promise<unknown>;
 }
 export type Tool = {
   spec: ToolSpec;
@@ -243,11 +249,59 @@ export interface SessionStore {
 // renders subscribe live at turn start, and no host exposes a reconnectable events
 // endpoint yet. A pending input.requested is not folded either — a late subscriber to a
 // parked turn learns of the park from result()/the session status, not the replay.
+// WHO may answer a parked input (#261).
+//   { user }            — exactly this identity: compared with the resumer's VERIFIED `by`, a
+//                         platform id such as the user id of a signature-checked Slack click.
+//   { policy, scope? }  — a rule only the app can decide ("the operators of mailbox scout",
+//                         "a manager of this tenant"): the host evaluates it at resume time
+//                         through the agent's authorizeAnswer hook (grantAnswer) and hands the
+//                         engine the grant; the engine checks the grant names exactly this rule.
+// When a tool names none, the default is the turn's speaker if the channel ATTESTS that
+// identity (event.user.attested); an inbound turn without one refuses to park (see
+// requestInput) rather than park an input nobody can answer. A turn with no inbound event
+// (proactive, programmatic) keeps no restriction — the app itself drives its resume.
+export type Answerers = { user: string } | { policy: string; scope?: unknown };
+
 // A tool's request for external (human) input that suspends the turn. `id` keys the answer
-// (stable within the turn). `answererId` is who may answer — defaults to the turn's trigger
-// user; the app widens it (e.g. a manager approves) by passing one to ctx.requestInput.
-// Serializable (it rides input.requested over SSE and persists in the suspended checkpoint).
-export type InputRequest = { id: string; prompt: string; schema?: unknown; answererId?: string };
+// (stable within the turn); `answerers` is who may answer (above). Serializable (it rides
+// input.requested over SSE and persists in the suspended checkpoint).
+export type InputRequest = { id: string; prompt: string; schema?: unknown; answerers?: Answerers };
+
+// The app's decision for a { policy } answerer, made at resume time. `by` is the resumer's
+// verified platform id, `principal` its app identity when the resuming surface resolved one
+// (a bearer-authenticated CLI call, a signed-in page). Async: a rule may need the db.
+export type AuthorizeAnswer = (a: {
+  policy: string;
+  scope?: unknown;
+  by?: string;
+  principal?: Principal;
+  agent: string;
+  session: string;
+  request: InputRequest;
+}) => boolean | Promise<boolean>;
+
+// Canonical JSON (sorted keys) so a grant and a stored request compare by value, whatever
+// the key order a host or a checkpoint round-trip produced.
+function canonical(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(canonical).join(",")}]`;
+  if (v && typeof v === "object") {
+    return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canonical((v as Record<string, unknown>)[k])}`).join(",")}}`;
+  }
+  return JSON.stringify(v) ?? "undefined";
+}
+function sameAnswerers(a: Answerers, b: Answerers): boolean {
+  return canonical(a) === canonical(b);
+}
+
+// The answerers a parked input gets when its tool named none (see Answerers).
+function defaultAnswerers(event: InboundEvent | undefined, inputId: string): Answerers | undefined {
+  if (!event) return undefined;
+  if (event.user?.attested) return { user: event.user.id };
+  throw new Error(
+    `requestInput("${inputId}"): this turn's speaker is not attested by its channel ("${event.source}"), so nobody could answer — ` +
+      `name who may: ctx.requestInput({ …, answerers: { user } | { policy, scope } })`,
+  );
+}
 
 // Thrown by ctx.requestInput to PARK a turn awaiting input. The engine catches it, persists
 // the pending request as a checkpoint, and reports { status: "suspended" }. A later
@@ -669,7 +723,7 @@ async function toolStep(
       if (!remote) throw new Error(`requestInput: tool "${call.name}" runs sync (local) — only an async tool can park the turn awaiting input`);
       const answer = store.getStep(`input:${opts.turnId}:${req.id}`);
       if (answer !== undefined) return Promise.resolve((answer as { input: unknown }).input);
-      throw new SuspendSignal({ id: req.id, prompt: req.prompt, schema: req.schema, answererId: req.answererId ?? env.event?.user?.id }, call.id);
+      throw new SuspendSignal({ id: req.id, prompt: req.prompt, schema: req.schema, answerers: req.answerers ?? defaultAnswerers(env.event, req.id) }, call.id);
     },
   };
 
@@ -792,8 +846,8 @@ export class AgentSession {
   // Explicit fields + assignment (not constructor parameter properties): June
   // ships raw .ts, so consumers type-strip it — parameter properties aren't
   // erasable and break `erasableSyntaxOnly` / Node native strip-types.
-  private readonly agent: string;
-  private readonly id: string;
+  readonly agent: string;
+  readonly id: string;
   private readonly store: SessionStore;
   private readonly sink: EventSink;
   private readonly model: Model;
@@ -955,10 +1009,11 @@ export class AgentSession {
   // ctx.requestInput now finds its answer and returns, and the turn runs on (may complete, or
   // suspend again). `opts.by` is the resumer's VERIFIED identity — the caller must authenticate
   // it (e.g. the user id from a signed Slack interaction payload), never trust a client-supplied
-  // value. When the request names an answererId, resume is DEFAULT-DENY: an absent `by` is an
-  // unauthenticated resume and cannot answer. Returns { turnId } like start(); await
-  // result(turnId) for the new terminal state.
-  resume(turnId: string, inputId: string, input: unknown, opts?: { by?: string }): { turnId: string } {
+  // value. `opts.granted` is a host's grant for a { policy } answerer (grantAnswer). When the
+  // request names answerers, resume is DEFAULT-DENY: a { user } needs that exact `by`, a
+  // { policy } needs a grant for exactly that policy and scope. Returns { turnId } like
+  // start(); await result(turnId) for the new terminal state.
+  resume(turnId: string, inputId: string, input: unknown, opts?: { by?: string; granted?: Answerers }): { turnId: string } {
     // A pending reset is about to retire the park this answer targets — applying it would
     // race the archival (the continuation could replay over an emptied store). Refuse.
     if (this.pendingReset) throw new Error(`turn ${turnId} cannot be resumed: a session reset is pending and will retire the suspended turn`);
@@ -967,8 +1022,14 @@ export class AgentSession {
     if (inputId !== suspended.request.id) {
       throw new Error(`turn ${turnId} is awaiting input "${suspended.request.id}", not "${inputId}"`);
     }
-    if (suspended.request.answererId && opts?.by !== suspended.request.answererId) {
-      throw new ResumeAuthorizationError(`resume: ${opts?.by ?? "<unidentified>"} is not authorized to answer input "${inputId}"`);
+    const answerers = suspended.request.answerers;
+    if (answerers) {
+      const allowed = "user" in answerers
+        ? opts?.by !== undefined && opts.by === answerers.user
+        : opts?.granted !== undefined && sameAnswerers(opts.granted, answerers);
+      if (!allowed) {
+        throw new ResumeAuthorizationError(`resume: ${opts?.by ?? "<unidentified>"} is not authorized to answer input "${inputId}"`);
+      }
     }
     this.store.tx(() => {
       this.store.putStep(`input:${turnId}:${inputId}`, { input });
@@ -986,6 +1047,13 @@ export class AgentSession {
       );
     this.track(turnId, this.chain.then(() => this.withTerminal(turnId, run)));
     return { turnId };
+  }
+
+  // The input this session is parked on, if any — what a host reads to evaluate a { policy }
+  // answerer before the synchronous resume (grantAnswer).
+  pending(): { turnId: string; request: InputRequest } | undefined {
+    const suspended = this.store.getStep("suspended") as SuspendedCheckpoint | undefined;
+    return suspended ? { turnId: suspended.turnId, request: suspended.request } : undefined;
   }
 
   // Terminally retire this session's history (#129): supersede every unfinished turn,
@@ -1079,4 +1147,31 @@ export class AgentSession {
 // an in-process map (@junejs/server); edge = idFromName on a DO namespace.
 export interface Runtime {
   session(agent: string, id: string): AgentSession;
+}
+
+// Evaluate a parked input's { policy } answerer for a resumer, BEFORE the synchronous resume —
+// the one async step a host takes (the authorize hook may query the db), kept apart so
+// resume-then-subscribe stays free of awaits. Returns the grant to pass as resume's `granted`,
+// or undefined: a { user } answerer needs no grant (resume checks `by`), and a refused or
+// unevaluated policy yields none, so resume refuses with ResumeAuthorizationError. The grant
+// names the policy it was made for; if the park changes in between, resume refuses it.
+export async function grantAnswer(
+  session: AgentSession,
+  resume: { turnId: string; inputId: string; by?: string; principal?: Principal },
+  authorize: AuthorizeAnswer | undefined,
+): Promise<Answerers | undefined> {
+  const pending = session.pending();
+  if (!pending || pending.turnId !== resume.turnId || pending.request.id !== resume.inputId) return undefined;
+  const answerers = pending.request.answerers;
+  if (!answerers || "user" in answerers || !authorize) return undefined;
+  const ok = await authorize({
+    policy: answerers.policy,
+    scope: answerers.scope,
+    by: resume.by,
+    principal: resume.principal,
+    agent: session.agent,
+    session: session.id,
+    request: pending.request,
+  });
+  return ok === true ? answerers : undefined;
 }

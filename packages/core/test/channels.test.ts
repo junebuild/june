@@ -617,7 +617,7 @@ describe("slackChannel", () => {
   test("status: a failed HITL prompt post clears the status (streaming path)", async () => {
     stubSlack((m) => (m === "chat.postMessage" ? { json: { ok: false, error: "channel_not_found" } } : undefined));
     const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true, status: "is thinking…", onError: () => {} });
-    await driveStream(ch2, [{ type: "input.requested", turnId: "t1", request: { id: "ok?", prompt: "Proceed?", answererId: "U1" } } as TurnEvent]);
+    await driveStream(ch2, [{ type: "input.requested", turnId: "t1", request: { id: "ok?", prompt: "Proceed?", answerers: { user: "U1" } } } as TurnEvent]);
     expect(calls.map((c) => [method(c), (c.body as { status?: string }).status])).toEqual([
       ["assistant.threads.setStatus", "is thinking…"],
       ["chat.postMessage", undefined], // the prompt failed to post (reported via onError)…
@@ -628,7 +628,7 @@ describe("slackChannel", () => {
   test("status: a failed HITL prompt post clears the status (post-once path)", async () => {
     stubSlack((m) => (m === "chat.postMessage" ? { json: { ok: false, error: "channel_not_found" } } : undefined));
     const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", status: "is thinking…", onError: () => {} });
-    await driveStream(ch2, [{ type: "input.requested", turnId: "t1", request: { id: "ok?", prompt: "Proceed?", answererId: "U1" } } as TurnEvent]);
+    await driveStream(ch2, [{ type: "input.requested", turnId: "t1", request: { id: "ok?", prompt: "Proceed?", answerers: { user: "U1" } } } as TurnEvent]);
     expect(calls.map(method)).toEqual(["assistant.threads.setStatus", "chat.postMessage", "assistant.threads.setStatus"]);
     expect((calls[2]!.body as { status?: string }).status).toBe("");
   });
@@ -720,7 +720,7 @@ describe("slackChannel", () => {
     const ch2 = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test" });
     async function* stream() {
       yield { type: "turn.started", turnId: "t1", trigger: { kind: "proactive", by: "cron:daily" } } as TurnEvent;
-      yield { type: "input.requested", turnId: "t1", request: { id: "approve-1", prompt: "Post the summary?", answererId: "U1" } } as TurnEvent;
+      yield { type: "input.requested", turnId: "t1", request: { id: "approve-1", prompt: "Post the summary?", answerers: { user: "U1" } } } as TurnEvent;
     }
     // a PROACTIVE session is caller-chosen — the click could never re-derive it from the thread
     await ch2.deliver!({ channelId: "C-ops" }, stream(), { session: "slack:C-ops:daily" });
@@ -752,7 +752,7 @@ describe("slackChannel", () => {
     const ctx = ctxWith(async () => "unused");
     ctx.runStream = async function* () {
       yield { type: "turn.started", turnId: "t1", trigger: { kind: "proactive", by: "x" } } as TurnEvent;
-      yield { type: "input.requested", turnId: "t1", request: { id: "approve-1", prompt: "Approve refund?", answererId: "U1" } } as TurnEvent;
+      yield { type: "input.requested", turnId: "t1", request: { id: "approve-1", prompt: "Approve refund?", answerers: { user: "U1" } } } as TurnEvent;
     };
     await ch2.webhook!(await signed(JSON.stringify({ type: "event_callback", event: { type: "message", text: "refund", channel: "C1", ts: "1.1", user: "U1" } })), ctx);
     await flush();
@@ -835,7 +835,7 @@ describe("slackChannel", () => {
     const withConfirm = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", stream: true, approvalConfirm: true });
     const parkStream = async function* () {
       yield { type: "turn.started", turnId: "t1", trigger: { kind: "proactive", by: "x" } } as TurnEvent;
-      yield { type: "input.requested", turnId: "t1", request: { id: "approve-1", prompt: "Approve refund?", answererId: "U1" } } as TurnEvent;
+      yield { type: "input.requested", turnId: "t1", request: { id: "approve-1", prompt: "Approve refund?", answerers: { user: "U1" } } } as TurnEvent;
     };
     const ctx = ctxWith(async () => "unused");
     ctx.runStream = parkStream;
@@ -865,7 +865,7 @@ describe("slackChannel", () => {
     const ctx = ctxWith(async () => { throw new Error("run() must not be used when runStream is available"); });
     ctx.runStream = async function* () {
       yield { type: "turn.started", turnId: "t1", trigger: { kind: "proactive", by: "x" } } as TurnEvent;
-      yield { type: "input.requested", turnId: "t1", request: { id: "approve-1", prompt: "Approve refund?", answererId: "U1" } } as TurnEvent;
+      yield { type: "input.requested", turnId: "t1", request: { id: "approve-1", prompt: "Approve refund?", answerers: { user: "U1" } } } as TurnEvent;
     };
     await ch2.webhook!(await signed(JSON.stringify({ type: "event_callback", event: { type: "message", text: "refund", channel: "C1", ts: "1.1", user: "U1" } })), ctx);
     await flush();
@@ -1224,6 +1224,10 @@ describe("exported verify/normalize primitives (D — composability floor)", () 
 
     const norm = normalizeSlackEvent({ type: "message", text: "hi", channel: "C1", ts: "1.1", user: "U1" }, ["message"], undefined);
     expect(norm?.event).toMatchObject({ source: "slack", kind: "message", text: "hi" });
+    // #261: a signed Slack event's speaker is attested — the default answerer of a requestInput
+    expect(norm?.event.user).toEqual({ id: "U1", attested: true });
+    const reaction = normalizeSlackEvent({ type: "reaction_added", reaction: "white_check_mark", user: "U2", item: { channel: "C1", ts: "1.1" } }, ["reaction_added"], undefined);
+    expect(reaction?.event.user).toEqual({ id: "U2", attested: true });
   });
 });
 

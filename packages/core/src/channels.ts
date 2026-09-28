@@ -761,7 +761,8 @@ export function slackChannel(opts: {
   }
   // Route an Approve/Deny click to session.resume and render the continuation into the button
   // message. The clicker's id is the VERIFIED resumer (`by`) — the signature was checked above,
-  // and Slack's payload.user.id is trustworthy; the engine enforces it against answererId.
+  // and Slack's payload.user.id is trustworthy; the engine enforces it against the request's
+  // answerers (a { user } must match it; a { policy } is decided by the host's grantAnswer).
   // Returns whether a built-in branch CLAIMED the payload (#88): june_feedback and
   // june_input:* action_ids are ours (claimed even when dropped — e.g. onFeedback absent);
   // everything else is unrouted and falls through to onInteraction at the call site.
@@ -1216,6 +1217,9 @@ type SlackInteraction = {
 // Returns null when the event isn't one we route (not in `events`, self-authored, or
 // missing required fields) so the webhook simply fast-ACKs and does nothing. Exported so
 // a hand-rolled Slack channel can reuse the normalization instead of re-deriving it.
+// The speaker is marked `attested` (#261): Slack signs the request, so `user` is Slack's
+// word, not a claim — which is what makes it the default answerer of a requestInput. Call
+// this only on a body that passed verifySlackSignature, as the built-in channel does.
 export function normalizeSlackEvent(
   e: SlackEvent,
   events: SlackEventKind[],
@@ -1229,7 +1233,7 @@ export function normalizeSlackEvent(
   if ((e.type === "message" || e.type === "app_mention") && events.includes(e.type) && !e.bot_id && !e.subtype && e.text && e.text.trim() && e.channel && e.ts) {
     const thread = e.thread_ts ?? e.ts; // reply in-thread; one session per thread
     return {
-      event: { source: "slack", kind: e.type, channelId: e.channel, channelType: slackChannelType(e.type === "message" ? e.channel_type : undefined, e.channel), threadId: thread, teamId, ts: e.ts, user: e.user ? { id: e.user } : undefined, text: e.text, raw: e },
+      event: { source: "slack", kind: e.type, channelId: e.channel, channelType: slackChannelType(e.type === "message" ? e.channel_type : undefined, e.channel), threadId: thread, teamId, ts: e.ts, user: e.user ? { id: e.user, attested: true } : undefined, text: e.text, raw: e },
       session: `slack:${e.channel}:${thread}`,
       userText: e.text,
     };
@@ -1242,7 +1246,7 @@ export function normalizeSlackEvent(
     const channel = e.item.channel, itemTs = e.item.ts;
     const verb = e.type === "reaction_added" ? "added" : "removed";
     return {
-      event: { source: "slack", kind: e.type, channelId: channel, channelType: slackChannelType(undefined, channel), threadId: itemTs, teamId, ts: itemTs, user: e.user ? { id: e.user } : undefined, reaction: { name: e.reaction, itemTs }, raw: e },
+      event: { source: "slack", kind: e.type, channelId: channel, channelType: slackChannelType(undefined, channel), threadId: itemTs, teamId, ts: itemTs, user: e.user ? { id: e.user, attested: true } : undefined, reaction: { name: e.reaction, itemTs }, raw: e },
       session: `slack:${channel}:${itemTs}`,
       userText: `[reaction] <@${e.user ?? "someone"}> ${verb} :${e.reaction}: on a message in this thread`,
     };

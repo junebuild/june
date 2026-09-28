@@ -259,8 +259,8 @@ describe("AgentDurableObject", () => {
     // nothing suspended yet → 409
     expect((await post("/resume", { turnId: "t1", inputId: "a1", input: true })).status).toBe(409);
 
-    // park t1 with an answererId (trigger user U1 from the inbound event)
-    const event = { source: "slack", kind: "message", channelId: "C1", ts: "1.1", user: { id: "U1" } };
+    // park t1 with answerers { user: "U1" } (the attested trigger user of the inbound event)
+    const event = { source: "slack", kind: "message", channelId: "C1", ts: "1.1", user: { id: "U1", attested: true } };
     const res = await post("/turn", { userText: "refund", turnId: "t1", event });
     for await (const _ of sseTurnEvents(res)) { /* drain to the park */ }
 
@@ -737,7 +737,7 @@ describe("AgentDurableObject — session identity (#75)", () => {
       { text: "done", toolCalls: [] },
     ]);
     const mk = () => new AgentDurableObject({ storage: s }, { name: "support", model, tools: [approve] });
-    const event = { source: "slack", kind: "message", channelId: "C1", ts: "1.1", user: { id: "U1" } };
+    const event = { source: "slack", kind: "message", channelId: "C1", ts: "1.1", user: { id: "U1", attested: true } };
 
     const parked = await mk().fetch(new Request("https://do/turn", {
       method: "POST",
