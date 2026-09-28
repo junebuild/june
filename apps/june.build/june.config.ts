@@ -44,6 +44,7 @@ export default defineJune({
     // the twitter handle). No postal address: the project is run in the open on GitHub.
     organization: {
       name: "June.build",
+      email: "scout@agents.june.build", // → contactPoint (also on /contact)
       sameAs: ["https://github.com/junebuild", "https://www.npmjs.com/org/junejs"],
     },
     // What the site is about: the framework itself, as software and as source code.
