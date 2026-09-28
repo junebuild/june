@@ -28,7 +28,7 @@ bun harness/installed.ts bun                # also: npm-global, bun-global, bunx
 
 | scenario | checks |
 |---|---|
-| session | renders; feed live (≥ 10 events — liveness only; throughput is the next check); CJK on screen; box borders in the same columns on every row; no stale cells after emoji (Unicode 11 widths); no full-screen clears and ≥ 5 events/s while keys are pressed (a starved event loop drops to ~0); `$EDITOR` runs with the terminal and the TUI comes back; resize 120x40 and 60x20; `q` exits 0; terminal restored; mounted once, one feed subscription, suspend/resume paired |
+| session | renders; feed live (≥ 10 events); CJK on screen; box borders in the same columns on every row; no stale cells after emoji (Unicode 11 widths); no full-screen clears, and the feed not starved (≥ 1 event/s) while keys are pressed; `$EDITOR` runs with the terminal and the TUI comes back; resize 120x40 and 60x20; `q` exits 0; terminal restored; mounted once, one feed subscription, suspend/resume paired |
 | anchor | with ≥ 30 rows: a middle row, then the last (oldest) row, stays on screen while events are prepended above it (≥ 18 of 20 samples each) |
 | typeahead | `q` sent the instant the process starts, before the first frame: exits 0 and restores the terminal |
 | typeahead nav | `j` sent the instant the process starts: once the list has data, a row is selected (it stays put while events stream in) |
@@ -36,8 +36,10 @@ bun harness/installed.ts bun                # also: npm-global, bun-global, bunx
 | stdin redirected | stdout a TTY, stdin `/dev/null` or `NUL`: no full-screen UI, prints the listing, exits 0 |
 | no TTY | pipes only: plain text, five lines, exits 0 |
 
-Reported but not asserted: frame times, PTY bytes/s, `widthMethod`, and stale cells when the same bytes
-are replayed with Unicode 6 widths (a stand-in for legacy `wcwidth` tables).
+Reported but not asserted: frame times, events/s, PTY bytes/s, `widthMethod`, and stale cells when
+the same bytes are replayed with Unicode 6 widths (a stand-in for legacy `wcwidth` tables). Speed
+is not a pass/fail criterion on shared CI runners: the Intel macOS runner has measured 4–17
+events/s on the same code, frames averaging 3–27 ms. Only starvation (< 1 event/s) fails.
 
 ## Results
 
