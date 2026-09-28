@@ -1,12 +1,7 @@
 ---
 title: Contact
-description: How to reach the June project — email, GitHub issues for bugs and feature requests, pull requests for changes, and where agents can query this site directly.
+description: How to reach the June project — GitHub issues for bugs and feature requests, pull requests for changes, and where agents can query this site directly.
 ---
-## Email
-
-For anything that doesn't fit a public issue, write to
-[scout@agents.june.build](mailto:scout@agents.june.build).
-
 ## Bugs and feature requests
 
 The fastest way to reach the people who build June is the issue tracker at
