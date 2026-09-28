@@ -2,6 +2,7 @@
 // search_site / get_page MCP tools. Benchmark numbers come from the named-run
 // registry (bench/results.json) — never hand-copied (see docs/benchmark-methodology.md).
 import RESULTS from "../../../bench/results.json";
+import { faqMarkdown } from "../faq";
 import { page } from "./_content";
 
 export type Page = { slug: string; title: string; summary: string; md: string };
@@ -78,7 +79,8 @@ server actions, its API is the \`/mcp\` your app already speaks.
   (the \`june\` command). NOT \`june\` (an unrelated npm package), not \`junejs\`.
 - NOT \`@june/*\` — that npm scope is not ours. Our scopes are \`@junejs\` and \`@junebuild\`.
 - Site: june.build · GitHub: github.com/junebuild
-`,
+
+${faqMarkdown()}`,
   },
   // /why (and /about, /contact, /privacy below) is authored once, as content/pages/<slug>.md:
   // the page renders its html, and the .md projection, search_site and get_page read its

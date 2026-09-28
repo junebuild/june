@@ -94,6 +94,22 @@ describe("human surface", () => {
     expect(byType("SoftwareSourceCode").codeRepository).toBe("https://github.com/junebuild/june");
   });
 
+  test("the homepage FAQ has ONE source: its section, /index.md, and the FAQPage JSON-LD agree", async () => {
+    const { FAQ } = await import("./faq");
+    const html = await (await get("/")).text();
+    const md = await (await get("/index.md")).text();
+    const ld = JSON.parse(html.match(/<script type="application\/ld\+json">(.*?)<\/script>/)![1]!);
+    const faqPage = ld["@graph"].find((n: { "@type": string }) => n["@type"] === "FAQPage");
+    expect(faqPage.mainEntity.map((q: { name: string }) => q.name)).toEqual(FAQ.map((f) => f.q));
+    for (const f of FAQ) {
+      expect(html).toContain(`<h3>${f.q.replace(/'/g, "&#x27;")}</h3>`);
+      expect(md).toContain(`### ${f.q}\n\n${f.a}`);
+      // JSON-LD answers are plain text: the Markdown code ticks are dropped
+      const answer = faqPage.mainEntity.find((q: { name: string }) => q.name === f.q).acceptedAnswer.text;
+      expect(answer).toBe(f.a.replace(/`/g, ""));
+    }
+  });
+
   test("docs and blog pages place themselves in the site: June › Docs|Blog › <page>", async () => {
     const trail = async (path: string) => {
       const html = await (await get(path)).text();
