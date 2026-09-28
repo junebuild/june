@@ -797,7 +797,10 @@ testing split the Slack channel already uses.
 ## 13. Open questions and live tests
 
 Cloudflare is built first, and five of its behaviors are undocumented or account-specific;
-each is settled by a test against a real onboarded domain before P1 code depends on it:
+each is settled by a test against a real onboarded domain before P1 code depends on it. The
+domain is **`agents.june.build`**, which June dogfoods for its own support and brand
+mailboxes (decided 2026-09-28) — a sending and routing subdomain kept apart from the
+`june.build` apex, as Cloudflare recommends:
 
 1. **Does the message `email()` receives carry `Authentication-Results`?** §7.1 derives an
    operator's identity from aligned DMARC / DKIM. If the header is absent, June verifies DKIM
