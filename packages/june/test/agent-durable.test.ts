@@ -303,6 +303,34 @@ describe("AgentDurableObject", () => {
     ]);
   });
 
+  test("a session first rebuilt by /reset still announces inside the request scope (#260)", async () => {
+    const s = await storage();
+    const approve: Tool = {
+      spec: { name: "approve", description: "ask a human", input: { type: "object" } },
+      run: async (_i, ctx) => ({ approved: await ctx.requestInput({ id: "a1", prompt: "Send?", answerers: { user: "U1" } }) }),
+    };
+    const model = () => scriptedModel([{ text: "drafting", toolCalls: [{ id: "c1", name: "approve", input: {} }] }, { text: "sent", toolCalls: [] }]);
+    const errors = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const before = new AgentDurableObject({ storage: s }, { name: "scout", model: model(), tools: [approve], onInputAnnouncement: () => { throw new Error("index down"); } });
+      for await (const _ of sseTurnEvents(await before.fetch(new Request("https://do/turn", { method: "POST", body: JSON.stringify({ userText: "refund", turnId: "t1" }) })))) { /* to the park */ }
+
+      const seen: { kind: string; scoped: unknown }[] = [];
+      const after = new AgentDurableObject({ storage: s }, {
+        name: "scout", model: model(), tools: [approve], services: { index: "pending_actions" },
+        onInputAnnouncement: (a) => { seen.push({ kind: a.kind, scoped: currentServices() }); },
+      });
+      expect((await after.fetch(new Request("https://do/reset", { method: "POST" }))).status).toBe(200); // the first path in this life
+      for (let i = 0; i < 100 && seen.length < 2; i++) await new Promise((r) => setTimeout(r, 5));
+      expect(seen).toEqual([
+        { kind: "parked", scoped: { index: "pending_actions" } },
+        { kind: "resolved", scoped: { index: "pending_actions" } }, // retired by the reset
+      ]);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
   test("a rebuilt object delivers announcements an earlier life committed but never delivered (#260)", async () => {
     const s = await storage();
     const approve: Tool = {

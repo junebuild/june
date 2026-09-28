@@ -453,7 +453,14 @@ export class AgentDurableObject {
     // died before delivering it.
     const announce = this.onInputAnnouncement;
     if (announce) {
-      this.session.onAnnounce = (a) => this.ready().then((resources) => runInScope({ resources, services: this.services }, () => announce(a)));
+      // ensureScope() here, not only in the request handlers: a session can first be rebuilt by
+      // a path that never wires async scope (/reset, /transcript, the direct API), and without it
+      // runInScope is a pass-through and the hook would see no ambient db.
+      this.session.onAnnounce = async (a) => {
+        await ensureScope();
+        const resources = await this.ready();
+        return runInScope({ resources, services: this.services }, () => announce(a));
+      };
       void this.session.flushAnnouncements();
     }
     return this.session;
