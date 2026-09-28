@@ -7,6 +7,9 @@ import { join } from "node:path";
 
 import { createApp, loadJuneConfig, type JuneApp } from "@junejs/server";
 
+import { DOCS, POSTS } from "./app/_content";
+import { ogOptions } from "./app/og-options";
+
 const ROOT = import.meta.dirname;
 
 let app: JuneApp;
@@ -283,6 +286,28 @@ describe("og:image route (app/_extra escape hatch)", () => {
       '<meta property="og:image" content="https://june.build/og/2026-06-12-built-in-og-image.png"/>',
     );
   }, 15_000);
+});
+
+describe("og:image card options (app/og-options.ts)", () => {
+  test("each page kind gets its card: label, markdown path, date", () => {
+    const post = POSTS.find((p) => p.slug === "2026-06-10-typesetting-cjk-at-the-edge")!;
+    expect(ogOptions(post.slug)).toEqual({
+      title: String(post.data.title),
+      path: `/blog/${post.slug}`,
+      kind: "blog",
+      date: String(post.data.date),
+    });
+    const doc = DOCS.find((d) => d.slug === "features-mcp")!;
+    expect(ogOptions("features-mcp")).toEqual({ title: String(doc.data.title), path: "/docs/features-mcp", kind: "docs" });
+    expect(ogOptions("why")).toEqual({ title: "Why June", path: "/why" }); // a page: no pill, no date
+    expect(ogOptions("benchmarks")).toEqual({ title: "Benchmarks", path: "/benchmarks" });
+  });
+
+  test("home (and an unknown slug) is the hero line at /, never /index", () => {
+    const home = { title: "Build agents into real apps.", path: "/" };
+    expect(ogOptions("index")).toEqual(home);
+    expect(ogOptions("no-such-page")).toEqual(home);
+  });
 });
 
 describe("favicon (generated letter default)", () => {
