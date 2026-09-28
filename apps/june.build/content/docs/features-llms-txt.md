@@ -151,9 +151,9 @@ turns a projection off answers 404 there; and call each tool at `/mcp`, listed
 with its parameters and description. The index next to it carries the
 SKILL.md's `sha256` digest, so an agent can verify what it downloaded.
 
-The AI Catalog lists the same resources for ARD: the MCP server card and the
-skill, each with a `urn:air:<host>:…` identifier, under a
-`did:web:<host>` host. `robots.txt` points at it (`Agentmap:`), and so do
+The AI Catalog lists the same resources for ARD: the MCP server card, the HTTP
+API's `/openapi.json`, and the skill, each with a `urn:air:<host>:…` identifier,
+under a `did:web:<host>` host. `robots.txt` points at it (`Agentmap:`), and so do
 every page's `<link rel="ai-catalog">` and `Link` header. Both catalogs name
 absolute URLs, so a static build writes them only when it knows the public
 origin (`site.url` or `deploy.domain`) and deploys at the domain root.
