@@ -215,6 +215,7 @@ export function makeTestContext(opts: {
 export function memorySessionStore(): SessionStore {
   const msgs: Msg[] = [];
   const steps = new Map<string, unknown>();
+  const outbox = new Map<string, unknown>(); // insertion-ordered, like the SQL stores' rowid
   let status = "new";
   return {
     appendMessage(m) { msgs.push(m); },
@@ -226,6 +227,9 @@ export function memorySessionStore(): SessionStore {
     getStatus() { return status; },
     setStatus(s) { status = s; },
     tx(fn) { return fn(); },
+    outboxPut(id, value) { if (!outbox.has(id)) outbox.set(id, value); },
+    outboxList() { return [...outbox].map(([id, value]) => ({ id, value })); },
+    outboxDel(id) { outbox.delete(id); },
     unwrap<H = unknown>(): H { return undefined as H; },
   };
 }

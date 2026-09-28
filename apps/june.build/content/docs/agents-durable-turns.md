@@ -153,6 +153,7 @@ Every turn emits typed `TurnEvent`s as it runs:
 | `action.requested` | the model asked for a tool call |
 | `action.completed` | a tool call's result was committed; `error` is set when the tool threw (see [When a tool throws](#when-a-tool-throws)) |
 | `input.requested` | the turn parked, waiting for a human |
+| `input.resolved` | a park ended: `answered` by a resume, or `cancelled` by a reset; carries `inputId` and `by` when known. Emitted before the continuation starts; not replayed |
 | `turn.completed` | final text |
 | `turn.failed` | the error, plus `phase` (`model` / `tool`) and `step` when a step was in flight |
 | `turn.cancelled` | the turn was cancelled; carries a `reason` |
@@ -290,6 +291,60 @@ export default {
     policy === "operator" && (await isOperator(principal, scope)),
 };
 ```
+
+### Knowing what is waiting: `onPendingInput`
+
+A park lives in its own session's store, so nothing outside that session can
+answer "what is waiting on a person right now?". Declare `onPendingInput` on the
+agent (`agent.ts`, `defineAgent`, or `DoAgentDef`) and the host tells it about
+every park and every resolution, across all sessions — enough to keep an index
+of pending approvals and update every surface showing one:
+
+```ts
+// app/agent/agent.ts
+export default {
+  name: "ops",
+  onPendingInput: async (change) => {
+    const key = `${change.session}:${change.turnId}:${change.inputId}`;
+    if (change.kind === "requested") {
+      // at-least-once: a repeat of the same change must be a no-op
+      await db.run("insert or ignore into pending_inputs (key, session, prompt) values (?, ?, ?)", [key, change.session, change.prompt]);
+    } else {
+      await db.run("delete from pending_inputs where key = ?", [key]);
+    }
+  },
+};
+```
+
+A `requested` change carries the session, turn and input ids, the prompt, the
+schema, the answerers and the triggering event (`raw` stripped). A `resolved`
+change carries the `outcome` — `answered` by a resume (with `by`, the resumer's
+verified id, when the host passed one) or `cancelled` when a reset retired the
+park.
+
+Delivery is **at least once and in order** per session. Each change is written to
+an outbox in the session's store in the same transaction as the park, the answer
+or the reset, and deleted only after the hook returns — so a crash between the
+commit and the hook delivers it later instead of losing it. Make the hook
+idempotent (as above), or dedupe on `change.id` — unique across agents and
+sessions. A hook that throws keeps the change and is retried, backing off from 5 seconds to
+5 minutes:
+
+- On the Durable Object, the hook runs in the request scope (ambient `db` works),
+  and retries run on the object's alarm. A watchdog alarm a minute out is armed
+  before anything can commit an announcement — when a turn starts, and before an
+  answer or a reset — so an object that dies between the commit and the delivery
+  still delivers. A custom shell must forward the alarm:
+  `alarm() { return this.agent.alarm(); }` — `june build`'s does.
+- On the native runtime, retries run on a timer, a rebuilt session delivers what
+  it finds, and `createNativeRuntime` delivers every session's leftovers at
+  startup.
+
+The index is a projection: the session store stays the source of truth, a second
+answer still fails, and `session.pending()` reconciles an index that drifted.
+`session.deliverPendingInputChanges(hook)` is the primitive both hosts call; a
+custom `SessionStore` implements `outboxPut`, `outboxList` and `outboxDel` to take
+part.
 
 ### Holding turns behind a park
 

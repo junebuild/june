@@ -1436,3 +1436,139 @@ describe("AgentDurableObject — turn control (#129)", () => {
     expect(seenUrls[1]).toContain("/reset");
   });
 });
+
+describe("pending-input announcements on the Durable Object (#260)", () => {
+  const approve: Tool = {
+    spec: { name: "approve", description: "ask a human", input: { type: "object" } },
+    run: async (_i, ctx) => ({ approved: await ctx.requestInput({ id: "a1", prompt: "Approve?" }) }),
+  };
+  const model = () => scriptedModel([
+    { text: "checking", toolCalls: [{ id: "c1", name: "approve", input: {} }] },
+    { text: "done", toolCalls: [] },
+  ]);
+  const drain = async (res: Response) => { for await (const _ of sseTurnEvents(res)) { /* to the end */ } };
+  const settle = () => new Promise((r) => setTimeout(r, 20));
+  const post = (agent: AgentDurableObject, path: string, body: unknown) =>
+    agent.fetch(new Request(`https://do${path}`, { method: "POST", body: JSON.stringify(body) }));
+
+  test("a park and its answer reach onPendingInput, in order, in the DO's scope", async () => {
+    const s = await storage();
+    const got: { kind: string; id: string; outcome?: string; services: unknown }[] = [];
+    const agent = new AgentDurableObject({ storage: s }, {
+      name: "ops", model: model(), tools: [approve], services: { index: "pending" },
+      onPendingInput: (c) => { got.push({ kind: c.kind, id: c.id, ...(c.kind === "resolved" ? { outcome: c.outcome } : {}), services: currentServices() }); },
+    });
+    await drain(await post(agent, "/turn", { userText: "please", turnId: "t1" }));
+    await settle();
+    expect(got).toEqual([{ kind: "requested", id: "ops/self/t1/a1/requested", services: { index: "pending" } }]);
+
+    await drain(await post(agent, "/resume", { turnId: "t1", inputId: "a1", input: true }));
+    await settle();
+    expect(got.map((c) => [c.kind, c.outcome])).toEqual([["requested", undefined], ["resolved", "answered"]]);
+    expect(new DoSessionStore(s).outboxList()).toEqual([]); // delivered ⇒ deleted
+  });
+
+  test("/reset announces the retired park as cancelled", async () => {
+    const s = await storage();
+    const got: string[] = [];
+    const agent = new AgentDurableObject({ storage: s }, {
+      name: "ops", model: model(), tools: [approve],
+      onPendingInput: (c) => { got.push(c.kind === "resolved" ? `resolved:${c.outcome}` : c.kind); },
+    });
+    await drain(await post(agent, "/turn", { userText: "please", turnId: "t1" }));
+    expect((await post(agent, "/reset", {})).status).toBe(200);
+    await settle();
+    expect(got).toEqual(["requested", "resolved:cancelled"]);
+  });
+
+  test("a failing hook keeps the announcement and schedules an alarm; alarm() delivers it", async () => {
+    const s = await storage();
+    const alarms: number[] = [];
+    const withAlarm = { ...s, setAlarm: (t: number) => { alarms.push(t); } };
+    let up = false;
+    const got: string[] = [];
+    const errors = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const agent = new AgentDurableObject({ storage: withAlarm }, {
+        name: "ops", model: model(), tools: [approve],
+        onPendingInput: (c) => { if (!up) throw new Error("index unavailable"); got.push(c.id); },
+      });
+      const before = Date.now();
+      await drain(await post(agent, "/turn", { userText: "please", turnId: "t1" }));
+      await settle();
+      expect(got).toEqual([]);
+      // the watchdog (60 s), then the failure's first backoff step (5 s) replacing it
+      expect(alarms).toHaveLength(2);
+      expect(alarms[1]!).toBeGreaterThanOrEqual(before + 5_000);
+      expect(alarms[1]!).toBeLessThan(before + 60_000);
+      expect(new DoSessionStore(s).outboxList().map((r) => r.id)).toEqual(["ops/self/t1/a1/requested"]); // kept
+      expect(errors.mock.calls.some((c) => String(c[0]).includes("onPendingInput failed"))).toBe(true);
+
+      up = true;
+      await agent.alarm();
+      expect(got).toEqual(["ops/self/t1/a1/requested"]);
+      expect(new DoSessionStore(s).outboxList()).toEqual([]);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  test("the watchdog alarm is armed before a park, an answer or a reset commits its row", async () => {
+    const s = await storage();
+    // What the outbox held at each setAlarm call: a watchdog armed after the commit would
+    // already see the row it is meant to protect.
+    const armed: { at: number; rows: string[] }[] = [];
+    const store = new DoSessionStore(s);
+    const agent = new AgentDurableObject({ storage: { ...s, setAlarm: (t: number) => { armed.push({ at: t, rows: store.outboxList().map((r) => r.id) }); } } }, {
+      name: "ops", model: model(), tools: [approve], onPendingInput: () => {},
+    });
+    const before = Date.now();
+    await drain(await post(agent, "/turn", { userText: "please", turnId: "t1" }));
+    expect(armed[0]).toEqual({ at: expect.any(Number), rows: [] }); // park: armed at turn.started
+    expect(armed[0]!.at).toBeGreaterThanOrEqual(before + 60_000);
+    await settle(); // delivered and deleted
+
+    armed.length = 0;
+    await drain(await post(agent, "/resume", { turnId: "t1", inputId: "a1", input: true }));
+    expect(armed[0]!.rows).toEqual([]); // answer: armed before resume() commits
+
+    await settle();
+    armed.length = 0;
+    expect((await post(agent, "/reset", {})).status).toBe(200);
+    expect(armed[0]!.rows).toEqual([]); // reset: armed before the archive commits
+  });
+
+  test("a rebuilt object delivers what a previous life committed but never delivered", async () => {
+    const s = await storage();
+    const keyed = (path: string, body?: unknown) =>
+      new Request(`https://do${path}`, { method: body ? "POST" : "GET", headers: { [SESSION_HEADER]: "k1" }, ...(body ? { body: JSON.stringify(body) } : {}) });
+    // First life: no hook wired — the park commits its announcement and nobody takes it.
+    const first = new AgentDurableObject({ storage: s }, { name: "ops", model: model(), tools: [approve] });
+    await drain(await first.fetch(keyed("/turn", { userText: "please", turnId: "t1" })));
+    expect(new DoSessionStore(s).outboxList().map((r) => r.id)).toEqual(["ops/k1/t1/a1/requested"]);
+
+    // Next life (eviction, a deploy): rebuilding the session delivers it — here a keyed
+    // read; in production also the watchdog alarm.
+    const got: string[] = [];
+    const second = new AgentDurableObject({ storage: s }, { name: "ops", model: model(), tools: [approve], onPendingInput: (c) => { got.push(c.id); } });
+    await second.fetch(keyed("/transcript"));
+    await settle();
+    expect(got).toEqual(["ops/k1/t1/a1/requested"]);
+
+    // alarm() alone does it too (a fresh life, rows re-committed by nobody → nothing to do)
+    const third = new AgentDurableObject({ storage: s }, { name: "ops", model: model(), tools: [approve], onPendingInput: (c) => { got.push(c.id); } });
+    await third.alarm();
+    expect(got).toEqual(["ops/k1/t1/a1/requested"]); // already delivered and deleted — not twice
+  });
+
+  test("alarm() on a fresh life delivers undelivered rows without any request", async () => {
+    const s = await storage();
+    const first = new AgentDurableObject({ storage: s }, { name: "ops", model: model(), tools: [approve] });
+    await drain(await first.fetch(new Request("https://do/turn", { method: "POST", headers: { [SESSION_HEADER]: "k1" }, body: JSON.stringify({ userText: "please", turnId: "t1" }) })));
+    const got: string[] = [];
+    const next = new AgentDurableObject({ storage: s }, { name: "ops", model: model(), tools: [approve], onPendingInput: (c) => { got.push(c.id); } });
+    await next.alarm();
+    await settle();
+    expect(got).toEqual(["ops/k1/t1/a1/requested"]);
+  });
+});

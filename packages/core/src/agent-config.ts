@@ -7,7 +7,7 @@
 // this module is the pure config layer it produces.
 
 import type { AnyAction } from "./agent";
-import type { AuthorizeAnswer, ChannelPolicy, InboundEvent, ProactiveTrigger, Tool, ToolContext, ToolSpec, TurnEvent } from "./agent-runtime";
+import type { AuthorizeAnswer, ChannelPolicy, InboundEvent, PendingInputHook, ProactiveTrigger, Tool, ToolContext, ToolSpec, TurnEvent } from "./agent-runtime";
 import type { Principal } from "./context";
 import { connectAll, type Connection, type ConnectionReport } from "./connections";
 
@@ -322,6 +322,11 @@ export type AgentConfigFile = {
   // Decides a { policy } answerer of a parked requestInput at resume time (#261) — e.g.
   // "is this principal an operator of mailbox scout". See AuthorizeAnswer.
   authorizeAnswer?: AuthorizeAnswer;
+  // Told of every park and resolution (#260) — to keep a cross-session index of what is
+  // waiting on a person and update the surfaces showing it. At-least-once and in order per
+  // session, after the change commits; dedupe on `change.id`. A throw is retried: the host
+  // keeps the announcement and delivers it again later. See PendingInputChange.
+  onPendingInput?: PendingInputHook;
 };
 
 // A fully-assembled agent, ready to mount on a runtime (tools already adapted).
@@ -345,6 +350,8 @@ export type AgentDefinition = {
   connections: ConnectionReport[];
   // The app's rule for { policy } answerers (#261); hosts evaluate it before a resume.
   authorizeAnswer?: AuthorizeAnswer;
+  // Pending-input announcements (#260); hosts deliver them from the session outbox.
+  onPendingInput?: PendingInputHook;
 };
 
 // Bridge a `defineAction` into a runtime Tool. The action's run(input, ctx)
@@ -423,6 +430,7 @@ export function defineAgent(config: {
   channelInstructions?: Record<string, string | ChannelPolicy>;
   connections?: ConnectionReport[];
   authorizeAnswer?: AuthorizeAnswer;
+  onPendingInput?: PendingInputHook;
 }): AgentDefinition {
   const skills = config.skills ?? [];
   const channels = config.channels ?? [];
@@ -463,6 +471,7 @@ export function defineAgent(config: {
     }),
     connections: config.connections ?? [],
     authorizeAnswer: config.authorizeAnswer,
+    onPendingInput: config.onPendingInput,
   };
 }
 
@@ -561,6 +570,7 @@ export async function assembleAgent(mod: AgentModule, env?: unknown): Promise<Ag
     channelInstructions: Object.keys(mod.channelInstructions).length ? mod.channelInstructions : undefined,
     connections: report,
     authorizeAnswer: mod.config.authorizeAnswer,
+    onPendingInput: mod.config.onPendingInput,
   });
 }
 
@@ -586,6 +596,7 @@ export function assembleDurable(mod: AgentModule): {
   channels: (Channel | ChannelFactory)[];
   connections: Connection[];
   authorizeAnswer?: AuthorizeAnswer;
+  onPendingInput?: PendingInputHook;
 } {
   const tools: Tool[] = flattenTools(mod.tools).map((t) => (isTool(t) ? t : actionToTool(t)));
   if (mod.skills.length) tools.push(readSkillTool(mod.skills));
@@ -617,5 +628,6 @@ export function assembleDurable(mod: AgentModule): {
     channels: Object.values(mod.channels),
     connections: mod.connections,
     ...(mod.config.authorizeAnswer ? { authorizeAnswer: mod.config.authorizeAnswer } : {}),
+    ...(mod.config.onPendingInput ? { onPendingInput: mod.config.onPendingInput } : {}),
   };
 }

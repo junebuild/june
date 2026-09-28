@@ -29,7 +29,10 @@ import type { Principal } from "./context";
 // v3: grantAnswer / AgentSession.pending() (#261) — the hosts decide { policy } answerers
 //     with them; AgentSession.onDequeue / drain() (#263) — the Durable Object renders
 //     held turns with them.
-export const RUNTIME_API_VERSION = 3;
+// v4: the pending-input outbox (#260) — SessionStore.outboxPut/outboxList/outboxDel and
+//     reset(inTx), AgentSession.deliverPendingInputChanges(), the input.resolved event;
+//     the hosts' stores implement them and the hosts deliver with them.
+export const RUNTIME_API_VERSION = 4;
 
 // `providerState` (#92) is OPAQUE round-trip state a model adapter may attach to a
 // tool call: some providers require it replayed verbatim (Gemini 3+ returns a
@@ -234,7 +237,17 @@ export interface SessionStore {
   // live tables, set status back to "new", and return the archived generation index
   // (0-based). Must commit atomically (one tx). Optional: a store that doesn't implement
   // it makes AgentSession.reset() fail loudly instead of half-clearing.
-  reset?(): number;
+  // `inTx` runs inside that same transaction, BEFORE the archive, so the engine can
+  // read the live steps and write outbox rows atomically with the reset (#260).
+  reset?(inTx?: () => void): number;
+  // The pending-input announcement outbox (#260): rows the engine writes inside the
+  // same `tx` as the change they announce, delivered to the host afterwards and
+  // deleted only once delivered. Kept OUTSIDE the steps, so reset() never archives
+  // them. `outboxList` returns rows oldest first. Optional as a set: a store without
+  // them makes delivery (AgentSession.deliverPendingInputChanges) fail loudly.
+  outboxPut?(id: string, value: unknown): void;
+  outboxList?(): { id: string; value: unknown }[];
+  outboxDel?(id: string): void;
   // Escape hatch to the underlying storage handle, so a local tool can write its
   // own app table inside `tx` (exactly-once). On native this is the host sync
   // SQLite handle; on an edge target it is ctx.storage.sql.
@@ -383,6 +396,50 @@ export class CancelSignal extends Error {
 // one is parked, so a single fixed key cannot be clobbered.
 type SuspendedCheckpoint = { turnId: string; callId: string; request: InputRequest; userText: string; systemOverlay?: string; systemMode?: "append" | "replace"; deniedTools?: string[]; event?: InboundEvent };
 
+// ── pending-input announcements (#260) ────────────────────────────────────────
+// A park and its resolution, announced to the host so it can keep a cross-session
+// index of what is waiting on a person, and update every surface showing it. The
+// session store holds the only truth (a second answer still fails); the index is a
+// projection, reconcilable from AgentSession.pending().
+//
+// Delivery is at-least-once, in order, through the store's outbox: each row commits
+// in the same transaction as the change it announces and is deleted only after the
+// host's hook returns. `id` is stable per change and unique across agents and sessions
+// (`agent/session/turnId/inputId/kind`, each part percent-encoded) — a consumer dedupes on it. `event`
+// is the turn's triggering event with `raw` stripped, as in the checkpoint.
+// `cancelled` is a park retired by reset(); `by` on `answered` is the resumer's
+// verified identity, when the host passed one.
+export type PendingInputChange =
+  | { kind: "requested"; id: string; agent: string; session: string; turnId: string; inputId: string; prompt: string; schema?: InputRequest["schema"]; answerers?: Answerers; event?: InboundEvent; at: string }
+  | { kind: "resolved"; id: string; agent: string; session: string; turnId: string; inputId: string; outcome: "answered" | "cancelled"; by?: string; at: string };
+export type PendingInputHook = (change: PendingInputChange) => void | Promise<void>;
+
+// Unique across agents and sessions — a caller may reuse a turnId in another session — and
+// reversible: each part is percent-encoded, so no part can contain the separator.
+function changeId(agent: string, session: string, turnId: string, inputId: string, kind: PendingInputChange["kind"]): string {
+  return [agent, session, turnId, inputId].map(encodeURIComponent).join("/") + `/${kind}`;
+}
+
+function requestedChange(agent: string, session: string, turnId: string, request: InputRequest, event: InboundEvent | undefined): PendingInputChange {
+  return {
+    kind: "requested",
+    id: changeId(agent, session, turnId, request.id, "requested"),
+    agent,
+    session,
+    turnId,
+    inputId: request.id,
+    prompt: request.prompt,
+    ...(request.schema !== undefined ? { schema: request.schema } : {}),
+    ...(request.answerers ? { answerers: request.answerers } : {}),
+    ...(event ? { event } : {}),
+    at: new Date().toISOString(),
+  };
+}
+
+function resolvedChange(agent: string, session: string, turnId: string, inputId: string, outcome: "answered" | "cancelled", by: string | undefined): PendingInputChange {
+  return { kind: "resolved", id: changeId(agent, session, turnId, inputId, "resolved"), agent, session, turnId, inputId, outcome, ...(by !== undefined ? { by } : {}), at: new Date().toISOString() };
+}
+
 // An inbound turn held while the session is parked (#263): everything start() needs to run it
 // later, persisted in the session's own store (step INBOUND_QUEUE), so it survives a restart.
 // `hostContext` is opaque to the engine — a host stores what it needs to finish the turn's
@@ -407,6 +464,10 @@ export type TurnEvent =
   | { type: "action.completed"; turnId: string; call: ToolCall; result: unknown; error?: string }
   | { type: "message.completed"; turnId: string; text: string }
   | { type: "input.requested"; turnId: string; request: InputRequest }
+  // A park ended (#260): answered by resume(), or retired by reset() ("cancelled").
+  // Emitted after the change commits and BEFORE any continuation starts. Live-only; the
+  // durable record of it is the outbox announcement (PendingInputChange).
+  | { type: "input.resolved"; turnId: string; inputId: string; outcome: "answered" | "cancelled"; by?: string }
   | { type: "turn.completed"; turnId: string; text: string }
   | { type: "turn.failed"; turnId: string; error: TurnError; phase?: TurnFailurePhase; step?: string }
   // The turn was cancelled at a checkpoint boundary — no reply follows. `reason` says
@@ -619,8 +680,14 @@ export async function runTurn(
       // is insert-only on the SQL stores).
       const event = env.event ? { ...env.event, raw: undefined } : undefined;
       const checkpoint: SuspendedCheckpoint = { turnId: opts.turnId, callId: err.callId, request: err.request, userText: opts.userText, systemOverlay: env.systemOverlay, systemMode: env.systemMode, deniedTools: env.deniedTools, event };
+      // The announcement (#260) rides the same insert: a redelivered replay neither
+      // re-parks nor re-announces.
       store.tx(() => {
-        if (store.getStep("suspended") === undefined) store.putStep("suspended", checkpoint);
+        if (store.getStep("suspended") === undefined) {
+          store.putStep("suspended", checkpoint);
+          const change = requestedChange(env.agent, env.sessionId, opts.turnId, err.request, event);
+          store.outboxPut?.(change.id, change);
+        }
         store.setStatus("suspended");
       });
       sink.emit({ type: "input.requested", turnId: opts.turnId, request: err.request });
@@ -914,6 +981,12 @@ export class AgentSession {
   // lets a new turn queue PAST a suspended park (the reset will retire it first) and
   // resume() refuses (the park is being retired — answering it would race the archival).
   private pendingReset = false;
+  // Serializes deliverPendingInputChanges (#260): two concurrent deliveries would hand the
+  // same outbox row to the hook twice and race each other's deletes.
+  private delivering: Promise<unknown> = Promise.resolve();
+  // Deliveries called and not yet settled (queued behind each other included) — idle() says
+  // no while any is, so a host cannot evict an actor mid-delivery.
+  private deliveriesInFlight = 0;
   // Called when a held inbound turn (#263) is started — synchronously, right after start(),
   // before any of its events can emit — so a host can attach what the turn's original caller
   // would have (a delivered render). Set by the host after constructing the session; queued
@@ -1142,11 +1215,14 @@ export class AgentSession {
         throw new ResumeAuthorizationError(`resume: ${opts?.by ?? "<unidentified>"} is not authorized to answer input "${inputId}"`);
       }
     }
+    const resolved = resolvedChange(this.agent, this.id, turnId, inputId, "answered", opts?.by);
     this.store.tx(() => {
       this.store.putStep(`input:${turnId}:${inputId}`, { input });
       this.store.delStep("suspended"); // consumed — the next park (same turn or a later one) inserts cleanly
       this.store.setStatus("running");
+      this.store.outboxPut?.(resolved.id, resolved); // #260: committed with the answer
     });
+    this.sink.emit({ type: "input.resolved", turnId, inputId, outcome: "answered", ...(opts?.by !== undefined ? { by: opts.by } : {}) });
     const run = () =>
       runTurn(
         this.store,
@@ -1167,6 +1243,37 @@ export class AgentSession {
   pending(): { turnId: string; request: InputRequest; queued: number } | undefined {
     const suspended = this.store.getStep("suspended") as SuspendedCheckpoint | undefined;
     return suspended ? { turnId: suspended.turnId, request: suspended.request, queued: this.heldTurns().length } : undefined;
+  }
+
+  // Hand this session's pending-input announcements (#260) to `hook`, oldest first,
+  // deleting each row only after the hook returns (a Promise is awaited). Rows written
+  // while delivery runs are picked up in the same call. A throwing hook stops delivery
+  // and the call rejects with its error; that row and every later one stay in the outbox
+  // for the next call — which is the host's retry. Resolves to the number delivered.
+  // Calls are serialized per session.
+  deliverPendingInputChanges(hook: PendingInputHook): Promise<number> {
+    const store = this.store;
+    const { outboxPut, outboxList, outboxDel } = store;
+    // All three or none: with List/Del but no Put nothing was ever persisted, and delivering
+    // "zero changes" would hide that.
+    if (!outboxPut || !outboxList || !outboxDel) {
+      return Promise.reject(new Error(`agent "${this.agent}" session "${this.id}": this SessionStore does not implement the announcement outbox (outboxPut/outboxList/outboxDel)`));
+    }
+    const deliver = async () => {
+      let delivered = 0;
+      for (let rows = outboxList.call(store); rows.length > 0; rows = outboxList.call(store)) {
+        for (const { id, value } of rows) {
+          await hook(value as PendingInputChange);
+          outboxDel.call(store, id);
+          delivered++;
+        }
+      }
+      return delivered;
+    };
+    this.deliveriesInFlight++;
+    const op = this.delivering.then(deliver, deliver).finally(() => { this.deliveriesInFlight--; });
+    this.delivering = op.catch(() => {});
+    return op;
   }
 
   // The inbound turns held while the session was parked (#263), oldest first.
@@ -1245,7 +1352,17 @@ export class AgentSession {
     // on failure the park still stands, and start()'s run-time guard protects it again.
     this.pendingReset = true;
     const op = this.chain.then(() => {
-      const generation = store.reset!();
+      // A park being archived is a pending input retired unanswered (#260): announce it
+      // inside the reset's own transaction, so the archive and the announcement commit
+      // together or not at all.
+      let retired: SuspendedCheckpoint | undefined;
+      const generation = store.reset!(() => {
+        retired = store.getStep("suspended") as SuspendedCheckpoint | undefined;
+        if (!retired) return;
+        const change = resolvedChange(this.agent, this.id, retired.turnId, retired.request.id, "cancelled", undefined);
+        store.outboxPut?.(change.id, change);
+      });
+      if (retired) this.sink.emit({ type: "input.resolved", turnId: retired.turnId, inputId: retired.request.id, outcome: "cancelled" });
       return { previousSession: `${this.id}#g${generation}`, generation };
     });
     const clear = () => { this.pendingReset = false; };
@@ -1314,11 +1431,13 @@ export class AgentSession {
   snapshot() { return { transcript: this.transcript(), status: this.store.getStatus() }; }
 
   // True when no in-memory state of this actor matters any more: no turn running or
-  // queued, no reset pending. Everything else (transcript, steps, a suspended park) is in
-  // the store, so a host may drop an idle actor and rebuild it on the next use (#174).
+  // queued, no reset pending, no pending-input delivery in flight (#260 — its row is still
+  // in the outbox, so a rebuilt actor would hand it to the hook a second time, in
+  // parallel). Everything else (transcript, steps, a suspended park) is in the store, so a
+  // host may drop an idle actor and rebuild it on the next use (#174).
   // Live subscribers are held by the host's sink, not here — the host checks those.
   idle(): boolean {
-    return this.running.size === 0 && !this.pendingReset;
+    return this.running.size === 0 && !this.pendingReset && this.deliveriesInFlight === 0;
   }
 }
 

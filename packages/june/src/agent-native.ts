@@ -16,6 +16,8 @@ import {
   type TurnEvent,
   type Model,
   type Msg,
+  type PendingInputChange,
+  type PendingInputHook,
   type Runtime,
   type SessionStore,
   type Tool,
@@ -34,6 +36,10 @@ function initSchema(db: SyncSqlite) {
   // NOTE: PRIMARY KEY (session_id, id) — never id alone. The store view scopes
   // every query by session, so a step id can't leak across sessions.
   db.exec(`CREATE TABLE IF NOT EXISTS agent_steps (session_id TEXT, id TEXT, output TEXT, PRIMARY KEY (session_id, id))`);
+  // The pending-input announcement outbox (#260): outside agent_steps, so reset() never
+  // archives an undelivered row. One table for every session in the file, so a restart
+  // can find what is still undelivered without loading each session first.
+  db.exec(`CREATE TABLE IF NOT EXISTS agent_outbox (seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, id TEXT, value TEXT, UNIQUE (session_id, id))`);
 }
 
 class SqliteSessionStore implements SessionStore {
@@ -88,12 +94,24 @@ class SqliteSessionStore implements SessionStore {
       throw e;
     }
   }
+  // OR IGNORE: an id names one change; a second write of it keeps the first's place.
+  outboxPut(id: string, value: unknown) {
+    this.db.query("INSERT OR IGNORE INTO agent_outbox (session_id, id, value) VALUES (?, ?, ?)").run(this.sid, id, JSON.stringify(value));
+  }
+  outboxList(): { id: string; value: unknown }[] {
+    return (this.db.query("SELECT id, value FROM agent_outbox WHERE session_id = ? ORDER BY seq").all(this.sid) as { id: string; value: string }[])
+      .map((r) => ({ id: r.id, value: JSON.parse(r.value) }));
+  }
+  outboxDel(id: string) {
+    this.db.query("DELETE FROM agent_outbox WHERE session_id = ? AND id = ?").run(this.sid, id);
+  }
   // Session reset (#129): ARCHIVE this session's messages/steps under the current
   // generation (audit trail — never deleted), clear the live rows, status → "new".
   // Archive tables + the generation counter are created lazily here, so existing
   // databases stay untouched until the first reset.
-  reset(): number {
+  reset(inTx?: () => void): number {
     return this.tx(() => {
+      inTx?.(); // before the archive: it reads the live steps (#260)
       this.db.exec(`CREATE TABLE IF NOT EXISTS agent_messages_archive (session_id TEXT, generation INTEGER, seq INTEGER, body TEXT)`);
       this.db.exec(`CREATE TABLE IF NOT EXISTS agent_steps_archive (session_id TEXT, generation INTEGER, id TEXT, output TEXT)`);
       this.db.exec(`CREATE TABLE IF NOT EXISTS agent_session_generations (session_id TEXT PRIMARY KEY, generation INTEGER)`);
@@ -113,14 +131,57 @@ class SqliteSessionStore implements SessionStore {
 
 class InProcEventSink implements EventSink {
   private subs = new Set<(e: TurnEvent) => void>();
-  emit(e: TurnEvent) { this.subs.forEach((cb) => { try { cb(e); } catch { /* a bad subscriber must not break emit */ } }); }
+  // The runtime's own listener (pending-input delivery, #260). Not a subscriber: it is
+  // not counted in `size`, so it never keeps an idle actor from being evicted.
+  private readonly onEvent?: (e: TurnEvent) => void;
+  constructor(onEvent?: (e: TurnEvent) => void) { this.onEvent = onEvent; }
+  emit(e: TurnEvent) {
+    this.subs.forEach((cb) => { try { cb(e); } catch { /* a bad subscriber must not break emit */ } });
+    try { this.onEvent?.(e); } catch { /* likewise */ }
+  }
   subscribe(cb: (e: TurnEvent) => void): () => void { this.subs.add(cb); return () => this.subs.delete(cb); }
   get size(): number { return this.subs.size; }
 }
 
+// Pending-input delivery for the in-process runtimes (#260): hands a session's outbox to
+// the agent's onPendingInput after every park or resolution and whenever the session is
+// (re)built. A failure keeps the rows and retries on a timer, 5 s doubling to 5 min —
+// unref'd, so a pending retry never holds the process open.
+function pendingInputDeliverer(agent: string, sessionId: string, hook: PendingInputHook, session: () => AgentSession): () => void {
+  let failures = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deliver = (): void => {
+    if (timer) { clearTimeout(timer); timer = undefined; }
+    session().deliverPendingInputChanges(hook).then(
+      () => { failures = 0; },
+      (err) => {
+        const delay = Math.min(5_000 * 2 ** failures, 300_000);
+        failures++;
+        console.error(`[june] agent "${agent}" session "${sessionId}": onPendingInput failed (attempt ${failures}); the announcement is kept and retried in ${delay / 1000}s:`, err);
+        timer = setTimeout(deliver, delay);
+        (timer as { unref?: () => void }).unref?.();
+      },
+    );
+  };
+  return deliver;
+}
+
+// The session's sink, wired to deliver pending-input announcements when the agent has a
+// hook. `session` is read lazily: the sink exists before the AgentSession it serves.
+function sessionSink(agent: string, sessionId: string, def: AgentDef, session: () => AgentSession): { sink: InProcEventSink; deliver?: () => void } {
+  if (!def.onPendingInput) return { sink: new InProcEventSink() };
+  const deliver = pendingInputDeliverer(agent, sessionId, def.onPendingInput, session);
+  const sink = new InProcEventSink((e) => {
+    if (e.type === "input.requested" || e.type === "input.resolved") deliver();
+  });
+  return { sink, deliver };
+}
+
 // `instructions` (the agent's system prompt) is injected into the model per turn
 // by the runtime (withSystem) — single-sourced on the def, not baked into `model`.
-export type AgentDef = { model: Model; tools: Tool[]; instructions?: string; channelInstructions?: Record<string, string | ChannelPolicy> };
+// `onPendingInput` (#260): the runtime delivers the agent's pending-input announcements
+// to it — see AgentDefinition.onPendingInput.
+export type AgentDef = { model: Model; tools: Tool[]; instructions?: string; channelInstructions?: Record<string, string | ChannelPolicy>; onPendingInput?: PendingInputHook };
 
 // The runtime-side def for an assembled AgentDefinition (#173): the tools (channel
 // capability tools and read_skill included), the system prompt (instructions + the
@@ -134,6 +195,7 @@ export function toAgentDef(agent: AgentDefinition, model: Model): AgentDef {
     tools: agent.tools,
     instructions: buildSystemPrompt(agent),
     ...(agent.channelInstructions ? { channelInstructions: agent.channelInstructions } : {}),
+    ...(agent.onPendingInput ? { onPendingInput: agent.onPendingInput } : {}),
   };
 }
 
@@ -187,11 +249,28 @@ export class NativeRuntime implements Runtime {
     const def = this.agents[agent];
     if (!def) throw new Error(`unknown agent: ${agent}`);
     const model = def.instructions ? withSystem(def.model, def.instructions) : def.model;
-    const sink = new InProcEventSink();
+    // Delivery resolves the session through the runtime, never a captured instance: an
+    // evicted-then-rebuilt actor must not be delivered from twice in parallel (#260).
+    const { sink, deliver } = sessionSink(agent, id, def, () => this.session(agent, id));
     const session = new AgentSession(agent, id, new SqliteSessionStore(this.db, key), sink, model, def.tools, this, def.channelInstructions);
     this.evictIdle();
     this.actors.set(key, { session, sink });
+    deliver?.(); // what a previous actor or process committed but never delivered
     return session;
+  }
+
+  // Deliver every pending-input announcement left undelivered in the database (#260) — a
+  // process that stopped between a commit and its delivery. Builds the sessions that have
+  // rows, which delivers them (session() does on every build). Called once at startup by
+  // createNativeRuntime; safe to call again.
+  recoverPendingInput(): void {
+    // The agent and session come from the change itself, not from splitting the store key
+    // (`${agent}:${id}`): an agent name may contain ":" too. One row per session is enough.
+    const rows = this.db.query("SELECT value FROM agent_outbox WHERE seq IN (SELECT MIN(seq) FROM agent_outbox GROUP BY session_id)").all() as { value: string }[];
+    for (const { value } of rows) {
+      const { agent, session } = JSON.parse(value) as PendingInputChange;
+      if (this.agents[agent]?.onPendingInput) this.session(agent, session);
+    }
   }
 
   // Number of memoized actors (observability / tests).
@@ -216,7 +295,9 @@ export async function createNativeRuntime(
   path = ":memory:",
   opts: NativeRuntimeOptions = {},
 ): Promise<NativeRuntime> {
-  return new NativeRuntime(agents, await openLocalSqliteSync(path), opts);
+  const runtime = new NativeRuntime(agents, await openLocalSqliteSync(path), opts);
+  runtime.recoverPendingInput(); // #260
+  return runtime;
 }
 
 // ── memory backend — in-process, ephemeral (no DB, no disk) ───────────────────
@@ -242,7 +323,12 @@ class MemorySessionStore implements SessionStore {
   getStatus(): string { return this.status; }
   setStatus(s: string) { this.status = s; }
   tx<T>(fn: () => T): T { return fn(); } // no rollback: an in-memory store is not a durability tier
-  reset(): number {
+  private outbox = new Map<string, unknown>(); // insertion-ordered; never archived (#260)
+  outboxPut(id: string, value: unknown) { if (!this.outbox.has(id)) this.outbox.set(id, value); }
+  outboxList(): { id: string; value: unknown }[] { return [...this.outbox].map(([id, value]) => ({ id, value })); }
+  outboxDel(id: string) { this.outbox.delete(id); }
+  reset(inTx?: () => void): number {
+    inTx?.(); // before the archive: it reads the live steps (#260)
     const generation = this.generation++;
     this.archives.push({ generation, msgs: this.msgs, steps: this.steps });
     this.msgs = [];
@@ -272,7 +358,8 @@ export class MemoryRuntime implements Runtime {
       this.stores.set(key, store);
       // Same def handling as NativeRuntime: switching backend must not change behavior.
       const model = def.instructions ? withSystem(def.model, def.instructions) : def.model;
-      a = new AgentSession(agent, id, store, new InProcEventSink(), model, def.tools, this, def.channelInstructions);
+      const { sink } = sessionSink(agent, id, def, () => this.session(agent, id)); // #260
+      a = new AgentSession(agent, id, store, sink, model, def.tools, this, def.channelInstructions);
       this.actors.set(key, a);
     }
     return a;

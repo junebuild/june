@@ -14,6 +14,7 @@ import {
   withSystem,
   type EventSink,
   type TurnEvent,
+  type PendingInputChange,
   type InboundEvent,
   type Model,
   type ModelReply,
@@ -34,6 +35,7 @@ import {
 function memStore() {
   const msgs: Msg[] = [];
   const steps = new Map<string, unknown>();
+  const outbox = new Map<string, unknown>();
   let status = "new";
   let generation = 0;
   const archives: { generation: number; msgs: Msg[]; steps: Map<string, unknown> }[] = [];
@@ -48,7 +50,11 @@ function memStore() {
     getStatus() { return status; },
     setStatus(s) { status = s; },
     tx(fn) { return fn(); },
-    reset() {
+    outboxPut(id, value) { if (!outbox.has(id)) outbox.set(id, value); },
+    outboxList() { return [...outbox].map(([id, value]) => ({ id, value })); },
+    outboxDel(id) { outbox.delete(id); },
+    reset(inTx) {
+      inTx?.();
       archives.push({ generation, msgs: msgs.splice(0), steps: new Map(steps) });
       steps.clear();
       status = "new";
@@ -1549,6 +1555,153 @@ describe("suspend / resume (P3 — HITL)", () => {
     s.start({ turnId: "t1", userText: "refund please", event: slackEvent });
     await new Promise((r) => setTimeout(r, 20)); // let park→cleanup→resume→continuation settle
     expect(await s.result("t1")).toEqual({ status: "completed", text: "Approved — refund sent." }); // not a spurious failure
+  });
+
+  describe("pending-input announcements (#260)", () => {
+    const collect = () => {
+      const got: PendingInputChange[] = [];
+      return { got, hook: (c: PendingInputChange) => { got.push(c); } };
+    };
+
+    test("a park and its answer are announced through the outbox, in order, then deleted", async () => {
+      const { store } = memStore();
+      const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), scriptedModel(APPROVE_SCRIPT), [approveTool()], noRuntime);
+      s.start({ turnId: "t1", userText: "refund please", event: slackEvent });
+      await s.result("t1");
+      // Committed with the checkpoint — before anyone delivers it.
+      expect(store.outboxList!().map((r) => r.id)).toEqual(["ops/s1/t1/approve-1/requested"]);
+
+      s.resume("t1", "approve-1", true, { by: "U1" });
+      await s.result("t1");
+      const { got, hook } = collect();
+      expect(await s.deliverPendingInputChanges(hook)).toBe(2);
+      expect(got).toEqual([
+        {
+          kind: "requested", id: "ops/s1/t1/approve-1/requested", agent: "ops", session: "s1", turnId: "t1", inputId: "approve-1",
+          prompt: "Approve the refund?", answerers: { user: "U1" },
+          event: { ...slackEvent, raw: undefined }, at: expect.any(String),
+        },
+        { kind: "resolved", id: "ops/s1/t1/approve-1/resolved", agent: "ops", session: "s1", turnId: "t1", inputId: "approve-1", outcome: "answered", by: "U1", at: expect.any(String) },
+      ]);
+      expect(store.outboxList!()).toEqual([]);
+      expect(await s.deliverPendingInputChanges(hook)).toBe(0); // nothing left
+    });
+
+    test("input.resolved is emitted after the answer commits and before the continuation starts", async () => {
+      const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), scriptedModel(APPROVE_SCRIPT), [approveTool()], noRuntime);
+      const events: TurnEvent[] = [];
+      s.observe((e) => events.push(e));
+      s.start({ turnId: "t1", userText: "refund please", event: slackEvent });
+      await s.result("t1");
+      s.resume("t1", "approve-1", true, { by: "U1" });
+      await s.result("t1");
+      const resolved = events.findIndex((e) => e.type === "input.resolved");
+      const continued = events.findIndex((e) => e.type === "turn.started" && e.trigger.kind === "resume");
+      expect(events[resolved]).toEqual({ type: "input.resolved", turnId: "t1", inputId: "approve-1", outcome: "answered", by: "U1" });
+      expect(resolved).toBeLessThan(continued);
+    });
+
+    test("a redelivered parked turn re-parks without announcing twice", async () => {
+      const { store } = memStore();
+      const s1 = new AgentSession("ops", "s1", store, new MemBroadcaster(), scriptedModel(APPROVE_SCRIPT), [approveTool()], noRuntime);
+      s1.start({ turnId: "t1", userText: "refund please", event: slackEvent });
+      await s1.result("t1");
+      // A restart redelivers the same turn: a fresh actor over the same store replays it.
+      const s2 = new AgentSession("ops", "s1", store, new MemBroadcaster(), scriptedModel(APPROVE_SCRIPT), [approveTool()], noRuntime);
+      s2.start({ turnId: "t1", userText: "refund please", event: slackEvent });
+      expect(await s2.result("t1")).toMatchObject({ status: "suspended" });
+      expect(store.outboxList!().map((r) => r.id)).toEqual(["ops/s1/t1/approve-1/requested"]);
+    });
+
+    test("reset() announces the retired park as cancelled, and the announcement survives the archive", async () => {
+      const { store, archives } = memStore();
+      const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), scriptedModel(APPROVE_SCRIPT), [approveTool()], noRuntime);
+      const events: TurnEvent[] = [];
+      s.observe((e) => events.push(e));
+      s.start({ turnId: "t1", userText: "refund please", event: slackEvent });
+      await s.result("t1");
+      await s.reset();
+      expect(archives[0]!.steps.has("suspended")).toBe(true); // the park itself was archived…
+      expect(events.at(-1)).toEqual({ type: "input.resolved", turnId: "t1", inputId: "approve-1", outcome: "cancelled" });
+      const { got, hook } = collect();
+      await s.deliverPendingInputChanges(hook); // …but both announcements are still deliverable
+      expect(got.map((c) => [c.kind, c.kind === "resolved" ? c.outcome : undefined])).toEqual([["requested", undefined], ["resolved", "cancelled"]]);
+      expect(got[1]).not.toHaveProperty("by");
+    });
+
+    test("reset() of a session with no park announces nothing", async () => {
+      const { store } = memStore();
+      const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), scriptedModel([{ text: "hi", toolCalls: [] }]), [], noRuntime);
+      await s.turn({ turnId: "t1", userText: "hello" });
+      await s.reset();
+      expect(store.outboxList!()).toEqual([]);
+    });
+
+    test("a failing hook stops delivery; the failed row and everything after it stay for the next call", async () => {
+      const { store } = memStore();
+      const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), scriptedModel(APPROVE_SCRIPT), [approveTool()], noRuntime);
+      s.start({ turnId: "t1", userText: "refund please", event: slackEvent });
+      await s.result("t1");
+      s.resume("t1", "approve-1", true, { by: "U1" });
+      await s.result("t1");
+
+      const seen: string[] = [];
+      let fail = true;
+      const flaky = async (c: PendingInputChange) => {
+        if (c.kind === "resolved" && fail) throw new Error("index unavailable");
+        seen.push(c.id);
+      };
+      await expect(s.deliverPendingInputChanges(flaky)).rejects.toThrow("index unavailable");
+      expect(store.outboxList!().map((r) => r.id)).toEqual(["ops/s1/t1/approve-1/resolved"]); // the first was delivered and deleted
+      fail = false;
+      expect(await s.deliverPendingInputChanges(flaky)).toBe(1);
+      expect(seen).toEqual(["ops/s1/t1/approve-1/requested", "ops/s1/t1/approve-1/resolved"]);
+    });
+
+    test("concurrent deliveries hand each row to the hook once", async () => {
+      const { store } = memStore();
+      const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), scriptedModel(APPROVE_SCRIPT), [approveTool()], noRuntime);
+      s.start({ turnId: "t1", userText: "refund please", event: slackEvent });
+      await s.result("t1");
+      const seen: string[] = [];
+      const slow = async (c: PendingInputChange) => { await new Promise((r) => setTimeout(r, 5)); seen.push(c.id); };
+      const counts = await Promise.all([s.deliverPendingInputChanges(slow), s.deliverPendingInputChanges(slow)]);
+      expect(seen).toEqual(["ops/s1/t1/approve-1/requested"]);
+      expect(counts).toEqual([1, 0]);
+    });
+
+    test("ids stay unique when the same turnId parks in two sessions and two agents", async () => {
+      const ids: string[] = [];
+      for (const [agent, session] of [["ops", "s1"], ["ops", "s2"], ["ops:v2", "s1"]] as const) {
+        const { store } = memStore();
+        const s = new AgentSession(agent, session, store, new MemBroadcaster(), scriptedModel(APPROVE_SCRIPT), [approveTool()], noRuntime);
+        s.start({ turnId: "t1", userText: "refund please", event: slackEvent });
+        await s.result("t1");
+        ids.push(...store.outboxList!().map((r) => r.id));
+      }
+      expect(ids).toEqual(["ops/s1/t1/approve-1/requested", "ops/s2/t1/approve-1/requested", "ops%3Av2/s1/t1/approve-1/requested"]);
+      expect(new Set(ids).size).toBe(3);
+    });
+
+    test("a store missing only outboxPut fails delivery instead of reporting zero", async () => {
+      const { store } = memStore();
+      const { outboxPut: _p, ...partial } = store;
+      const s = new AgentSession("ops", "s1", partial, new MemBroadcaster(), scriptedModel(APPROVE_SCRIPT), [approveTool()], noRuntime);
+      s.start({ turnId: "t1", userText: "refund please", event: slackEvent });
+      await s.result("t1");
+      await expect(s.deliverPendingInputChanges(() => {})).rejects.toThrow(/does not implement the announcement outbox/);
+    });
+
+    test("a store without the outbox still parks and resumes; only delivery fails, loudly", async () => {
+      const { store } = memStore();
+      const { outboxPut: _p, outboxList: _l, outboxDel: _d, ...plain } = store;
+      const s = new AgentSession("ops", "s1", plain, new MemBroadcaster(), scriptedModel(APPROVE_SCRIPT), [approveTool()], noRuntime);
+      s.start({ turnId: "t1", userText: "refund please", event: slackEvent });
+      await s.result("t1");
+      s.resume("t1", "approve-1", true, { by: "U1" });
+      expect(await s.result("t1")).toMatchObject({ status: "completed" });
+      await expect(s.deliverPendingInputChanges(() => {})).rejects.toThrow(/does not implement the announcement outbox/);
+    });
   });
 });
 
