@@ -53,6 +53,7 @@ export const llms = (): LlmsEntry[] =>
       title: String(d.data.title ?? d.slug),
       description: d.data.description ? String(d.data.description) : undefined,
       section: s.title || "Docs",
+      lastModified: (d.data.updated ?? d.data.date) as string | undefined,
     })),
   );
 ```
@@ -65,6 +66,7 @@ export const llms = (): LlmsEntry[] =>
     title: String(p.data.title ?? p.slug),
     description: p.data.description ? String(p.data.description) : undefined,
     optional: true,
+    lastModified: (p.data.updated ?? p.data.date) as string | undefined,
   }));
 ```
 
