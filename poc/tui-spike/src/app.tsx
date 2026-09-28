@@ -152,7 +152,16 @@ export function App({ feedUrl, openEditor, quit, drainEarlyKeys }: AppProps) {
       {/* Yoga defaults flexShrink to 0: without shrink and minHeight 0 the panes
           take their content height and push the status line onto the border. */}
       <box style={{ flexDirection: "row", flexGrow: 1, flexShrink: 1, minHeight: 0 }}>
-        <scrollbox ref={list} title={`pending (${events.length})`} style={{ border: true, width: "45%" }}>
+        {/* paddingBottom: when the last (oldest) row is selected, the scroll
+            target is the new content height minus the viewport — one row past
+            what OpenTUI has laid out at commit time, so scrollTop clamps one
+            short (measured 0/20 visible). The spare row keeps the target in
+            range. stickyScroll does not help (also 0/20). */}
+        <scrollbox
+          ref={list}
+          title={`pending (${events.length})`}
+          style={{ border: true, width: "45%", contentOptions: { paddingBottom: 1 } }}
+        >
           {events.map((e, i) => (
             <text
               key={e.seq}

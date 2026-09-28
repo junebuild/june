@@ -128,6 +128,33 @@ function readReport(path: string): Report | null {
 
 const eventsOnScreen = (run: Run) => Number(/events (\d+)/.exec(run.screen())?.[1] ?? 0);
 
+// New events are prepended above the selection; after more than a screenful
+// of them the selected row must still be on screen. Sampled 20 times over
+// 2 s: a frame between the insert and the scroll is invisible to a person; a
+// selection that drifts away is not.
+async function selectionStaysOnScreen(run: Run, s: string, name: string, selected: (seq: string) => boolean) {
+  // Wait for the keys to land: reading the title right after sending them
+  // gets the previous selection, which may well still be on screen.
+  const title = () => /trace #(\d+)/.exec(run.screen())?.[1] ?? "";
+  const landed = await run.waitFor(() => selected(title()), 5000);
+  const selectedSeq = title();
+  if (!landed) return check(s, name, false, `selection never reached the expected row (trace #${selectedSeq})`);
+  const rowRe = new RegExp(`│\\s*${selectedSeq}  `);
+  await sleep(3000);
+  let seen = 0;
+  let miss = "";
+  for (let i = 0; i < 20; i++) {
+    await run.waitFor(() => true, 0);
+    if (run.lines().some((l) => rowRe.test(l))) seen++;
+    else {
+      const seqs = run.lines().map((l) => /^│\s*(\d+)  /.exec(l)?.[1]).filter(Boolean);
+      miss = `; on a miss the list showed #${seqs[0]}…#${seqs.at(-1)}`;
+    }
+    await sleep(100);
+  }
+  check(s, name, seen >= 18, `#${selectedSeq} visible ${seen}/20${miss}`);
+}
+
 const scenarios: Record<string, () => Promise<void>> = {
   async session() {
     const s = "session";
@@ -142,7 +169,13 @@ const scenarios: Record<string, () => Promise<void>> = {
     check(s, "renders", rendered, run.screen().slice(0, 200));
     // Whatever the TUI printed instead — a load error lives only on this screen.
     if (!rendered) console.log(`--- screen ---\n${run.screen().trimEnd()}\n--------------`);
-    check(s, "feed is live (≥ 40 events)", await run.waitFor(() => eventsOnScreen(run) >= 40, 15_000), eventsOnScreen(run));
+    // Liveness only: events are arriving at all. Throughput has its own check
+    // below. At ≥ 40 this failed once on the Intel macOS runner at 37 — a slow
+    // runner (the same path ran 17/s the run before), not a stalled feed.
+    const liveFrom = performance.now();
+    const live = await run.waitFor(() => eventsOnScreen(run) >= 10, 15_000);
+    notes.secondsTo10Events = live ? Number(((performance.now() - liveFrom) / 1000).toFixed(1)) : null;
+    check(s, "feed is live (≥ 10 events)", live, eventsOnScreen(run));
 
     // CJK / emoji: every body row keeps its borders in the same columns.
     const text = run.screen();
@@ -191,27 +224,6 @@ const scenarios: Record<string, () => Promise<void>> = {
     check(s, "no stale cells after emoji (Unicode 11 widths)", stale.size === 0, [...stale].slice(0, 2).join(" | "));
     check(s, "selection moved", await run.waitFor(() => /trace #\d+/.test(run.screen()), 3000));
 
-    // New events are prepended above the selection; after more than a
-    // screenful of them the selected row must still be on screen.
-    // Sampled 20 times over 2 s: a frame between the insert and the scroll
-    // is invisible to a person; a selection that drifts away is not.
-    const selectedSeq = /trace #(\d+)/.exec(run.screen())?.[1];
-    const rowRe = new RegExp(`│\\s*${selectedSeq}  `);
-    await sleep(3000);
-    let seen = 0;
-    let miss = "";
-    for (let i = 0; i < 20; i++) {
-      await run.waitFor(() => true, 0);
-      if (run.lines().some((l) => rowRe.test(l))) seen++;
-      else {
-        const seqs = run.lines().map((l) => /^│\s*(\d+)  /.exec(l)?.[1]).filter(Boolean);
-        miss = `; on a miss the list showed #${seqs[0]}…#${seqs.at(-1)}`;
-      }
-      await sleep(100);
-    }
-    notes.selectedRowVisible = `${seen}/20`;
-    check(s, "selected row stays on screen while events stream in", seen >= 18, `#${selectedSeq} visible ${seen}/20${miss}`);
-
     run.send("e");
     check(s, "editor ran", await run.waitFor(() => existsSync(mark), 15_000));
     const editor = existsSync(mark) ? JSON.parse(readFileSync(mark, "utf8")) : {};
@@ -236,6 +248,30 @@ const scenarios: Record<string, () => Promise<void>> = {
       check(s, "one feed subscription", r.maxActiveSubscriptions === 1, r.maxActiveSubscriptions);
       check(s, "suspend/resume paired", r.suspends === 1 && r.resumes === 1, `${r.suspends}/${r.resumes}`);
     }
+  },
+
+  // The selection anchor, in both places it can break: a row in the middle
+  // of the list, and the last (oldest) row — where the scroll target is past
+  // the content height OpenTUI has laid out so far.
+  async anchor() {
+    const s = "anchor";
+    const run = launch(cmd, 100, 30);
+    // Enough rows that five steps down is still mid-list; generous timeout,
+    // since this checks the anchor, not throughput.
+    check(s, "renders", await run.waitFor(() => eventsOnScreen(run) >= 30, 30_000), eventsOnScreen(run));
+    // Unselected, the newest row is highlighted; five steps down lands about
+    // five below it (a few more events may arrive while the keys do).
+    const newest = Number(/trace #(\d+)/.exec(run.screen())?.[1] ?? 0);
+    for (let i = 0; i < 5; i++) run.send("j");
+    await selectionStaysOnScreen(run, s, "middle row stays on screen while events stream in", (t) => {
+      const n = Number(t);
+      return n > 1 && n <= newest - 5 + 3 && n >= newest - 5 - 3;
+    });
+    // Event #1 is the oldest and, under the 500-row cap, the last row.
+    for (let i = 0; i < 200; i++) run.send("j");
+    await selectionStaysOnScreen(run, s, "last row stays on screen while events stream in", (t) => t === "1");
+    run.send("q");
+    check(s, "exits 0", (await run.exit(10_000)) === 0);
   },
 
   // A key typed while the TUI starts must not be lost: `q` goes out the
