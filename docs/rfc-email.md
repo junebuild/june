@@ -191,6 +191,9 @@ address (§6) carries the routing instead.
 
 ### Cloudflare Email Service (read 2026-09-28)
 
+The operator-facing setup (subdomain, DNS records, subaddressing, DMARC, token, wrangler
+config) is in `docs/email-cloudflare-setup.md`, verified step by step on `agents.june.build`.
+
 The first provider, and the one June's edge target runs on. From the docs:
 
 - **Inbound** arrives at the Worker's `email(message, env, ctx)` as a `ForwardableEmailMessage`:
