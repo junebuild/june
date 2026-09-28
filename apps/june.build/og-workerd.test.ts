@@ -6,7 +6,7 @@
 // real og-card), and fetch is stubbed for this test alone so no font is fetched.
 import { afterEach, expect, mock, test } from "bun:test";
 
-import { OG_HEADERS } from "./app/og-card";
+import { OG_HEADERS, ogFonts } from "./app/og-card";
 
 mock.module("workers-og", () => ({
   ImageResponse: class {
@@ -40,4 +40,22 @@ test("the workerd og:image response carries exactly one content-type and cache-c
   expect(res.status).toBe(200);
   expect(res.headers.get("content-type")).toBe("image/png");
   expect(res.headers.get("cache-control")).toBe(OG_HEADERS["cache-control"]);
+});
+
+test("a cold card requests its font subsets concurrently, not one after another", async () => {
+  let inFlight = 0;
+  let peak = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    if (!String(input).includes("fonts.googleapis.com")) return new Response(new ArrayBuffer(8));
+    peak = Math.max(peak, ++inFlight);
+    await new Promise((r) => setTimeout(r, 20));
+    inFlight--;
+    return new Response("src: url(https://fonts.example/f.ttf)");
+  }) as typeof fetch;
+
+  // A CJK title needs all three faces (Inter, Geist Mono, Noto Sans TC); unique
+  // text, so no font memo from another test short-circuits a request.
+  const fonts = await ogFonts({ title: "並行字型測試 og-fonts-concurrency", path: "/x", kind: "test" });
+  expect(fonts.map((f) => f.name)).toEqual(["Inter", "Geist Mono", "Noto Sans TC"]);
+  expect(peak).toBe(3);
 });

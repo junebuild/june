@@ -85,22 +85,19 @@ function monoText(opts: OgOptions) {
 }
 
 export async function ogFonts(opts: OgOptions): Promise<OgFont[]> {
-  const sans = opts.title + "June";
-  const fonts: OgFont[] = [
+  // Started together: a cold card waits for its slowest subset, not their sum.
+  const [inter, mono, cjk] = await Promise.all([
+    loadGoogleFont("Inter", 600, opts.title + "June"),
+    loadGoogleFont("Geist Mono", 400, monoText(opts)),
+    hasCJK(opts.title) ? loadGoogleFont("Noto Sans TC", 600, opts.title) : undefined,
+  ]);
+  return [
     // Inter, not the site's Geist: satori sets some of Geist's spaces
     // (after "y", "e", "s") visibly too wide; Inter's spacing comes out even.
-    { name: "Inter", data: await loadGoogleFont("Inter", 600, sans), weight: 600, style: "normal" },
-    { name: "Geist Mono", data: await loadGoogleFont("Geist Mono", 400, monoText(opts)), weight: 400, style: "normal" },
+    { name: "Inter", data: inter, weight: 600, style: "normal" },
+    { name: "Geist Mono", data: mono, weight: 400, style: "normal" },
+    ...(cjk ? [{ name: "Noto Sans TC", data: cjk, weight: 600, style: "normal" } as const] : []),
   ];
-  if (hasCJK(opts.title)) {
-    fonts.push({
-      name: "Noto Sans TC",
-      data: await loadGoogleFont("Noto Sans TC", 600, opts.title),
-      weight: 600,
-      style: "normal",
-    });
-  }
-  return fonts;
 }
 
 // The dark, terminal-grade card: the nav's wordmark, the page title, and the
