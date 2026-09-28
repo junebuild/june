@@ -27,15 +27,24 @@ jobs:
           - { target: linux-x64, os: ubuntu-24.04 }
           - { target: linux-arm64, os: ubuntu-24.04-arm }
           - { target: win32-x64, os: windows-2025 }
-          - { target: win32-arm64, os: windows-11-arm }
+          # Bun 1.3.14's native Windows arm64 build ships without TinyCC, so
+          # bun:ffi dlopen() — how OpenTUI loads its core — is unavailable.
+          # Kept to track it; the two rows after it are the candidate fixes.
+          - { target: win32-arm64, os: windows-11-arm, known-broken: true }
+          - { target: win32-arm64-bun-1.4.2, os: windows-11-arm, bun: 1.4.2 }
+          - target: win32-arm64-x64-emulated
+            os: windows-11-arm
+            bun-url: https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-windows-x64-baseline.zip
     runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.known-broken == true }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.3.14
+          bun-version: ${{ matrix.bun || '1.3.14' }}
+          bun-download-url: ${{ matrix.bun-url }}
 
       - uses: actions/setup-node@v4
         with:
@@ -51,7 +60,9 @@ jobs:
       # this prints the whole thing to the log.
       - name: Native core
         if: ${{ !cancelled() }}
-        run: bun harness/probe.ts
+        run: |
+          bun -e "console.log('bun', Bun.version, process.platform, process.arch)"
+          bun harness/probe.ts
 
       - name: From source
         if: ${{ !cancelled() }}
@@ -100,14 +111,14 @@ jobs:
       - uses: actions/checkout@v4
 
       # OpenTUI does not detect musl: without OPENTUI_LIBC=musl it loads the
-      # glibc build. The first probe records what happens then; everything
-      # after it runs with the variable set.
+      # glibc build (on x64 that needs ld-linux-x86-64.so.2 and fails). The
+      # --raw probe records OpenTUI's own behavior; everything after it relies
+      # on the spike's detection in src/libc.ts.
       - name: Harness in Alpine
         run: |
           docker run --rm -v "$PWD:/w" -w /w oven/bun:1.3.14-alpine sh -euc '
             bun install --frozen-lockfile
-            bun harness/probe.ts || echo "(expected without OPENTUI_LIBC)"
-            export OPENTUI_LIBC=musl
+            bun harness/probe.ts --raw || echo "(OpenTUI alone picks the glibc build)"
             bun harness/probe.ts
             status=0
             bun harness/run.ts --out results-source.json || status=1

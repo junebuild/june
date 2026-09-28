@@ -2,6 +2,9 @@
 // Entry point. Opens the TUI only when both stdin and stdout are TTYs
 // (docs/rfc-email.md §9.3); otherwise prints a text listing and exits.
 
+// First: ES modules evaluate in import order, and this must set
+// OPENTUI_LIBC before @opentui/core resolves its native package.
+import "./libc";
 import { createCliRenderer } from "@opentui/core";
 import { createRoot } from "@opentui/react";
 import { mkdtempSync, writeFileSync } from "node:fs";
