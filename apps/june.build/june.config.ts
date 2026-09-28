@@ -1,7 +1,8 @@
 import { defineJune } from "@junejs/core/config";
 
 // Dual-audience is ON by default — this file exists to turn things off, not on.
-//   agent.discovery  llms.txt, sitemap.xml, robots.txt, api-catalog, Link header
+//   agent.discovery  llms.txt, sitemap.xml, robots.txt, api-catalog, ai-catalog,
+//                    agent skills, Link header
 //   agent.mcp        the /mcp endpoint (your defineAction()s as tools)
 export default defineJune({
   agent: { enabled: true, discovery: true, mcp: true, webmcp: true },

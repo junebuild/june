@@ -43,6 +43,8 @@ each `defineAction()` is an MCP tool at `/mcp` (and a browser WebMCP tool).
 
 - `/llms.txt` — route map + the framework's canonical names
 - `/sitemap.xml`, `/robots.txt`, `/.well-known/api-catalog`
+- `/.well-known/ai-catalog.json` (ARD) and `/.well-known/agent-skills/index.json`
+  — the app's MCP server and a generated "how to use this site" skill
 - `/mcp` — your `defineAction()`s as MCP tools: one definition is a UI server
   action AND an MCP tool AND a browser WebMCP tool
 - `<link rel="alternate" type="text/markdown">` pointing at a page's `.md`

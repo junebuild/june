@@ -105,7 +105,7 @@ export type AgentRuntimeConfig = {
 
 export type AgentConfig = {
   enabled: boolean; // master switch
-  discovery: boolean; // Link header, llms.txt, sitemap, api-catalog, mcp server-card
+  discovery: boolean; // Link header, llms.txt, sitemap, api-catalog, mcp server-card, ai-catalog (ARD), agent skills
   mcp: boolean; // the /mcp execution endpoint
   webmcp: boolean; // inject WebMCP tool registrations into the view
   // Optional llms.txt customization for apps built ON June (e.g. the Kura docs framework):

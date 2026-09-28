@@ -314,7 +314,9 @@ export async function juneBuild(
   // The Link header is frozen here from the same builder the pipeline uses, so
   // the static and dynamic surfaces advertise identically. The adapter wraps the
   // portable pipeline for its target (workers() → withAssets).
-  const linkHeader = buildLinkHeader(frozen.agent);
+  // (catalogs: the same publication rule as the pipeline's catalogOrigin — a
+  // basePath site publishes no /.well-known catalog, so it links none.)
+  const linkHeader = buildLinkHeader(frozen.agent, { catalogs: !frozen.document.basePath });
   const adapterEntry = adapter.entry({ linkHeader });
 
   // Resources (when declared) are bound from the worker's env (env.DB → D1) by
@@ -506,9 +508,15 @@ ${doClass}`;
   if (cssAsset) manifest.document.styles = `/${cssAsset}`; // prerendered HTML links the hashed sheet
   if (clientAsset) manifest.document.clientScript = `/${clientAsset}`;
   if (moduleCssAsset) manifest.document.moduleStyles = `/${moduleCssAsset}`;
+  // A static site has no server: /mcp (and the WebMCP tools that proxy to it)
+  // does not exist there. Render with MCP projected out, so the published files
+  // advertise only what is deployed: llms.txt drops its MCP section, the catalogs
+  // and the generated skill list no MCP server, pages register no WebMCP tools.
+  const isStatic = adapter.capabilities.runtime === "static";
+  if (isStatic) manifest.agent = { ...manifest.agent, mcp: false, webmcp: false };
   // The static() target prerenders its sitemap too; that build is where the
   // route contract lets `staticPaths` run, so its sitemap lists those pages.
-  const worker = createWorker(manifest, { staticBuild: adapter.capabilities.runtime === "static" });
+  const worker = createWorker(manifest, { staticBuild: isStatic });
   let hasAssets = false;
 
   // ---- public/ → assets/ : verbatim static files (favicon, images, fonts) ----
@@ -569,7 +577,6 @@ ${doClass}`;
   // dynamic routes via their staticPaths, and write <stem>/index.html so clean URLs
   // resolve on a dumb file host with no rewrite server. Other targets keep the
   // opt-in `prerender: true` behavior and the flat <stem>.html naming (byte-identical).
-  const isStatic = adapter.capabilities.runtime === "static";
   const i18n = frozen.i18n;
 
   // Render ONE route pathname through the worker → HTML (+ .md/.json projections).
@@ -640,11 +647,37 @@ ${doClass}`;
       ["/llms.txt", "llms.txt"],
       ["/sitemap.xml", "sitemap.xml"],
     ];
-    for (const [reqPath, file] of extra) {
+    // The agent catalogs (ARD, Agent Skills) — JSON/Markdown files a static host
+    // can serve as-is — only when this site publishes them: agent discovery on, a
+    // root deploy (a basePath site doesn't own /.well-known), and a known public
+    // origin (the files name absolute URLs). Same rule as the pipeline's
+    // catalogOrigin, stated here too so an app catch-all route can never answer
+    // these paths into the build. The generated skill's path carries its name, so
+    // it is read back from the index.
+    const doc = manifest.document;
+    if (manifest.agent.discovery && !doc.basePath && (doc.site.url || doc.deployOrigin)) {
+      extra.push(
+        ["/.well-known/ai-catalog.json", ".well-known/ai-catalog.json"],
+        ["/.well-known/ard.json", ".well-known/ard.json"],
+        ["/.well-known/agent-skills/index.json", ".well-known/agent-skills/index.json"],
+      );
+    }
+    for (let i = 0; i < extra.length; i++) {
+      const [reqPath, file] = extra[i]!;
       const res = await worker.fetch(new Request(`${PRERENDER_ORIGIN}${reqPath}`));
       if (!res.ok) continue;
-      await writeFile(join(assetsDir, file), Buffer.from(await res.arrayBuffer()));
+      const bytes = Buffer.from(await res.arrayBuffer());
+      await mkdir(dirname(join(assetsDir, file)), { recursive: true });
+      await writeFile(join(assetsDir, file), bytes);
       hasAssets = true;
+      if (file.endsWith("agent-skills/index.json")) {
+        const index = JSON.parse(bytes.toString("utf8")) as { skills?: Array<{ url?: string }> };
+        for (const s of index.skills ?? []) {
+          if (!s.url) continue;
+          const p = new URL(s.url, PRERENDER_ORIGIN).pathname;
+          extra.push([p, p.slice(1)]);
+        }
+      }
     }
     // 404.html — GitHub Pages serves it for any unmatched URL. A deliberately-missing
     // path renders June's not-found HTML (body is written regardless of the 404 status).

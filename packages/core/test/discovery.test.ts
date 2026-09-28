@@ -2,8 +2,13 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { ACTION_REGISTRY, defineAction } from "@junejs/core/agent";
 import { resolveAgent } from "@junejs/core/config";
 import {
+  API_CATALOG_CONTENT_TYPE,
+  agentSkillsIndex,
+  aiCatalog,
   apiCatalog,
   buildLinkHeader,
+  siteSkill,
+  skillName,
   llmsTxt,
   type LlmsLink,
   MCP_SERVER_CARD_TYPE,
@@ -44,9 +49,14 @@ describe("buildLinkHeader()", () => {
     expect(buildLinkHeader(resolveAgent())).toContain(
       `</.well-known/mcp/server-card.json>; rel="mcp-server"; type="${MCP_SERVER_CARD_TYPE}"`,
     );
-    expect(apiCatalog(ORIGIN, resolveAgent()).linkset[0]?.["service-desc"]).toEqual([
+    // the api-catalog's MCP context (RFC 9727: each API its own linkset context)
+    const mcp = apiCatalog(ORIGIN, resolveAgent()).linkset.find((c) => c.anchor === `${ORIGIN}/mcp`);
+    expect(mcp?.["service-desc"]).toEqual([
       { href: `${ORIGIN}/.well-known/mcp/server-card.json`, type: MCP_SERVER_CARD_TYPE },
     ]);
+    // …and the ARD catalog entry for it
+    const entry = aiCatalog(ORIGIN, resolveAgent()).entries.find((e) => e.url === `${ORIGIN}/.well-known/mcp/server-card.json`);
+    expect(entry?.type).toBe(MCP_SERVER_CARD_TYPE);
   });
 
   test("returns null when discovery is disabled", () => {
@@ -239,11 +249,29 @@ describe("robotsTxt() / apiCatalog() / mcpServerCard()", () => {
     expect(txt).toContain(`Sitemap: ${ORIGIN}/sitemap.xml`);
   });
 
-  test("api-catalog is an RFC 9727 linkset, with service-desc only when mcp is on", () => {
+  test("robots.txt points ARD crawlers at the catalog (Agentmap)", () => {
+    expect(robotsTxt(ORIGIN)).toContain(`Agentmap: ${ORIGIN}/.well-known/ai-catalog.json`);
+  });
+
+  test("api-catalog is an RFC 9727 linkset: the catalog lists each API as an item, each API carries its links", () => {
     const cat = apiCatalog(ORIGIN, resolveAgent());
-    expect(cat.linkset[0]?.anchor).toBe(`${ORIGIN}/`);
-    expect(cat.linkset[0]?.["service-desc"]).toBeDefined();
-    expect(apiCatalog(ORIGIN, resolveAgent({ mcp: false })).linkset[0]?.["service-desc"]).toBeUndefined();
+    const [head, ...apis] = cat.linkset;
+    // §4 / Appendix A: the catalog context is anchored at its own well-known URI
+    expect(head?.anchor).toBe(`${ORIGIN}/.well-known/api-catalog`);
+    expect(head?.item).toEqual([{ href: `${ORIGIN}/` }, { href: `${ORIGIN}/mcp` }]);
+    // every item has a context of its own with service-doc; MCP adds its service-desc
+    expect(apis.map((a) => a.anchor)).toEqual([`${ORIGIN}/`, `${ORIGIN}/mcp`]);
+    for (const a of apis) expect(a["service-doc"]?.[0]?.href).toBe(`${ORIGIN}/llms.txt`);
+    expect(apis[1]?.["service-desc"]?.[0]?.href).toBe(`${ORIGIN}/.well-known/mcp/server-card.json`);
+    expect(API_CATALOG_CONTENT_TYPE).toBe(
+      'application/linkset+json; profile="https://www.rfc-editor.org/info/rfc9727"',
+    );
+  });
+
+  test("api-catalog without mcp lists only the site", () => {
+    const cat = apiCatalog(ORIGIN, resolveAgent({ mcp: false }));
+    expect(cat.linkset[0]?.item).toEqual([{ href: `${ORIGIN}/` }]);
+    expect(cat.linkset.some((c) => c["service-desc"])).toBe(false);
   });
 
   test("mcp server card reports the protocol version and tool names", () => {
@@ -317,5 +345,110 @@ describe("robotsTxt() / apiCatalog() / mcpServerCard()", () => {
     expect(Array.from(card.description).length).toBeLessThanOrEqual(100);
     expect(Array.from(card.title!).length).toBeLessThanOrEqual(100);
     expect(card.description.endsWith("…")).toBe(true);
+  });
+});
+
+// Requirements from isitagentready.com's agent-skills and ard skill docs, and the
+// Agent Skills Discovery RFC v0.2.0 / AI Catalog spec they cite.
+describe("agent skills index + generated SKILL.md", () => {
+  const SITE = { name: "Example", description: "A demo app." };
+  const NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+
+  test("index: $schema v0.2.0, one skill-md entry whose digest is sha256 of the served SKILL.md", async () => {
+    defineAction({
+      id: "search_site",
+      description: "Search pages.",
+      input: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+      run: () => [],
+    });
+    const agent = resolveAgent();
+    const index = await agentSkillsIndex(ORIGIN, agent, SITE);
+    expect(index.$schema).toBe("https://schemas.agentskills.io/discovery/0.2.0/schema.json");
+    expect(index.skills).toHaveLength(1);
+    const entry = index.skills[0]!;
+    expect(entry.type).toBe("skill-md");
+    expect(entry.name).toMatch(NAME);
+    expect(entry.description.length).toBeGreaterThan(0);
+    expect(entry.description.length).toBeLessThanOrEqual(1024);
+    expect(entry.url).toBe(`${ORIGIN}/.well-known/agent-skills/${entry.name}/SKILL.md`);
+    expect(entry.digest).toMatch(/^sha256:[0-9a-f]{64}$/);
+
+    const skill = siteSkill(ORIGIN, agent, SITE);
+    const hex = new Bun.CryptoHasher("sha256").update(skill.markdown).digest("hex");
+    expect(entry.digest).toBe(`sha256:${hex}`);
+    // frontmatter name/description match the index (RFC: SHOULD match)
+    expect(skill.markdown.startsWith(`---\nname: ${entry.name}\ndescription: ${JSON.stringify(entry.description)}\n---\n`)).toBe(true);
+    // teaches the read path and each tool with its signature
+    expect(skill.markdown).toContain(`${ORIGIN}/llms.txt`);
+    expect(skill.markdown).toContain(`${ORIGIN}/mcp`);
+    expect(skill.markdown).toContain("`search_site(query: string)` — Search pages.");
+  });
+
+  test("the skill promises projections only where a page offers them (md/json can be turned off per route)", () => {
+    const md = siteSkill(ORIGIN, resolveAgent(), SITE).markdown;
+    expect(md).not.toMatch(/any page/i);
+    // the signal pages actually emit (the pipeline's markdown alternate link)
+    expect(md).toContain('<link rel="alternate" type="text/markdown"');
+    expect(md).toContain("route turned Markdown off has no such link and answers 404");
+    expect(md).toContain("where the page offers it (404 where it doesn't)");
+  });
+
+  test("without mcp, llms.txt claims no /mcp endpoint", () => {
+    expect(llmsTxt(ORIGIN, ["/"], resolveAgent({ mcp: false }))).not.toContain("/mcp");
+    expect(llmsTxt(ORIGIN, ["/"], resolveAgent())).toContain("actions are MCP tools at `/mcp`");
+  });
+
+  test("without mcp the skill covers reading only", () => {
+    const skill = siteSkill(ORIGIN, resolveAgent({ mcp: false }), SITE);
+    expect(skill.markdown).not.toContain("/mcp");
+    expect(skill.description).not.toContain("MCP");
+  });
+
+  test("skill names derive from the host and always satisfy the Agent Skills name rules", () => {
+    expect(skillName("https://june.build")).toBe("june-build");
+    expect(skillName("https://www.example.co.uk")).toBe("example-co-uk");
+    expect(skillName("http://localhost:3000")).toBe("localhost");
+    // an IDN host reaches URL as punycode: still a valid name, no double hyphens
+    const idn = skillName("https://例え.jp");
+    expect(idn).toMatch(NAME);
+    expect(skillName(`https://${"a".repeat(70)}.com`).length).toBeLessThanOrEqual(64);
+  });
+});
+
+describe("aiCatalog() (ARD / AI Catalog)", () => {
+  test("specVersion, host with did:web identifier, entries with urn:air ids and exactly one of url|data", () => {
+    defineAction({ id: "ping", description: "Ping", input: { type: "object", properties: {} }, run: () => ({}) });
+    const cat = aiCatalog(ORIGIN, resolveAgent(), { name: "Example" });
+    expect(typeof cat.specVersion).toBe("string");
+    expect(cat.host).toMatchObject({ displayName: "Example", identifier: "did:web:example.com" });
+    expect(cat.entries.length).toBeGreaterThan(0);
+    for (const e of cat.entries) {
+      expect(String(e.identifier)).toMatch(/^urn:air:example\.com:[a-z-]+:[a-z0-9-]+$/);
+      expect(e.displayName).toBeTruthy();
+      expect(e.type).toBeTruthy();
+      expect(("url" in e ? 1 : 0) + ("data" in e ? 1 : 0)).toBe(1);
+    }
+    const types = cat.entries.map((e) => e.type);
+    expect(types).toEqual(["application/mcp-server-card+json", "application/agent-skills+md"]);
+    expect(cat.entries[0]?.url).toBe(`${ORIGIN}/.well-known/mcp/server-card.json`);
+  });
+
+  test("no MCP entry when mcp is off; a port in the host is percent-encoded for did:web", () => {
+    const cat = aiCatalog("http://localhost:3000", resolveAgent({ mcp: false }));
+    expect(cat.entries.map((e) => e.type)).toEqual(["application/agent-skills+md"]);
+    expect(cat.host.identifier).toBe("did:web:localhost%3A3000");
+  });
+
+  test("the Link header advertises the catalog", () => {
+    expect(buildLinkHeader(resolveAgent())).toContain(`</.well-known/ai-catalog.json>; rel="ai-catalog"`);
+  });
+
+  test("catalogs: false (the host's publication rule) drops the Link relation and the Agentmap line", () => {
+    const link = buildLinkHeader(resolveAgent(), { catalogs: false });
+    expect(link).not.toContain('rel="ai-catalog"');
+    expect(link).toContain('rel="llms-txt"');
+    const robots = robotsTxt(ORIGIN, { catalogs: false });
+    expect(robots).not.toContain("Agentmap:");
+    expect(robots).toContain(`Sitemap: ${ORIGIN}/sitemap.xml`);
   });
 });

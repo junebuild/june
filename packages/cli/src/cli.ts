@@ -72,7 +72,10 @@ async function info(root: string): Promise<number> {
   for (const r of routes) console.log(`  ${r}`);
   if (agent.enabled) {
     console.log(`\nAgent surface:`);
-    if (agent.discovery) console.log(`  discovery  /llms.txt · /sitemap.xml · /.well-known/api-catalog`);
+    if (agent.discovery) {
+      console.log(`  discovery  /llms.txt · /sitemap.xml · /.well-known/api-catalog`);
+      console.log(`             /.well-known/ai-catalog.json · /.well-known/agent-skills/index.json`);
+    }
     if (agent.mcp) console.log(`  mcp        /mcp  (tools: ${tools.length ? tools.join(", ") : "none"})`);
   } else {
     console.log(`\nAgent surface: disabled`);
