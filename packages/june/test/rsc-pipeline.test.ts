@@ -34,12 +34,21 @@ beforeAll(() => {
 });
 afterAll(() => rmSync(workdir, { recursive: true, force: true }));
 
+// Write a bundle to import. Each one gets its own fresh directory: Bun caches a
+// directory's entries on the first import from it, so a second module written
+// into the same directory afterwards fails "Cannot find module" (Bun 1.3.14 and
+// 1.4.2). Run alone, this file failed 3 tests; the full suite masked it.
+function writeModule(name: string, code: string): string {
+  const file = join(mkdtempSync(join(workdir, "m-")), name);
+  writeFileSync(file, code);
+  return file;
+}
+
 // Bundle the server graph for an app fixture, run it, return the Flight payload.
 async function renderFlightFor(appFixture: string): Promise<{ flight: string; code: string }> {
   const appDir = join(FIXTURES, appFixture);
   const code = await bundleServerGraph(FLIGHT_ENTRY, REPO, { "june:app": join(appDir, "App.tsx") }, appDir);
-  const file = join(workdir, `flight-${appFixture}.mjs`);
-  writeFileSync(file, code);
+  const file = writeModule(`flight-${appFixture}.mjs`, code);
   const mod = (await import(file)) as { renderFlight: () => Promise<string> };
   return { flight: await mod.renderFlight(), code };
 }
@@ -94,8 +103,7 @@ describe("RSC SSR graph (Flight → HTML)", () => {
   test("a pure server component's Flight renders to worker-safe HTML", async () => {
     const { flight } = await renderFlightFor("server-only");
     const code = await bundleSsrGraph(SSR_ENTRY_SERVER_ONLY, REPO);
-    const file = join(workdir, "ssr-server-only.mjs");
-    writeFileSync(file, code);
+    const file = writeModule("ssr-server-only.mjs", code);
     const mod = (await import(file)) as { flightToHtml: (f: string) => Promise<string> };
     const html = await mod.flightToHtml(flight);
     expect(html).toContain("<h1>Server only</h1>");
@@ -107,8 +115,7 @@ describe("RSC SSR graph (Flight → HTML)", () => {
     const { flight } = await renderFlightFor("with-island");
     // The SSR entry imports the generated _rsc-client.gen (webpack shim + moduleMap).
     const code = await bundleSsrGraph(join(WITH_ISLAND, "ssr-entry.tsx"), REPO);
-    const file = join(workdir, "ssr-island.mjs");
-    writeFileSync(file, code);
+    const file = writeModule("ssr-island.mjs", code);
     const mod = (await import(file)) as { renderHtml: (f: string) => Promise<string> };
     const html = await mod.renderHtml(flight);
     expect(html).toContain('data-island="tabs"'); // island shell SSR'd
