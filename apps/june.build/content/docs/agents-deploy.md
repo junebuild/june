@@ -197,6 +197,12 @@ The object's HTTP surface:
 | `POST /reset` | archive the history; returns `{ previousSession, generation }` |
 | `GET /transcript` | the folded transcript |
 
+`POST /turn` also accepts `ifSuspended` in its body. The default `"reject"` 409s
+a turn started against a suspended session; `"queue"` holds it and runs it once
+the park resolves, returning `{ turnId, queued: true }` with a 202. Because a held
+turn's reply arrives later, `"queue"` requires `?deliver=1` or `?detach=1` — a
+streaming caller asking to be held is a 400.
+
 ### The worker side
 
 Two helpers from `@junejs/server/agent-durable` route to those objects:
