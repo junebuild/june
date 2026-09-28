@@ -162,6 +162,25 @@ function publicOrigin(config: DocumentConfig, pageUrl?: string, onLocaleDomain?:
   return config.deployOrigin ?? live;
 }
 
+// The canonical URL of a page's HTML form, for surfaces rendered outside the
+// Document (the markdown projection's frontmatter). Same rules as the <link
+// rel="canonical"> the Document emits: metadata.canonical wins, else the public
+// origin + the page path; noindex pages and an unknown origin get none.
+export function pageCanonical(
+  config: DocumentConfig,
+  metadata: Metadata | undefined,
+  pageUrl: string | undefined,
+  pagePath: string | undefined,
+  onLocaleDomain?: boolean,
+): string | undefined {
+  const origin = publicOrigin(config, pageUrl, onLocaleDomain);
+  const base = (u: string) => (config.basePath && u.startsWith("/") && !u.startsWith("//") ? config.basePath + u : u);
+  const c = metadata?.canonical;
+  if (c) return c.startsWith("/") && !c.startsWith("//") ? (origin ? origin + base(c) : undefined) : c;
+  if (!origin || !pagePath || metadata?.robots?.includes("noindex")) return undefined;
+  return origin + base(pagePath);
+}
+
 // theme-color: the app's, else the starter background — but only when June's
 // starter look is the WHOLE look (no global.css or CSS Modules on top); any
 // other page background is unknown here, and a guessed toolbar colour is worse
@@ -218,6 +237,7 @@ export function Document({
   pageUrl,
   isHome,
   onLocaleDomain,
+  markdownHref,
 }: {
   children: React.ReactNode;
   metadata?: Metadata;
@@ -244,6 +264,11 @@ export function Document({
   isHome?: boolean;
   // The request host is an i18n locale's own domain (see publicOrigin).
   onLocaleDomain?: boolean;
+  // Root-relative URL of this page's markdown twin (e.g. /docs/intro.md,
+  // /index.md for home), advertised as rel="alternate" type="text/markdown" so an
+  // agent reading the HTML finds the clean projection. The host passes it only
+  // when the route's md projection is live; absent → no link.
+  markdownHref?: string;
 }) {
   const title = documentTitle(metadata, config.site);
   const description = metadata?.description ?? config.site.description;
@@ -262,10 +287,7 @@ export function Document({
     if (!u || !u.startsWith("/") || u.startsWith("//")) return u;
     return origin ? origin + withBase(u) : undefined;
   };
-  const noindex = metadata?.robots?.includes("noindex") ?? false;
-  const canonical =
-    absolute(metadata?.canonical) ??
-    (origin && pageUrl && !noindex ? origin + withBase(new URL(pageUrl).pathname) : undefined);
+  const canonical = pageCanonical(config, metadata, pageUrl, pageUrl && new URL(pageUrl).pathname, onLocaleDomain);
   const favicon = config.site.icon ?? config.icons?.primary ?? "/favicon.svg";
   const themeColor = resolveThemeColor(config);
   const docLang = lang ?? config.site.lang ?? "en";
@@ -291,6 +313,7 @@ export function Document({
         <title>{title}</title>
         {description ? <meta name="description" content={description} /> : null}
         {canonical ? <link rel="canonical" href={canonical} /> : null}
+        {markdownHref ? <link rel="alternate" type="text/markdown" href={withBase(markdownHref)} /> : null}
         {alternates?.map((a) => (
           <link key={a.hreflang} rel="alternate" hrefLang={a.hreflang} href={a.href} />
         ))}

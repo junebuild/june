@@ -21,6 +21,7 @@ import type { Channel, ChannelFactory } from "@junejs/core/agent-config";
 
 import { createPipeline, type ExtraHandler, type LayoutComponent, type LoadingComponent, type Resolved, type ResolvedResource, type ResourceHandler } from "./pipeline";
 import { durableAgentSurface, durableChannelSurface, type DurableObjectNamespace } from "./agent-durable";
+import { acceptTarget } from "./negotiate";
 import { contentTypeFor, RESERVED_PREFIX, safeRelativePath } from "./static-files";
 
 // The slice of workerd's ExecutionContext the worker threads through: webhook
@@ -282,7 +283,9 @@ export function createWorker(
 // --- the deployed worker's outermost layer (run_worker_first) ---------------
 // Prerendered pages are served as static ASSETS, which bypass the pipeline —
 // so the agent-ready signals the asset layer can't produce get added HERE:
-//   1. `Accept: text/markdown` on a page → the prerendered `.md` asset.
+//   1. a negotiated projection on a page (Accept: text/markdown / application/
+//      json → the prerendered .md / .json asset; else, and for the client
+//      router's fragment, the pipeline — never the page's HTML asset).
 //   2. a `Link` header on every HTML response (RFC 8288/9727 discovery).
 //   3. `x-markdown-tokens` on markdown responses.
 // Static assets are served by the ASSETS binding (no re-render); only genuinely
@@ -293,6 +296,15 @@ type FetchPipeline = { fetch(request: Request, env?: unknown, ctx?: WorkerExecut
 
 const estimateTokens = (s: string) => String(Math.ceil(s.length / 4));
 
+// Add Accept to a response's Vary, keeping whatever the asset layer already set.
+function varyAccept(headers: Headers): void {
+  const vary = headers.get("vary");
+  if (!vary) headers.set("vary", "accept");
+  else if (vary.trim() !== "*" && !vary.split(",").some((v) => v.trim().toLowerCase() === "accept")) {
+    headers.set("vary", `${vary}, accept`);
+  }
+}
+
 export function withAssets(
   pipeline: FetchPipeline,
   opts: { link?: string | null } = {},
@@ -302,23 +314,40 @@ export function withAssets(
       const assets = env?.ASSETS;
       const url = new URL(request.url);
       const isPagePath = !/\.[a-z0-9]+$/i.test(url.pathname); // no file extension
-      const accept = request.headers.get("accept") ?? "";
+      // The pipeline's own Accept decision (q-values included). A page path that
+      // negotiates a projection other than the HTML view must get THAT projection
+      // or the pipeline's answer for it — never the prerendered HTML asset.
+      const target = isPagePath ? acceptTarget(request.headers.get("accept") ?? "") : null;
 
-      // 1. Markdown content negotiation on a page path → prerendered .md asset.
-      if (assets && request.method === "GET" && isPagePath && /text\/markdown/.test(accept)) {
-        const base = url.pathname === "/" ? "/index" : url.pathname.replace(/\/+$/, "");
-        const mdUrl = new URL(url);
-        mdUrl.pathname = `${base}.md`;
-        const a = await assets.fetch(new Request(mdUrl.toString(), { headers: request.headers }));
-        if (a.ok) {
-          const body = await a.text();
-          const headers = new Headers(a.headers);
-          headers.set("content-type", "text/markdown; charset=utf-8");
-          headers.set("x-markdown-tokens", estimateTokens(body));
-          if (opts.link) headers.set("link", opts.link);
-          return new Response(body, { status: 200, headers });
+      // 1. Negotiated projections on a page path.
+      if (target && (request.method === "GET" || request.method === "HEAD")) {
+        // md / json → the prerendered <path>.md / <path>.json asset when the build
+        // emitted one (.md unless md = false; .json only for a json() route). Only
+        // the flat file — never <path>/index.*, a distinct /path/index route's twin
+        // (locale homes' <locale>/index.* are a static()-target artifact; this
+        // workers()-only layer never has them).
+        if (assets && request.method === "GET" && (target === "md" || target === "json")) {
+          const base = url.pathname === "/" ? "/index" : url.pathname.replace(/\/+$/, "");
+          const assetUrl = new URL(url);
+          assetUrl.pathname = `${base}.${target}`;
+          const a = await assets.fetch(new Request(assetUrl.toString(), { headers: request.headers }));
+          if (a.ok) {
+            const headers = new Headers(a.headers);
+            if (opts.link) headers.set("link", opts.link);
+            varyAccept(headers);
+            if (target === "json") return new Response(a.body, { status: 200, headers });
+            const body = await a.text();
+            headers.set("content-type", "text/markdown; charset=utf-8");
+            headers.set("x-markdown-tokens", estimateTokens(body));
+            return new Response(body, { status: 200, headers });
+          }
         }
-        // no prerendered .md → fall through; a dynamic route renders it below.
+        // No such asset (or a fragment, or HEAD) → the pipeline (step 3). It renders
+        // a dynamic route's projection, derives .json from the loader data, 404s a
+        // disabled projection, and renders the client router's soft-nav fragment —
+        // the HTML asset is a full DOCUMENT, which the router would morph into its
+        // [data-june-root] as if it were the root's inner HTML.
+        return pipeline.fetch(request, env, ctx);
       }
 
       // 2. Static assets (prerendered HTML/.md/.json, /client.js, hashed CSS)
@@ -335,10 +364,15 @@ export function withAssets(
           // URL changes when the bytes do, so the browser may cache forever and
           // never revalidate (no 304 round-trip, no stale window).
           const immutable = /\.[a-f0-9]{8,}\.(css|js)$/.test(url.pathname);
-          if (addLink || immutable) {
+          // A page path answers HTML here but Markdown under Accept: text/markdown
+          // (step 1) — the same URL, so caches must key on Accept or they hand an
+          // agent the HTML (or a browser the Markdown).
+          const negotiated = isPagePath && ct.includes("text/html");
+          if (addLink || immutable || negotiated) {
             const headers = new Headers(a.headers);
             if (addLink) headers.set("link", opts.link!);
             if (immutable) headers.set("cache-control", "public, max-age=31536000, immutable");
+            if (negotiated) varyAccept(headers);
             return new Response(a.body, { status: a.status, headers });
           }
           return a;

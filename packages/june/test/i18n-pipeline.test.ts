@@ -195,7 +195,8 @@ describe("document <html lang>/<dir>", () => {
 
   test("no i18n → no hreflang", async () => {
     const html = await (await viewPipeline()("http://example.com/page")).text();
-    expect(html).not.toContain('rel="alternate"');
+    // (the markdown twin's rel="alternate" type="text/markdown" is not hreflang)
+    expect(html).not.toContain("hrefLang");
   });
 });
 
