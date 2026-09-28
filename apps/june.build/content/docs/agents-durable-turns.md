@@ -269,7 +269,10 @@ Things to know:
   An `authorizeAnswer` that throws (a db outage) is a 500 and the answer is not
   applied, so the same answer can be retried.
 - **One park at a time.** While a session is suspended, `start()` rejects any
-  other turn. Redelivering the parked turn is allowed.
+  other inbound turn by default (`ifSuspended: "reject"`) — the right thing for an
+  interactive surface, where the person who would speak next is the one being
+  asked. Redelivering the parked turn is allowed. A channel whose other party
+  keeps talking regardless can hold the turn instead — see below.
 - On Slack, `slackChannel` renders `input.requested` as Approve / Deny buttons.
   A click resumes with `true` or `false` and the clicker's verified id.
 
@@ -287,6 +290,35 @@ export default {
     policy === "operator" && (await isOperator(principal, scope)),
 };
 ```
+
+### Holding turns behind a park
+
+Rejecting is wrong for a channel where the other party keeps talking regardless —
+email, say, where a follow-up arrives while a draft awaits approval. Pass
+`ifSuspended: "queue"` to hold the turn instead of rejecting it: it is recorded in
+the session's own store (durable across a restart, idempotent per `turnId`,
+`event.raw` stripped) and `start()` returns `{ turnId, queued: true }`. Held turns
+run one at a time, oldest first, once the park resolves; a held turn that parks
+again holds the rest behind it.
+
+- `hostContext` rides with a held turn and comes back through `session.onDequeue`,
+  called as the turn starts — so a host can reattach what the original caller
+  would have (for example a delivered render).
+- `session.heldTurns()` lists the held turns, oldest first. `session.drain()`
+  starts the oldest one when the session can run it now (no park, nothing running
+  or queued, no reset pending); a host calls it after rebuilding a session from
+  the store, and every other drain is automatic. `session.pending()` gains a
+  `queued` count — the approver's cue that the conversation moved on since the
+  request was made.
+- On the Durable Object, `POST /turn` accepts `ifSuspended`. `"queue"` needs
+  `?deliver=1` or `?detach=1`; a streaming caller asking to be held is a 400,
+  because a held turn's reply comes later, when nobody is streaming it. A held
+  delivered turn's reply is rendered through its source channel when it runs, in
+  whichever life of the object that is. `ctx.runDetached` and `ctx.runDelivered`
+  take `ifSuspended` and return `queued: true` when the turn was held.
+
+The native `mountAgent` host doesn't take `ifSuspended` yet — it has no delivered
+mode to render a held turn's reply.
 
 ## Cancellation and replace
 
