@@ -92,6 +92,28 @@ curl -H "Authorization: Bearer $KEY" "$U/events?limit=50"      # what was observ
 
 ## Teardown
 
-Delete the routing rule, `wrangler queues subscription delete`, `wrangler delete`,
-`wrangler queues delete june-email-probe-events`, and the `june-email-probe-key` Keychain
-item. (The temporary deploy token used for the first run was deleted on 2026-09-28.)
+With the same `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` and `W` as in Setup. The
+subscription and the rule are deleted by id, so both are looked up first (the lookups verified
+2026-09-28; the deletes have not been run yet):
+
+```sh
+Z=<zone id>
+API="https://api.cloudflare.com/client/v4/zones/$Z/email/routing/rules"
+AUTH="Authorization: Bearer $CLOUDFLARE_API_TOKEN"
+
+# The inbound rule: the one whose action is the probe Worker.
+RULE="$(curl -s "$API" -H "$AUTH" \
+  | jq -r '.result[] | select(.actions[0].type=="worker" and .actions[0].value[0]=="june-email-probe") | .id')"
+curl -X DELETE "$API/$RULE" -H "$AUTH"
+
+# The event subscription, before its queue.
+SUB="$($W queues subscription list june-email-probe-events --json \
+  | jq -r '.[] | select(.name=="june-email-probe") | .id')"
+$W queues subscription delete june-email-probe-events --id "$SUB" --force
+
+$W delete
+$W queues delete june-email-probe-events
+security delete-generic-password -s june-email-probe-key
+```
+
+(The temporary deploy token used for the first run was deleted on 2026-09-28.)
