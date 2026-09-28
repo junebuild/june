@@ -1,4 +1,4 @@
-import type { ScrollBoxRenderable } from "@opentui/core";
+import type { KeyEvent, ScrollBoxRenderable } from "@opentui/core";
 import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { type FakeEvent, fakeTrace, subscribe } from "./feed";
@@ -21,9 +21,11 @@ export type AppProps = {
   feedUrl: string;
   openEditor: (text: string) => number;
   quit: (reason: string, code: number) => void;
+  // Keys that arrived before this component could listen (main.tsx).
+  drainEarlyKeys: () => KeyEvent[];
 };
 
-export function App({ feedUrl, openEditor, quit }: AppProps) {
+export function App({ feedUrl, openEditor, quit, drainEarlyKeys }: AppProps) {
   const [events, setEvents] = useState<FakeEvent[]>([]);
   const [selectedSeq, setSelectedSeq] = useState<number | null>(null);
   const [note, setNote] = useState("");
@@ -81,12 +83,15 @@ export function App({ feedUrl, openEditor, quit }: AppProps) {
     else if (selectedIndex >= box.scrollTop + height) box.scrollTop = selectedIndex - height + 1;
   }, [selectedSeq, selectedIndex, events]);
 
-  const move = (delta: number) => {
-    const next = events[Math.min(events.length - 1, Math.max(0, selectedIndex + delta))];
-    if (next) setSelectedSeq(next.seq);
-  };
+  // A functional update, so several queued moves replayed in one pass each
+  // take effect instead of all starting from the same selectedIndex.
+  const move = (delta: number) =>
+    setSelectedSeq((prev) => {
+      const i = Math.max(0, events.findIndex((e) => e.seq === prev));
+      return events[Math.min(events.length - 1, Math.max(0, i + delta))]?.seq ?? prev;
+    });
 
-  useKeyboard((key) => {
+  const handle = (key: KeyEvent) => {
     if (key.ctrl && key.name === "c") return quit("ctrl-c", 130);
     switch (key.name) {
       case "q":
@@ -116,7 +121,31 @@ export function App({ feedUrl, openEditor, quit }: AppProps) {
         throw new Error("tui-spike: deliberate crash");
       }, 0);
     }
-  });
+  };
+
+  // Typeahead. OpenTUI emits keys as soon as the renderer exists, but
+  // useKeyboard only listens once its effect has run: a key typed during
+  // startup reached no listener (measured: `q` sent before the first frame was
+  // lost 5/5, while OpenTUI's own keyInput saw it 5/5), so main.tsx buffers
+  // them. Replaying is not enough on its own: before the first event arrives
+  // the list is empty and `j` would be spent on nothing. So quit keys act at
+  // once, and every other key — early or live — waits in `pending` until the
+  // list has data, then runs in order.
+  const ready = events.length > 0;
+  const pending = useRef<KeyEvent[]>([]);
+  const immediate = (key: KeyEvent) => (key.ctrl && key.name === "c") || key.name === "q" || key.sequence === "!";
+  const onKey = (key: KeyEvent) => {
+    if (!ready && !immediate(key)) pending.current.push(key);
+    else handle(key);
+  };
+  useKeyboard(onKey);
+  // Declared after useKeyboard, so it runs after the subscription exists.
+  useEffect(() => {
+    for (const key of drainEarlyKeys()) onKey(key);
+  }, []);
+  useEffect(() => {
+    if (ready) for (const key of pending.current.splice(0)) handle(key);
+  }, [ready]);
 
   return (
     <box style={{ flexDirection: "column", width: "100%", height: "100%" }}>

@@ -238,6 +238,37 @@ const scenarios: Record<string, () => Promise<void>> = {
     }
   },
 
+  // A key typed while the TUI starts must not be lost: `q` goes out the
+  // moment the process is spawned, before the first frame.
+  async typeahead() {
+    const s = "typeahead";
+    const report = join(work, "typeahead.json");
+    const run = launch(cmd, 100, 30, { TUI_SPIKE_REPORT: report });
+    run.send("q");
+    check(s, "q typed before the first frame quits", (await run.exit(10_000)) === 0);
+    restored(s, run);
+    check(s, "exit reason", readReport(report)?.exitReason === "q", readReport(report)?.exitReason);
+  },
+
+  // A navigation key typed at startup must still select once the list has
+  // data. Unselected, the highlight follows the newest event, so the trace
+  // title changes as events stream in; after an early `j` it stays put.
+  async typeaheadNav() {
+    const s = "typeahead nav";
+    const run = launch(cmd, 100, 30);
+    run.send("j");
+    check(s, "renders", await run.waitFor(() => eventsOnScreen(run) >= 10, 15_000), eventsOnScreen(run));
+    const title = () => /trace #(\d+)/.exec(run.screen())?.[1];
+    const first = title();
+    const eventsBefore = eventsOnScreen(run);
+    await sleep(1000);
+    await run.waitFor(() => true, 0);
+    const moved = eventsOnScreen(run) > eventsBefore;
+    check(s, "early j selected a row (it stays put as events stream)", moved && !!first && title() === first, `trace #${first} → #${title()}`);
+    run.send("q");
+    check(s, "exits 0", (await run.exit(10_000)) === 0);
+  },
+
   async ctrlc() {
     const s = "ctrl-c";
     const report = join(work, "ctrlc.json");
