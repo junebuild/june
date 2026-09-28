@@ -153,9 +153,10 @@ Permission-group ids are global; they were read from
 subscriptions; *Queues Write* with *Email Sending Write* is enough to create one (verified in
 step 8).
 
-`wrangler tail` needs account *Workers Tail Read* (`05880cd1bdc24d8bae0be2136972816b`). Keep
-it out of the long-lived deploy token — it lets whoever holds the token read the Worker's
-logs — and mint a separate short-lived token (`expires_on`) when you need to tail.
+No *Workers Tail Read*: *Workers Scripts Write* already covers `wrangler tail`. A token with
+exactly the policy above tailed the probe Worker (2026-09-28). So whoever holds the deploy token
+can read what the Worker logs; leaving out *Workers Tail Read* does not prevent it. Keep secrets
+and message bodies out of logs.
 
 As infrastructure as code (Cloudflare provider 5.x, `cloudflare_account_token`). Running it
 needs a token with *Account API Tokens Write*, which can mint any token — keep that bootstrap
@@ -198,10 +199,12 @@ Without infrastructure as code, the same policies go to
 `POST /accounts/{account}/tokens` as JSON (`resources` as an object rather than an encoded
 string); set `expires_on` for a token meant only for a test window.
 
-Status: **verified 2026-09-28** — a deploy token with these policies, plus *Workers Tail Read*
-(since moved to its own token, above), was created through the API for the test window, then
-again from the OpenTofu template above (`cloudflare_account_token`); the IaC-made one deployed the probe Worker, reads and writes
-routing rules and queues, and is refused on DNS records and on token management.
+Status: **verified 2026-09-28** — a deploy token was created through the API for the test
+window, then again from the OpenTofu template above (`cloudflare_account_token`); both also
+carried *Workers Tail Read*, which turned out redundant. A short-lived token with exactly these
+policies deployed the probe Worker, created and deleted a zone routing rule, listed the queue and
+its event subscription, tailed the Worker, and was refused on DNS records and on token
+management.
 
 ## 7. Wrangler configuration and routing rules
 
