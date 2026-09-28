@@ -242,6 +242,8 @@ Things to know:
   (and the Durable Object's `/resume`) carry the resumer's `principal` beside `by`
   so `authorizeAnswer` can use it. The Durable Object maps `ResumeAuthorizationError`
   to 403, and a wrong turn, a wrong input id, or a turn that isn't suspended to 409.
+  An `authorizeAnswer` that throws (a db outage) is a 500 and the answer is not
+  applied, so the same answer can be retried.
 - **One park at a time.** While a session is suspended, `start()` rejects any
   other turn. Redelivering the parked turn is allowed.
 - On Slack, `slackChannel` renders `input.requested` as Approve / Deny buttons.
