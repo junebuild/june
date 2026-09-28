@@ -114,7 +114,17 @@ Missing (verified against `main` at b5f0dfd, 2026-09-28):
 5. **No web approval surface.** The session DO answers only `POST /turn`, `POST /resume`,
    `POST /reset` and `GET /transcript` (`agent-durable.ts`); a parked `requestInput` can be
    answered from Slack, or by code calling `/resume`, but no page lists pending approvals.
-6. **`june deploy` pins `wrangler@4.99.0`** (`packages/june/src/deploy.ts`). Declaring inbound
+6. **Engine gaps behind approvals and take-over** (each filed):
+   - a park is visible only inside its session — no cross-session pending index, no
+     resolution announcement (#260);
+   - `requestInput`'s answerer is one id defaulting to the trigger user, who on email is the
+     external correspondent (#261);
+   - nothing can be added to a session's history without running a turn, and there is no
+     attributed third-party role (#262);
+   - an inbound event against a suspended session is rejected, not queued (#263).
+7. **The `june` CLI's verbs are hard-coded** (`packages/cli/src/cli.ts`); a package cannot add
+   `june inbox` / `june mail`.
+8. **`june deploy` pins `wrangler@4.99.0`** (`packages/june/src/deploy.ts`). Declaring inbound
    addresses in wrangler config (`addresses`) needs Wrangler ≥ 4.113.0.
 
 ## 4. Design principles
@@ -337,7 +347,7 @@ Email is reachable by anyone, so these are defaults, not options:
    | **R1** | reply in a thread the correspondent started | approve | yes |
    | **R2** | new thread to someone who has written to this agent before | approve | yes |
    | **R3** | a recipient the app vouches for — `consent(recipient)` hook (a CRM consent flag, an internal domain) | approve | yes; the app answers for it |
-   | **R4** | anyone else (cold) | approve | only with an explicit `allowCold`, always under the §7.7 caps |
+   | **R4** | anyone else (cold) | approve | only with an explicit `allowCold`, always under the §7.8 caps |
 
    Approvals are answered through the operator surface (§9) and, optionally, another channel (Slack)
    through `deliver()` — an email thread cannot render Approve / Deny.
@@ -351,7 +361,21 @@ Email is reachable by anyone, so these are defaults, not options:
 6. **Deliverability.** `email.diagnose()`, mirroring `SlackDiagnosis`: SPF, DKIM, DMARC for the
    sending domain, provider auth, subaddressing enabled (Cloudflare), suppression hits, and
    per-isolate counters (received, rejected by kind, deduped, loop-suppressed, bounced).
-7. **Proactive mail.** An agent writing first is where legal exposure (CAN-SPAM in the US,
+7. **Limits have two sources, kept apart.** *Provider capacity* is an external fact June must
+   never exceed: per-message limits declared by each adapter (Cloudflare 50 recipients / 5 MiB;
+   Gmail API 500 recipients), and account quotas that vary per account (SES sandbox 200/day at
+   1/s, production set case by case; Resend Free 100/day, 10 API requests/s per team; Workspace
+   2,000 messages and 2,000 unique external recipients per user per day; Cloudflare starts new
+   accounts conservatively) — read at run time where the provider has an API (SES
+   `GetAccount`), configured otherwise. *June's safety policy* is provider-independent: new
+   recipients per day (default 20), and circuit-breaker thresholds set below the strictest
+   external enforcement (Gmail's bulk-sender spam-rate ceiling, SES account review), with a
+   minimum sample so one bounce out of one send does not read as 100%. The effective limit is
+   `min(provider capacity, account quota, June default, app config)`; over it, sends queue
+   instead of failing. Policy numbers live in code (`agent/channels/email.ts`, reviewed and
+   versioned); deploy-time environment overrides may only **tighten** them. A new sending
+   domain warms up: limits start lower and rise over its first weeks.
+8. **Proactive mail.** An agent writing first is where legal exposure (CAN-SPAM in the US,
    CASL in Canada, ePrivacy/GDPR in the EU) and reputation damage (Gmail and Yahoo bulk-sender
    rules) concentrate. The framework enforces mechanisms; the app remains responsible for
    compliance, and none of this is legal advice. Apps can tune the numbers, not remove the
@@ -430,6 +454,15 @@ Versioned, JSON-Schema-described types — the contract, not the tables (§8 imp
 `PendingAction`, `TurnTrace` and `Decision` form a generic **agent supervision contract**
 shared by every channel; `Mailbox`, `Thread` and `Message` are the email layer on top.
 
+Where it lives is split by what only the engine can do:
+
+- **`@junejs/core`** gets the minimal engine seams: park and resolution announcements (#260),
+  answerer policies (#261), attributed notes (#262), queued inbound while suspended (#263).
+  Slack needs every one of them too.
+- **A new supervision package** (working name `@junejs/supervise`) holds the contract types,
+  the cross-session `pending_actions` index, the API actions and the `june inbox` verbs.
+- **`@junejs/email`** depends on it and adds the mailbox layer and `june mail`.
+
 ### 9.2 API
 
 Every operation is a `defineAction`, so the API needs no separate implementation: each action
@@ -448,28 +481,53 @@ the same seam as everywhere else (a session, or a bearer API key for the CLI —
 - Authorization per mailbox: an `authorize(principal, agent)` hook filters every read and
   guards every decision — never one policy that opens every mailbox.
 
+**CLI credentials.** June is auth-agnostic: the app's `identity(request)` seam turns a request
+into a principal (`pipeline.ts`), Better Auth being the recommended implementation. So the
+CLI's only contract is `Authorization: Bearer <token>`; how the token is obtained:
+
+1. `june login <app-url>` uses the OAuth device authorization grant (RFC 8628) when the app
+   advertises it in its discovery document — it works over SSH and with no local browser, and
+   Better Auth ships a plugin for it. Otherwise it falls back to pasting a token
+   (`june login --token`). The device-code page is the one web page needed before the GUI
+   phase, and it belongs to the app's auth pages anyway.
+2. Tokens are stored in the OS keychain where available, else a `0600` file, keyed by app
+   origin, with named profiles (`--app prod`).
+3. `JUNE_TOKEN` overrides the stored token, for CI and coding agents.
+4. `june dev` mints a short-lived local token into `.june/dev-token` (git-ignored); the CLI
+   uses it against localhost.
+5. Tokens are scoped and expiring — `inbox:read`, `inbox:decide`, `mail:send`, optionally per
+   mailbox — so a coding agent can be given read and decide without send. No all-powerful
+   static admin key by default.
+
 ### 9.3 CLI and TUI
 
-The `june` CLI already has nested verbs (`june db migrate`); the inbox is `june inbox`,
-talking to a running or deployed app through the API:
+Two verb groups, matching the package split: `june inbox` is everything waiting on a person,
+from **every** channel; `june mail` is the email-specific mailbox. Both talk to a running or
+deployed app through the API. (Package-contributed verbs need a registration seam in the CLI,
+§3.7.)
 
 ```
-june inbox pending [--agent scout] [--json]
-june inbox approve <pending> [--edit]        # --edit opens the draft in $EDITOR
+june inbox                                    # no verb: the TUI
+june inbox pending [--agent scout] [--source email|slack] [--json]
+june inbox approve <pending> [--edit]         # --edit opens the draft in $EDITOR
 june inbox reject <pending> --note "…"
-june inbox threads [--agent scout] [--state waiting_on_operator] [--json]
-june inbox show <thread> [--trace]
-june inbox take-over <thread> | hand-back <thread>
-june inbox send --agent scout --to … --subject …   # compose
-june inbox instruct --agent scout "write to … about …"
+june inbox show <pending|session> [--trace]
 june inbox watch                              # the change feed, line by line
-june inbox diagnose [--agent scout]
+
+june mail threads [--agent scout] [--state waiting_on_operator] [--json]
+june mail show <thread> [--trace]
+june mail take-over <thread> | hand-back <thread> [--note "…"]
+june mail send --agent scout --to … --subject …    # the operator writes as the agent
+june mail instruct --agent scout "write to … about …"
+june mail diagnose [--agent scout]
 ```
 
-`--json` on every read makes the CLI a second machine interface next to `/mcp`. `june inbox`
-with no verb opens the **TUI**: a keyboard triage loop over the pending queue (next / previous,
-approve, edit in `$EDITOR`, reject with a note, open the thread and its trace), kept live by
-the change feed.
+`--json` on every read makes the CLI a second machine interface next to `/mcp`. The **TUI**
+is a keyboard triage loop over the pending queue (next / previous, approve, edit in `$EDITOR`,
+reject with a note, open the thread and its trace), kept live by the change feed. It is built
+on OpenTUI's React reconciler — the `june` CLI already requires Bun, which OpenTUI's FFI core
+needs — and loaded lazily so other verbs do not pay for it; Ink is the fallback. `@clack/prompts`
+covers one-off confirmations in plain CLI verbs.
 
 ### 9.4 Web GUI
 
@@ -486,6 +544,54 @@ page also answers `.md` / `.json`, like every June page.
 | **Thread** | mail interleaved with the agent's turn traces; take over / hand back |
 | **Compose** | write directly, or instruct the agent |
 | **Settings** | addresses, policy, `instructions.email.md`, `diagnose()` |
+
+### 9.5 One approval, several surfaces
+
+The parked checkpoint in the session is the single source of truth; the engine already
+answers a second resume with 409. On top of it:
+
+1. **Index.** Park and resolution announcements (#260) maintain `pending_actions`, which every
+   surface lists from.
+2. **Surface registry.** Every rendering of a pending action records its handle
+   (`pending_surfaces`: a Slack channel + message ts, a GUI session). On resolution, a
+   `pending.resolved` event updates each one — the Slack message becomes "Approved by Alice
+   via CLI at …" and loses its buttons; CLI, TUI and GUI follow the change feed.
+3. **Races.** Concurrent answers are serialized by the session; the loser gets 409 and its
+   surface says who resolved it, not a generic error.
+4. **Revisions.** A decision carries the draft `revision` it was made against; approving a
+   revision the agent has since replaced is refused, so no one approves text they did not see.
+5. **Answerers.** Who may answer is a policy (#261) — for email, the mailbox's operators via
+   `authorize(principal, agent)`; never the correspondent.
+6. **Mail during a park.** Inbound mail is stored and its turn queued (#263); the pending
+   action is marked "new mail since this draft", and approving it asks for confirmation.
+7. **Staleness.** A pending action reminds its approvers after a while and is marked stale
+   later. It is never auto-sent and never auto-discarded.
+
+### 9.6 Take-over and hand-back
+
+A thread's control is a small state machine:
+
+```
+agent ──take_over──▶ taken_over(by) ──hand_back(note?)──▶ agent
+  ▲                                                        │
+  └──────── escalate(reason): the agent asks a person ─────┘
+```
+
+- **Take over** resolves any pending action on the thread as superseded (the session never
+  stays parked), stops turns on the thread, and makes the agent's send tools refuse it.
+  Inbound mail keeps being stored.
+- **The operator writes from the agent's address**, so the correspondent sees one
+  conversation, with the operator's own signature and **without** the AI-disclosure line —
+  a person wrote it.
+- **The agent's history records it as an attributed note (#262)**, never as `assistant`:
+  "[operator Alice replied at …, not you]: …". Otherwise the model believes it wrote the
+  operator's words and may imitate them or stand by commitments it never made.
+- **Hand-back is explicit by default.** A take-over usually means a sensitive situation, so
+  idleness only prompts ("idle for 3 days — hand back?"); automatic hand-back is opt-in.
+  A hand-back note ("take it from here; offer the refund") starts a proactive turn; without a
+  note or unanswered inbound mail, the agent does nothing.
+- **`escalate(reason)`** is the agent's side: it sets `waiting_on_operator` and the thread
+  appears in `june inbox`.
 
 ## 10. Package layout and API sketch
 
@@ -542,7 +648,8 @@ in `.june/routes/` operate it through the same actions; the agent gets `email__s
 
 | phase | scope | proves |
 | --- | --- | --- |
-| **P0** | types, MIME parse/build, thread key, signed reply address, safety (§7.4–7.5, §7.7 caps and suppression), mailbox store + migrations, `.eml` corpus (multipart, non-UTF-8, encoded headers, auto-replies, bounces, list mail) | the provider-independent core |
+| **P0e** | engine seams: #260, #261, #262, #263; CLI verb registration | approvals and take-over have something to stand on |
+| **P0** | types, MIME parse/build, thread key, signed reply address, safety (§7.4–7.5, §7.8 caps and suppression), mailbox store + migrations, `.eml` corpus (multipart, non-UTF-8, encoded headers, auto-replies, bounces, list mail) | the provider-independent core |
 | **P1** | Cloudflare inbound + outbound; worker `email()` and `queue()` entries; `june build` emits `addresses` + per-agent `send_email`; wrangler pin ≥ 4.113 | the edge target end to end |
 | **P1b** | supervision contract + API (§9.1–9.2), `june inbox` CLI, per-mailbox `authorize` | `approve` works without Slack, from a terminal or a coding agent |
 | **P1c** | `june inbox` TUI and the change feed | live triage |
@@ -567,21 +674,29 @@ testing split the Slack channel already uses.
 5. **An agent has one identity address and any number of aliases**; it replies from the
    address that was written to (2026-09-28, §6).
 6. **Proactive sends are tiered by relationship**, with caps, unsubscribe, suppression, a
-   circuit breaker and AI disclosure enforced by the framework (2026-09-28, §7.3, §7.7).
+   circuit breaker and AI disclosure enforced by the framework (2026-09-28, §7.3, §7.8).
+
+7. **Engine seams go in `@junejs/core`; the supervision contract, index, API and `june inbox`
+   go in a new package; the mailbox layer and `june mail` in `@junejs/email`** (2026-09-28,
+   §9.1).
+8. **TUI on OpenTUI (React), Ink as fallback** (2026-09-28, §9.3).
+9. **CLI credentials: bearer tokens via `june login` (device flow, token-paste fallback),
+   keychain storage, `JUNE_TOKEN` override, scoped and expiring** (2026-09-28, §9.2).
+10. **Approvals across surfaces: index, surface registry, revisions, answerer policies, queued
+    mail** (2026-09-28, §9.5).
+11. **Limits: provider capacity and June policy kept apart; code sets policy, deploy config
+    may only tighten it** (2026-09-28, §7.7).
+12. **Take-over: explicit hand-back, attributed notes, no AI disclosure on human-written
+    mail** (2026-09-28, §9.6).
 
 ## 13. Open questions
 
-1. **Where the supervision contract lives.** `PendingAction` / `TurnTrace` / `Decision` are
-   channel-neutral: `@junejs/core`, a new package, or `@junejs/email` until a second channel
-   needs them?
-2. **TUI toolkit on Bun**, and whether the TUI ships in the `june` CLI or a separate binary.
-3. **CLI credentials.** How `june inbox` gets its bearer key per app and environment (a
-   `june login`, an env var, the wrangler-style config file).
-4. **One approval, several surfaces.** When the operator surface and a Slack mirror both show the same
-   parked input, the engine already rejects the second answer — but the losing surface must
-   update (the Slack message still shows its buttons). What notifies it?
-5. **Default caps.** The starting value for new recipients per day, and the bounce and
-   complaint thresholds that trip the circuit breaker.
-6. **Take-over semantics.** While an operator holds a thread, inbound mail is stored but starts
-   no turn. How does the thread go back to the agent — explicitly only, or also after a
-   timeout — and does the agent's next turn see the operator's messages as its own?
+1. **The supervision package's name** (`@junejs/supervise` is a working name).
+2. **CLI verb registration.** How a package contributes verbs to `june` — a manifest field, a
+   discovered module, or a fixed list the CLI knows how to lazy-load.
+3. **OpenTUI distribution.** Confirm it installs prebuilt native binaries for every platform
+   the `june` CLI supports (at least macOS arm64, Linux x64 and arm64) without a Zig toolchain;
+   if not, Ink.
+4. **Numbers to verify before they become defaults**: Mailgun's free-plan limits (only
+   third-party sources found), Gmail's bulk-sender spam-rate ceiling and SES's review
+   thresholds (from memory), and the circuit-breaker's minimum sample.
