@@ -117,6 +117,13 @@ describe("llmsTxt() with route links (llmstxt.org sections)", () => {
     expect(txt).not.toContain("## Blog"); // an optional link is filed under Optional, not its section
   });
 
+  test('"## Optional" is the file\'s LAST H2 — after the MCP / WebMCP tool sections too', () => {
+    const txt = llmsTxt(ORIGIN, [], resolveAgent(), undefined, [link("Intro", "Docs"), link("Post", "Blog", { optional: true })]);
+    const h2s = [...txt.matchAll(/^## (.+)$/gm)].map((m) => m[1]);
+    expect(h2s).toContain("Tools (MCP)"); // mcp on (the default): tools are present…
+    expect(h2s.at(-1)).toBe("Optional"); // …and still come before the skippable section
+  });
+
   test("app-authored agent.llms.sections still appear — before Optional (Kura's compat path)", () => {
     const agent = resolveAgent({ mcp: false, llms: { sections: ["## Custom", "- [x](/x)"] } });
     const txt = llmsTxt(ORIGIN, [], agent, undefined, [link("Intro", "Docs"), link("Post", "Blog", { optional: true })]);

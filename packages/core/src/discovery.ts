@@ -84,13 +84,16 @@ export function llmsTxt(
     "",
     ...framework,
   ];
+  // "## Optional" is the part an agent may drop when context is short, so it is the
+  // LAST H2 of the file — after the tools, which an agent should never lose.
+  let optional: string[] = [];
   if (links) {
-    // app-authored agent.llms.sections sit with the regular sections, before Optional
     const sections = linkSections(links);
     const optionalAt = sections.indexOf("## Optional");
-    const custom = agent.llms?.sections?.length ? ["", ...agent.llms.sections] : [];
-    if (optionalAt < 0) lines.push(...sections, ...custom);
-    else lines.push(...sections.slice(0, optionalAt - 1), ...custom, ...sections.slice(optionalAt - 1));
+    const regular = optionalAt < 0 ? sections : sections.slice(0, optionalAt - 1);
+    optional = optionalAt < 0 ? [] : sections.slice(optionalAt - 1);
+    // app-authored agent.llms.sections sit with the regular sections
+    lines.push(...regular, ...(agent.llms?.sections?.length ? ["", ...agent.llms.sections] : []));
   } else {
     lines.push(
       "",
@@ -115,6 +118,7 @@ export function llmsTxt(
       );
     }
   }
+  lines.push(...optional);
   return lines.join("\n") + "\n";
 }
 
