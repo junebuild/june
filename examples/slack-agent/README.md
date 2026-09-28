@@ -136,9 +136,12 @@ verified id — the turn continues from where it parked.
 
 To enable it, turn on **Interactivity** in your Slack app and set the Request URL to
 `https://<your-worker>/channels/slack` (same endpoint as events). The clicker's id is enforced
-against the request's `answererId` (defaults to the user who triggered the turn). A rejected
-click — someone other than the answerer, or a stale/double click — leaves the buttons in place
-for the rightful answerer and tells the clicker ephemerally.
+against the request's `answerers`: by default `{ user }` — the user who triggered the turn,
+whom Slack attests by signing the event. A tool can name someone else
+(`answerers: { user: "U123" }`) or a rule the app decides at click time
+(`answerers: { policy: "manager", scope }`, checked by the agent's `authorizeAnswer`). A
+rejected click — someone other than the answerer, or a stale/double click — leaves the buttons
+in place for the rightful answerer and tells the clicker ephemerally.
 
 HITL works in both render modes: with `stream: true` the prompt follows the live-streamed text;
 without it the channel still consumes the event stream (post-once) so a parked turn posts its
