@@ -64,6 +64,7 @@
     "slack-feedback-tasks",
     "slack-identity-seam",
     "slack-intermediate-text",
+    "slack-respond-when",
     "slack-retry-dedupe",
     "slack-stream-hardening",
     "social-meta-defaults",
