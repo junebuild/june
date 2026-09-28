@@ -54,7 +54,14 @@ All three are exported from `@junejs/core/connections`.
 - **MCP** — the tool's description is prefixed `[<name>]` and its
   `annotations` (`readOnlyHint`, `destructiveHint`, …) carry through when
   June re-serves it. A call's first text content block is parsed as JSON,
-  falling back to the raw text.
+  falling back to the raw text. MCP allows dots in tool names
+  (`admin.tools.list`) and names up to 128 characters before the
+  `<name>__` prefix, so ids follow the same rule as OpenAPI's: characters
+  outside `[A-Za-z0-9_-]` become `_`, ids are cut to 128 characters, and a
+  colliding id gets a numeric suffix. The remote tool is still called by its
+  own name. In both kinds, a name that is already valid keeps its id: only
+  reduced ids are ever suffixed, so adding a dotted tool to a server never
+  moves an existing one.
 - **OpenAPI** — a minimal subset of OpenAPI 3:
   - **Tool ids** are `<name>__<operationId>`, or an id built from the method
     and path when an operation has none. Characters outside `[A-Za-z0-9_-]`
