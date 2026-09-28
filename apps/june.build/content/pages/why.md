@@ -61,4 +61,4 @@ auth are still changing. Benchmarks are dev-machine numbers with published
 methodology. The owned Rust+V8 runtime and server-reactive live RSC are
 experimental — today's host is Bun/Node, deploying to Cloudflare Workers,
 Vercel, or Deno Deploy, or exporting a static site. Each piece's standing is
-on the [stability & roadmap](/docs/05-stability) page.
+on the [stability & roadmap](/docs/stability) page.

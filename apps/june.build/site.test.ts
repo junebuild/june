@@ -185,9 +185,21 @@ describe("docs", () => {
   });
 
   test("doc page serves authored markdown at .md", async () => {
-    const served = await (await get("/docs/01-getting-started.md")).text();
-    const authored = await Bun.file(join(ROOT, "content/docs/01-getting-started.md")).text();
+    const served = await (await get("/docs/getting-started.md")).text();
+    const authored = await Bun.file(join(ROOT, "content/docs/getting-started.md")).text();
     expect(served).toBe(authored);
+  });
+
+  test("a numbered legacy slug 301s to the unnumbered doc, suffix kept", async () => {
+    for (const [from, to] of [
+      ["/docs/05-stability", "/docs/stability"],
+      ["/docs/05-stability.md", "/docs/stability.md"],
+    ]) {
+      const res = await get(from);
+      expect(res.status).toBe(301);
+      expect(res.headers.get("location")).toBe(to);
+    }
+    expect((await get("/docs/stability")).status).toBe(200);
   });
 
   test("Features section: grouped in the index, each page renders with a demo", async () => {

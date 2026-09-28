@@ -54,7 +54,7 @@ function Hero() {
           </p>
           <div className="j-hero-cta">
             <InstallCmd client:load />
-            <a className="j-btn" href="/docs/01-getting-started">
+            <a className="j-btn" href="/docs/getting-started">
               Get started
             </a>
             <a className="j-link" href="/why">
@@ -565,7 +565,7 @@ function Status() {
           lead={
             <>
               The shape is settled; the surface is still moving. Calibrate with the{" "}
-              <a href="/docs/05-stability">stability &amp; roadmap</a> page.
+              <a href="/docs/stability">stability &amp; roadmap</a> page.
             </>
           }
         />

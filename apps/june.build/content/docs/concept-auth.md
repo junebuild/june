@@ -62,4 +62,4 @@ UI enforces* and *what the tool endpoint allows*. June closes it by
 construction: there is only one gate, so there is nothing to keep in sync.
 
 > Status: **Changing** — the model (one gate, `ctx`-as-principal) is settled; the
-> Better Auth integration is in progress. See [Stability](/docs/05-stability).
+> Better Auth integration is in progress. See [Stability](/docs/stability).

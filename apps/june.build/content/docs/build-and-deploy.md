@@ -31,5 +31,5 @@ in routes whose output depends on `ctx.url.origin`.
 
 The same bundle ships to any target — the verb is fixed, the target is one line
 of config. `june deploy` = build → upload → URL, with `--dry-run` as the CI
-test. See [Deployment](/docs/04-deployment) for the adapters (Workers, Vercel,
+test. See [Deployment](/docs/deployment) for the adapters (Workers, Vercel,
 Deno) and what each maps your resources to.

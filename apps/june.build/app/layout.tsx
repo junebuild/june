@@ -36,7 +36,7 @@ const FOOTER_COLS = [
     links: [
       ["GitHub", "https://github.com/junebuild/june"],
       ["npm @junejs", "https://www.npmjs.com/org/junejs"],
-      ["Stability", "/docs/05-stability"],
+      ["Stability", "/docs/stability"],
     ],
   },
 ];

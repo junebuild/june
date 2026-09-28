@@ -23,7 +23,7 @@ zero `node:*` modules — enforced as an architectural rule, not a habit.
 ## Standards as the portability mechanism
 
 This is why deployment is an adapter instead of a rewrite
-([Deployment](/docs/04-deployment)):
+([Deployment](/docs/deployment)):
 
 - **workerd** speaks fetch natively — the built worker's `fetch()` IS the
   pipeline, no shim.
