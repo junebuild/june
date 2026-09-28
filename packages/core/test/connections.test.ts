@@ -613,3 +613,90 @@ describe("MCP: tool ids are valid tool names; the remote is still called by its 
     expect(actions.map((a) => a.id)).toEqual(["weather__get_weather"]);
   });
 });
+
+describe("MCP: tools/list pagination (spec 2026-07-28)", () => {
+  // A server that pages its tool list. `pages` maps the cursor a request
+  // carries (START = no cursor) to that page's tools and nextCursor.
+  const START = Symbol("start");
+  type Page = { tools: string[]; nextCursor?: string | null };
+  function pagedServer(pages: Map<string | typeof START, Page>) {
+    const cursors: (string | typeof START)[] = [];
+    globalThis.fetch = (async (_url: unknown, init?: { body?: string }) => {
+      const rpc = JSON.parse(init!.body!) as { id: unknown; method: string; params?: { cursor?: string } };
+      const reply = (result: unknown) => Response.json({ jsonrpc: "2.0", id: rpc.id, result });
+      if (rpc.method !== "tools/list") return reply({});
+      const key = rpc.params && "cursor" in rpc.params ? rpc.params.cursor! : START;
+      cursors.push(key);
+      const page = pages.get(key);
+      if (!page) return Response.json({ jsonrpc: "2.0", id: rpc.id, error: { code: -32602, message: `invalid cursor ${String(key)}` } });
+      return reply({
+        tools: page.tools.map((name) => ({ name, inputSchema: { type: "object", properties: {} } })),
+        ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
+      });
+    }) as typeof fetch;
+    return cursors;
+  }
+  const connect = () => connectAll([defineMcpConnection({ name: "srv", url: "http://x/mcp" })]);
+
+  test("follows nextCursor across pages, sending each cursor back verbatim (opaque)", async () => {
+    const cursors = pagedServer(
+      new Map<string | typeof START, Page>([
+        [START, { tools: ["a", "b"], nextCursor: "eyJwYWdlIjogMn0=/+" }],
+        ["eyJwYWdlIjogMn0=/+", { tools: ["c"], nextCursor: "p3" }],
+        ["p3", { tools: ["d"] }],
+      ]),
+    );
+    const { actions, report } = await connect();
+    expect(actions.map((a) => a.id)).toEqual(["srv__a", "srv__b", "srv__c", "srv__d"]);
+    expect(report[0]!.error).toBeUndefined();
+    expect(cursors).toEqual([START, "eyJwYWdlIjogMn0=/+", "p3"]); // the first request carries no cursor
+  });
+
+  test('an EMPTY-STRING nextCursor is a cursor, not the end: "" is sent back and the next page is read', async () => {
+    const cursors = pagedServer(
+      new Map<string | typeof START, Page>([
+        [START, { tools: ["a"], nextCursor: "" }],
+        ["", { tools: ["b"] }],
+      ]),
+    );
+    const { actions } = await connect();
+    expect(actions.map((a) => a.id)).toEqual(["srv__a", "srv__b"]);
+    expect(cursors).toEqual([START, ""]);
+  });
+
+  test("a null nextCursor ends the listing, like an absent one", async () => {
+    const cursors = pagedServer(new Map<string | typeof START, Page>([[START, { tools: ["a"], nextCursor: null }]]));
+    const { actions } = await connect();
+    expect(actions.map((a) => a.id)).toEqual(["srv__a"]);
+    expect(cursors).toEqual([START]);
+  });
+
+  test("a server that repeats a cursor fails the connection (never hangs) and registers nothing", async () => {
+    pagedServer(
+      new Map<string | typeof START, Page>([
+        [START, { tools: ["a"], nextCursor: "x" }],
+        ["x", { tools: ["b"], nextCursor: "x" }],
+      ]),
+    );
+    const { actions, report } = await connect();
+    expect(actions).toEqual([]);
+    expect(report[0]!.error).toContain('repeated cursor "x"');
+    expect([...ACTION_REGISTRY.keys()].filter((id) => id.startsWith("srv__"))).toEqual([]);
+  });
+
+  test("an endless listing is cut off after 100 pages with an error, not silently truncated", async () => {
+    const pages = new Map<string | typeof START, Page>([[START, { tools: ["t0"], nextCursor: "c1" }]]);
+    for (let i = 1; i <= 200; i++) pages.set(`c${i}`, { tools: [`t${i}`], nextCursor: `c${i + 1}` });
+    const cursors = pagedServer(pages);
+    const { actions, report } = await connect();
+    expect(actions).toEqual([]);
+    expect(report[0]!.error).toContain("more than 100 pages");
+    expect(cursors).toHaveLength(100);
+  });
+
+  test("an invalid-cursor error from the server fails the connection with the server's message", async () => {
+    pagedServer(new Map<string | typeof START, Page>([[START, { tools: ["a"], nextCursor: "gone" }]]));
+    const { report } = await connect();
+    expect(report[0]!.error).toContain("invalid cursor gone");
+  });
+});
