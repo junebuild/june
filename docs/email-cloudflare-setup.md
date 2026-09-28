@@ -135,7 +135,8 @@ deploy code, and the token that deploys code never needs to touch DNS.
 with: zone *Zone Write*, *DNS Write*, *Zone Settings Write*, *Email Routing Rules Write*;
 account *Email Sending Write*, *Email Routing Addresses Write*.
 
-**Deploying the Worker** — an **account-owned** token (it outlives any one person's user
+**Deploying the Worker** (it also creates routing rules and the event subscription, steps 7–8)
+— an **account-owned** token (it outlives any one person's user
 account), limited to one account and one zone:
 
 | scope | permission group | id | why |
@@ -199,35 +200,66 @@ Status: **verified 2026-09-28** — a deploy token with exactly these policies w
 through the API (expiring after the test window); it can upload Workers, read and write
 routing rules and queues, and is refused on DNS records.
 
-## 7. Wrangler configuration
+## 7. Wrangler configuration and routing rules
 
-`june build` will emit this from your agents' definitions; shown here so the moving parts are
-visible:
+`june build` will emit the bindings from your agents' definitions; shown here so the moving
+parts are visible:
 
 ```jsonc
 {
-  // inbound: each address becomes a routing rule to this Worker
-  "addresses": ["support@agents.example.com", "hello@agents.example.com"],
   // outbound: one binding per agent, restricted to that agent's own addresses
   "send_email": [
     {
       "name": "EMAIL_SUPPORT",
       "allowed_sender_addresses": ["support@agents.example.com", "hello@agents.example.com"]
     }
-  ]
+  ],
+  // delivery events (step 8)
+  "queues": { "consumers": [{ "queue": "agents-email-events" }] }
 }
 ```
 
-Status: not yet verified.
+**Routing rules go through the zone API, not wrangler `addresses`.** With an account-owned
+deploy token, `wrangler deploy` uploads the Worker and then fails on the undocumented
+account-level `POST /accounts/{account}/email/routing/rules/plan` (`10000 Authentication
+error`); no grantable permission tried satisfied it (zone *Email Routing Rules Write*,
+account *Email Routing Account Rules Read*, and *Email Routing Rules Read* / *Write* on all
+zones). The zone API works with the step 6 token:
+
+```sh
+curl -X POST "https://api.cloudflare.com/client/v4/zones/<zone id>/email/routing/rules" \
+  -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H "Content-Type: application/json" \
+  --data '{"name":"support","enabled":true,
+           "matchers":[{"type":"literal","field":"to","value":"support@agents.example.com"}],
+           "actions":[{"type":"worker","value":["<worker name>"]}]}'
+```
+
+One literal rule per address; with subaddressing on (step 2), `support+anything@…` reaches
+the same Worker with the `+anything` part — and its letter case — kept in `message.to`.
+
+Status: **verified 2026-09-28** with `poc/email-probe` (send binding, queue consumer, a
+zone-API rule; subaddressed deliveries received).
 
 ## 8. Delivery events
 
 Email Sending publishes `message.delivered | deferred | bounced | failed | rejected |
-complained` through **Queues event subscriptions**, one subscription per sending domain. The
-Worker consumes the queue in a `queue()` handler. Inbound (routing) activity is not published
-as sending events.
+complained` through **Queues event subscriptions**, one subscription per sending domain:
 
-Status: not yet verified.
+```sh
+wrangler queues create agents-email-events
+wrangler queues subscription create agents-email-events --source email.sending \
+  --events message.delivered,message.deferred,message.bounced,message.failed,message.rejected,message.complained \
+  --zone-id <zone id> --domain agents.example.com
+```
+
+The step 6 token is enough (*Queues Write* and *Email Sending Write*). The Worker consumes the
+queue in a `queue()` handler. Each event names one recipient, and its `payload.messageId` is
+exactly the id `send()` returned — which is also the `Message-ID` header the recipient sees.
+Sends to **verified destination addresses** are routing deliveries and publish no sending
+events; test with a non-verified recipient.
+
+Status: **verified 2026-09-28** — seven sends, seven `message.delivered` events, all ids
+matching.
 
 ## Check it
 
@@ -245,8 +277,11 @@ dig +short TXT _dmarc.agents.example.com
 
 ## Things that surprise people
 
-- **`Message-ID` is Cloudflare's.** The send API rejects a caller-set `Message-ID`; threading
-  replies back to the right conversation relies on June's signed reply address.
+- **`Message-ID` is Cloudflare's.** The `headers` field rejects a caller-set `Message-ID`, and
+  REST `send_raw` accepts one but replaces it. The id `send()` / `send_raw` returns is the
+  delivered `Message-ID`, so store it — replies can be matched by `In-Reply-To`.
+- **Never set `Date`.** A caller-set future `Date` in `send_raw` left the message `queued`
+  and undelivered.
 - **`message.reply()` is not how an agent replies.** It works once, inside the `email()`
   event, only to the original sender; an agent's reply comes from a turn that runs later.
 - **No published daily quota.** New accounts start conservatively and rise with reputation;
