@@ -180,7 +180,10 @@ async function listMcpTools(c: McpConnection): Promise<McpTool[]> {
       tools?: McpTool[];
       nextCursor?: string | null;
     };
-    tools.push(...(result.tools ?? []));
+    // `tools` is required on every page: a page without it is malformed, and
+    // reading it as empty would silently drop that page's tools.
+    if (!Array.isArray(result.tools)) throw new Error(`tools/list: page ${page} has no \`tools\` array — the server's response is malformed.`);
+    tools.push(...result.tools);
     const next = result.nextCursor;
     if (next === undefined || next === null) return tools;
     if (sent.has(next)) throw new Error(`tools/list: the server repeated cursor ${JSON.stringify(next)} — the listing would never end.`);

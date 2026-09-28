@@ -694,6 +694,19 @@ describe("MCP: tools/list pagination (spec 2026-07-28)", () => {
     expect(cursors).toHaveLength(100);
   });
 
+  test("a page without the required `tools` array fails the connection, not read as an empty page", async () => {
+    pagedServer(new Map<string | typeof START, Page>([[START, { tools: ["a"], nextCursor: "p2" }]]));
+    const paged = globalThis.fetch;
+    globalThis.fetch = (async (url: unknown, init?: { body?: string }) => {
+      const rpc = JSON.parse(init!.body!) as { id: unknown; params?: { cursor?: string } };
+      if (rpc.params?.cursor === "p2") return Response.json({ jsonrpc: "2.0", id: rpc.id, result: {} });
+      return paged(url as string, init as RequestInit);
+    }) as typeof fetch;
+    const { actions, report } = await connect();
+    expect(actions).toEqual([]);
+    expect(report[0]!.error).toContain("page 2 has no `tools` array");
+  });
+
   test("an invalid-cursor error from the server fails the connection with the server's message", async () => {
     pagedServer(new Map<string | typeof START, Page>([[START, { tools: ["a"], nextCursor: "gone" }]]));
     const { report } = await connect();
