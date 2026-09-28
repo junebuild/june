@@ -153,6 +153,7 @@ Every turn emits typed `TurnEvent`s as it runs:
 | `action.requested` | the model asked for a tool call |
 | `action.completed` | a tool call's result was committed; `error` is set when the tool threw (see [When a tool throws](#when-a-tool-throws)) |
 | `input.requested` | the turn parked, waiting for a human |
+| `input.resolved` | a parked turn's input was answered or retired; carries `outcome` (`answered` / `retired`) and `by`. Live only |
 | `turn.completed` | final text |
 | `turn.failed` | the error, plus `phase` (`model` / `tool`) and `step` when a step was in flight |
 | `turn.cancelled` | the turn was cancelled; carries a `reason` |
@@ -290,6 +291,33 @@ export default {
     policy === "operator" && (await isOperator(principal, scope)),
 };
 ```
+
+### Input announcements
+
+`session.pending()` tells you what one session is parked on, but only for a
+session you already hold. To keep a cross-session index of everything waiting on
+a person, declare `onInputAnnouncement` on the agent (`agent.ts`, `defineAgent`,
+or `DoAgentDef`). It receives an `InputAnnouncement` for each change to a park:
+
+- `parked` — a turn parked on `requestInput`; carries the request, the
+  triggering event (`raw` stripped), and how many turns are held behind it.
+- `held` — an inbound turn was held behind the park (see below); carries the new
+  `queued` count.
+- `resolved` — the park ended: `answered` by `by`, or `retired` by a session
+  reset.
+
+Delivery is durable, at-least-once, and in order. Each announcement is recorded
+in the same transaction as the state change it reports, in an outbox in the
+session's store, and removed only after the hook returns. A hook that throws
+keeps it for the next flush, and a session rebuilt after a crash delivers what
+the earlier one left. Every announcement carries a unique `id` — dedupe on it.
+Nothing is recorded while no hook is set.
+
+On the Durable Object the hook runs in the request scope, so it can write a
+cross-session index with the ambient `db` directly. `session.flushAnnouncements()`
+and `session.undeliveredAnnouncements()` are the plumbing hosts use; live
+subscribers of the parked turn also get an `input.resolved` event when it is
+answered or retired.
 
 ### Holding turns behind a park
 
