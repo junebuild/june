@@ -1,0 +1,25 @@
+// The email RFC's live-test Worker (docs/rfc-email.md §13). Not a June app:
+// a bare Worker, so each Cloudflare behavior is observed without framework
+// code in between. The account comes from CLOUDFLARE_ACCOUNT_ID.
+{
+  "name": "june-email-probe",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "workers_dev": true,
+  "observability": { "enabled": true },
+
+  // Inbound: a literal rule probe@agents.june.build -> this Worker, created
+  // through the zone API (README: Setup). Not `addresses`: with an
+  // account-owned deploy token, wrangler's account-level
+  // /email/routing/rules/plan call is refused (10000) — see README, Findings.
+
+  // Outbound: the binding may only send as the probe address.
+  "send_email": [{ "name": "EMAIL", "allowed_sender_addresses": ["probe@agents.june.build"] }],
+
+  // Everything observed is kept here, so results survive a missed `wrangler tail`.
+  "durable_objects": { "bindings": [{ "name": "LOG", "class_name": "ProbeLog" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ProbeLog"] }],
+
+  // Email Sending delivery events (test 3) arrive on this queue.
+  "queues": { "consumers": [{ "queue": "june-email-probe-events", "max_batch_timeout": 1 }] }
+}
