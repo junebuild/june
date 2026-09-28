@@ -84,7 +84,11 @@ export type ChannelContext = {
   // while it has pending work. A detached turn has no live consumer: failures surface
   // only via the host's turn-failure logging / onTurnError hook. Optional, like
   // runStream: the host provides it where detachment is meaningful.
-  runDetached?: (message: string, opts?: { session?: string; turnId?: string; event?: InboundEvent; trigger?: ProactiveTrigger; replace?: boolean }) => Promise<{ turnId: string }>;
+  // `ifSuspended: "queue"` (#263, here and on runDelivered): against a session parked on
+  // requestInput, hold the turn and run it once the park resolves, instead of rejecting it —
+  // the result carries `queued: true`. Only the modes without a live consumer take it: a
+  // caller streaming the reply wants it now, and a held turn's reply comes later.
+  runDetached?: (message: string, opts?: { session?: string; turnId?: string; event?: InboundEvent; trigger?: ProactiveTrigger; replace?: boolean; ifSuspended?: "reject" | "queue" }) => Promise<{ turnId: string; queued?: true }>;
   // DELIVERED (runDetached's reply-bearing sibling): start the turn, resolve once it is
   // durably ACCEPTED — and have the TURN'S HOST render the reply through the channel's own
   // deliver() (same renderer as the inbound path), instead of a consumer at the edge. On the
@@ -96,7 +100,7 @@ export type ChannelContext = {
   // DeliverUnsupportedError BEFORE starting the turn, so the channel may safely fall back to
   // consumer-side rendering (ctx.runStream) without double-running the turn. Optional, like
   // runStream: the host provides it where host-side delivery is meaningful.
-  runDelivered?: (message: string, opts?: { session?: string; turnId?: string; event?: InboundEvent; trigger?: ProactiveTrigger; replace?: boolean }) => Promise<{ turnId: string }>;
+  runDelivered?: (message: string, opts?: { session?: string; turnId?: string; event?: InboundEvent; trigger?: ProactiveTrigger; replace?: boolean; ifSuspended?: "reject" | "queue" }) => Promise<{ turnId: string; queued?: true }>;
   // Resume a turn that was parked by ctx.requestInput (HITL): provide the answer and get the
   // continuation's TurnEvent stream, so a channel can render the resumed turn to completion.
   // `by` is the VERIFIED resumer identity (e.g. the user id from a signature-checked Slack
