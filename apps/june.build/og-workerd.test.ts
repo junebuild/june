@@ -36,7 +36,7 @@ test("the workerd og:image response carries exactly one content-type and cache-c
 
   const { ogResponse } = await import("./app/_og");
   // A title no other test renders, so the stub font can't reach their font memo.
-  const res = await ogResponse({ title: "og-workerd header regression", tag: "test" });
+  const res = await ogResponse({ title: "og-workerd header regression", kind: "test" });
   expect(res.status).toBe(200);
   expect(res.headers.get("content-type")).toBe("image/png");
   expect(res.headers.get("cache-control")).toBe(OG_HEADERS["cache-control"]);
