@@ -309,14 +309,17 @@ describe("agent surface", () => {
   test("llms.txt is a curated index: sections, descriptions, every doc, posts under Optional", async () => {
     const llms = await (await get("/llms.txt")).text();
     const sections = [...llms.matchAll(/^## (.+)$/gm)].map((m) => m[1]!);
-    // Pages first, the docs sidebar's sections in order, Optional last before the tools
-    expect(sections.slice(1, 7)).toEqual(["Pages", "Get started", "Concepts", "Agents", "Features", "Optional"]);
+    // Pages first, the docs sidebar's sections in order, the tools, and Optional as the LAST H2
+    expect(sections.slice(1)).toEqual([
+      "Pages", "Get started", "Concepts", "Agents", "Features",
+      "Tools (MCP)", "Tools (WebMCP, in-browser)", "Optional",
+    ]);
     expect(llms).toContain(
       "- [Connections: where tools come from](http://june.build/docs/agents-connections.md): A connection is an agent's outbound edge",
     );
     const { DOCS, POSTS } = await import("./app/_content");
     for (const d of DOCS) expect(llms).toContain(`(http://june.build/docs/${d.slug}.md)`); // every doc, via its .md
-    const optional = llms.slice(llms.indexOf("## Optional"), llms.indexOf("## Tools"));
+    const optional = llms.slice(llms.indexOf("## Optional"));
     for (const p of POSTS) expect(optional).toContain(`/blog/${p.slug}.md`);
     expect(llms).not.toMatch(/\]\([^)]*\[/); // no link URL is an unfetchable [param] template
 
