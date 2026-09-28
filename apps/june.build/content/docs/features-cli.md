@@ -32,7 +32,7 @@ june info         # show routes + the agent surface
 - `june deploy --dry-run` runs the full build and config resolution without
   uploading — it's also the CI test, so "deployable" is continuously asserted.
 - `june info` is the app's oracle: what routes exist, what tools an agent
-  would see at `/mcp`, what discovery endpoints are live. If `info` shows it,
+  would see at `/mcp` and `/api`, what discovery endpoints are live. If `info` shows it,
   it's served; if it doesn't, it isn't.
 
 ## Canonical names

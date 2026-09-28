@@ -35,7 +35,7 @@ The directory *is* the manifest. No central registry has to stay in sync with it
   produce the same raw module and go through one assembly function, so dev and
   production can't disagree about what the directory means.
 - **Tools are `defineAction`s.** The same object is a UI server action, an
-  `/mcp` tool, and an agent tool. The turn's verified identity arrives as
+  `/mcp` tool, a plain-HTTP `POST /api/<id>` endpoint, and an agent tool. The turn's verified identity arrives as
   `ctx.user`, so the authorization you wrote for the UI also covers the agent.
   A `requiresPrincipal: true` action is hidden from anonymous turns.
 - **Channels bring messages in.** A channel is pure transport: an HTTP endpoint,
