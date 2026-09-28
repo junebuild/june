@@ -1,10 +1,21 @@
 import type { ScrollBoxRenderable } from "@opentui/core";
 import { useKeyboard, useTerminalDimensions } from "@opentui/react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { type FakeEvent, fakeTrace, subscribe } from "./feed";
 import { metrics } from "./metrics";
 
 const KEEP = 500;
+
+// Cap the list at KEEP, but never drop the selected event: the operator is
+// looking at it.
+function keepSelected(next: FakeEvent[], selectedSeq: number | null): FakeEvent[] {
+  if (next.length <= KEEP) return next;
+  const kept = next.slice(0, KEEP);
+  if (selectedSeq === null || kept.some((e) => e.seq === selectedSeq)) return kept;
+  const sel = next.find((e) => e.seq === selectedSeq);
+  if (sel) kept[KEEP - 1] = sel;
+  return kept;
+}
 
 export type AppProps = {
   feedUrl: string;
@@ -17,6 +28,10 @@ export function App({ feedUrl, openEditor, quit }: AppProps) {
   const [selectedSeq, setSelectedSeq] = useState<number | null>(null);
   const [note, setNote] = useState("");
   const trace = useRef<ScrollBoxRenderable>(null);
+  const list = useRef<ScrollBoxRenderable>(null);
+  // Read by the feed loop, which must not evict the selected event.
+  const selectedRef = useRef<number | null>(null);
+  selectedRef.current = selectedSeq;
   const { width, height } = useTerminalDimensions();
 
   useEffect(() => {
@@ -36,7 +51,7 @@ export function App({ feedUrl, openEditor, quit }: AppProps) {
     (async () => {
       for await (const e of subscribe(feedUrl, ac.signal)) {
         metrics.events++;
-        setEvents((prev) => [e, ...prev].slice(0, KEEP));
+        setEvents((prev) => keepSelected([e, ...prev], selectedRef.current));
       }
     })().catch(() => {});
     return () => {
@@ -48,6 +63,23 @@ export function App({ feedUrl, openEditor, quit }: AppProps) {
   const selectedIndex = Math.max(0, events.findIndex((e) => e.seq === selectedSeq));
   const selected = events[selectedIndex];
   const lines = useMemo(() => (selected ? fakeTrace(selected) : []), [selected?.seq]);
+
+  // New events are prepended, pushing an older selection down ~20 rows/s:
+  // keep it in view. With nothing selected, the newest row is highlighted and
+  // the list stays at the top. Both halves of this were measured (the
+  // harness's "selected row stays on screen" check, 20 samples):
+  // - useLayoutEffect, not useEffect: a passive effect runs after OpenTUI has
+  //   already drawn a frame with the new row inserted (9–18/20 visible).
+  // - From the data, not scrollChildIntoView: at commit time the new rows are
+  //   not laid out yet, so it scrolls one row short (0/20). Every row is one
+  //   line, so the selected row sits at selectedIndex.
+  useLayoutEffect(() => {
+    const box = list.current;
+    if (!box || selectedSeq === null) return;
+    const height = box.viewport.height;
+    if (selectedIndex < box.scrollTop) box.scrollTop = selectedIndex;
+    else if (selectedIndex >= box.scrollTop + height) box.scrollTop = selectedIndex - height + 1;
+  }, [selectedSeq, selectedIndex, events]);
 
   const move = (delta: number) => {
     const next = events[Math.min(events.length - 1, Math.max(0, selectedIndex + delta))];
@@ -91,7 +123,7 @@ export function App({ feedUrl, openEditor, quit }: AppProps) {
       {/* Yoga defaults flexShrink to 0: without shrink and minHeight 0 the panes
           take their content height and push the status line onto the border. */}
       <box style={{ flexDirection: "row", flexGrow: 1, flexShrink: 1, minHeight: 0 }}>
-        <scrollbox title={`pending (${events.length})`} style={{ border: true, width: "45%" }}>
+        <scrollbox ref={list} title={`pending (${events.length})`} style={{ border: true, width: "45%" }}>
           {events.map((e, i) => (
             <text
               key={e.seq}

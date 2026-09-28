@@ -10,8 +10,10 @@ it, with `.github/workflows/tui-spike.yml`, once `@junejs/inbox` starts.
 - `harness/run.ts` — runs it under a real pseudo-terminal (`Bun.spawn({ terminal })`: openpty on
   POSIX, ConPTY on Windows), replays the output into headless xterm.js to assert on what a user
   sees, and answers the terminal's startup queries like a real emulator. Exit code = failed checks.
-- `harness/installed.ts npm|bun` — packs the spike, installs the tarball into a fresh project and
-  runs the harness against the bin the package manager made.
+- `harness/installed.ts <path>` — packs the spike, installs the tarball the way a user would, and
+  runs the harness against the bin that install made: `npm` / `bun` (a fresh project),
+  `npm-global` / `bun-global` (into a temporary prefix), `bunx`. Not covered: `june inbox`
+  delegation, which does not exist yet.
 
 ```sh
 bun install
@@ -19,19 +21,19 @@ bun harness/run.ts                          # from source
 bun build --compile src/main.tsx --outfile dist/tui-spike
 bun harness/run.ts --bin dist/tui-spike     # the compiled binary
 bun harness/installed.ts npm                # npm install of the packed tarball
-bun harness/installed.ts bun
+bun harness/installed.ts bun                # also: npm-global, bun-global, bunx
 ```
 
 ## What the harness checks
 
 | scenario | checks |
 |---|---|
-| session | renders; feed live; CJK on screen; box borders in the same columns on every row; no stale cells after emoji (Unicode 11 widths); no full-screen clears and ≥ 5 events/s while keys are pressed (a starved event loop drops to ~0); `$EDITOR` runs with the terminal and the TUI comes back; resize 120x40 and 60x20; `q` exits 0; terminal restored; mounted once, one feed subscription, suspend/resume paired |
+| session | renders; feed live; CJK on screen; box borders in the same columns on every row; no stale cells after emoji (Unicode 11 widths); no full-screen clears and ≥ 5 events/s while keys are pressed (a starved event loop drops to ~0); the selected row stays on screen while events are prepended above it (≥ 18 of 20 samples); `$EDITOR` runs with the terminal and the TUI comes back; resize 120x40 and 60x20; `q` exits 0; terminal restored; mounted once, one feed subscription, suspend/resume paired |
 | ctrl-c, crash, sigterm | exits 130 / 1 / 143 and restores alternate screen, cursor and mouse modes (sigterm skipped on Windows) |
 | stdin redirected | stdout a TTY, stdin `/dev/null` or `NUL`: no full-screen UI, prints the listing, exits 0 |
 | no TTY | pipes only: plain text, five lines, exits 0 |
 
-Reported but not asserted: frame times, bytes/s, `widthMethod`, and stale cells when the same bytes
+Reported but not asserted: frame times, PTY bytes/s, `widthMethod`, and stale cells when the same bytes
 are replayed with Unicode 6 widths (a stand-in for legacy `wcwidth` tables).
 
 ## Results
@@ -87,7 +89,14 @@ four paths, 2026-09-28, on Bun 1.3.14.
    event loop drops to ~0. Windows timers tick every 15.6 ms, so the fake feed runs at ~16/s there.
 6. **Layout**: Yoga defaults `flexShrink` to 0, so a flex child with long content pushes its
    siblings off screen unless it sets `flexShrink: 1, minHeight: 0`.
-7. **Spawning on Windows**: npm makes `.cmd` shims, bun makes `.exe` shims; `cmd.exe` does not
+7. **A live list must anchor its selection in a layout effect, from the data.** New events are
+   prepended, pushing an older selection down ~20 rows/s. Scrolling in `useEffect` left the row
+   off screen in 2–11 of 20 samples: the passive effect runs after OpenTUI has drawn a frame
+   with the row inserted. `scrollChildIntoView` in `useLayoutEffect` was off screen 20 of 20:
+   at commit time the new rows are not laid out, so it scrolls one row short. Setting `scrollTop`
+   from the row's index in `useLayoutEffect` holds it 20 of 20 (six runs). The list also never
+   evicts the selected event at its 500-row cap.
+8. **Spawning on Windows**: npm makes `.cmd` shims, bun makes `.exe` shims; `cmd.exe` does not
    parse backslash-escaped quotes; Windows PowerShell 5.1 strips quotes from arguments to native
    commands (hence `--bin`).
 

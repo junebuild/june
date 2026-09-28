@@ -48,6 +48,7 @@ function launch(argv: string[], cols: number, rows: number, env: Record<string, 
   const legacy = new Terminal({ cols, rows, allowProposedApi: true });
   const decoder = new TextDecoder();
   let raw = "";
+  let bytes = 0; // PTY bytes, not UTF-16 code units: the output is full of CJK and emoji
   const proc = Bun.spawn(argv, {
     cwd: root,
     env: { ...process.env, TERM: "xterm-256color", ...env },
@@ -57,6 +58,7 @@ function launch(argv: string[], cols: number, rows: number, env: Record<string, 
       data(_t, data) {
         const s = decoder.decode(data, { stream: true });
         raw += s;
+        bytes += data.byteLength;
         xterm.write(s);
         legacy.write(s);
       },
@@ -73,6 +75,7 @@ function launch(argv: string[], cols: number, rows: number, env: Record<string, 
     proc,
     xterm,
     raw: () => raw,
+    bytes: () => bytes,
     lines,
     legacyLines: () => linesOf(legacy),
     screen: () => lines().join("\n"),
@@ -160,7 +163,7 @@ const scenarios: Record<string, () => Promise<void>> = {
       for (const l of run.lines()) if (staleRe.test(l)) stale.add(l.trim());
       for (const l of run.legacyLines()) if (staleRe.test(l)) staleLegacy.add(l.trim());
     }, 100);
-    const before = run.raw().length;
+    const before = run.bytes();
     const clearsBefore = run.raw().split("\x1b[2J").length;
     const eventsBefore = eventsOnScreen(run);
     for (let i = 0; i < 20; i++) {
@@ -175,7 +178,7 @@ const scenarios: Record<string, () => Promise<void>> = {
     await sleep(2000 - 20 * 30 - 5 * 60);
     clearInterval(sampler);
     await run.waitFor(() => true, 0);
-    notes.steadyBytesPerSec = Math.round((run.raw().length - before) / 2);
+    notes.steadyBytesPerSec = Math.round((run.bytes() - before) / 2);
     // The feed emits 20/s (≈16/s on Windows, whose timers tick every 15.6 ms);
     // a starved event loop drops to ~0. Slow machines land between: the Intel
     // macOS runner renders at ~15 ms/frame and keeps ~9/s.
@@ -187,6 +190,27 @@ const scenarios: Record<string, () => Promise<void>> = {
     check(s, "no full-screen clears while streaming", clears === 0, clears);
     check(s, "no stale cells after emoji (Unicode 11 widths)", stale.size === 0, [...stale].slice(0, 2).join(" | "));
     check(s, "selection moved", await run.waitFor(() => /trace #\d+/.test(run.screen()), 3000));
+
+    // New events are prepended above the selection; after more than a
+    // screenful of them the selected row must still be on screen.
+    // Sampled 20 times over 2 s: a frame between the insert and the scroll
+    // is invisible to a person; a selection that drifts away is not.
+    const selectedSeq = /trace #(\d+)/.exec(run.screen())?.[1];
+    const rowRe = new RegExp(`│\\s*${selectedSeq}  `);
+    await sleep(3000);
+    let seen = 0;
+    let miss = "";
+    for (let i = 0; i < 20; i++) {
+      await run.waitFor(() => true, 0);
+      if (run.lines().some((l) => rowRe.test(l))) seen++;
+      else {
+        const seqs = run.lines().map((l) => /^│\s*(\d+)  /.exec(l)?.[1]).filter(Boolean);
+        miss = `; on a miss the list showed #${seqs[0]}…#${seqs.at(-1)}`;
+      }
+      await sleep(100);
+    }
+    notes.selectedRowVisible = `${seen}/20`;
+    check(s, "selected row stays on screen while events stream in", seen >= 18, `#${selectedSeq} visible ${seen}/20${miss}`);
 
     run.send("e");
     check(s, "editor ran", await run.waitFor(() => existsSync(mark), 15_000));
