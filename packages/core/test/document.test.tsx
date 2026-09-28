@@ -319,6 +319,44 @@ describe("Document social tags (on by default)", () => {
       "@graph": Record<string, any>[];
     };
 
+  test("a non-home page's breadcrumbs → a BreadcrumbList, absolute, the last item its canonical", () => {
+    const site = { ...baseConfig.site, url: "https://acme.com" };
+    const ld = jsonLd(
+      render({
+        config: { ...baseConfig, site, basePath: "/b" },
+        pageUrl: "https://acme.com/docs/x",
+        breadcrumbs: [
+          { name: "Acme", path: "/" },
+          { name: "Docs </script>", path: "/docs" },
+          { name: "X", path: "/docs/x" },
+        ],
+      }),
+    );
+    expect(ld["@graph"].map((n) => n["@type"])).toEqual(["BreadcrumbList"]);
+    expect(ld["@graph"][0]!.itemListElement).toEqual([
+      { "@type": "ListItem", position: 1, name: "Acme", item: "https://acme.com/b/" },
+      { "@type": "ListItem", position: 2, name: "Docs </script>", item: "https://acme.com/b/docs" },
+      { "@type": "ListItem", position: 3, name: "X", item: "https://acme.com/b/docs/x" },
+    ]);
+  });
+
+  test("breadcrumbs render nowhere they'd mislead: home, a one-crumb trail, noindex, no origin", () => {
+    const crumbs = [
+      { name: "Acme", path: "/" },
+      { name: "X", path: "/x" },
+    ];
+    const site = { ...baseConfig.site, url: "https://acme.com" };
+    const at = (props: Partial<React.ComponentProps<typeof Document>>) =>
+      render({ config: { ...baseConfig, site }, pageUrl: "https://acme.com/x", ...props });
+    expect(at({ breadcrumbs: crumbs })).toContain(`"@type":"BreadcrumbList"`);
+    expect(at({ breadcrumbs: crumbs, isHome: true })).not.toContain("BreadcrumbList");
+    expect(at({ breadcrumbs: crumbs.slice(0, 1) })).not.toContain("BreadcrumbList");
+    expect(at({ breadcrumbs: crumbs, metadata: { robots: "noindex" } })).not.toContain("BreadcrumbList");
+    expect(
+      render({ config: baseConfig, pageUrl: "https://prerender.june/x", breadcrumbs: crumbs }),
+    ).not.toContain("BreadcrumbList");
+  });
+
   test("no organization declared → the @graph is the WebSite alone (nothing invented)", () => {
     const ld = jsonLd(render({ config: { ...baseConfig, site: { ...baseConfig.site, twitter: "@acme" } }, pageUrl: "https://acme.com/", isHome: true }));
     expect(ld["@context"]).toBe("https://schema.org");

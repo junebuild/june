@@ -263,6 +263,26 @@ function siteJsonLd(
   return JSON.stringify({ "@context": "https://schema.org", "@graph": graph }).replace(/</g, "\\u003c");
 }
 
+// One crumb of a page's trail: a display name and the root-relative path it links
+// to (before the deploy basePath). The host builds the trail; see Metadata.breadcrumb.
+export type Breadcrumb = { name: string; path: string };
+
+// A non-home page's JSON-LD: the schema.org BreadcrumbList for its trail (home
+// first, this page last), in the same one-@graph shape as the homepage's. `abs`
+// makes each root-relative path absolute; `current` is this page's canonical URL.
+function breadcrumbJsonLd(trail: Breadcrumb[], abs: (u?: string) => string | undefined, current?: string): string {
+  const itemListElement = trail.map((c, i) => ({
+    "@type": "ListItem",
+    position: i + 1,
+    name: c.name,
+    item: (i === trail.length - 1 && current) || abs(c.path),
+  }));
+  return JSON.stringify({
+    "@context": "https://schema.org",
+    "@graph": [{ "@type": "BreadcrumbList", itemListElement }],
+  }).replace(/</g, "\\u003c");
+}
+
 // basePath: prefix the framework's root-absolute asset URLs so they resolve under
 // a deploy subpath (e.g. GitHub Pages "/openab/docs"). Only single-leading-slash
 // URLs are rewritten (leaves "//cdn", "https://…", relative, and empty basePath untouched).
@@ -295,6 +315,7 @@ export function Document({
   isHome,
   onLocaleDomain,
   markdownHref,
+  breadcrumbs,
 }: {
   children: React.ReactNode;
   metadata?: Metadata;
@@ -326,6 +347,10 @@ export function Document({
   // agent reading the HTML finds the clean projection. The host passes it only
   // when the route's md projection is live; absent → no link.
   markdownHref?: string;
+  // This page's trail, home first, this page last (the host derives it — see
+  // Metadata.breadcrumb). Rendered as a BreadcrumbList on non-home, indexable
+  // pages with a known public origin; a trail of one (just home) is none.
+  breadcrumbs?: Breadcrumb[];
 }) {
   const title = documentTitle(metadata, config.site);
   const description = metadata?.description ?? config.site.description;
@@ -397,6 +422,14 @@ export function Document({
           <script
             type="application/ld+json"
             dangerouslySetInnerHTML={{ __html: siteJsonLd(config.site, origin + (withBase("/") ?? "/"), docLang, absolute) }}
+          />
+        ) : null}
+        {/* Every other page places itself in the site (schema.org BreadcrumbList).
+            Same gates as the canonical: a public origin, and not noindex. */}
+        {!isHome && origin && breadcrumbs && breadcrumbs.length > 1 && !metadata?.robots?.includes("noindex") ? (
+          <script
+            type="application/ld+json"
+            dangerouslySetInnerHTML={{ __html: breadcrumbJsonLd(breadcrumbs, absolute, canonical) }}
           />
         ) : null}
         <meta name="viewport" content="width=device-width, initial-scale=1" />

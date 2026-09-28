@@ -225,7 +225,24 @@ describe("document social tags under i18n", () => {
     const get = socialPipeline();
     expect(await get("https://example.com/de")).toContain(`"@type":"WebSite"`);
     expect(await get("https://example.com/index")).toContain(`"@type":"WebSite"`);
-    expect(await get("https://example.com/de/page")).not.toContain("ld+json");
+    // a non-home page carries no WebSite node — its JSON-LD is only its breadcrumb trail
+    const page = await get("https://example.com/de/page");
+    expect(page).not.toContain(`"@type":"WebSite"`);
+    expect(page).toContain(`"@type":"BreadcrumbList"`);
+  });
+
+  test("a locale page's breadcrumb starts at the locale's home, on the locale's domain", async () => {
+    const get = socialPipeline();
+    const crumbs = (html: string) =>
+      JSON.parse(html.match(/<script type="application\/ld\+json">(.*?)<\/script>/)![1]!)["@graph"][0].itemListElement.map(
+        (i: { item: string }) => i.item,
+      );
+    expect(crumbs(await get("https://example.com/de/page"))).toEqual([
+      "https://example.com/de",
+      "https://example.com/de/page",
+    ]);
+    // a locale on its own domain (fr → example.fr) has no path prefix: its home is "/"
+    expect(crumbs(await get("https://example.fr/page"))).toEqual(["https://example.fr/", "https://example.fr/page"]);
   });
 
   test("the home JSON-LD's inLanguage is the resolved locale, not the site default", async () => {
