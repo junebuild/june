@@ -36,24 +36,27 @@ are replayed with Unicode 6 widths (a stand-in for legacy `wcwidth` tables).
 
 ## Results
 
-CI run [36459284068](https://github.com/junebuild/june/actions/runs/36459284068) (2026-09-28,
-OpenTUI 0.5.12, Bun 1.3.14 unless noted). Windows runs 39 checks: SIGTERM is skipped. Alpine has
-no npm, so musl has no npm column.
+CI run [36461777855](https://github.com/junebuild/june/actions/runs/36461777855) (2026-09-28,
+OpenTUI 0.5.12, Bun 1.4.2 on every target). Windows runs 39 checks: SIGTERM is skipped. Alpine
+has no npm, so musl has no npm column.
 
 | target | source | compiled | npm | bun | frame avg / max | events/s |
 |---|---|---|---|---|---|---|
-| darwin-arm64 | ✅ 44/44 | ✅ 44/44 | ✅ 44/44 | ✅ 44/44 | 6.0 / 32.5 ms | 18 |
-| darwin-x64 | ✅ 44/44 | ✅ 44/44 | ✅ 44/44 | ✅ 44/44 | 12.7 / 64.4 ms | 15.5 |
-| linux-x64 | ✅ 44/44 | ✅ 44/44 | ✅ 44/44 | ✅ 44/44 | 6.7 / 27.8 ms | 17.5 |
-| linux-arm64 | ✅ 44/44 | ✅ 44/44 | ✅ 44/44 | ✅ 44/44 | 5.9 / 13.4 ms | 17.5 |
-| linux-x64-musl | ✅ 44/44 | ✅ 44/44 | — | ✅ 44/44 | 6.9 / 25.8 ms | 17 |
-| linux-arm64-musl | ✅ 44/44 | ✅ 44/44 | — | ✅ 44/44 | 5.0 / 11.9 ms | 17.5 |
-| win32-x64 | ✅ 39/39 | ✅ 39/39 | ✅ 39/39 | ✅ 39/39 | 7.0 / 21.4 ms | 17 |
-| win32-arm64, **Bun 1.4.2** | ✅ 39/39 | ✅ 39/39 | ✅ 39/39 | ✅ 39/39 | 4.4 / 14.3 ms | 18 |
-| win32-arm64, Bun 1.3.14 | ❌ | ❌ | ❌ | ❌ | native core does not load | |
+| darwin-arm64 | ✅ 44/44 | ✅ 44/44 | ✅ 44/44 | ✅ 44/44 | 2.7 / 14.9 ms | 19.5 |
+| darwin-x64 | ✅ 44/44 | ✅ 44/44 | ✅ 44/44 | ✅ 44/44 | 11.2 / 165.5 ms | 17.5 |
+| linux-x64 | ✅ 44/44 | ✅ 44/44 | ✅ 44/44 | ✅ 44/44 | 3.8 / 14.9 ms | 17.5 |
+| linux-arm64 | ✅ 44/44 | ✅ 44/44 | ✅ 44/44 | ✅ 44/44 | 4.0 / 22.5 ms | 17.5 |
+| linux-x64-musl | ✅ 44/44 | ✅ 44/44 | — | ✅ 44/44 | 5.5 / 17.9 ms | 18 |
+| linux-arm64-musl | ✅ 44/44 | ✅ 44/44 | — | ✅ 44/44 | 3.9 / 15.3 ms | 17.5 |
+| win32-x64 | ✅ 39/39 | ✅ 39/39 | ✅ 39/39 | ✅ 39/39 | 5.4 / 24.7 ms | 18 |
+| win32-arm64 | ✅ 39/39 | ✅ 39/39 | ✅ 39/39 | ✅ 39/39 | 4.3 / 17.6 ms | 18 |
+
+On Bun 1.3.14 (run [36460069360](https://github.com/junebuild/june/actions/runs/36460069360))
+the same checks passed everywhere except Windows arm64, where the native core does not load
+(finding 1), and frames were slower: 5–8 ms average against 2.7–5.5 ms on 1.4.2.
 
 Also verified by hand: darwin-arm64 (MacBook Air M3) and win32-x64 (starship-win11 over SSH), all
-four paths, 2026-09-28.
+four paths, 2026-09-28, on Bun 1.3.14.
 
 ## Findings
 
@@ -62,8 +65,8 @@ four paths, 2026-09-28.
    disabled)` — and OpenTUI loads its core through `bun:ffi`. Bun 1.4.2 passes everything. x64
    Bun 1.3.14 under emulation is not a way out: from source it passes, but the compiled and
    bun-installed bins die a few events after the first frame (EPIPE), and npm installs the arm64
-   native package, which x64 Bun cannot load. A compiled `@junejs/inbox` for Windows arm64 has to
-   be built with Bun ≥ 1.4.2.
+   native package, which x64 Bun cannot load. June now follows the newest Bun (#281), so this is
+   closed; the workflow runs every target on 1.4.2.
 2. **OpenTUI does not detect musl.** It loads `@opentui/core-linux-<arch>-musl` only when
    `OPENTUI_LIBC=musl`; otherwise it dlopens the glibc build, which on Alpine x64 fails with
    `Error loading shared library ld-linux-x86-64.so.2`. (On Alpine arm64 the glibc build happened
