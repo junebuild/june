@@ -281,6 +281,41 @@ describe("AgentDurableObject", () => {
     expect(seenServices).toEqual([{ operators: ["ops-1"] }, { operators: ["ops-1"] }, { operators: ["ops-1"] }]); // hook ran in scope
   });
 
+  test("/resume: an authorizeAnswer that throws is a 500, not a 409, and the answer is not applied", async () => {
+    const s = await storage();
+    const approve: Tool = {
+      spec: { name: "approve", description: "ask an operator", input: { type: "object" } },
+      run: async (_i, ctx) => ({ approved: await ctx.requestInput({ id: "a1", prompt: "Send?", answerers: { policy: "mailbox-operator" } }) }),
+    };
+    const model = scriptedModel([
+      { text: "drafting", toolCalls: [{ id: "c1", name: "approve", input: {} }] },
+      { text: "sent", toolCalls: [] },
+    ]);
+    let down = true;
+    const agent = new AgentDurableObject({ storage: s }, {
+      name: "scout", model, tools: [approve],
+      authorizeAnswer: async () => { if (down) throw new Error("db unavailable"); return true; },
+    });
+    const errors = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const post = (path: string, body: unknown) => agent.fetch(new Request(`https://do${path}`, { method: "POST", body: JSON.stringify(body) }));
+      const event = { source: "email", kind: "message", channelId: "scout", ts: "m1", user: { id: "customer@example.com" } };
+      for await (const _ of sseTurnEvents(await post("/turn", { userText: "refund me", turnId: "t1", event }))) { /* drain to the park */ }
+
+      const failed = await post("/resume", { turnId: "t1", inputId: "a1", input: true, principal: { id: "ops-1" } });
+      expect(failed.status).toBe(500);
+      expect(((await failed.json()) as { error: string }).error).toMatch(/authorizeAnswer failed: db unavailable — the answer was NOT applied/);
+      expect(errors).toHaveBeenCalled();
+
+      down = false; // the same answer, retried once the dependency is back, still applies
+      const events: TurnEvent[] = [];
+      for await (const e of sseTurnEvents(await post("/resume", { turnId: "t1", inputId: "a1", input: true, principal: { id: "ops-1" } }))) events.push(e);
+      expect(events.at(-1)).toMatchObject({ type: "turn.completed", text: "sent" });
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
   test("/resume and /turn map suspension conflicts to 4xx, not a crash (P3)", async () => {
     const s = await storage();
     const approve: Tool = {
