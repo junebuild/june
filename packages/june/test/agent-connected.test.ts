@@ -21,7 +21,7 @@ beforeEach(() => {
   ACTION_REGISTRY.clear();
   globalThis.fetch = (async (url: unknown, init?: { body?: string }) => {
     const rpc = JSON.parse(init!.body!) as { id: unknown; method: string; params?: { arguments?: { city?: string } } };
-    const reply = (result: unknown) => new Response(JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result }));
+    const reply = (result: unknown) => Response.json({ jsonrpc: "2.0", id: rpc.id, result });
     if (rpc.method === "initialize") return reply({ protocolVersion: "2025-06-18", capabilities: {}, serverInfo: { name: "weather", version: "1" } });
     if (rpc.method === "tools/list")
       return reply({ tools: [{ name: "get_weather", description: "Current weather", inputSchema: { type: "object", properties: { city: { type: "string" } }, required: ["city"] } }] });

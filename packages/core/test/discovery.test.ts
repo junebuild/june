@@ -311,7 +311,7 @@ describe("robotsTxt() / apiCatalog() / mcpServerCard()", () => {
     });
     const card = mcpServerCard(ORIGIN);
     expect(card.url).toBe(`${ORIGIN}/mcp`);
-    expect(card.protocolVersion).toBe("2025-06-18");
+    expect(card.protocolVersion).toBe("2026-07-28");
     expect(card.tools).toContain("ping");
   });
 
@@ -327,7 +327,7 @@ describe("robotsTxt() / apiCatalog() / mcpServerCard()", () => {
       version: "0.0.0",
       description: "The agent-native React framework.",
       websiteUrl: "https://june.build/",
-      remotes: [{ type: "streamable-http", url: "https://june.build/mcp", supportedProtocolVersions: ["2025-06-18"] }],
+      remotes: [{ type: "streamable-http", url: "https://june.build/mcp", supportedProtocolVersions: ["2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26"] }],
     });
     // reverse-DNS with exactly one slash (schema pattern)
     expect(card.name).toMatch(/^[a-zA-Z0-9.-]+\/[a-zA-Z0-9._-]+$/);

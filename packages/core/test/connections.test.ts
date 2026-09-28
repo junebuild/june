@@ -8,6 +8,7 @@ import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { ACTION_REGISTRY, defineAction } from "@junejs/core/agent";
 import { connectAll, defineMcpConnection, defineOpenapiConnection, defineProviderConnection } from "@junejs/core/connections";
+import { fakeMcpServer, START, type FakeCall, type FakePage } from "./mcp-fake-server";
 
 // connectAll registers tools as defineActions (global registry) — isolate.
 let preexisting = new Map(ACTION_REGISTRY);
@@ -23,7 +24,7 @@ function mockRemotes() {
     if (u.includes("down")) throw new Error("connection refused");
     if (u.endsWith("/mcp")) {
       const rpc = JSON.parse(init!.body!) as { id: unknown; method: string; params?: { arguments?: { city?: string } } };
-      const reply = (result: unknown) => new Response(JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result }));
+      const reply = (result: unknown) => Response.json({ jsonrpc: "2.0", id: rpc.id, result });
       if (rpc.method === "initialize") return reply({ protocolVersion: "2025-06-18", capabilities: {}, serverInfo: { name: "weather", version: "1" } });
       if (rpc.method === "tools/list")
         return reply({ tools: [{ name: "get_weather", description: "Current weather", inputSchema: { type: "object", properties: { city: { type: "string" } }, required: ["city"] }, annotations: { readOnlyHint: true } }] });
@@ -111,14 +112,19 @@ describe("connection identity + annotations", () => {
         },
       }),
     ]);
-    // Discovery (initialize + tools/list) ran WITHOUT ctx → the service credential.
-    expect(authCtxs).toEqual([undefined, undefined]);
-    expect(sentAuth.slice(0, 2)).toEqual(["Bearer svc", "Bearer svc"]);
+    // Discovery (the era probe, the handshake, tools/list) ran WITHOUT ctx →
+    // every one of those requests carried the service credential.
+    expect(authCtxs.length).toBeGreaterThan(0);
+    expect(authCtxs.every((c) => c === undefined)).toBe(true);
+    const discovery = sentAuth.length;
+    expect(sentAuth).toEqual(Array(discovery).fill("Bearer svc"));
 
     // A call carrying identity mints the CALLER's credential.
     await actions[0]!.run({ city: "Taipei" }, { user: { id: "acme" } });
-    expect(authCtxs[2]).toEqual({ user: { id: "acme" } });
-    expect(sentAuth[2]).toBe("Bearer tenant-acme");
+    expect(authCtxs.at(-1)).toEqual({ user: { id: "acme" } });
+    // This mock is a 2025-era server, so the tenant's call opens the tenant's
+    // OWN session (initialize → initialized → call) — never the discovery one.
+    expect(sentAuth.slice(discovery)).toEqual(["Bearer tenant-acme", "Bearer tenant-acme", "Bearer tenant-acme"]);
   });
 
   test("requiresPrincipal on the connection stamps every exposed action (mcp + openapi)", async () => {
@@ -566,150 +572,134 @@ describe("OpenAPI: spec features the minimal client used to mishandle", () => {
   });
 });
 
-describe("MCP: tool ids are valid tool names; the remote is still called by its own name", () => {
-  // MCP allows dots ("admin.tools.list") and names up to 128 characters before
-  // our `<connection>__` prefix — both break the model API's ^[a-zA-Z0-9_-]{1,128}$.
-  function mcpServer(names: string[]) {
-    const called: string[] = [];
-    globalThis.fetch = (async (_url: unknown, init?: { body?: string }) => {
-      const rpc = JSON.parse(init!.body!) as { id: unknown; method: string; params?: { name?: string } };
-      const reply = (result: unknown) => Response.json({ jsonrpc: "2.0", id: rpc.id, result });
-      if (rpc.method === "tools/list") return reply({ tools: names.map((name) => ({ name, inputSchema: { type: "object", properties: {} } })) });
-      if (rpc.method === "tools/call") {
-        called.push(rpc.params!.name!);
-        return reply({ content: [{ type: "text", text: JSON.stringify({ ran: rpc.params!.name }) }] });
-      }
-      return reply({});
-    }) as typeof fetch;
-    return called;
-  }
+// Every MCP behavior below runs against BOTH protocol eras: June's client probes
+// with a modern server/discover and falls back to the 2025-era initialize.
+for (const era of ["modern", "legacy"] as const) {
+  describe(`MCP (${era} server): tool ids are valid tool names; the remote is still called by its own name`, () => {
+    // MCP allows dots ("admin.tools.list") and names up to 128 characters before
+    // our `<connection>__` prefix — both break the model API's ^[a-zA-Z0-9_-]{1,128}$.
+    const called = (calls: FakeCall[]) => calls.filter((c) => c.method === "tools/call").map((c) => (c.body.params as { name: string }).name);
 
-  test("dotted, over-long and colliding names get valid, unique ids — and each still calls its own remote tool", async () => {
-    const long = "t".repeat(128); // valid in MCP; with the "srv__" prefix it is not
-    const called = mcpServer(["admin.tools.list", "admin_tools_list", long, "get_weather"]);
-    const { actions, report } = await connectAll([defineMcpConnection({ name: "srv", url: "http://x/mcp" })]);
-    const ids = actions.map((a) => a.id);
-    // The already-valid "admin_tools_list" keeps its id even though the dotted
-    // name that reduces to the same id is listed first: only the reduced one
-    // is suffixed, so an existing caller of srv__admin_tools_list still reaches
-    // the same remote tool.
-    expect(ids).toEqual(["srv__admin_tools_list_2", "srv__admin_tools_list", `srv__${long}`.slice(0, 128), "srv__get_weather"]);
-    expect(report[0]!.tools).toEqual(ids);
-    for (const id of ids) expect(id).toMatch(/^[a-zA-Z0-9_-]{1,128}$/);
+    test("dotted, over-long and colliding names get valid, unique ids — and each still calls its own remote tool", async () => {
+      const long = "t".repeat(128); // valid in MCP; with the "srv__" prefix it is not
+      const server = fakeMcpServer({ era, tools: ["admin.tools.list", "admin_tools_list", long, "get_weather"] });
+      server.install();
+      const { actions, report } = await connectAll([defineMcpConnection({ name: "srv", url: "http://x/mcp" })]);
+      const ids = actions.map((a) => a.id);
+      // The already-valid "admin_tools_list" keeps its id even though the dotted
+      // name that reduces to the same id is listed first: only the reduced one
+      // is suffixed, so an existing caller of srv__admin_tools_list still reaches
+      // the same remote tool.
+      expect(ids).toEqual(["srv__admin_tools_list_2", "srv__admin_tools_list", `srv__${long}`.slice(0, 128), "srv__get_weather"]);
+      expect(report[0]!.tools).toEqual(ids);
+      for (const id of ids) expect(id).toMatch(/^[a-zA-Z0-9_-]{1,128}$/);
 
-    for (const a of actions) await a.run({}, {} as never);
-    expect(called).toEqual(["admin.tools.list", "admin_tools_list", long, "get_weather"]);
+      for (const a of actions) await a.run({}, {} as never);
+      expect(called(server.calls)).toEqual(["admin.tools.list", "admin_tools_list", long, "get_weather"]);
+    });
+
+    test("a connection named after its host yields valid ids", async () => {
+      fakeMcpServer({ era, tools: ["search"] }).install();
+      const { actions } = await connectAll([defineMcpConnection({ name: "mcp.example.com", url: "http://x/mcp" })]);
+      expect(actions.map((a) => a.id)).toEqual(["mcp_example_com__search"]);
+    });
   });
 
-  test("a connection named after its host yields valid ids", async () => {
-    mcpServer(["search"]);
-    const { actions } = await connectAll([defineMcpConnection({ name: "mcp.example.com", url: "http://x/mcp" })]);
-    expect(actions.map((a) => a.id)).toEqual(["mcp_example_com__search"]);
-  });
-
-  test("already-valid names are unchanged", async () => {
-    mockRemotes();
-    const { actions } = await connectAll([defineMcpConnection({ name: "weather", url: "http://x/mcp" })]);
-    expect(actions.map((a) => a.id)).toEqual(["weather__get_weather"]);
-  });
-});
-
-describe("MCP: tools/list pagination (spec 2026-07-28)", () => {
-  // A server that pages its tool list. `pages` maps the cursor a request
-  // carries (START = no cursor) to that page's tools and nextCursor.
-  const START = Symbol("start");
-  type Page = { tools: string[]; nextCursor?: string | null };
-  function pagedServer(pages: Map<string | typeof START, Page>) {
-    const cursors: (string | typeof START)[] = [];
-    globalThis.fetch = (async (_url: unknown, init?: { body?: string }) => {
-      const rpc = JSON.parse(init!.body!) as { id: unknown; method: string; params?: { cursor?: string } };
-      const reply = (result: unknown) => Response.json({ jsonrpc: "2.0", id: rpc.id, result });
-      if (rpc.method !== "tools/list") return reply({});
-      const key = rpc.params && "cursor" in rpc.params ? rpc.params.cursor! : START;
-      cursors.push(key);
-      const page = pages.get(key);
-      if (!page) return Response.json({ jsonrpc: "2.0", id: rpc.id, error: { code: -32602, message: `invalid cursor ${String(key)}` } });
-      return reply({
-        tools: page.tools.map((name) => ({ name, inputSchema: { type: "object", properties: {} } })),
-        ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
+  describe(`MCP (${era} server): tools/list pagination (spec 2026-07-28)`, () => {
+    const connect = () => connectAll([defineMcpConnection({ name: "srv", url: "http://x/mcp" })]);
+    const cursors = (calls: FakeCall[]) =>
+      calls.filter((c) => c.method === "tools/list").map((c) => {
+        const p = c.body.params as Record<string, unknown> | undefined;
+        return p && "cursor" in p ? (p.cursor as string) : START;
       });
-    }) as typeof fetch;
-    return cursors;
-  }
-  const connect = () => connectAll([defineMcpConnection({ name: "srv", url: "http://x/mcp" })]);
 
-  test("follows nextCursor across pages, sending each cursor back verbatim (opaque)", async () => {
-    const cursors = pagedServer(
-      new Map<string | typeof START, Page>([
-        [START, { tools: ["a", "b"], nextCursor: "eyJwYWdlIjogMn0=/+" }],
-        ["eyJwYWdlIjogMn0=/+", { tools: ["c"], nextCursor: "p3" }],
-        ["p3", { tools: ["d"] }],
-      ]),
-    );
-    const { actions, report } = await connect();
-    expect(actions.map((a) => a.id)).toEqual(["srv__a", "srv__b", "srv__c", "srv__d"]);
-    expect(report[0]!.error).toBeUndefined();
-    expect(cursors).toEqual([START, "eyJwYWdlIjogMn0=/+", "p3"]); // the first request carries no cursor
-  });
+    test("follows nextCursor across pages, sending each cursor back verbatim (opaque)", async () => {
+      const server = fakeMcpServer({
+        era,
+        pages: new Map<string | typeof START, FakePage>([
+          [START, { tools: ["a", "b"], nextCursor: "eyJwYWdlIjogMn0=/+" }],
+          ["eyJwYWdlIjogMn0=/+", { tools: ["c"], nextCursor: "p3" }],
+          ["p3", { tools: ["d"] }],
+        ]),
+      });
+      server.install();
+      const { actions, report } = await connect();
+      expect(actions.map((a) => a.id)).toEqual(["srv__a", "srv__b", "srv__c", "srv__d"]);
+      expect(report[0]!.error).toBeUndefined();
+      expect(cursors(server.calls)).toEqual([START, "eyJwYWdlIjogMn0=/+", "p3"]); // the first request carries no cursor
+    });
 
-  test('an EMPTY-STRING nextCursor is a cursor, not the end: "" is sent back and the next page is read', async () => {
-    const cursors = pagedServer(
-      new Map<string | typeof START, Page>([
-        [START, { tools: ["a"], nextCursor: "" }],
-        ["", { tools: ["b"] }],
-      ]),
-    );
-    const { actions } = await connect();
-    expect(actions.map((a) => a.id)).toEqual(["srv__a", "srv__b"]);
-    expect(cursors).toEqual([START, ""]);
-  });
+    test('an EMPTY-STRING nextCursor is a cursor, not the end: "" is sent back and the next page is read', async () => {
+      const server = fakeMcpServer({
+        era,
+        pages: new Map<string | typeof START, FakePage>([
+          [START, { tools: ["a"], nextCursor: "" }],
+          ["", { tools: ["b"] }],
+        ]),
+      });
+      server.install();
+      const { actions } = await connect();
+      expect(actions.map((a) => a.id)).toEqual(["srv__a", "srv__b"]);
+      expect(cursors(server.calls)).toEqual([START, ""]);
+    });
 
-  test("a null nextCursor ends the listing, like an absent one", async () => {
-    const cursors = pagedServer(new Map<string | typeof START, Page>([[START, { tools: ["a"], nextCursor: null }]]));
-    const { actions } = await connect();
-    expect(actions.map((a) => a.id)).toEqual(["srv__a"]);
-    expect(cursors).toEqual([START]);
-  });
+    test("a null nextCursor ends the listing, like an absent one", async () => {
+      const server = fakeMcpServer({ era, pages: new Map<string | typeof START, FakePage>([[START, { tools: ["a"], nextCursor: null }]]) });
+      server.install();
+      const { actions } = await connect();
+      expect(actions.map((a) => a.id)).toEqual(["srv__a"]);
+      expect(cursors(server.calls)).toEqual([START]);
+    });
 
-  test("a server that repeats a cursor fails the connection (never hangs) and registers nothing", async () => {
-    pagedServer(
-      new Map<string | typeof START, Page>([
-        [START, { tools: ["a"], nextCursor: "x" }],
-        ["x", { tools: ["b"], nextCursor: "x" }],
-      ]),
-    );
-    const { actions, report } = await connect();
-    expect(actions).toEqual([]);
-    expect(report[0]!.error).toContain('repeated cursor "x"');
-    expect([...ACTION_REGISTRY.keys()].filter((id) => id.startsWith("srv__"))).toEqual([]);
-  });
+    test("a server that repeats a cursor fails the connection (never hangs) and registers nothing", async () => {
+      fakeMcpServer({
+        era,
+        pages: new Map<string | typeof START, FakePage>([
+          [START, { tools: ["a"], nextCursor: "x" }],
+          ["x", { tools: ["b"], nextCursor: "x" }],
+        ]),
+      }).install();
+      const { actions, report } = await connect();
+      expect(actions).toEqual([]);
+      expect(report[0]!.error).toContain('repeated cursor "x"');
+      expect([...ACTION_REGISTRY.keys()].filter((id) => id.startsWith("srv__"))).toEqual([]);
+    });
 
-  test("an endless listing is cut off after 100 pages with an error, not silently truncated", async () => {
-    const pages = new Map<string | typeof START, Page>([[START, { tools: ["t0"], nextCursor: "c1" }]]);
-    for (let i = 1; i <= 200; i++) pages.set(`c${i}`, { tools: [`t${i}`], nextCursor: `c${i + 1}` });
-    const cursors = pagedServer(pages);
-    const { actions, report } = await connect();
-    expect(actions).toEqual([]);
-    expect(report[0]!.error).toContain("more than 100 pages");
-    expect(cursors).toHaveLength(100);
-  });
+    test("an endless listing is cut off after 100 pages with an error, not silently truncated", async () => {
+      const pages = new Map<string | typeof START, FakePage>([[START, { tools: ["t0"], nextCursor: "c1" }]]);
+      for (let i = 1; i <= 200; i++) pages.set(`c${i}`, { tools: [`t${i}`], nextCursor: `c${i + 1}` });
+      const server = fakeMcpServer({ era, pages });
+      server.install();
+      const { actions, report } = await connect();
+      expect(actions).toEqual([]);
+      expect(report[0]!.error).toContain("more than 100 pages");
+      expect(cursors(server.calls)).toHaveLength(100);
+    });
 
-  test("a page without the required `tools` array fails the connection, not read as an empty page", async () => {
-    pagedServer(new Map<string | typeof START, Page>([[START, { tools: ["a"], nextCursor: "p2" }]]));
-    const paged = globalThis.fetch;
-    globalThis.fetch = (async (url: unknown, init?: { body?: string }) => {
-      const rpc = JSON.parse(init!.body!) as { id: unknown; params?: { cursor?: string } };
-      if (rpc.params?.cursor === "p2") return Response.json({ jsonrpc: "2.0", id: rpc.id, result: {} });
-      return paged(url as string, init as RequestInit);
-    }) as typeof fetch;
-    const { actions, report } = await connect();
-    expect(actions).toEqual([]);
-    expect(report[0]!.error).toContain("page 2 has no `tools` array");
-  });
+    test("a page without the required `tools` array fails the connection, not read as an empty page", async () => {
+      const server = fakeMcpServer({ era, pages: new Map<string | typeof START, FakePage>([[START, { tools: ["a"], nextCursor: "p2" }]]) });
+      server.install();
+      // Page 2 answers a result with no `tools` at all (malformed).
+      globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+        const rpc = JSON.parse(String(init!.body)) as { id: unknown; method: string; params?: { cursor?: string } };
+        if (rpc.method === "tools/list" && rpc.params?.cursor === "p2") return Response.json({ jsonrpc: "2.0", id: rpc.id, result: {} });
+        return server.fetch(url as string, init);
+      }) as typeof fetch;
+      const { actions, report } = await connect();
+      expect(actions).toEqual([]);
+      expect(report[0]!.error).toContain("page 2 has no `tools` array");
+    });
 
-  test("an invalid-cursor error from the server fails the connection with the server's message", async () => {
-    pagedServer(new Map<string | typeof START, Page>([[START, { tools: ["a"], nextCursor: "gone" }]]));
-    const { report } = await connect();
-    expect(report[0]!.error).toContain("invalid cursor gone");
+    test("an invalid-cursor error from the server fails the connection with the server's message", async () => {
+      fakeMcpServer({ era, pages: new Map<string | typeof START, FakePage>([[START, { tools: ["a"], nextCursor: "gone" }]]) }).install();
+      const { report } = await connect();
+      expect(report[0]!.error).toContain("invalid cursor gone");
+    });
   });
+}
+
+test("MCP: already-valid tool names are unchanged", async () => {
+  mockRemotes();
+  const { actions } = await connectAll([defineMcpConnection({ name: "weather", url: "http://x/mcp" })]);
+  expect(actions.map((a) => a.id)).toEqual(["weather__get_weather"]);
 });

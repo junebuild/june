@@ -5,7 +5,7 @@ description: A connection is an agent's outbound edge — an MCP server, an Open
 date: 2026-09-27
 section: Agents
 order: "16.3"
-sources: [packages/core/src/connections.ts, packages/core/src/google-drive.ts, packages/core/src/github.ts, packages/core/src/agent-config.ts, packages/june/src/connection-auth.ts, packages/june/src/agent-durable.ts, packages/june/src/agent-discover.ts, docs/google-drive-integration.md, packages/core/CHANGELOG.md]
+sources: [packages/core/src/connections.ts, packages/core/src/mcp-client.ts, packages/core/src/mcp-protocol.ts, packages/core/src/google-drive.ts, packages/core/src/github.ts, packages/core/src/agent-config.ts, packages/june/src/connection-auth.ts, packages/june/src/agent-durable.ts, packages/june/src/agent-discover.ts, docs/google-drive-integration.md, packages/core/CHANGELOG.md]
 ---
 ## The shape
 
@@ -51,22 +51,50 @@ All three are exported from `@junejs/core/connections`.
 | `defineOpenapiConnection` | `name`, `url` (the OpenAPI doc), `baseUrl?`, `headers?`, `auth?`, `requiresPrincipal?`, `include?`, `docAuth?` | each path × method in the doc, or those `include` selects |
 | `defineProviderConnection` | `name`, `connect`, `url?`, `requiresPrincipal?` | whatever `connect()` returns |
 
-- **MCP** — a paginated `tools/list` is read to the end: June follows
-  `nextCursor` until the server omits it (an empty-string cursor is a cursor,
-  not the end). A page with no `tools` array, a server that repeats a cursor,
-  or pages past 100 all fail the connection rather than dropping tools
-  silently. The tool's
-  description is prefixed `[<name>]` and its
-  `annotations` (`readOnlyHint`, `destructiveHint`, …) carry through when
-  June re-serves it. A call's first text content block is parsed as JSON,
-  falling back to the raw text. MCP allows dots in tool names
-  (`admin.tools.list`) and names up to 128 characters before the
-  `<name>__` prefix, so ids follow the same rule as OpenAPI's: characters
-  outside `[A-Za-z0-9_-]` become `_`, ids are cut to 128 characters, and a
-  colliding id gets a numeric suffix. The remote tool is still called by its
-  own name. In both kinds, a name that is already valid keeps its id: only
-  reduced ids are ever suffixed, so adding a dotted tool to a server never
-  moves an existing one.
+- **MCP** — Streamable HTTP, in either protocol era:
+  - **2026-07-28 first, the 2025 era as a fallback.** June first sends
+    `server/discover`. A server offering 2026-07-28 gets stateless
+    requests, each carrying its protocol version in `_meta` and mirrored
+    into `MCP-Protocol-Version`, `Mcp-Method` and `Mcp-Name` headers.
+  - **Falling back to the 2025 handshake.** Anything a 2025-era server
+    answers to that probe makes June run `initialize` and
+    `notifications/initialized` instead, and keep the `Mcp-Session-Id` the
+    server mints (an expired session is re-initialized once).
+  - **Legacy sessions are per credential.** Each distinct set of resolved
+    headers, so each tenant under a per-caller `auth(ctx)`, opens and reuses
+    its own session; a tenant never rides on another tenant's session or on
+    discovery's. A `ping` the server sends on the response stream is
+    answered; other server requests get method-not-found.
+  - **A broken 2026-07-28 response stream** is re-issued with a new request
+    id, at most twice.
+  - **Errors, not downgrades.** 401/403, 5xx and network failures fail the
+    connection; they never trigger the fallback. Responses may be JSON or
+    SSE.
+  - **Paginated listings are read to the end.** June follows `nextCursor`
+    until the server omits it; an empty-string cursor is a cursor, not the
+    end. A page with no `tools` array, a server that repeats a cursor, or
+    a listing past 100 pages fails the connection rather than dropping
+    tools silently.
+  - **`x-mcp-header`.** When a modern server annotates tool parameters, June
+    mirrors them into `Mcp-Param-*` headers, encoding values as Base64 where
+    needed. It drops a tool whose annotations are invalid, with a warning.
+  - **Results.** A call returns the tool's `structuredContent` when there is
+    one; otherwise it returns the first text block, parsed as JSON when it
+    is JSON. `isError: true` is thrown, so the model sees a failed call. June
+    declares no client capabilities: a server asking for input (elicitation,
+    sampling) gets an error, while a `requestState`-only retry is echoed,
+    up to three rounds.
+  - **Descriptions and annotations.** The tool's description is prefixed
+    `[<name>]`, and its `annotations` (`readOnlyHint`, `destructiveHint`, …)
+    carry through when June re-serves it.
+  - **Tool ids.** MCP allows dots in tool names (`admin.tools.list`) and
+    names up to 128 characters before the `<name>__` prefix, so ids follow
+    the same rule as OpenAPI's: characters outside `[A-Za-z0-9_-]` become
+    `_`, ids are cut to 128 characters, and a colliding id gets a numeric
+    suffix. The remote tool is still called by its own name. A name that is
+    already valid keeps its id, in both kinds: only reduced ids are ever
+    suffixed, so adding a dotted tool to a server never moves an existing
+    one.
 - **OpenAPI** — a minimal subset of OpenAPI 3:
   - **Tool ids** are `<name>__<operationId>`, or an id built from the method
     and path when an operation has none. Characters outside `[A-Za-z0-9_-]`

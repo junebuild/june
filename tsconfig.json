@@ -8,5 +8,7 @@
     "examples/basic/**/*.ts",
     "examples/basic/**/*.tsx"
   ],
-  "exclude": ["**/node_modules", "**/dist"]
+  // mcp-interop.test.ts: see packages/core/tsconfig.json — the official MCP SDK's
+  // deps export raw TS under the "source" condition this repo resolves.
+  "exclude": ["**/node_modules", "**/dist", "packages/core/test/mcp-interop.test.ts"]
 }

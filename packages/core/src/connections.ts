@@ -17,6 +17,8 @@
 
 import { ACTION_REGISTRY, defineAction, type AnyAction, type JsonSchema, type ToolAnnotations } from "./agent";
 import type { ActionContext } from "./context";
+import { McpClient } from "./mcp-client";
+import { headerParams, headerParamValues, type HeaderParam } from "./mcp-protocol";
 
 // Resolved per call, server-side — the token never reaches the model. The ctx
 // is the CALL's identity (ActionContext: `user` is the turn's resolved
@@ -151,13 +153,10 @@ function toolIds(connection: string, remoteNames: readonly string[]): string[] {
 }
 
 // --- MCP client ---------------------------------------------------------------
-
-async function rpc(url: string, headers: Headers, method: string, params?: object) {
-  const res = await fetch(url, { method: "POST", headers, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) });
-  const json = (await res.json()) as { result?: unknown; error?: { message: string } };
-  if (json.error) throw new Error(`${method}: ${json.error.message}`);
-  return json.result;
-}
+//
+// The protocol itself — era detection (2026-07-28 first, 2025-era initialize
+// as the fallback), sessions, headers, JSON/SSE responses — lives in
+// ./mcp-client. Here: list the remote's tools and turn each into an action.
 
 type McpTool = { name: string; description?: string; inputSchema?: JsonSchema; annotations?: ToolAnnotations };
 
@@ -170,13 +169,12 @@ const MAX_TOOL_PAGES = 100;
 // Stopping at page 1 would silently drop every later tool; a repeated cursor
 // or an endless listing throws instead, so tools are never lost without a
 // report.
-async function listMcpTools(c: McpConnection): Promise<McpTool[]> {
-  const headers = await resolveHeaders(c); // one discovery credential for the whole listing
+async function listMcpTools(client: McpClient): Promise<McpTool[]> {
   const tools: McpTool[] = [];
   const sent = new Set<string>();
   let cursor: string | undefined;
   for (let page = 1; ; page++) {
-    const result = (await rpc(c.url, headers, "tools/list", cursor === undefined ? undefined : { cursor })) as {
+    const result = (await client.request("tools/list", cursor === undefined ? {} : { cursor })) as {
       tools?: McpTool[];
       nextCursor?: string | null;
     };
@@ -193,13 +191,44 @@ async function listMcpTools(c: McpConnection): Promise<McpTool[]> {
   }
 }
 
+// A tools/call result → what the action returns. structuredContent is the
+// tool's typed output when present; otherwise the first text block, parsed as
+// JSON when it is JSON. `isError: true` is a tool-execution error the model
+// should see AS an error — thrown, so the turn records a failed tool call
+// instead of treating the error text as data.
+function callResult(tool: string, result: Record<string, unknown>): unknown {
+  const content = (result.content as { type: string; text?: string }[] | undefined) ?? [];
+  const text = content.find((b) => b.type === "text")?.text;
+  if (result.isError === true) throw new Error(text ?? `${tool} failed`);
+  if (result.structuredContent !== undefined) return result.structuredContent;
+  if (text === undefined) return result;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
 async function connectMcp(c: McpConnection): Promise<AnyAction[]> {
-  await rpc(c.url, await resolveHeaders(c), "initialize", {
-    protocolVersion: "2025-06-18",
-    capabilities: {},
-    clientInfo: { name: "june", version: "0.0.0" },
-  });
-  const tools = await listMcpTools(c);
+  // Discovery (server/discover or initialize, tools/list) runs with no ctx.
+  const client = new McpClient({ url: c.url, headers: () => resolveHeaders(c) });
+  let tools = await listMcpTools(client);
+
+  // Modern servers may mirror tool parameters into Mcp-Param-* headers
+  // (x-mcp-header). The client MUST mirror them — and MUST drop a tool whose
+  // annotations are invalid, rather than let one bad definition sink the rest.
+  const mirrors = new Map<string, HeaderParam[]>();
+  if (client.negotiated?.kind === "modern") {
+    tools = tools.filter((t) => {
+      const found = headerParams(t.inputSchema);
+      if ("error" in found) {
+        console.warn(`[june] connection "${c.name}": dropping tool "${t.name}" — ${found.error}.`);
+        return false;
+      }
+      if (found.params.length) mirrors.set(t.name, found.params);
+      return true;
+    });
+  }
 
   const ids = toolIds(c.name, tools.map((t) => t.name));
   return tools.map((t, i) =>
@@ -215,16 +244,13 @@ async function connectMcp(c: McpConnection): Promise<AnyAction[]> {
       // actionToTool, or the request identity on UI//mcp) into auth — a
       // per-tenant auth mints the CALLER's credential, never a global one.
       run: async (input: unknown, ctx: ActionContext) => {
-        const result = (await rpc(c.url, await resolveHeaders(c, ctx), "tools/call", { name: t.name, arguments: input })) as {
-          content?: { type: string; text?: string }[];
-        };
-        const text = result.content?.find((b) => b.type === "text")?.text;
-        if (text === undefined) return result;
-        try {
-          return JSON.parse(text);
-        } catch {
-          return text;
-        }
+        const params = mirrors.get(t.name);
+        const result = await client.request(
+          "tools/call",
+          { name: t.name, arguments: input },
+          { headers: () => resolveHeaders(c, ctx), ...(params ? { extraHeaders: headerParamValues(params, input) } : {}) },
+        );
+        return callResult(t.name, result);
       },
     }),
   );

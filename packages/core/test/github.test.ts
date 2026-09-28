@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { ACTION_REGISTRY, invokeAction } from "@junejs/core/agent";
 import { connectAll, defineMcpConnection } from "@junejs/core/connections";
 import { githubApp, GitHubAppError, type GitHubAppConfig } from "@junejs/core/github";
+import { fakeMcpServer } from "./mcp-fake-server";
 import { CREDENTIAL } from "./fixtures/github-app/credential";
 
 function rsaKeys(modulusLength: number) {
@@ -545,16 +546,10 @@ describe("as a connection auth", () => {
     });
 
     const origFetch = globalThis.fetch;
-    const remoteAuth: string[] = [];
-    globalThis.fetch = (async (_url: string, init?: RequestInit) => {
-      const body = JSON.parse(String(init!.body));
-      remoteAuth.push(new Headers(init!.headers).get("authorization")!);
-      if (body.method === "initialize") return Response.json({ jsonrpc: "2.0", id: 1, result: {} });
-      if (body.method === "tools/list") {
-        return Response.json({ jsonrpc: "2.0", id: 1, result: { tools: [{ name: "comment", inputSchema: { type: "object", properties: {} } }] } });
-      }
-      return Response.json({ jsonrpc: "2.0", id: 1, result: { content: [{ type: "text", text: JSON.stringify({ ok: true }) }] } });
-    }) as typeof fetch;
+    // A 2026-07-28 MCP server: server/discover, tools/list, tools/call.
+    const server = fakeMcpServer({ era: "modern", tools: ["comment"], call: () => ({ content: [{ type: "text", text: JSON.stringify({ ok: true }) }] }) });
+    server.install();
+    const remoteAuth = () => server.calls.map((c) => c.headers.authorization);
     try {
       const { actions } = await connectAll([defineMcpConnection({ name: "github", url: "https://mcp.example.com/", auth })]);
       const tool = actions.find((a) => a.id === "github__comment")!;
@@ -567,7 +562,8 @@ describe("as a connection auth", () => {
     }
     // Discovery ran without identity (tenant-a fallback); the call as tenant-b.
     expect(identities).toEqual([undefined, undefined, "tenant-b"]);
-    expect(remoteAuth).toEqual(["Bearer ghs_token1", "Bearer ghs_token1", "Bearer ghs_token2"]);
+    // server/discover and tools/list with the discovery token, the call with tenant-b's.
+    expect(remoteAuth()).toEqual(["Bearer ghs_token1", "Bearer ghs_token1", "Bearer ghs_token2"]);
     expect(gh.seen.find((s) => s.url.endsWith("/installations/2/access_tokens"))).toBeDefined();
   });
 
@@ -580,14 +576,7 @@ describe("as a connection auth", () => {
         : { owner: "acme", repo: "widgets", permissions: { metadata: "read" } },
     );
     const origFetch = globalThis.fetch;
-    globalThis.fetch = (async (_url: string, init?: RequestInit) => {
-      const body = JSON.parse(String(init!.body));
-      if (body.method === "initialize") return Response.json({ jsonrpc: "2.0", id: 1, result: {} });
-      if (body.method === "tools/list") {
-        return Response.json({ jsonrpc: "2.0", id: 1, result: { tools: [{ name: "comment", inputSchema: { type: "object", properties: {} } }] } });
-      }
-      return Response.json({ jsonrpc: "2.0", id: 1, result: { content: [{ type: "text", text: "{}" }] } });
-    }) as typeof fetch;
+    fakeMcpServer({ era: "modern", tools: ["comment"], call: () => ({ content: [{ type: "text", text: "{}" }] }) }).install();
     try {
       await connectAll([defineMcpConnection({ name: "github", url: "https://mcp.example.com/", auth, requiresPrincipal: true })]);
       const exchanges = () => gh.seen.filter((s) => s.url.endsWith("/access_tokens")).map((s) => s.body);

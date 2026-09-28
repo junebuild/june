@@ -109,7 +109,34 @@ try {
   assert.equal(call.error, undefined, `tools/call → ${JSON.stringify(call.error)}`);
   assert.match(call.result.content[0].text, /Grace/, "the action ran on the POSTed input");
 
-  console.log("workerd smoke: OK (build, assets, pages, markdown negotiation, discovery, POST /mcp)");
+  // The same endpoint in the 2026-07-28 era: the per-request `_meta` envelope and
+  // the mirrored headers, no initialize.
+  const modern = async (method: string, params: Record<string, unknown>, id: number) => {
+    const meta = {
+      "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+      "io.modelcontextprotocol/clientCapabilities": {},
+    };
+    const res = await http("/mcp", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        "mcp-protocol-version": "2026-07-28",
+        "mcp-method": method,
+        ...(method === "tools/call" ? { "mcp-name": String(params.name) } : {}),
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id, method, params: { ...params, _meta: meta } }),
+    });
+    assert.equal(res.status, 200, `POST /mcp (2026-07-28 ${method}) → ${res.status}`);
+    return (await res.json()) as { result?: any; error?: { code: number; message: string } };
+  };
+  const discover = await modern("server/discover", {}, 3);
+  assert.deepEqual(discover.result?.supportedVersions, ["2026-07-28"], `server/discover → ${JSON.stringify(discover)}`);
+  const modernCall = await modern("tools/call", { name: "createUser", arguments: { name: "Ada" } }, 4);
+  assert.equal(modernCall.result?.resultType, "complete", `2026-07-28 tools/call → ${JSON.stringify(modernCall)}`);
+  assert.match(modernCall.result.content[0].text, /Ada/, "the action ran on the 2026-07-28 request");
+
+  console.log("workerd smoke: OK (build, assets, pages, markdown negotiation, discovery, POST /mcp in both MCP eras)");
 } catch (e) {
   // name a mid-run crash plainly — otherwise it surfaces as a bare connection error
   const died = exited() ? ` (wrangler died mid-run: ${exitStatus()})` : "";

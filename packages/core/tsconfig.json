@@ -1,4 +1,9 @@
 {
   "extends": "../../tsconfig.base.json",
-  "include": ["src/**/*.ts", "src/**/*.tsx", "test/**/*.ts", "test/**/*.tsx"]
+  "include": ["src/**/*.ts", "src/**/*.tsx", "test/**/*.ts", "test/**/*.tsx"],
+  // The official-SDK interop test pulls @modelcontextprotocol/client, whose deps
+  // (eventsource, eventsource-parser) export a "source" condition pointing at raw
+  // TypeScript that doesn't compile under this repo's settings — and the base
+  // config's customConditions ["source"] selects it. Bun still runs the test.
+  "exclude": ["test/mcp-interop.test.ts"]
 }
