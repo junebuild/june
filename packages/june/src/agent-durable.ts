@@ -20,6 +20,7 @@ import {
   grantAnswer,
   ResumeAuthorizationError,
   withSystem,
+  type Answerers,
   type AuthorizeAnswer,
   type ChannelPolicy,
   type EventSink,
@@ -603,10 +604,22 @@ export class AgentDurableObject {
       let session: AgentSession;
       try {
         session = this.resolveSession(key);
-        // A { policy } answerer is the app's call (#261), made before the synchronous
-        // resume-then-subscribe section and inside the request scope (the hook may read the db).
-        const granted = await runInScope({ resources, services: this.services }, () =>
+      } catch (err) {
+        return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 409 });
+      }
+      // A { policy } answerer is the app's call (#261), made before the synchronous
+      // resume-then-subscribe section and inside the request scope (the hook may read the db).
+      // The hook is app code: a failure there (a db outage) is a 500 — never the 409 a
+      // resume-state conflict gets, which would tell the caller its answer is stale.
+      let granted: Answerers | undefined;
+      try {
+        granted = await runInScope({ resources, services: this.services }, () =>
           grantAnswer(session, { turnId, inputId, by, principal }, this.authorizeAnswer));
+      } catch (err) {
+        console.error(`[june] agent "${this.name}": authorizeAnswer failed for input "${inputId}" of turn ${turnId}:`, err);
+        return Response.json({ error: `authorizeAnswer failed: ${err instanceof Error ? err.message : String(err)} — the answer was NOT applied` }, { status: 500 });
+      }
+      try {
         runInScope({ resources, services: this.services }, () => session.resume(turnId, inputId, input, { by, granted }));
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -1054,16 +1067,20 @@ export function durableChannelSurface(
 // run the turn, so on a serialization failure we drop it rather than let an
 // unserializable payload take down turn forwarding entirely. (raw is optional on
 // InboundEvent precisely because it may not survive this boundary.)
-// Serialize a /resume RPC body. `input` is `unknown` — the human's answer — so a
-// (third-party) host could hand us something JSON.stringify chokes on (BigInt, circular).
-// Unlike serializeTurn's `raw`, `input` is essential: silently dropping it would resume the
-// turn with the wrong answer. So fail loudly with a clear message rather than corrupt the resume.
+// Serialize a /resume RPC body. `input` (the human's answer) and `principal` (the resumer,
+// whose extra fields are `unknown`) come from a (third-party) host and could hold something
+// JSON.stringify chokes on (BigInt, circular). Unlike serializeTurn's `raw`, neither is
+// droppable: resuming without them answers wrongly or as the wrong person. So fail loudly,
+// naming the field that failed, rather than corrupt the resume.
 function serializeResume(o: { turnId: string; inputId: string; input: unknown; by?: string; principal?: Principal; source?: string; target?: ResumeDeliveryTarget }): string {
   try {
     return JSON.stringify({ turnId: o.turnId, inputId: o.inputId, input: o.input, by: o.by, principal: o.principal, source: o.source, target: o.target });
   } catch (err) {
+    const culprit = (["input", "principal"] as const).find((field) => {
+      try { JSON.stringify(o[field]); return false; } catch { return true; }
+    }) ?? "payload";
     // API-neutral prefix: this serializer backs both resumeStream and resumeDelivered.
-    throw new Error(`resume: input is not JSON-serializable (${(err as Error).message}) — a resume answer must round-trip to the DO`);
+    throw new Error(`resume: ${culprit} is not JSON-serializable (${(err as Error).message}) — a resume must round-trip to the DO`);
   }
 }
 
