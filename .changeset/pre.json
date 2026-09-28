@@ -60,6 +60,7 @@
     "llms-sections",
     "mcp-server-identity",
     "mcp-tool-names",
+    "mcp-tools-list-pagination",
     "model-finish-reason",
     "native-agent-def",
     "native-eviction-review",
