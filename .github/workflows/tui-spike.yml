@@ -77,6 +77,18 @@ jobs:
         if: ${{ !cancelled() }}
         run: bun harness/installed.ts bun --out results-bun.json
 
+      - name: Global install with npm
+        if: ${{ !cancelled() }}
+        run: bun harness/installed.ts npm-global --out results-npm-global.json
+
+      - name: Global install with bun
+        if: ${{ !cancelled() }}
+        run: bun harness/installed.ts bun-global --out results-bun-global.json
+
+      - name: bunx
+        if: ${{ !cancelled() }}
+        run: bun harness/installed.ts bunx --out results-bunx.json
+
       - name: Summary
         if: ${{ !cancelled() }}
         run: bun harness/summary.ts ${{ matrix.target }} >> "$GITHUB_STEP_SUMMARY"
@@ -118,6 +130,8 @@ jobs:
             bun build --compile src/main.tsx --outfile dist/tui-spike
             bun harness/run.ts --bin dist/tui-spike --out results-compiled.json || status=1
             bun harness/installed.ts bun --out results-bun.json || status=1
+            bun harness/installed.ts bun-global --out results-bun-global.json || status=1
+            bun harness/installed.ts bunx --out results-bunx.json || status=1
             bun harness/summary.ts ${{ matrix.target }} > summary.md
             exit $status
           '

@@ -20,7 +20,7 @@ type Result = {
 
 const root = resolve(import.meta.dir, "..");
 const target = process.argv[2] ?? "";
-const variants = ["source", "compiled", "npm", "bun"];
+const variants = ["source", "compiled", "npm", "bun", "npm-global", "bun-global", "bunx"];
 
 console.log(`### ${target}\n`);
 console.log("| path | runtime | result | frame avg / max | width | bytes/s | stale cells on Unicode 6 |");
