@@ -3,7 +3,7 @@
 // seam's real-file durability (crash + fresh process over a persisted db) is
 // covered in @junejs/server's agent-native test.
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import {
   AgentSession,
   FatalToolError,
@@ -25,6 +25,7 @@ import {
   type Tool,
   type Answerers,
   type AuthorizeAnswer,
+  type InputAnnouncement,
 } from "@junejs/core/agent-runtime";
 
 // ── an in-memory SessionStore (pure). `app` is the side-effect target a local
@@ -1432,6 +1433,123 @@ describe("suspend / resume (P3 — HITL)", () => {
       const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), scriptedModel([{ text: "Hi.", toolCalls: [] }]), [], noRuntime);
       expect(s.start({ turnId: "t1", userText: "hello", event: followUp("m1"), ifSuspended: "queue" })).toEqual({ turnId: "t1" });
       expect(await s.result("t1")).toMatchObject({ status: "completed" });
+    });
+  });
+
+  // #260 — what a host hears about a session's parked input.
+  describe("input announcements (#260)", () => {
+    const followUp = (ts: string) => ({ source: "email", kind: "message" as const, channelId: "scout", ts, user: { id: "customer@example.com" }, raw: { huge: "mime" } });
+    function announced(store = memStore().store) {
+      const got: InputAnnouncement[] = [];
+      const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), scriptedModel(APPROVE_SCRIPT), [approveTool()], noRuntime);
+      s.onAnnounce = (a) => { got.push(a); };
+      return { s, got, store };
+    }
+
+    test("without a hook nothing is recorded, and nothing changes", async () => {
+      const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), scriptedModel(APPROVE_SCRIPT), [approveTool()], noRuntime);
+      s.start({ turnId: "t1", userText: "refund please", event: { ...slackEvent, raw: { x: 1 } } });
+      await s.result("t1");
+      expect(s.undeliveredAnnouncements()).toEqual([]);
+    });
+
+    test("a park is announced once — with the request and the event (raw stripped) — and not again on a redelivery", async () => {
+      const { s, got } = announced();
+      s.start({ turnId: "t1", userText: "refund please", event: { ...slackEvent, raw: { x: 1 } } });
+      await s.result("t1");
+      await s.flushAnnouncements();
+      expect(got).toHaveLength(1);
+      expect(got[0]).toMatchObject({ kind: "parked", agent: "ops", session: "s1", turnId: "t1", request: { id: "approve-1", answerers: { user: "U1" } }, event: { ts: "1.1", raw: undefined }, queued: 0 });
+      expect(typeof got[0]!.id).toBe("string");
+
+      s.start({ turnId: "t1", userText: "refund please", event: slackEvent }); // redelivered: replays, re-parks
+      await s.result("t1");
+      await s.flushAnnouncements();
+      expect(got).toHaveLength(1);
+      expect(s.undeliveredAnnouncements()).toEqual([]);
+    });
+
+    test("held turns, the answer, and input.resolved: the park's whole life, in order", async () => {
+      const { s, got } = announced();
+      s.start({ turnId: "t1", userText: "refund please", event: slackEvent });
+      await s.result("t1");
+      s.start({ turnId: "t2", userText: "any news?", event: followUp("m2"), ifSuspended: "queue" });
+      s.start({ turnId: "t3", userText: "hello?", event: followUp("m3"), ifSuspended: "queue" });
+      const live: TurnEvent[] = [];
+      s.observe((e) => live.push(e), { turnId: "t1" });
+      s.resume("t1", "approve-1", true, { by: "U1" });
+      await s.flushAnnouncements();
+
+      expect(got.map((a) => a.kind === "held" ? `held:${a.queued}` : a.kind === "resolved" ? `resolved:${a.outcome}:${a.by}` : a.kind))
+        .toEqual(["parked", "held:1", "held:2", "resolved:answered:U1"]);
+      expect(got.slice(1)).toMatchObject([{ turnId: "t1", inputId: "approve-1" }, { turnId: "t1", inputId: "approve-1" }, { turnId: "t1", inputId: "approve-1" }]);
+      expect(new Set(got.map((a) => a.id)).size).toBe(4); // one id per announcement
+      expect(live[0]).toEqual({ type: "input.resolved", turnId: "t1", inputId: "approve-1", outcome: "answered", by: "U1" });
+    });
+
+    test("a reset retires the park, and carries undelivered announcements into the new generation", async () => {
+      const store = memStore().store;
+      const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), scriptedModel(APPROVE_SCRIPT), [approveTool()], noRuntime);
+      s.onAnnounce = () => { throw new Error("index down"); }; // nothing gets delivered yet
+      const errors = spyOn(console, "error").mockImplementation(() => {});
+      try {
+        s.start({ turnId: "t1", userText: "refund please", event: slackEvent });
+        await s.result("t1");
+        await s.flushAnnouncements();
+        expect(s.undeliveredAnnouncements().map((a) => a.kind)).toEqual(["parked"]);
+
+        const live: TurnEvent[] = [];
+        s.observe((e) => live.push(e));
+        await s.reset();
+        expect(s.pending()).toBeUndefined();
+        expect(s.undeliveredAnnouncements().map((a) => a.kind === "resolved" ? `resolved:${a.outcome}` : a.kind)).toEqual(["parked", "resolved:retired"]);
+        expect(live).toContainEqual({ type: "input.resolved", turnId: "t1", inputId: "approve-1", outcome: "retired" });
+
+        const got: InputAnnouncement[] = [];
+        s.onAnnounce = (a) => { got.push(a); }; // the index is back
+        await s.flushAnnouncements();
+        expect(got.map((a) => a.kind)).toEqual(["parked", "resolved"]);
+        expect(s.undeliveredAnnouncements()).toEqual([]);
+      } finally {
+        errors.mockRestore();
+      }
+    });
+
+    test("a hook that fails keeps the announcement for the next flush — delivery is at-least-once, in order", async () => {
+      let fail = true;
+      const got: string[] = [];
+      const store = memStore().store;
+      const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), scriptedModel(APPROVE_SCRIPT), [approveTool()], noRuntime);
+      s.onAnnounce = async (a) => { if (fail) throw new Error("index down"); got.push(a.kind); };
+      const errors = spyOn(console, "error").mockImplementation(() => {});
+      try {
+        s.start({ turnId: "t1", userText: "refund please", event: slackEvent });
+        await s.result("t1");
+        await s.flushAnnouncements();
+        expect(got).toEqual([]);
+        expect(errors).toHaveBeenCalled();
+        fail = false;
+        s.resume("t1", "approve-1", true, { by: "U1" }); // the next announcement triggers a flush of both
+        await s.flushAnnouncements();
+        expect(got).toEqual(["parked", "resolved"]);
+        expect(s.undeliveredAnnouncements()).toEqual([]);
+      } finally {
+        errors.mockRestore();
+      }
+    });
+
+    test("an announcement recorded before a crash is delivered by the rebuilt session", async () => {
+      const store = memStore().store;
+      const doomed = new AgentSession("ops", "s1", store, new MemBroadcaster(), scriptedModel(APPROVE_SCRIPT), [approveTool()], noRuntime);
+      doomed.onAnnounce = () => new Promise(() => {}); // the host dies while delivering
+      doomed.start({ turnId: "t1", userText: "refund please", event: slackEvent });
+      await doomed.result("t1");
+      expect(doomed.undeliveredAnnouncements().map((a) => a.kind)).toEqual(["parked"]); // committed with the park
+
+      const { s, got } = announced(store);
+      await s.flushAnnouncements();
+      expect(got).toMatchObject([{ kind: "parked", turnId: "t1" }]);
+      expect(s.undeliveredAnnouncements()).toEqual([]);
     });
   });
 
