@@ -379,6 +379,14 @@ export class CancelSignal extends Error {
 // overlay/event). One per session — turns serialize, and start() rejects new turns while
 // one is parked, so a single fixed key cannot be clobbered.
 type SuspendedCheckpoint = { turnId: string; callId: string; request: InputRequest; userText: string; systemOverlay?: string; systemMode?: "append" | "replace"; deniedTools?: string[]; event?: InboundEvent };
+
+// An inbound turn held while the session is parked (#263): everything start() needs to run it
+// later, persisted in the session's own store (step INBOUND_QUEUE), so it survives a restart.
+// `hostContext` is opaque to the engine — a host stores what it needs to finish the turn's
+// delivery when it runs (e.g. "render through the source channel") and gets it back in
+// onDequeue. `event.raw` is stripped, as in the suspended checkpoint.
+export type QueuedTurn = { turnId: string; userText: string; event?: InboundEvent; trigger?: ProactiveTrigger; hostContext?: unknown; queuedAt: string };
+const INBOUND_QUEUE = "inbound-queue";
 // The proactive variant stands alone: it's the only trigger a CALLER may pass explicitly
 // (TurnInput / ChannelContext.run / receive()) — inbound is derived from the event, resume is
 // engine-internal. Narrowing the public seams to this type makes misuse (passing an inbound or
@@ -882,8 +890,13 @@ export function mintTurnId(): string {
 // cancellation of every unfinished turn on the session (in-flight and queued) — they
 // unwind at their next checkpoint boundary and this turn runs after them on the chain.
 // A SUSPENDED turn is deliberately NOT cancelled: a parked approval must not silently
-// die because a new message arrived, so start() still rejects while one is pending.
-export type TurnInput = { turnId?: string; userText: string; crash?: Crash; event?: InboundEvent; trigger?: ProactiveTrigger; replace?: boolean };
+// die because a new message arrived.
+// `ifSuspended` (#263) says what an inbound turn does against a parked session: "reject"
+// (the default — right for an interactive surface, where the person who would speak next is
+// the one being asked) or "queue" (right where the other party keeps talking regardless, like
+// email): the turn is held durably and runs, in arrival order, once the park resolves. See
+// QueuedTurn for `hostContext`.
+export type TurnInput = { turnId?: string; userText: string; crash?: Crash; event?: InboundEvent; trigger?: ProactiveTrigger; replace?: boolean; ifSuspended?: "reject" | "queue"; hostContext?: unknown };
 
 export class AgentSession {
   private chain: Promise<unknown> = Promise.resolve();
@@ -898,6 +911,11 @@ export class AgentSession {
   // lets a new turn queue PAST a suspended park (the reset will retire it first) and
   // resume() refuses (the park is being retired — answering it would race the archival).
   private pendingReset = false;
+  // Called when a held inbound turn (#263) is started — synchronously, right after start(),
+  // before any of its events can emit — so a host can attach what the turn's original caller
+  // would have (a delivered render). Set by the host after constructing the session; queued
+  // turns started without one simply run.
+  onDequeue?: (turnId: string, queued: QueuedTurn) => void;
   // Explicit fields + assignment (not constructor parameter properties): June
   // ships raw .ts, so consumers type-strip it — parameter properties aren't
   // erasable and break `erasableSyntaxOnly` / Node native strip-types.
@@ -930,8 +948,15 @@ export class AgentSession {
   // interface for live/streaming consumers (channels, SSE). Turns are serialized: each
   // awaits the previous on the chain — no interleaving on the shared transcript. (On a
   // Durable Object this is blockConcurrencyWhile; here it's a promise chain.)
-  start(input: TurnInput): { turnId: string } {
+  start(input: TurnInput): { turnId: string; queued?: true } {
     const turnId = input.turnId ?? mintTurnId();
+    // HOLD (#263): against a parked session — or behind turns already held, so arrival order
+    // holds — an inbound turn that asked to queue is recorded durably instead of rejected.
+    if (input.ifSuspended === "queue" && !this.pendingReset && (this.parkedBy(turnId) || this.heldTurns().length > 0)) {
+      this.hold(turnId, input);
+      this.drain(); // no-op while parked; runs the head if the park resolved in between
+      return { turnId, queued: true };
+    }
     // While a turn is parked awaiting input, the transcript ends in its dangling tool call —
     // running a NEW turn on it would corrupt both (the resumed replay would adopt the new
     // turn's tail as its own result). Reject loudly; redelivering the SAME parked turn is
@@ -1033,7 +1058,13 @@ export class AgentSession {
     // The cancel request is cleared under the same identity guard: if a resume continuation
     // already replaced this entry, a pending request now belongs to the continuation.
     const clear = () => { if (this.running.get(turnId) === p) { this.running.delete(turnId); this.cancelRequests.delete(turnId); } };
-    p.then(clear, clear);
+    // Every settle is a chance to run a held turn (#263): the park may have resolved. A drain
+    // that throws (a store error) must not become an unhandled rejection of this bookkeeping.
+    const settle = () => {
+      clear();
+      try { this.drain(); } catch (err) { console.error(`[june] agent "${this.agent}" session "${this.id}": starting a held turn failed:`, err); }
+    };
+    p.then(settle, settle);
   }
 
   // Await a turn's terminal state (completed | suspended | failed). Reads the in-flight promise
@@ -1106,9 +1137,55 @@ export class AgentSession {
 
   // The input this session is parked on, if any — what a host reads to evaluate a { policy }
   // answerer before the synchronous resume (grantAnswer).
-  pending(): { turnId: string; request: InputRequest } | undefined {
+  // `queued` counts the inbound turns held since the park (#263) — an approver's cue that the
+  // conversation moved on after the request was made.
+  pending(): { turnId: string; request: InputRequest; queued: number } | undefined {
     const suspended = this.store.getStep("suspended") as SuspendedCheckpoint | undefined;
-    return suspended ? { turnId: suspended.turnId, request: suspended.request } : undefined;
+    return suspended ? { turnId: suspended.turnId, request: suspended.request, queued: this.heldTurns().length } : undefined;
+  }
+
+  // The inbound turns held while the session was parked (#263), oldest first.
+  heldTurns(): QueuedTurn[] {
+    return (this.store.getStep(INBOUND_QUEUE) as QueuedTurn[] | undefined) ?? [];
+  }
+
+  // Start the oldest held turn, if the session can run it now: no park, no turn running or
+  // queued on the chain, no reset pending. One at a time — the next is drained when this one
+  // settles (track), because a turn that parks again must hold everything behind it. Hosts
+  // call it after rebuilding a session (a restart between a park resolving and its held turns
+  // starting leaves them in the store); every other drain is automatic.
+  drain(): { turnId: string } | undefined {
+    if (this.pendingReset || this.store.getStatus() === "suspended" || this.running.size > 0) return undefined;
+    const [head, ...rest] = this.heldTurns();
+    if (!head) return undefined;
+    this.store.tx(() => {
+      this.store.delStep(INBOUND_QUEUE);
+      if (rest.length) this.store.putStep(INBOUND_QUEUE, rest);
+    });
+    const started = this.start({ turnId: head.turnId, userText: head.userText, event: head.event, trigger: head.trigger });
+    this.onDequeue?.(started.turnId, head);
+    return started;
+  }
+
+  // Whether a turn OTHER than `turnId` is parked on this session.
+  private parkedBy(turnId: string): boolean {
+    if (this.store.getStatus() !== "suspended") return false;
+    const s = this.store.getStep("suspended") as SuspendedCheckpoint | undefined;
+    return !!s && s.turnId !== turnId;
+  }
+
+  // Record an inbound turn durably (#263). Idempotent per turnId, like any inbound delivery:
+  // a redelivered event that is already held is not held twice. putStep is insert-only, so
+  // the list is replaced (delete + put) inside one transaction.
+  private hold(turnId: string, input: TurnInput): void {
+    const held = this.heldTurns();
+    if (held.some((q) => q.turnId === turnId)) return;
+    const event = input.event ? { ...input.event, raw: undefined } : undefined;
+    const entry: QueuedTurn = { turnId, userText: input.userText, event, trigger: input.trigger, hostContext: input.hostContext, queuedAt: new Date().toISOString() };
+    this.store.tx(() => {
+      this.store.delStep(INBOUND_QUEUE);
+      this.store.putStep(INBOUND_QUEUE, [...held, entry]);
+    });
   }
 
   // Terminally retire this session's history (#129): supersede every unfinished turn,
