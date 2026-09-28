@@ -125,7 +125,8 @@ Missing (verified against `main` at b5f0dfd, 2026-09-28):
 7. **The `june` CLI's verbs are hard-coded** (`packages/cli/src/cli.ts`); a package cannot add
    `june inbox` (resolved by external subcommands, §9.3).
 8. **`june deploy` pins `wrangler@4.99.0`** (`packages/june/src/deploy.ts`). Declaring inbound
-   addresses in wrangler config (`addresses`) needs Wrangler ≥ 4.113.0.
+   addresses in wrangler config (`addresses`) needs Wrangler ≥ 4.113.0 — moot since §13 found
+   `addresses` fails with the deploy token; routing rules go through the zone API instead.
 
 ## 4. Design principles
 
@@ -811,7 +812,7 @@ in `.june/routes/` operate it through the same actions; the agent gets `email__s
 | --- | --- | --- |
 | **P0e** | engine seams: #260, #261, #262, #263; CLI external subcommands | approvals and take-over have something to stand on |
 | **P0** | types, MIME parse/build, thread key, signed reply address, **identity (§7.1) and the send gate (§7.3)**, safety (§7.4–7.5, §7.8 caps and suppression), mailbox store + migrations + search index, `.eml` corpus (multipart, non-UTF-8, encoded headers, auto-replies, bounces, list mail) | the provider-independent core |
-| **P1** | Cloudflare inbound + outbound (live tests done 2026-09-28, §13) — outbound is enabled only once the §7.1 identity check and the §7.3 send gate from P0 are in place, and a turn cannot reach `send` without them; worker `email()` and `queue()` entries; `june build` emits `addresses` + per-agent `send_email`; wrangler pin ≥ 4.113 | the edge target end to end |
+| **P1** | Cloudflare inbound + outbound (live tests done 2026-09-28, §13) — outbound is enabled only once the §7.1 identity check and the §7.3 send gate from P0 are in place, and a turn cannot reach `send` without them; worker `email()` and `queue()` entries; `june build` emits a per-agent `send_email`; `june deploy` creates the routing rules through the zone API (§5, §13), not wrangler `addresses` | the edge target end to end |
 | **P1b** | supervision contract + API (§9.1–9.2), `@junejs/inbox` CLI + `june login`, per-mailbox `authorize` | `approve` works without Slack, from a terminal or a coding agent |
 | **P1c** | `june inbox` TUI, the change feed, compiled binaries | live triage; operators without the repo |
 | **P2** | Resend, SES; Gmail with durable `alarm()` | notify inbound, cursors, SigV4, OAuth, renewal |
