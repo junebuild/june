@@ -648,10 +648,19 @@ in `$EDITOR`, reject with a note, open the thread and its trace), kept live by t
 feed, built on **OpenTUI**'s React reconciler with Ink as the fallback; `@clack/prompts` covers
 one-off confirmations. Checked 2026-09-28: `@opentui/core` 0.5.12 ships prebuilt native
 packages for eight targets (macOS, Linux glibc and musl, Windows; x64 and arm64) — no Zig
-toolchain; it needs `bun >= 1.3` or `node >= 26.4` and React ≥ 19.2; it installs 14 MB plus a
-5.4 MB native package for the host; and `bun build --compile` of an OpenTUI program produced
-a 74 MB darwin-arm64 binary that rendered and exited cleanly when copied to a directory with
-no `node_modules`.
+toolchain; it needs `bun >= 1.3` or `node >= 26.4` and React ≥ 19.2; and `bun build
+--compile` of an OpenTUI program produced a 74 MB darwin-arm64 binary that rendered and exited
+cleanly when copied to a directory with no `node_modules`. The spike (`docs/rfc-tui.md` §5,
+2026-09-28) then passed on all eight targets, with three consequences for this client:
+
+- **Windows arm64 needs Bun ≥ 1.4.2** — 1.3.14's build there has no `bun:ffi` `dlopen()`. June
+  follows the newest Bun (decided 2026-09-28; #281 moves the repo to 1.4.2), so every binary is
+  built with it.
+- **The client detects musl itself** and sets `OPENTUI_LIBC=musl` before `@opentui/core` loads;
+  OpenTUI otherwise loads its glibc build, which fails on Alpine x64.
+- **A package install is 67 MB** (npm, with React): 19.4 MB of OpenTUI and its native package,
+  plus 44 MB of peers installed automatically but never loaded (`typescript`,
+  `react-devtools-core`, `web-tree-sitter`). The compiled binary does not carry them.
 
 `june inbox` opens the TUI only when **both stdin and stdout are TTYs**; otherwise it prints
 the `pending` listing and exits, so a pipe, a CI job or a coding agent gets text, and a
@@ -667,16 +676,17 @@ FFI. A separate client behind an exec boundary has neither problem.
 
 **Distribution of `@junejs/inbox`:**
 
-1. `bunx @junejs/inbox …` or a global install;
+1. `bunx @junejs/inbox …` or a global install — the 67 MB path;
 2. a single-file binary per platform (`bun build --compile`), attached to releases, later
-   `curl | sh`;
+   `curl | sh` — self-contained, and the one to recommend;
 3. inside a project, `june inbox` delegating to it.
 
 It is released with the monorepo (the publish workflow's tag equals `@junejs/core`'s version,
 on the `dev` channel for now), with **OpenTUI pinned to an exact version** and bumped only by
 its own changeset — 330 releases so far means it moves fast — behind a thin internal
 component layer so a switch to Ink stays cheap, and a CI smoke test that compiles and runs the
-TUI under a pseudo-terminal on macOS arm64 and Linux x64 / arm64.
+TUI under a pseudo-terminal on every target it ships a binary for — the spike's
+`.github/workflows/tui-spike.yml` already does this for all eight.
 
 **Contract versioning.** Because the client ships apart from the app, an operator's client
 and an app's server will differ in version. The server's discovery document advertises the
