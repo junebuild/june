@@ -123,7 +123,7 @@ Missing (verified against `main` at b5f0dfd, 2026-09-28):
      attributed third-party role (#262);
    - an inbound event against a suspended session is rejected, not queued (#263).
 7. **The `june` CLI's verbs are hard-coded** (`packages/cli/src/cli.ts`); a package cannot add
-   `june inbox` / `june mail`.
+   `june inbox` (resolved by external subcommands, §9.3).
 8. **`june deploy` pins `wrangler@4.99.0`** (`packages/june/src/deploy.ts`). Declaring inbound
    addresses in wrangler config (`addresses`) needs Wrangler ≥ 4.113.0.
 
@@ -232,6 +232,33 @@ The first provider, and the one June's edge target runs on. From the docs:
   destination addresses are reachable (free, not counted).
 - **Local dev**: `wrangler dev` simulates `email()` and the send binding; `ArrayBuffer`
   attachments cannot be serialized by the local simulator.
+- **Transactional only.** The FAQ: "Email Service is intended only for transactional emails";
+  marketing and bulk tooling are planned, not offered. On Cloudflare, the R4 (cold) tier is
+  unavailable — `allowCold` is a configuration error — and R3 (app-vouched) is documented as
+  transactional relationships only (§7.3).
+- **Reputation targets** (deliverability docs): delivery rate > 95%, hard-bounce rate < 2%,
+  complaint rate < 0.1%. Cloudflare also recommends a separate (sub)domain per kind of mail.
+- **No published daily quota and no quota API.** New accounts start conservatively and rise
+  with reputation; the REST API covers send, send-raw, suppressions and sending subdomains,
+  nothing that reads a quota. The adapter learns limits from `E_RATE_LIMIT_EXCEEDED` /
+  `E_DAILY_LIMIT_EXCEEDED`: sends queue and back off, and `diagnose()` reports the last hit.
+- **Retries are Cloudflare's.** Hard bounces are never retried; soft bounces are retried with
+  exponential backoff by Cloudflare. June does not retry soft bounces itself.
+- **Suppressed recipients fail the whole send** while the per-domain "Drop suppressed
+  recipients" setting is off (the default): one suppressed address raises
+  `E_RECIPIENT_SUPPRESSED` for the message. June keeps the default and checks suppression
+  before drafting (§7.8).
+- **Other send limits**: at most 32 attachments and 20 allowlisted (non-`X-`) custom headers
+  per message.
+- **Inbound gates before the Worker**: mail failing both SPF and DKIM is rejected, mail failing
+  DMARC is rejected per the sender's policy, and senders on realtime block lists are rejected
+  at SMTP. Whatever reaches `email()` passed at least one of SPF or DKIM — not necessarily
+  aligned with `From:`, which is what §7.1 needs.
+- **ASCII local parts only.** Email Routing supports internationalized domains but not
+  internationalized local parts; agent addresses are validated at configuration time.
+- **REST `send_raw`** takes a full RFC 5322 message plus the envelope. Whether it keeps a
+  caller-set `Message-ID` is undocumented (the header allowlist says `Message-ID` is
+  platform-controlled); it is on the live-test list (§13).
 
 ### Other providers
 
@@ -347,7 +374,7 @@ Email is reachable by anyone, so these are defaults, not options:
    | **R1** | reply in a thread the correspondent started | approve | yes |
    | **R2** | new thread to someone who has written to this agent before | approve | yes |
    | **R3** | a recipient the app vouches for — `consent(recipient)` hook (a CRM consent flag, an internal domain) | approve | yes; the app answers for it |
-   | **R4** | anyone else (cold) | approve | only with an explicit `allowCold`, always under the §7.8 caps |
+   | **R4** | anyone else (cold) | approve | only with an explicit `allowCold`, always under the §7.8 caps; **never on Cloudflare** (transactional only, §5) |
 
    Approvals are answered through the operator surface (§9) and, optionally, another channel (Slack)
    through `deliver()` — an email thread cannot render Approve / Deny.
@@ -361,20 +388,33 @@ Email is reachable by anyone, so these are defaults, not options:
 6. **Deliverability.** `email.diagnose()`, mirroring `SlackDiagnosis`: SPF, DKIM, DMARC for the
    sending domain, provider auth, subaddressing enabled (Cloudflare), suppression hits, and
    per-isolate counters (received, rejected by kind, deduped, loop-suppressed, bounced).
-7. **Limits have two sources, kept apart.** *Provider capacity* is an external fact June must
-   never exceed: per-message limits declared by each adapter (Cloudflare 50 recipients / 5 MiB;
-   Gmail API 500 recipients), and account quotas that vary per account (SES sandbox 200/day at
-   1/s, production set case by case; Resend Free 100/day, 10 API requests/s per team; Workspace
-   2,000 messages and 2,000 unique external recipients per user per day; Cloudflare starts new
-   accounts conservatively) — read at run time where the provider has an API (SES
-   `GetAccount`), configured otherwise. *June's safety policy* is provider-independent: new
-   recipients per day (default 20), and circuit-breaker thresholds set below the strictest
-   external enforcement (Gmail's bulk-sender spam-rate ceiling, SES account review), with a
-   minimum sample so one bounce out of one send does not read as 100%. The effective limit is
-   `min(provider capacity, account quota, June default, app config)`; over it, sends queue
-   instead of failing. Policy numbers live in code (`agent/channels/email.ts`, reviewed and
-   versioned); deploy-time environment overrides may only **tighten** them. A new sending
-   domain warms up: limits start lower and rise over its first weeks.
+7. **Limits have two sources, kept apart.**
+   - *Provider capacity* is an external fact June must never exceed. Per-message limits are
+     declared by each adapter (Cloudflare: 50 recipients, 5 MiB, 32 attachments; Gmail API:
+     500 recipients). Account quotas vary per account and are read at run time where an API
+     exists (SES `GetAccount`), configured or learned from limit errors otherwise. Verified
+     2026-09-28: SES sandbox 200 messages / 24 h at 1 / s, production set case by case; Resend
+     Free 100 / day (UTC day), 10 API requests / s per team; Workspace 2,000 messages and 2,000
+     unique external recipients per user per day; Mailgun Free 100 / day and 1 custom domain,
+     Basic 10,000 / month with no daily cap; Cloudflare unpublished (§5).
+   - *June's safety policy* is provider-independent: new recipients per agent per day (default
+     20) and a circuit breaker set **below** the strictest external enforcement. The external
+     numbers (verified 2026-09-28): Cloudflare targets hard bounces < 2% and complaints < 0.1%;
+     SES puts an account under review at 5% bounces or 0.1% complaints and may pause it at 10%
+     or 0.5%, measured over a "representative volume" rather than a fixed window; Gmail
+     requires a spam rate below 0.3% for all senders and recommends below 0.1%, and treats
+     more than 5,000 messages a day to Gmail accounts as bulk (SPF + DKIM + DMARC and one-click
+     unsubscribe required).
+   - *Proposed breaker defaults*: trip at a 0.08% complaint rate or a 1.5% hard-bounce rate;
+     warn when the delivery rate drops below 95%. Rates are computed over a rolling window
+     only once it holds at least 200 sends; below that, absolute counts rule — two complaints
+     in 30 days, or any complaint on proactive (R3 / R4) mail, trips it. Tripping drops every
+     tier to `approve` and notifies the operator.
+   - The effective limit is `min(provider capacity, account quota, June default, app config)`;
+     over it, sends queue instead of failing. Policy numbers live in code
+     (`agent/channels/email.ts`, reviewed and versioned); deploy-time environment overrides may
+     only **tighten** them. A new sending domain warms up: limits start lower and rise over its
+     first weeks.
 8. **Proactive mail.** An agent writing first is where legal exposure (CAN-SPAM in the US,
    CASL in Canada, ePrivacy/GDPR in the EU) and reputation damage (Gmail and Yahoo bulk-sender
    rules) concentrate. The framework enforces mechanisms; the app remains responsible for
@@ -459,9 +499,19 @@ Where it lives is split by what only the engine can do:
 - **`@junejs/core`** gets the minimal engine seams: park and resolution announcements (#260),
   answerer policies (#261), attributed notes (#262), queued inbound while suspended (#263).
   Slack needs every one of them too.
-- **A new supervision package** (working name `@junejs/supervise`) holds the contract types,
-  the cross-session `pending_actions` index, the API actions and the `june inbox` verbs.
-- **`@junejs/email`** depends on it and adds the mailbox layer and `june mail`.
+- **`@junejs/core/supervise`** (a subpath) holds the contract's types and JSON Schema —
+  types only, which keeps core pure.
+- **`@junejs/server`** implements it: the `pending_actions` index, the supervision actions and
+  the change feed. It is host code, and the server already hosts the agent DO and `/mcp`; it
+  mounts whenever the app has an agent, so approvals work without installing anything.
+- **`@junejs/email`** adds the mailbox layer: channel, providers, store, the email actions.
+- **`@junejs/inbox`** is the operator client — CLI and TUI, bin `june-inbox` — and nothing
+  else. It speaks only HTTP to the API, so it needs no app code (§9.3).
+
+The name follows the house style of short nouns (`db`, `og`, `i18n`, `juno`) and matches the
+verb, and "inbox" as "what is waiting on you" is the sense GitHub and Linear already taught.
+Rejected: `supervise` (a verb), `console` (implies the GUI that comes last), `ops` (DevOps),
+`operator` (Kubernetes).
 
 ### 9.2 API
 
@@ -485,7 +535,7 @@ the same seam as everywhere else (a session, or a bearer API key for the CLI —
 into a principal (`pipeline.ts`), Better Auth being the recommended implementation. So the
 CLI's only contract is `Authorization: Bearer <token>`; how the token is obtained:
 
-1. `june login <app-url>` uses the OAuth device authorization grant (RFC 8628) when the app
+1. `june login <app-url>` (provided by `@junejs/inbox`) uses the OAuth device authorization grant (RFC 8628) when the app
    advertises it in its discovery document — it works over SSH and with no local browser, and
    Better Auth ships a plugin for it. Otherwise it falls back to pasting a token
    (`june login --token`). The device-code page is the one web page needed before the GUI
@@ -499,35 +549,76 @@ CLI's only contract is `Authorization: Bearer <token>`; how the token is obtaine
    mailbox — so a coding agent can be given read and decide without send. No all-powerful
    static admin key by default.
 
-### 9.3 CLI and TUI
+### 9.3 CLI, TUI and distribution
 
-Two verb groups, matching the package split: `june inbox` is everything waiting on a person,
-from **every** channel; `june mail` is the email-specific mailbox. Both talk to a running or
-deployed app through the API. (Package-contributed verbs need a registration seam in the CLI,
-§3.7.)
+**One verb.** `docs/cli.md` rule 4 is "keep the verb set tight", so there is no separate
+`june mail`: email-specific subcommands live under `june inbox` and appear only when the app's
+discovery document says email is enabled.
 
 ```
-june inbox                                    # no verb: the TUI
+june inbox                                    # no subcommand: the TUI
+june inbox login <app-url> [--token]          # also reachable as `june login`
 june inbox pending [--agent scout] [--source email|slack] [--json]
 june inbox approve <pending> [--edit]         # --edit opens the draft in $EDITOR
 june inbox reject <pending> --note "…"
 june inbox show <pending|session> [--trace]
 june inbox watch                              # the change feed, line by line
-
-june mail threads [--agent scout] [--state waiting_on_operator] [--json]
-june mail show <thread> [--trace]
-june mail take-over <thread> | hand-back <thread> [--note "…"]
-june mail send --agent scout --to … --subject …    # the operator writes as the agent
-june mail instruct --agent scout "write to … about …"
-june mail diagnose [--agent scout]
+# with email enabled:
+june inbox threads [--agent scout] [--state waiting_on_operator] [--json]
+june inbox take-over <thread> | hand-back <thread> [--note "…"]
+june inbox send --agent scout --to … --subject …   # the operator writes as the agent
+june inbox instruct --agent scout "write to … about …"
+june inbox diagnose [--agent scout]
 ```
 
-`--json` on every read makes the CLI a second machine interface next to `/mcp`. The **TUI**
-is a keyboard triage loop over the pending queue (next / previous, approve, edit in `$EDITOR`,
-reject with a note, open the thread and its trace), kept live by the change feed. It is built
-on OpenTUI's React reconciler — the `june` CLI already requires Bun, which OpenTUI's FFI core
-needs — and loaded lazily so other verbs do not pay for it; Ink is the fallback. `@clack/prompts`
-covers one-off confirmations in plain CLI verbs.
+`--json` on every read makes the CLI a second machine interface next to `/mcp`.
+
+**External subcommands.** `june <verb>` that is not built in runs `june-<verb>`, looked up in
+the app's `node_modules/.bin`, then on `PATH` — the git / cargo model. Built-in verbs that need
+the app's code (`gen`, `db`) stay built in; the CLI keeps a small table of first-party
+external verbs for `help` and for an install hint, like the one it already prints for
+`@junejs/i18n`. Alternatives considered: a hard-coded list lazily imported from the app's
+dependencies (needs a CLI release per verb, works only inside a project), `package.json`
+manifests discovered by scanning dependencies (runs third-party code in-process on every
+invocation), plugins in `june.config.ts` (needs the project). External subcommands win on
+four counts: only an explicitly invoked binary runs; the client versions and ships on its
+own; it works for operators who do not have the app's repository; and it survives the
+planned move of `june` to a native binary (`docs/cli.md`), because an exec boundary does not
+care what either side is written in.
+
+**The TUI** is a keyboard triage loop over the pending queue (next / previous, approve, edit
+in `$EDITOR`, reject with a note, open the thread and its trace), kept live by the change
+feed, built on **OpenTUI**'s React reconciler with Ink as the fallback; `@clack/prompts` covers
+one-off confirmations. Checked 2026-09-28: `@opentui/core` 0.5.12 ships prebuilt native
+packages for eight targets (macOS, Linux glibc and musl, Windows; x64 and arm64) — no Zig
+toolchain; it needs `bun >= 1.3` or `node >= 26.4` and React ≥ 19.2; it installs 14 MB plus a
+5.4 MB native package for the host; and `bun build --compile` of an OpenTUI program produced
+a 74 MB darwin-arm64 binary that rendered and exited cleanly when copied to a directory with
+no `node_modules`.
+
+**Why the TUI is not in `@junejs/cli`.** Every June project would install OpenTUI's native
+packages whether or not it has an agent to supervise; and the native `june` planned in
+`docs/cli.md` runs on deno_core, which cannot load a library OpenTUI reaches through Bun's
+FFI. A separate client behind an exec boundary has neither problem.
+
+**Distribution of `@junejs/inbox`:**
+
+1. `bunx @junejs/inbox …` or a global install;
+2. a single-file binary per platform (`bun build --compile`), attached to releases, later
+   `curl | sh`;
+3. inside a project, `june inbox` delegating to it.
+
+It is released with the monorepo (the publish workflow's tag equals `@junejs/core`'s version,
+on the `dev` channel for now), with **OpenTUI pinned to an exact version** and bumped only by
+its own changeset — 330 releases so far means it moves fast — behind a thin internal
+component layer so a switch to Ink stays cheap, and a CI smoke test that compiles and runs the
+TUI under a pseudo-terminal on macOS arm64 and Linux x64 / arm64.
+
+**Contract versioning.** Because the client ships apart from the app, an operator's client
+and an app's server will differ in version. The server's discovery document advertises the
+supervision contract version and its capabilities (email or not); the client supports a range
+and says so plainly when it is outside it. The contract's version is independent of package
+versions; a breaking contract change bumps its major.
 
 ### 9.4 Web GUI
 
@@ -606,6 +697,13 @@ packages/email/
   src/providers/smtp.ts  imap.ts        # socket protocols, runtime-specific
 ```
 
+```
+packages/inbox/        # @junejs/inbox — operator client, bin `june-inbox`
+  src/cli.ts           # subcommands, --json
+  src/tui/             # OpenTUI views behind a thin component layer
+  src/credentials.ts   # june login: device flow, token paste, keychain / 0600 file
+```
+
 Subpath exports (`@junejs/email/ses`, …) keep SigV4 and the IMAP client out of apps that do not
 use them, and keep `channels.ts` (already 1906 lines) from growing.
 
@@ -648,11 +746,11 @@ in `.june/routes/` operate it through the same actions; the agent gets `email__s
 
 | phase | scope | proves |
 | --- | --- | --- |
-| **P0e** | engine seams: #260, #261, #262, #263; CLI verb registration | approvals and take-over have something to stand on |
+| **P0e** | engine seams: #260, #261, #262, #263; CLI external subcommands | approvals and take-over have something to stand on |
 | **P0** | types, MIME parse/build, thread key, signed reply address, safety (§7.4–7.5, §7.8 caps and suppression), mailbox store + migrations, `.eml` corpus (multipart, non-UTF-8, encoded headers, auto-replies, bounces, list mail) | the provider-independent core |
-| **P1** | Cloudflare inbound + outbound; worker `email()` and `queue()` entries; `june build` emits `addresses` + per-agent `send_email`; wrangler pin ≥ 4.113 | the edge target end to end |
-| **P1b** | supervision contract + API (§9.1–9.2), `june inbox` CLI, per-mailbox `authorize` | `approve` works without Slack, from a terminal or a coding agent |
-| **P1c** | `june inbox` TUI and the change feed | live triage |
+| **P1** | the Cloudflare live tests (§13) first; Cloudflare inbound + outbound; worker `email()` and `queue()` entries; `june build` emits `addresses` + per-agent `send_email`; wrangler pin ≥ 4.113 | the edge target end to end |
+| **P1b** | supervision contract + API (§9.1–9.2), `@junejs/inbox` CLI + `june login`, per-mailbox `authorize` | `approve` works without Slack, from a terminal or a coding agent |
+| **P1c** | `june inbox` TUI, the change feed, compiled binaries | live triage; operators without the repo |
 | **P2** | Resend, SES; Gmail with durable `alarm()` | notify inbound, cursors, SigV4, OAuth, renewal |
 | **P3** | Mailgun, SMTP outbound | coverage; socket I/O on both runtimes |
 | **P4** | IMAP (native IDLE, edge polling) | poll inbound |
@@ -676,10 +774,13 @@ testing split the Slack channel already uses.
 6. **Proactive sends are tiered by relationship**, with caps, unsubscribe, suppression, a
    circuit breaker and AI disclosure enforced by the framework (2026-09-28, §7.3, §7.8).
 
-7. **Engine seams go in `@junejs/core`; the supervision contract, index, API and `june inbox`
-   go in a new package; the mailbox layer and `june mail` in `@junejs/email`** (2026-09-28,
-   §9.1).
-8. **TUI on OpenTUI (React), Ink as fallback** (2026-09-28, §9.3).
+7. **Packages** (2026-09-28, §9.1): engine seams in `@junejs/core`, contract types in
+   `@junejs/core/supervise`, the implementation in `@junejs/server`, the mailbox in
+   `@junejs/email`, the operator client in `@junejs/inbox`. One verb, `june inbox`; no
+   `june mail`.
+8. **TUI on OpenTUI (React), pinned, Ink as fallback; the client ships separately from
+   `@junejs/cli` as an external subcommand, as a package and as compiled binaries, over a
+   versioned contract** (2026-09-28, §9.3).
 9. **CLI credentials: bearer tokens via `june login` (device flow, token-paste fallback),
    keychain storage, `JUNE_TOKEN` override, scoped and expiring** (2026-09-28, §9.2).
 10. **Approvals across surfaces: index, surface registry, revisions, answerer policies, queued
@@ -688,15 +789,26 @@ testing split the Slack channel already uses.
     may only tighten it** (2026-09-28, §7.7).
 12. **Take-over: explicit hand-back, attributed notes, no AI disclosure on human-written
     mail** (2026-09-28, §9.6).
+13. **Cloudflare is transactional only**: no R4 on Cloudflare, R3 documented as transactional
+    (2026-09-28, §5, §7.3).
+14. **Verified provider numbers and proposed breaker defaults** recorded in §7.7
+    (2026-09-28).
 
-## 13. Open questions
+## 13. Open questions and live tests
 
-1. **The supervision package's name** (`@junejs/supervise` is a working name).
-2. **CLI verb registration.** How a package contributes verbs to `june` — a manifest field, a
-   discovered module, or a fixed list the CLI knows how to lazy-load.
-3. **OpenTUI distribution.** Confirm it installs prebuilt native binaries for every platform
-   the `june` CLI supports (at least macOS arm64, Linux x64 and arm64) without a Zig toolchain;
-   if not, Ink.
-4. **Numbers to verify before they become defaults**: Mailgun's free-plan limits (only
-   third-party sources found), Gmail's bulk-sender spam-rate ceiling and SES's review
-   thresholds (from memory), and the circuit-breaker's minimum sample.
+Cloudflare is built first, and five of its behaviors are undocumented or account-specific;
+each is settled by a test against a real onboarded domain before P1 code depends on it:
+
+1. **Does the message `email()` receives carry `Authentication-Results`?** §7.1 derives an
+   operator's identity from aligned DMARC / DKIM. If the header is absent, June verifies DKIM
+   itself over the raw MIME (DNS-over-HTTPS for the key, Web Crypto for the signature).
+2. **Does REST `send_raw` keep a caller-set `Message-ID`?** If it does, header lookup (§6)
+   becomes a reliable second thread key on Cloudflare.
+3. **Is a delivery event's `messageId` the one `send()` returned?** It decides how delivery
+   status is joined to stored messages.
+4. **Do subaddressing and wrangler `addresses` work together** (`scout+<thread>.<mac>@…`
+   reaching the Worker through a literal `scout@…` rule on a subdomain)?
+5. **What daily quota does the account actually start with?**
+
+Also open: the circuit breaker's defaults (§7.7) are a proposal to be tuned against real
+traffic.
