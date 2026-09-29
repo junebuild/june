@@ -2133,3 +2133,52 @@ describe("a tool that throws tells the model instead of failing the turn (#232)"
     expect(replayed.find((e) => e.type === "action.completed")).toMatchObject({ error: "boom", result: { error: "boom" } });
   });
 });
+
+describe("a run that returns a Promise without being async (#233)", () => {
+  const SCRIPT: ModelReply[] = [
+    { text: "", toolCalls: [{ id: "c1", name: "lookup", input: {} }] },
+    { text: "done", toolCalls: [] },
+  ];
+  const lookup = (run: Tool["run"], mode?: Tool["mode"]): Tool => ({
+    spec: { name: "lookup", description: "d", input: { type: "object" } },
+    run,
+    ...(mode ? { mode } : {}),
+  });
+  const flush = () => new Promise((r) => setTimeout(r, 10));
+
+  for (const [label, promise] of [
+    ["resolves", () => Promise.resolve({ inStock: 7 })],
+    ["rejects", () => Promise.reject(new Error("upstream 503"))],
+  ] as const) {
+    test(`classified local, a Promise that ${label} fails the turn instead of committing {} as the result`, async () => {
+      const { store } = memStore();
+      const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), scriptedModel(SCRIPT), [lookup(() => promise())], noRuntime);
+      const events: TurnEvent[] = [];
+      s.observe((e) => events.push(e));
+      await expect(s.turn({ turnId: "t1", userText: "go" })).rejects.toThrow(/tool "lookup" returned a Promise but runs local.*mode: "remote"/);
+      expect(events.map((e) => e.type)).toContain("turn.failed");
+      expect(store.messages().some((m) => m.role === "tool")).toBe(false); // nothing committed
+      expect(store.getStep("tool:1:c1")).toBeUndefined();
+      await flush(); // a rejection that escaped would fail this test as unhandled
+    });
+  }
+
+  test('mode: "remote" makes a plain function returning a Promise a remote tool: its result is awaited', async () => {
+    const { store } = memStore();
+    const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), scriptedModel(SCRIPT), [lookup(() => Promise.resolve({ inStock: 7 }), "remote")], noRuntime);
+    expect(await s.turn({ turnId: "t1", userText: "go" })).toBe("done");
+    expect(store.messages().find((m) => m.role === "tool")).toMatchObject({ result: { inStock: 7 } });
+  });
+
+  test('mode: "remote" lets such a tool park the turn with ctx.requestInput', async () => {
+    const tool = lookup((_input, ctx) => ctx.requestInput({ id: "approve-1", prompt: "OK?" }).then((ok) => ({ ok })), "remote");
+    const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), scriptedModel(SCRIPT), [tool], noRuntime);
+    const { turnId } = s.start({ turnId: "t1", userText: "go", event: { source: "slack", kind: "message", channelId: "C1", ts: "1.1", user: { id: "U1", attested: true }, raw: {} } });
+    expect(await s.result(turnId)).toMatchObject({ status: "suspended", request: { id: "approve-1" } });
+  });
+
+  test('mode: "local" on an async function is honored — and so fails the same way', async () => {
+    const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), scriptedModel(SCRIPT), [lookup(async () => ({ inStock: 7 }), "local")], noRuntime);
+    await expect(s.turn({ turnId: "t1", userText: "go" })).rejects.toThrow(/returned a Promise but runs local/);
+  });
+});

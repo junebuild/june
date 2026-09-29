@@ -209,9 +209,9 @@ export interface ToolContext {
   initiator?: Principal;
   // Ask for external (human) input and SUSPEND the turn until session.resume provides it.
   // First call throws SuspendSignal to park the turn (durably); on the replay after resume it
-  // returns the stored answer. Only usable from an ASYNC tool — a sync (local) tool commits in
-  // the same tx and cannot park, so calling it there throws a plain Error (the turn fails
-  // loudly). `answerers` says who may answer (see Answerers); it defaults to the turn's
+  // returns the stored answer. Only usable from a remote tool (see Tool.mode) — a local tool
+  // commits in the same tx and cannot park, so calling it there throws a FatalToolError (the
+  // turn fails loudly). `answerers` says who may answer (see Answerers); it defaults to the turn's
   // speaker only when the channel attests that identity.
   requestInput(req: { id: string; prompt: string; schema?: unknown; answerers?: Answerers }): Promise<unknown>;
 }
@@ -224,7 +224,24 @@ export type Tool = {
   // tool list entirely, so the model can neither call it nor see it. Mark every tool
   // that reads user/tenant-scoped data; leave knowledge/utility tools unmarked.
   requiresPrincipal?: boolean;
+  // How the engine runs it (#233). "local": inside the store tx, exactly-once, and `run` must
+  // return its result synchronously. "remote": awaited outside the tx, at-least-once, and the
+  // only mode that can `ctx.requestInput`. Absent = derived from `run`: an `async` function is
+  // remote, anything else local. Set it when `run` is async but isn't declared `async` — a
+  // wrapper (`withRetry(async …)`), a plain function returning a Promise, transpiled code.
+  mode?: ToolMode;
 };
+export type ToolMode = "local" | "remote";
+
+// The mode the engine runs `run` in: the declared one, else remote exactly when `run` is an
+// `async` function. Shared with actionToTool so a bridged action classifies the same way.
+export function toolMode(run: Function, mode?: ToolMode): ToolMode {
+  return mode ?? (run.constructor.name === "AsyncFunction" ? "remote" : "local");
+}
+
+function isThenable(x: unknown): x is PromiseLike<unknown> {
+  return (typeof x === "object" || typeof x === "function") && x !== null && typeof (x as { then?: unknown }).then === "function";
+}
 
 // ── the two inner seams (LOCAL, per-session, co-located with execution) ───────
 //
@@ -870,7 +887,7 @@ async function toolStep(
   if (store.getStep(stepId) !== undefined) return;
   const tool = tools.find((t) => t.spec.name === call.name);
   if (!tool) throw new Error(`unknown tool ${call.name}`);
-  const remote = tool.run.constructor.name === "AsyncFunction";
+  const remote = toolMode(tool.run, tool.mode) === "remote";
   const ctx: ToolContext = {
     store, runtime: env.runtime, agent: env.agent, sessionId: env.sessionId, callId: call.id, event: env.event, principal: env.event?.principal, initiator: env.initiator,
     // replay-aware: return the stored answer if resume already provided it, else park the turn.
@@ -913,6 +930,13 @@ async function toolStep(
         toolThrew = true;
         out = tool.run(call.input, ctx);
         toolThrew = false;
+        // A Promise here means the tool is async but was classified local (#233). Committing it
+        // would record `{}` and lose the real result, so fail the turn — it's a definition bug.
+        // The Promise already runs; swallow its rejection so it can't surface as unhandled.
+        if (isThenable(out)) {
+          out.then(undefined, () => {});
+          throw new FatalToolError(`tool "${call.name}" returned a Promise but runs local (sync) — declare its run \`async\`, or set mode: "remote"`);
+        }
         record(out, undefined);
       });
     }

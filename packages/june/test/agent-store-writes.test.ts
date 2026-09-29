@@ -108,42 +108,59 @@ describe("the documented exactly-once write (agents-durable-turns.md)", () => {
   });
 });
 
-describe("a non-async tool that returns a Promise (the documented hazard)", () => {
-  test("commits `{}`: the step, the transcript, and the model all see an empty result", async () => {
-    let finished = false;
-    const notAsync: Tool = {
-      spec: { name: "create_order", description: "returns a Promise without being async", input: { type: "object" } },
-      // a plain function → classified local; its Promise is committed unresolved
-      run: () =>
-        new Promise((resolve) =>
-          setTimeout(() => {
-            finished = true;
-            resolve({ orderId: 42 });
-          }, 5),
-        ),
-    };
-    const modelSaw: unknown[] = [];
-    const model: Model = (msgs: Msg[]) => {
-      const tool = msgs.find((m): m is Extract<Msg, { role: "tool" }> => m.role === "tool");
-      if (!tool) return replyStream({ text: "", toolCalls: [{ id: "c1", name: "create_order", input: {} }] });
-      modelSaw.push(tool.result);
-      return replyStream({ text: "done", toolCalls: [] } satisfies ModelReply);
-    };
+describe("a non-async tool that returns a Promise (#233)", () => {
+  const promised = (flag: { finished: boolean }, mode?: Tool["mode"]): Tool => ({
+    spec: { name: "create_order", description: "returns a Promise without being async", input: { type: "object" } },
+    run: () =>
+      new Promise((resolve) =>
+        setTimeout(() => {
+          flag.finished = true;
+          resolve({ orderId: 42 });
+        }, 5),
+      ),
+    ...(mode ? { mode } : {}),
+  });
+  const modelSeeing = (seen: unknown[]): Model => (msgs: Msg[]) => {
+    const tool = msgs.find((m): m is Extract<Msg, { role: "tool" }> => m.role === "tool");
+    if (!tool) return replyStream({ text: "", toolCalls: [{ id: "c1", name: "create_order", input: {} }] });
+    seen.push(tool.result);
+    return replyStream({ text: "done", toolCalls: [] } satisfies ModelReply);
+  };
+  const toolRows = (path: string) => {
+    const db = openLocalSqliteSync(path);
+    return db.then((d) => {
+      cleanup.push(() => d.close());
+      const steps = d.query("select output from agent_steps where id like 'tool:%'").all() as { output: string }[];
+      const msgs = (d.query("select body from agent_messages").all() as Array<{ body: string }>).map((r) => JSON.parse(r.body) as Msg);
+      return { steps: steps.map((r) => JSON.parse(r.output)), toolMsgs: msgs.filter((m) => m.role === "tool") };
+    });
+  };
+
+  test("classified local, it fails the turn instead of committing the Promise as `{}`", async () => {
+    const flag = { finished: false };
+    const seen: unknown[] = [];
     const path = join(tempDir(), "agent.sqlite");
-    const rt = await createNativeRuntime({ ops: { model, tools: [notAsync] } }, path);
-    await rt.session("ops", "s1").turn({ userText: "go" });
+    const rt = await createNativeRuntime({ ops: { model: modelSeeing(seen), tools: [promised(flag)] } }, path);
+    const s = rt.session("ops", "s1");
+    const { turnId } = s.start({ userText: "go" });
+    expect(await s.result(turnId)).toMatchObject({
+      status: "failed",
+      error: { message: expect.stringContaining('returned a Promise but runs local (sync) — declare its run `async`, or set mode: "remote"') },
+    });
+    expect(await toolRows(path)).toEqual({ steps: [], toolMsgs: [] }); // nothing committed
+    expect(seen).toEqual([]); // the model never read a fake result
+  });
 
-    const db = await openLocalSqliteSync(path);
-    cleanup.push(() => db.close());
-    const step = db.query("select output from agent_steps where id like 'tool:%'").get() as { output: string };
-    expect(JSON.parse(step.output)).toEqual({}); // the Promise, serialized
-    const toolMsg = (db.query("select body from agent_messages").all() as Array<{ body: string }>)
-      .map((r) => JSON.parse(r.body) as Msg)
-      .find((m) => m.role === "tool") as Extract<Msg, { role: "tool" }>;
-    expect(toolMsg.result).toEqual({});
-    expect(JSON.parse(JSON.stringify(modelSaw))).toEqual([{}]); // what the model is actually sent
-
-    await new Promise((r) => setTimeout(r, 20));
-    expect(finished).toBe(true); // …while the real work still ran, outside the transaction
+  test('with mode: "remote" the same run is awaited and its real result committed', async () => {
+    const flag = { finished: false };
+    const seen: unknown[] = [];
+    const path = join(tempDir(), "agent.sqlite");
+    const rt = await createNativeRuntime({ ops: { model: modelSeeing(seen), tools: [promised(flag, "remote")] } }, path);
+    expect(await rt.session("ops", "s1").turn({ userText: "go" })).toBe("done");
+    expect(flag.finished).toBe(true);
+    const rows = await toolRows(path);
+    expect(rows.steps).toEqual([{ orderId: 42 }]);
+    expect(rows.toolMsgs).toMatchObject([{ result: { orderId: 42 } }]);
+    expect(seen).toEqual([{ orderId: 42 }]);
   });
 });
