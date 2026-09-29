@@ -857,6 +857,11 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
 
   // Which browsers may call /mcp and /api (#308) — the config's allowlists.
   const originPolicy = { allowedOrigins: agent.allowedOrigins, allowedHosts: agent.allowedHosts };
+  // Only a POST runs an action on /mcp or /api; any other method is a CORS
+  // preflight or a 405. A preflight carries no credentials, so a cookie-reading
+  // resolver could throw on it — never resolve identity for one.
+  const callerIdentity = async (request: Request) =>
+    request.method === "POST" && cfg.identity ? await cfg.identity(request) : undefined;
 
   async function handleRequest(request: Request): Promise<Response> {
       const url = new URL(request.url);
@@ -872,7 +877,7 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
         // identity resolver (its I/O, or a throw that would turn 403 into 500).
         const refused = originRejection(request, originPolicy);
         if (refused !== undefined) return mcpForbidden(refused);
-        const identity = cfg.identity ? await cfg.identity(request) : undefined;
+        const identity = await callerIdentity(request);
         return mcpHandler(
           request,
           { request, ...identity },
@@ -898,7 +903,7 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
         if (actionId) {
           const refused = originRejection(request, originPolicy);
           if (refused !== undefined) return apiForbidden(request, refused);
-          const identity = cfg.identity ? await cfg.identity(request) : undefined;
+          const identity = await callerIdentity(request);
           return apiHandler(request, actionId, { request, ...identity }, originPolicy);
         }
       }

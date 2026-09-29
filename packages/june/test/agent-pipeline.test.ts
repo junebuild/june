@@ -118,6 +118,29 @@ describe("/mcp mount identity (cfg.identity)", () => {
     expect(((await api.json()) as { error: { code: string } }).error.code).toBe("forbidden");
     expect(resolved).toBe(0);
   });
+
+  test("an allowed origin's CORS preflight never resolves identity: it carries no credentials (#308)", async () => {
+    await mcpPipeline(undefined); // registers the action
+    let resolved = 0;
+    const p = createPipeline({
+      docConfig,
+      agent: resolveAgent({ mcp: true, allowedOrigins: ["https://app.example.com"] }),
+      routeList: () => [],
+      resolve: async () => null,
+      identity: () => {
+        resolved++;
+        throw new Error("no session cookie on a preflight");
+      },
+    });
+    for (const path of ["/mcp", `/api/${gatedId}`]) {
+      const res = await p.fetch(
+        new Request(`http://x${path}`, { method: "OPTIONS", headers: { origin: "https://app.example.com", "access-control-request-method": "POST", "access-control-request-headers": "content-type" } }),
+      );
+      expect(res.status).toBe(204);
+      expect(res.headers.get("access-control-allow-origin")).toBe("https://app.example.com");
+    }
+    expect(resolved).toBe(0);
+  });
 });
 
 // ── REST projection: POST /api/<id> + /openapi.json on the same pipeline ──
