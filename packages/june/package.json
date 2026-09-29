@@ -136,7 +136,7 @@
     "@momiji-rs/sparkdown": "^0.0.4",
     "@resvg/resvg-wasm": "^2.6.2",
     "lightningcss": "^1.27.0",
-    "oxc-parser": "^0.151.0",
+    "oxc-parser": "^0.152.0",
     "rolldown": "^1.1.0"
   },
   "peerDependencies": {
