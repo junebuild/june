@@ -26,7 +26,11 @@ static directory that dead-ends doesn't shadow a dynamic sibling. A
 `route.ts` resource route ranks by the same segment shape as a page, so
 `feed.xml/route.ts` answers `/feed.xml` ahead of a `[slug]/page.tsx`
 sibling; within one tree, a page wins only over a `route.ts` in the same
-directory.
+directory. A `(group)` is invisible to ranking as well as to the URL: its
+children compete as siblings of the level it sits in, so
+`(marketing)/[slug]/page.tsx` never shadows a static `about/page.tsx`
+next to it, and the group's layout still wraps whichever of its routes
+wins.
 
 Routes a framework generates into `.june/routes/` (Kura's docs, search and
 og images) are a second tree, consulted only when nothing in `app/`
