@@ -279,6 +279,10 @@ describe("compiled module on the durable target", () => {
       const agent = new AgentDurableObject({ storage: s }, { ...def, model, env: { SLACK_SIGNING_SECRET: "s" } });
       const res = await agent.fetch(new Request("https://do/turn", { method: "POST", body: JSON.stringify({ userText: "restock", turnId: "t1" }) }));
       expect(await sseTurnFinalText(res)).toBe("GOT_SKILL");
+      // The final event reaches the stream before the turn's promise settles, and settling
+      // still reads the store (held turns, announcements). Let it finish before the storage
+      // closes, or it throws "Cannot use a closed database" into whatever runs next (#317).
+      await new Promise((r) => setTimeout(r, 0));
     } finally {
       s.close();
     }
