@@ -156,6 +156,8 @@ export class JuneAgentDO extends DurableObject {
     // + resources / services when june.config declares them
   });
   fetch(req) { return this.#agent.fetch(req); }
+  // delivers input announcements left undelivered — a failed hook's retry, or the watchdog
+  alarm() { return this.#agent.alarm(); }
 }
 ```
 
@@ -342,6 +344,8 @@ export class JuneAgentDO extends DurableObject<Env> {
     env: this.env,
   });
   fetch(req: Request) { return this.#agent.fetch(req); }
+  // required for input-announcement delivery (the retry and watchdog alarm); june build's shell does this too
+  alarm() { return this.#agent.alarm(); }
 }
 
 export default {
