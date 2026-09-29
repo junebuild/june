@@ -1,6 +1,6 @@
 {
   "name": "@junejs/cli",
-  "version": "0.0.52-dev.3",
+  "version": "0.1.0-dev.4",
   "description": "The `june` CLI — dev / build / deploy / gen / info. A thin bin over @junejs/server.",
   "type": "module",
   "license": "MIT",
@@ -27,8 +27,8 @@
     "build": "tsdown"
   },
   "dependencies": {
-    "@junejs/core": ">=0.2.0-dev.51",
-    "@junejs/server": ">=1.0.0-dev.31"
+    "@junejs/core": ">=0.2.0-dev.62",
+    "@junejs/server": ">=1.0.0-dev.41"
   },
   "repository": {
     "type": "git",

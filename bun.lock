@@ -22,7 +22,7 @@
     },
     "apps/june.build": {
       "name": "june.build",
-      "version": "0.0.5-dev.61",
+      "version": "0.0.5-dev.62",
       "dependencies": {
         "@junejs/core": "workspace:*",
         "react": "catalog:",
@@ -48,7 +48,7 @@
     },
     "examples/basic": {
       "name": "@june-examples/basic",
-      "version": "0.0.5-dev.61",
+      "version": "0.0.5-dev.62",
       "dependencies": {
         "@junejs/core": "workspace:*",
       },
@@ -58,7 +58,7 @@
     },
     "examples/i18n": {
       "name": "@june-examples/i18n",
-      "version": "0.0.5-dev.62",
+      "version": "0.0.5-dev.63",
       "dependencies": {
         "@junejs/core": "workspace:*",
         "@junejs/i18n": "workspace:*",
@@ -69,7 +69,7 @@
     },
     "examples/juno-crud": {
       "name": "@june-examples/juno-crud",
-      "version": "0.0.5-dev.62",
+      "version": "0.0.5-dev.63",
       "dependencies": {
         "@junejs/core": "workspace:*",
         "@junejs/db": "workspace:*",
@@ -97,7 +97,7 @@
     },
     "packages/cli": {
       "name": "@junejs/cli",
-      "version": "0.0.52-dev.3",
+      "version": "0.1.0-dev.4",
       "bin": {
         "june": "./bin.mjs",
       },
@@ -108,7 +108,7 @@
     },
     "packages/core": {
       "name": "@junejs/core",
-      "version": "0.2.0-dev.61",
+      "version": "0.2.0-dev.62",
       "devDependencies": {
         "@modelcontextprotocol/client": "2.1.0",
         "@modelcontextprotocol/server": "2.1.0",
@@ -151,7 +151,7 @@
     },
     "packages/june": {
       "name": "@junejs/server",
-      "version": "1.0.0-dev.40",
+      "version": "1.0.0-dev.41",
       "dependencies": {
         "@junejs/db": ">=0.1.0-dev.2",
         "@momiji-rs/sparkdown": "^0.0.4",
