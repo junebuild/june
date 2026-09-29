@@ -300,6 +300,12 @@ export async function juneBuild(
   const resourceRoutesField = resources.length
     ? `\n  resourceRoutes: [\n${resources.join("\n")}\n  ],`
     : "";
+  // .june/routes/ patterns rank after every app/ route (dev falls back to them).
+  // Only emitted when there are some, so bundles without them stay byte-identical.
+  const generatedPaths = routes.filter((r) => r.generated).map((r) => r.path);
+  const generatedRoutesField = generatedPaths.length
+    ? `\n  generatedRoutes: ${JSON.stringify(generatedPaths)},`
+    : "";
   // Only emitted when some route declares a boundary, so boundary-less bundles
   // stay byte-identical (additive manifest field, like resources).
   const layoutBoundariesField = boundaries.length
@@ -435,7 +441,7 @@ ${statics.join("\n")}
   },
   dynamicRoutes: [
 ${dynamics.join("\n")}
-  ],${resourceRoutesField}
+  ],${resourceRoutesField}${generatedRoutesField}
   layoutChains: {
 ${chains.join("\n")}
   },${layoutBoundariesField}

@@ -63,6 +63,7 @@ export async function buildManifest(appRoot: string): Promise<WorkerManifest> {
   const routes: Record<string, BrandedRoute> = {};
   const dynamicRoutes: Array<{ pattern: string; def: BrandedRoute }> = [];
   const resourceRoutes: Array<{ pattern: string; handler: ResourceHandler }> = [];
+  const generatedRoutes = scanned.filter((r) => r.generated).map((r) => r.path);
   const layoutChains: Record<string, LayoutComponent[]> = {};
   const layoutBoundaries: Record<string, { index: number; key: string }> = {};
   const loadings: Record<string, LoadingComponent> = {};
@@ -115,6 +116,7 @@ export async function buildManifest(appRoot: string): Promise<WorkerManifest> {
     routes,
     dynamicRoutes,
     resourceRoutes,
+    ...(generatedRoutes.length ? { generatedRoutes } : {}),
     layoutChains,
     layoutBoundaries,
     loadings,
