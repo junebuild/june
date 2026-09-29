@@ -20,8 +20,9 @@ Durable Object on Workers.
 
 Two tables hold a session's state:
 
-- **The message log** (`user`, `trigger`, `assistant`, `tool` messages) *is*
-  the conversation. The loop's position is read straight off it.
+- **The message log** (`user`, `trigger`, `assistant`, `tool`, and `note`
+  messages) *is* the conversation. The loop's position is read straight off it —
+  notes are context, so the loop skips them (see [Notes](#notes)).
 - **The steps table** memoizes each step under a stable id: `model:<n>` for a
   model call, `tool:<n>:<callId>` for a tool call (`n` is the transcript index
   of the assistant message that made the call). A step with a stored result is
