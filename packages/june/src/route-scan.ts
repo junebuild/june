@@ -78,6 +78,8 @@ export async function scanAppRoutes(appRoot: string): Promise<RouteEntry[]> {
   const juneRoutesDir = join(appRoot, ".june", "routes");
   const appRoutes = await scanRoutes(appDir);
   const frameworkRoutes = existsSync(juneRoutesDir) ? await scanRoutes(juneRoutesDir) : [];
+  const conflicts = [...routeConflicts(appRoutes), ...routeConflicts(frameworkRoutes)];
+  if (conflicts.length) throw new Error(formatRouteConflicts(conflicts, appRoot));
   const appPaths = new Set(appRoutes.map((r) => r.path));
   const generated = frameworkRoutes
     .filter((r) => !appPaths.has(r.path))
@@ -85,4 +87,31 @@ export async function scanAppRoutes(appRoot: string): Promise<RouteEntry[]> {
   return [...appRoutes, ...generated].sort((a, b) =>
     a.path.localeCompare(b.path),
   );
+}
+
+// Two route files in ONE tree that resolve to the same URL: `(a)/about/page.tsx`
+// and `(b)/about/page.tsx` (groups vanish from the URL), or `page.tsx` next to
+// `index.tsx`. Pages and resource routes are counted apart — a page beside a
+// route.ts is allowed (the page wins). No winner is defined for the rest: dev
+// would pick by group order and the worker by scan order, so the build refuses
+// them and dev reports them (#316).
+export function routeConflicts(routes: RouteEntry[]): Array<{ path: string; files: string[] }> {
+  const byKey = new Map<string, { path: string; files: string[] }>();
+  for (const r of routes) {
+    const key = `${r.resource ? "route" : "page"} ${r.path}`;
+    const hit = byKey.get(key);
+    if (hit) hit.files.push(r.file);
+    else byKey.set(key, { path: r.path, files: [r.file] });
+  }
+  return [...byKey.values()]
+    .filter((c) => c.files.length > 1)
+    .map((c) => ({ path: c.path, files: c.files.sort() }))
+    .sort((a, b) => a.path.localeCompare(b.path));
+}
+
+export function formatRouteConflicts(conflicts: Array<{ path: string; files: string[] }>, appRoot: string): string {
+  const lines = conflicts.map(
+    (c) => `  ${c.path}: ${c.files.map((f) => relative(appRoot, f).split(sep).join("/")).join(", ")}`,
+  );
+  return `[june] more than one route file resolves to the same path — keep one per path:\n${lines.join("\n")}`;
 }

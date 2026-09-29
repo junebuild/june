@@ -27,6 +27,7 @@ import type { DocumentConfig } from "@junejs/core/document";
 import { runWithTrace, type RequestTrace } from "@junejs/core/instrumentation";
 
 import { findMiddlewareFile, isResourceFile, listRoutes, matchRouteTree, resolveNotFound, routeFiles, type SegmentMatch } from "./router";
+import { formatRouteConflicts, routeConflicts, scanRoutes } from "./route-scan";
 import { createPipeline, type ExtraHandler, type LayoutComponent, type MiddlewareHandler, type Pipeline, type Resolved, type ResourceHandler } from "./pipeline";
 import { discoverAgent } from "./agent-discover";
 import { createAgentRuntime, mountAgent, toAgentDef } from "./agent-native";
@@ -443,6 +444,13 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
       return toPipeline();
     },
     async warmup() {
+      // Same-path route files have no defined winner; `june build` refuses them.
+      // Dev still serves (first by group order) but says so up front.
+      const conflicts = [
+        ...routeConflicts(await scanRoutes(appDir)),
+        ...(hasJuneRoutes ? routeConflicts(await scanRoutes(juneRoutesDir)) : []),
+      ];
+      if (conflicts.length) console.error(formatRouteConflicts(conflicts, dirname(appDir)));
       const files = await routeFiles(appDir, { pageConvention: true });
       if (hasJuneRoutes) files.push(...(await routeFiles(juneRoutesDir, { pageConvention: true })));
       for (const file of files) {
