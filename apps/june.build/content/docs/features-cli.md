@@ -19,7 +19,7 @@ version pinned per project, reproducible for every collaborator — human or
 agent. Then the whole loop is six verbs:
 
 ```bash
-june dev          # dev server (Bun/Node host), zero config
+june dev          # dev server (Bun/Node host); binds localhost, --host opens the network
 june build        # Workers bundle: dist/worker.js + prerendered assets
 june deploy       # build → wrangler upload → URL (--dry-run validates only)
 june gen          # freeze content/**/*.md (+ content.sources) → app/_content.ts; compile agent/ → _agent.gen.ts (--check gates CI)
