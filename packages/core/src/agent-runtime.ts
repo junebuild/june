@@ -34,7 +34,9 @@ import type { Principal } from "./context";
 // v5: SessionStore.reset(inTx) (#260) — the engine carries undelivered announcements across a
 //     reset inside the reset's own transaction; a host store that ignored the callback would
 //     drop them silently.
-export const RUNTIME_API_VERSION = 5;
+// v6: AgentSession.note() and the `note` Msg role (#262) — the Durable Object's /note route
+//     and note() call it.
+export const RUNTIME_API_VERSION = 6;
 
 // `providerState` (#92) is OPAQUE round-trip state a model adapter may attach to a
 // tool call: some providers require it replayed verbatim (Gemini 3+ returns a
@@ -56,7 +58,16 @@ export type Msg =
   | { role: "assistant"; turnId: string; text: string; toolCalls: ToolCall[] }
   // `isError`: the tool threw — `result` is `{ error: message }`, and the model adapter marks
   // the block as an error (Anthropic `is_error`) so the model reads a failed call, not data.
-  | { role: "tool"; turnId: string; toolCallId: string; name: string; result: unknown; isError?: true };
+  | { role: "tool"; turnId: string; toolCallId: string; name: string; result: unknown; isError?: true }
+  // A note (#262): something that belongs in the agent's history without being a turn or the
+  // agent's own words — an operator's reply during a take-over, traffic a channel observed.
+  // Attributed (`by`, `kind`, `at`); the model adapter renders it as labelled context, never
+  // as the agent's own message or the correspondent's. `turnId` is the note's own id (`n_…`):
+  // every Msg keeps one, and no turn's filters match a note. Appended by AgentSession.note().
+  | { role: "note"; turnId: string; by: string; kind: NoteKind; text: string; at: string };
+// What a note is (#262). The two the email take-over and observe mode need, and any other
+// string an app defines.
+export type NoteKind = "operator_reply" | "observed" | (string & {});
 export type ModelReply = { text: string; toolCalls: ToolCall[] };
 export type ToolSpec = { name: string; description: string; input: unknown };
 
@@ -578,8 +589,13 @@ export async function runTurn(
   // checkpoint's: a crash-replay or a raced duplicate must not double-INSERT the step.
   let initiator = store.getStep(INITIATOR_STEP) as Principal | undefined;
   const claimant = initiator === undefined && env.event?.principal != null ? env.event.principal : undefined;
-  if (opening !== undefined || claimant !== undefined) {
+  // Notes still held (#262) — behind a batch a cancelled turn closed, say — join the log ahead
+  // of this turn's opening, once the log is clean. Not for a parked turn's replay: its batch
+  // is still owed, and the turn loop releases them once it is answered.
+  const releaseNotes = store.getStep(HELD_NOTES) !== undefined && !owesToolResults(store.messages());
+  if (opening !== undefined || claimant !== undefined || releaseNotes) {
     store.tx(() => {
+      if (releaseNotes) releaseHeldNotes(store);
       if (opening !== undefined) store.appendMessage(opening);
       if (claimant !== undefined && store.getStep(INITIATOR_STEP) === undefined) store.putStep(INITIATOR_STEP, claimant);
     });
@@ -610,9 +626,9 @@ export async function runTurn(
   try {
     while (true) {
       const msgs = store.messages();
-      // Non-null: the loop always runs with ≥1 message (the user turn is appended
-      // above before the first iteration), so the transcript is never empty here.
-      const last = msgs[msgs.length - 1]!;
+      // Non-null: the loop always runs with ≥1 non-note message (the opening is appended
+      // above before the first iteration). Notes (#262) are skipped: context, not a step.
+      const last = lastNonNote(msgs)!;
 
       if (last.role === "assistant" && last.toolCalls.length === 0) {
         store.setStatus("done");
@@ -643,7 +659,10 @@ export async function runTurn(
         continue;
       }
       // About to ask the model: the transcript is provider-clean here (every tool_use
-      // answered), so a cancelled turn simply ends without a final assistant message.
+      // answered). Notes held behind the batch just answered (#262) join the log now, so
+      // the model reads them on this very call; the loop then re-reads the log.
+      if (store.getStep(HELD_NOTES) !== undefined && store.tx(() => releaseHeldNotes(store)) > 0) continue;
+      // A cancelled turn simply ends without a final assistant message.
       const why = cancelled();
       if (why) throw new CancelSignal(opts.turnId, why);
       inFlight = { phase: "model", step: `model:${msgs.length}` };
@@ -694,6 +713,51 @@ export async function runTurn(
 // turn loop spun on the unchanged transcript forever, synchronously (#167).
 function toolStepId(assistantAt: number, callId: string): string {
   return `tool:${assistantAt}:${callId}`;
+}
+
+// ── notes held behind a tool batch (#262) ─────────────────────────────────────
+// The Messages API requires a tool_use to be answered by the very next message: "You cannot
+// include any messages between the assistant's tool use message and the user's tool result
+// message." A note written while the log ends mid-batch — a turn parked on requestInput —
+// would land exactly there. So it waits under this step and joins the log at the next point
+// the log is clean: in the turn loop, once every call is answered and before the model is
+// asked (the adapter then renders it after the tool results, in the same user message — the
+// API allows text after tool_result blocks), or ahead of the next turn's opening. A reset
+// archives held notes with the rest of the steps.
+const HELD_NOTES = "held-notes";
+type NoteMsg = Extract<Msg, { role: "note" }>;
+
+// True when the log's latest assistant message made calls that are not all answered yet.
+function owesToolResults(msgs: Msg[]): boolean {
+  for (let at = msgs.length - 1; at >= 0; at--) {
+    const m = msgs[at]!;
+    if (m.role !== "assistant") continue;
+    if (m.toolCalls.length === 0) return false;
+    const answered = new Set<string>();
+    for (let j = at + 1; j < msgs.length; j++) {
+      const r = msgs[j]!;
+      if (r.role === "tool") answered.add(r.toolCallId);
+    }
+    return m.toolCalls.some((c) => !answered.has(c.id));
+  }
+  return false;
+}
+
+// Move the held notes into the log, oldest first. Runs inside the caller's transaction;
+// returns how many moved.
+function releaseHeldNotes(store: SessionStore): number {
+  const held = store.getStep(HELD_NOTES) as NoteMsg[] | undefined;
+  if (!held?.length) return 0;
+  for (const n of held) store.appendMessage(n);
+  store.delStep(HELD_NOTES);
+  return held.length;
+}
+
+// The latest message that is not a note — what the turn loop decides on. A note appended
+// after a completed turn must not make a redelivery of that turn look unfinished.
+function lastNonNote(msgs: Msg[]): Msg | undefined {
+  for (let i = msgs.length - 1; i >= 0; i--) if (msgs[i]!.role !== "note") return msgs[i];
+  return undefined;
 }
 
 // This turn's latest assistant message, if it made calls, and those of its calls that no
@@ -875,6 +939,9 @@ export type Turn = {
   by?: string; // set when the turn was agent-initiated: who seeded it (the trigger msg's `by`)
   steps: { name: string; done: boolean; result?: unknown }[];
   text?: string;
+  // Set on the entry a note (#262) folds into — its own, keyed by the note's id: a note is
+  // not part of any turn. `user` is empty and `steps` stays empty on such an entry.
+  note?: { by: string; kind: NoteKind; text: string; at: string };
 };
 export function foldTranscript(msgs: Msg[]): Turn[] {
   const byId = new Map<string, Turn>();
@@ -883,6 +950,7 @@ export function foldTranscript(msgs: Msg[]): Turn[] {
     let t = byId.get(m.turnId);
     if (!t) { t = { turnId: m.turnId, user: "", steps: [] }; byId.set(m.turnId, t); order.push(m.turnId); }
     if (m.role === "user") t.user = m.text;
+    else if (m.role === "note") t.note = { by: m.by, kind: m.kind, text: m.text, at: m.at };
     else if (m.role === "trigger") { t.user = m.text; t.by = m.by; } // proactive seed shows as the turn's prompt, still attributed
     else if (m.role === "assistant") {
       for (const tc of m.toolCalls) t.steps.push({ name: tc.name, done: false });
@@ -1222,6 +1290,37 @@ export class AgentSession {
       );
     this.track(turnId, this.chain.then(() => this.withTerminal(turnId, run)));
     return { turnId };
+  }
+
+  // Append an attributed note (#262) to the session's history without running a turn — an
+  // operator's reply during a take-over, traffic a channel observed. The next model call reads
+  // it as labelled context. Serialized with turns (queued behind whatever is running), allowed
+  // while idle or parked. While a turn is parked its tool batch is still owed, so the note is
+  // held and joins the log as soon as the batch is answered — before the resumed turn next
+  // asks the model — keeping the Messages API's rule that nothing sits between a tool_use and
+  // its tool_result. Resolves to the note's id once it is durably recorded (in the log, or held).
+  note(input: { by: string; kind: NoteKind; text: string }): Promise<{ noteId: string }> {
+    for (const field of ["by", "kind", "text"] as const) {
+      if (typeof input[field] !== "string" || input[field].length === 0) {
+        return Promise.reject(new TypeError(`note(): "${field}" must be a non-empty string`));
+      }
+    }
+    const note: NoteMsg = { role: "note", turnId: `n_${mintTurnId().slice(2)}`, by: input.by, kind: input.kind, text: input.text, at: new Date().toISOString() };
+    const store = this.store;
+    const op = this.chain.then(() => {
+      store.tx(() => {
+        if (!owesToolResults(store.messages())) {
+          store.appendMessage(note);
+          return;
+        }
+        const held = (store.getStep(HELD_NOTES) as NoteMsg[] | undefined) ?? [];
+        store.delStep(HELD_NOTES); // putStep is insert-only: replace
+        store.putStep(HELD_NOTES, [...held, note]);
+      });
+      return { noteId: note.turnId };
+    });
+    this.chain = op.catch(() => {}); // a failed note must not break the inbox
+    return op;
   }
 
   // The input this session is parked on, if any — what a host reads to evaluate a { policy }

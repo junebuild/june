@@ -357,6 +357,26 @@ describe("AgentDurableObject", () => {
     }
   });
 
+  test("POST /note appends an attributed note without running a turn; a bad body is a 400 (#262)", async () => {
+    const s = await storage();
+    const calls = { n: 0 };
+    const counting: Model = (msgs, tools, opts) => { calls.n++; return scriptedModel([{ text: "ok", toolCalls: [] }])(msgs, tools, opts); };
+    const agent = new AgentDurableObject({ storage: s }, { name: "scout", model: counting, tools: [] });
+    const post = (body: unknown) => agent.fetch(new Request("https://do/note", { method: "POST", headers: { [SESSION_HEADER]: "k1" }, body: typeof body === "string" ? body : JSON.stringify(body) }));
+
+    const ok = await post({ by: "operator:alice", kind: "operator_reply", text: "Refund ships Friday." });
+    expect(ok.status).toBe(200);
+    const { noteId } = (await ok.json()) as { noteId: string };
+    expect(noteId).toMatch(/^n_/);
+    expect(calls.n).toBe(0); // no turn ran
+    const transcript = (await (await agent.fetch(new Request("https://do/transcript", { headers: { [SESSION_HEADER]: "k1" } }))).json()) as { transcript: unknown[] };
+    expect(transcript.transcript).toEqual([{ turnId: noteId, user: "", steps: [], note: { by: "operator:alice", kind: "operator_reply", text: "Refund ships Friday.", at: expect.any(String) } }]);
+
+    expect((await post({ by: "operator:alice", kind: "operator_reply" })).status).toBe(400); // no text
+    expect((await post("not json")).status).toBe(400);
+    expect((await agent.note({ session: "k1", by: "observer", kind: "observed", text: "seen" })).noteId).toMatch(/^n_/); // the direct API
+  });
+
   test("a reset archives and carries undelivered announcements in ONE transaction (#260)", async () => {
     const s = await storage();
     // Fail the carry's own write — the outbox re-put into the fresh generation — inside the reset.

@@ -23,6 +23,7 @@ import {
   type Answerers,
   type AuthorizeAnswer,
   type InputAnnouncement,
+  type NoteKind,
   type ChannelPolicy,
   type EventSink,
   type TurnEvent,
@@ -566,6 +567,12 @@ export class AgentDurableObject {
     const session = this.resolveSession(input.session);
     return runInScope({ resources, services: this.services }, () => session.start(input));
   }
+  // An attributed note (#262) for custom shells — the direct sibling of the /note route. No
+  // scope needed: a note touches only the store.
+  note(input: { by: string; kind: NoteKind; text: string; session?: string }): Promise<{ noteId: string }> {
+    const { session, ...note } = input;
+    return this.resolveSession(session).note(note);
+  }
   // Session reset (#129) for custom shells — the direct sibling of the /reset route. No
   // scope needed: reset touches only the store (no tools run).
   reset(opts?: { session?: string }): Promise<{ previousSession: string; generation: number }> {
@@ -791,6 +798,28 @@ export class AgentDurableObject {
       } catch (err) {
         // e.g. a store without reset() — a caller-resolvable refusal, not a crash
         return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 409 });
+      }
+    }
+    // An attributed note (#262): body { by, kind, text } → { noteId }. A malformed body is a
+    // 400; a session-key conflict is a 409, like every other route.
+    if (req.method === "POST" && url.pathname.endsWith("/note")) {
+      let input: { by?: unknown; kind?: unknown; text?: unknown };
+      try {
+        input = (await req.json()) as typeof input;
+      } catch {
+        return Response.json({ error: "note: the body must be JSON { by, kind, text }" }, { status: 400 });
+      }
+      let session: AgentSession;
+      try {
+        session = this.resolveSession(key);
+      } catch (err) {
+        return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 409 });
+      }
+      try {
+        return Response.json(await session.note(input as { by: string; kind: string; text: string }));
+      } catch (err) {
+        if (err instanceof TypeError) return Response.json({ error: err.message }, { status: 400 });
+        throw err;
       }
     }
     if (url.pathname.endsWith("/transcript")) {
