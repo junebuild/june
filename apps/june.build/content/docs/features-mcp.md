@@ -120,7 +120,12 @@ didn't match the schema, and a hint points back to `inputSchema`),
 request without an `Origin` header passes: CLIs, SDKs, and server-side
 connectors don't send one. A request with an `Origin` must come from your own
 origin or from one you list. Anything else gets `403`. On `/mcp` the body is a
-JSON-RPC error with no `id`, as the spec requires.
+JSON-RPC error with no `id`, as the spec requires. The check runs before your
+`identity` resolver, so a refused call never reaches it.
+
+A listed origin also gets CORS: its preflight is answered, and responses carry
+`Access-Control-Allow-Origin` with credentials allowed. List only origins you
+trust with a visitor's session.
 
 An origin check alone doesn't stop DNS rebinding. The attacker's domain
 resolves to `127.0.0.1`, so their page is same-origin with your local server,
