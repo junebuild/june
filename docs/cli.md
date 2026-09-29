@@ -68,6 +68,32 @@ reinforcing the agent-native story at low cost.
 Deferred to v0.2 (don't fatten the CLI early): `june add <integration>` (one-shot
 add Better Auth / a resource), `june db migrate` (once migrations land).
 
+### External subcommands (#295)
+
+Any other verb runs `june-<verb>` — the git / cargo model. `june inbox pending --json`
+runs `june-inbox pending --json`, with the arguments exactly as typed (June's parser never
+sees them), the terminal inherited, and its exit code returned. The binary is looked up in
+`node_modules/.bin` from the working directory up (a package manager may hoist it), then
+on `PATH`. Built-in verbs always win: a `june-dev` never shadows `june dev`.
+
+This keeps rule 4 honest: a client that talks to a running app (the operator inbox) ships
+and versions on its own, works for an operator without the app's repository, and runs
+only when named — nothing is scanned or imported in-process. The exec boundary also
+survives the native `june` below. `external.ts` holds a table of first-party external
+verbs (empty until `@junejs/inbox` publishes) for `june help` and for the install hint
+when one is invoked but missing.
+
+Signals: the `june` launcher (`bin.mjs`, Node) runs the Bun CLI as an async child and relays
+SIGTERM / SIGHUP; the Bun CLI relays them to the external command; each mirrors its child's
+exit. SIGINT is caught at both hops but relayed only without a terminal — Ctrl-C in a terminal
+already reaches the whole foreground group, and a second SIGINT would turn a graceful stop
+into a forced one.
+
+On Windows a `.cmd` / `.bat` target (npm's shims) goes through `cmd.exe`, which re-parses
+the line: every argument is quoted and its metacharacters `^`-escaped (twice for a
+`node_modules/.bin` shim), cross-spawn's algorithm, so `&`, `|`, `%` and quotes reach the
+command literally instead of splitting it or running another one.
+
 ## Evolution: JS bin → native single binary
 
 - **v0.1**: `june` is a JS bin running on the Bun/Node host (the supported path).

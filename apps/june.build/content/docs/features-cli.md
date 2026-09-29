@@ -35,6 +35,16 @@ june info         # show routes + the agent surface
   would see at `/mcp` and `/api`, what discovery endpoints are live. If `info` shows it,
   it's served; if it doesn't, it isn't.
 
+## Extending the CLI
+
+Any other command runs `june-<command>`, the way `git` and `cargo` do: `june inbox pending
+--json` runs `june-inbox pending --json`. The binary is found in `node_modules/.bin` (in
+this directory or a parent) or on `PATH`; it gets the arguments exactly as typed and the
+terminal, and its exit code is `june`'s. Built-in commands always win. So a tool that
+talks to a running app ships as its own package, works without the app's repository, and
+runs only when you name it. On Windows, arguments reach an npm `.cmd` shim literally —
+`&`, `|` and `%` are escaped for `cmd.exe`, never interpreted.
+
 ## Canonical names
 
 Scaffold with `create-june`; the packages are `@junejs/core` and

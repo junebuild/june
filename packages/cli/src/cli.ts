@@ -49,6 +49,9 @@ Commands:
   help     Show this help
 
 The app directory defaults to the current directory.
+
+Any other command runs \`june-<command>\` from node_modules/.bin (this directory or
+a parent) or PATH, with the arguments as given — e.g. \`june inbox\` runs june-inbox.
 `;
 
 function appRoot(positional: string[]): string {
@@ -225,11 +228,17 @@ export async function run(argv: string[]): Promise<number | undefined> {
     case "help":
     case "--help":
     case "-h":
-      console.log(HELP);
+      console.log(HELP + (await import("./external")).firstPartyHelp());
       return 0;
-    default:
-      console.error(`june: unknown command "${verb}"\n`);
+    default: {
+      // Not built in: an external subcommand (#295) — `june-<verb>` from node_modules/.bin or
+      // PATH, handed the arguments exactly as typed (june's own parser never sees them).
+      const { findExternal, runExternal, unknownVerbMessage } = await import("./external");
+      const bin = findExternal(verb, process.cwd());
+      if (bin) return runExternal(bin, argv.slice(1));
+      console.error(`${unknownVerbMessage(verb)}\n`);
       console.log(HELP);
       return 1;
+    }
   }
 }
