@@ -1,5 +1,22 @@
 # @junejs/server
 
+## 1.0.0-dev.43
+
+### Patch Changes
+
+- [#305](https://github.com/junebuild/june/pull/305) [`88a2e61`](https://github.com/junebuild/june/commit/88a2e618ee7bb31773a9615788347e4f9b632396) Thanks [@linyiru](https://github.com/linyiru)! - `oxc-parser` moves from `^0.151.0` to `^0.152.0`. A 0.x caret range never crosses a minor, so installs stayed on 0.151. `june build`'s island scan (`parseSync` over `client:*` pages) behaves the same on the newer parser.
+
+- [#313](https://github.com/junebuild/june/pull/313) [`4e16e7c`](https://github.com/junebuild/june/commit/4e16e7cbd2e5fb5ca22bb2fb41916f75ecaf30f4) Thanks [@linyiru](https://github.com/linyiru)! - The built worker now ranks pages and resource routes the way `june dev` does ([#312](https://github.com/junebuild/june/issues/312)). It used to try static pages, then dynamic pages in manifest order, then resource routes, so `[slug]/page.tsx` answered `/feed.xml` ahead of `feed.xml/route.ts`, and a root `[[...slug]]` (Kura) swallowed `/og/*`: 200 in dev, 404 on Workers.
+
+  - Pages and resource routes now resolve from one table ranked the way dev does: `app/` before `.june/routes/`, then per segment static > `[param]` > `[[param]]` > `[...rest]` > `[[...rest]]`, then a page before a resource route at the same pattern. Route kind no longer decides precedence; segment shape does.
+  - The dev matcher orders sibling directories by the same ranking instead of `readdir` order, so `[slug]` answers before `[[slug]]` on every filesystem.
+  - A bracketed name that is not an identifier (`[1]`, `docs[v2`, `[slug].png`) is a static segment in dev and on the worker alike, matched literally.
+  - The manifest gains an optional `generatedRoutes` field (patterns from `.june/routes/`), emitted only when there are some.
+  - Two dev/worker differences remain and are tracked separately: a `(group)` dir is tried before a static sibling in dev ([#314](https://github.com/junebuild/june/issues/314)), and a non-trailing optional segment (`/[[lang]]/about`) matches `/about` only on the worker ([#315](https://github.com/junebuild/june/issues/315)).
+
+- Updated dependencies [[`db3c835`](https://github.com/junebuild/june/commit/db3c83556b730d9b2184e89cd025296c0e42ef55)]:
+  - @junejs/core@0.2.0-dev.64
+
 ## 1.0.0-dev.42
 
 ### Patch Changes
