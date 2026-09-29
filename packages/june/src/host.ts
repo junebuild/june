@@ -42,7 +42,8 @@ export interface JuneHost {
   readonly name: "bun" | "node";
   serve(
     handler: (req: Request) => Promise<Response>,
-    opts: { port: number; earlyHints?: () => string[] },
+    // hostname: the address to bind. Absent = all interfaces (production, containers).
+    opts: { port: number; hostname?: string; earlyHints?: () => string[] },
   ): ServeHandle;
   // Spawn a module in a child runtime (the react-server Flight renderer, which
   // must run under a different module-resolution condition). Phase 4 supersedes
@@ -63,7 +64,7 @@ function bunHost(): JuneHost {
       // idleTimeout 0: Bun's 10s default kills quiet long-lived responses —
       // the dev live-reload SSE most visibly (the browser then reconnects,
       // reads it as a server restart, and reloads the page every 10s).
-      const server = Bun.serve({ port: opts.port, fetch: handler, idleTimeout: 0 });
+      const server = Bun.serve({ port: opts.port, hostname: opts.hostname, fetch: handler, idleTimeout: 0 });
       return { port: server.port ?? opts.port, stop: (force) => void server.stop(force) };
     },
     spawnModule(entry, args, opts) {
@@ -125,7 +126,7 @@ function nodeHost(): JuneHost {
           res.end("Internal Server Error");
         }
       });
-      server.listen(opts.port);
+      server.listen(opts.port, opts.hostname);
       return {
         get port() {
           const addr = server.address();
