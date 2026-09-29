@@ -151,8 +151,10 @@ function routePath(appDir: string, file: string) {
 // Recursive-descent matcher over the app directory. Priority at every level:
 // exact static segment > [param] > [...catchAll], required before optional, ties
 // by name (route-rank.ts — the built worker sorts its route table by the same
-// ranking); route groups `(name)` descend without consuming a URL segment;
-// `_`-prefixed entries never participate.
+// ranking); `_`-prefixed entries never participate. Route groups `(name)` are
+// invisible in the URL, so they are invisible to ranking too: a group's children
+// compete as siblings of the level the group sits in (a grouped `[slug]` never
+// shadows a static sibling), while the group still contributes its layout.
 // Returns the page file, accumulated params (catch-all joins with "/"), and the
 // chain of segments (with their special files) from the app root to the page.
 export async function matchRouteTree(
@@ -162,79 +164,74 @@ export async function matchRouteTree(
 ): Promise<RouteTreeMatch | null> {
   const urlSegments = pathname.split("/").filter(Boolean).map(decodeURIComponent);
 
+  // One URL level = this dir plus every route group under it (groups nest), each
+  // with the segment chain down to it: the dir first, then groups in name order.
+  type Level = { dir: string; entries: DirEntry[]; segments: SegmentMatch[] };
+  async function levelAt(dir: string, chain: SegmentMatch[]): Promise<Level[]> {
+    // Ranked, not readdir order, so the pick is the same on every filesystem.
+    const entries = (await listDir(dir)).sort((a, b) => compareSegments(a.name, b.name));
+    const segments = [...chain, segmentAt(dir, entries)];
+    const levels: Level[] = [{ dir, entries, segments }];
+    for (const e of entries) {
+      if (e.dir && isRouteGroup(e.name)) levels.push(...(await levelAt(join(dir, e.name), segments)));
+    }
+    return levels;
+  }
+
   async function descend(
     dir: string,
     rest: string[],
     params: Record<string, string>,
     chain: SegmentMatch[],
   ): Promise<RouteTreeMatch | null> {
-    // Ranked, not readdir order, so the pick is the same on every filesystem.
-    const entries = (await listDir(dir)).sort((a, b) => compareSegments(a.name, b.name));
-    const segments = [...chain, segmentAt(dir, entries)];
+    const levels = await levelAt(dir, chain);
 
-    // Terminal: URL consumed → find the page (or resource route) in this dir.
+    // Terminal: URL consumed → find the page (or resource route) at this level.
     if (rest.length === 0) {
-      const page =
-        fileFor(entries, dir, "page") ??
-        fileFor(entries, dir, "index") ??
-        fileFor(entries, dir, "route");
-      if (page) return { file: page, params, segments };
-    } else if (!options.pageConvention) {
+      for (const { dir: d, entries, segments } of levels) {
+        const page = fileFor(entries, d, "page") ?? fileFor(entries, d, "index") ?? fileFor(entries, d, "route");
+        if (page) return { file: page, params, segments };
+      }
+    } else if (!options.pageConvention && rest.length === 1) {
       // Legacy flat convention: a non-special leaf FILE names the final segment
       // (examples/rsc: about.tsx → /about). Only valid for the last segment.
-      if (rest.length === 1) {
-        const leaf = fileFor(entries, dir, rest[0]!);
-        if (leaf && !isSpecialFile(leaf) && !isPageFile(leaf)) {
-          return { file: leaf, params, segments };
-        }
+      for (const { dir: d, entries, segments } of levels) {
+        const leaf = fileFor(entries, d, rest[0]!);
+        if (leaf && !isSpecialFile(leaf) && !isPageFile(leaf)) return { file: leaf, params, segments };
       }
     }
 
-    // Route groups: try descending into every (group) without consuming URL.
-    for (const e of entries) {
-      if (!e.dir || !isRouteGroup(e.name)) continue;
-      const hit = await descend(join(dir, e.name), rest, params, segments);
-      if (hit) return hit;
-    }
+    // Every child dir at this level, groups flattened, in rank order. The sort is
+    // stable, so a tie (the same name in two groups) keeps the level order.
+    const children = levels
+      .flatMap((lv) => lv.entries.filter((e) => e.dir && !isRouteGroup(e.name)).map((e) => ({ lv, name: e.name })))
+      .sort((a, b) => compareSegments(a.name, b.name));
+    const into = (c: (typeof children)[number], r: string[], p: Record<string, string>) =>
+      descend(join(c.lv.dir, c.name), r, p, c.lv.segments);
 
     if (rest.length === 0) {
       // Optional segments match ABSENCE too: descend without consuming and
       // without setting the param.
-      for (const e of entries) {
-        if (!e.dir || !(isOptionalDir(e.name) || isOptionalCatchAllDir(e.name))) continue;
-        const hit = await descend(join(dir, e.name), [], params, segments);
+      for (const c of children) {
+        if (!(isOptionalDir(c.name) || isOptionalCatchAllDir(c.name))) continue;
+        const hit = await into(c, [], params);
         if (hit) return hit;
       }
       return null;
     }
     const [head, ...tail] = rest as [string, ...string[]];
 
-    // 1) exact static dir
-    const exact = entries.find((e) => e.dir && e.name === head);
-    if (exact) {
-      const hit = await descend(join(dir, head), tail, params, segments);
-      if (hit) return hit;
-    }
-    // 2) [param] and [[param]] dirs consume one segment
-    for (const e of entries) {
-      if (!e.dir || !(isParamDir(e.name) || isOptionalDir(e.name))) continue;
-      const hit = await descend(
-        join(dir, e.name),
-        tail,
-        { ...params, [paramName(e.name)]: head },
-        segments,
-      );
-      if (hit) return hit;
-    }
-    // 3) [...catchAll] and [[...catchAll]] dirs consume everything remaining
-    for (const e of entries) {
-      if (!e.dir || !(isCatchAllDir(e.name) || isOptionalCatchAllDir(e.name))) continue;
-      const hit = await descend(
-        join(dir, e.name),
-        [],
-        { ...params, [paramName(e.name)]: rest.join("/") },
-        segments,
-      );
+    for (const c of children) {
+      let hit: RouteTreeMatch | null = null;
+      if (isParamDir(c.name) || isOptionalDir(c.name)) {
+        // [param] and [[param]] consume one segment
+        hit = await into(c, tail, { ...params, [paramName(c.name)]: head });
+      } else if (isCatchAllDir(c.name) || isOptionalCatchAllDir(c.name)) {
+        // [...catchAll] and [[...catchAll]] consume everything remaining
+        hit = await into(c, [], { ...params, [paramName(c.name)]: rest.join("/") });
+      } else if (c.name === head) {
+        hit = await into(c, tail, params); // exact static dir
+      }
       if (hit) return hit;
     }
 
