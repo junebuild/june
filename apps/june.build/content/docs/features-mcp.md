@@ -176,8 +176,9 @@ It is the same dispatch as `/mcp`, and the same `run(input, ctx)` gate:
 `requiresPrincipal` holds, and the input is validated against the schema
 before `run`. Every failure has one JSON shape,
 `{ "error": { "code", "message", "hint?" } }`, where `code` is one of
-`invalid_json`, `invalid_input`, `unauthorized`, `unsupported_media_type`,
-`method_not_allowed`, `not_found`, or `execution_error`. Every call needs a JSON
+`invalid_json`, `invalid_input`, `unauthorized`, `forbidden` (the origin check
+above), `unsupported_media_type`, `method_not_allowed`, `not_found`, or
+`execution_error`. Every call needs a JSON
 body with `Content-Type: application/json` (or another `+json` type), so send
 `{}` to a tool that takes no input. That rule means a browser on another origin
 can't reach an action with a plain form post.
