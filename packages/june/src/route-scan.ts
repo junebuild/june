@@ -91,8 +91,9 @@ export async function scanAppRoutes(appRoot: string): Promise<RouteEntry[]> {
 
 // Two route files in ONE tree that resolve to the same URL: `(a)/about/page.tsx`
 // and `(b)/about/page.tsx` (groups vanish from the URL), or `page.tsx` next to
-// `index.tsx`. Pages and resource routes are counted apart — a page beside a
-// route.ts is allowed (the page wins). No winner is defined for the rest: dev
+// `index.tsx`. Pages and resource routes are counted apart — a page and a
+// route.ts at the same path are allowed, in one dir or across groups (the page
+// wins). No winner is defined for the rest: dev
 // would pick by group order and the worker by scan order, so the build refuses
 // them and dev reports them (#316).
 export function routeConflicts(routes: RouteEntry[]): Array<{ path: string; files: string[] }> {
