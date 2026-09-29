@@ -27,6 +27,7 @@ import {
   type AuthorizeAnswer,
   type InputAnnouncement,
 } from "@junejs/core/agent-runtime";
+import { toAnthropicMessages, type AnthropicMessage } from "@junejs/core/agent-models";
 
 // ── an in-memory SessionStore (pure). `app` is the side-effect target a local
 // tool writes via unwrap() — stands in for "any table a tool writes in the same
@@ -1691,6 +1692,122 @@ describe("suspend / resume (P3 — HITL)", () => {
     s.start({ turnId: "t1", userText: "refund please", event: slackEvent });
     await new Promise((r) => setTimeout(r, 20)); // let park→cleanup→resume→continuation settle
     expect(await s.result("t1")).toEqual({ status: "completed", text: "Approved — refund sent." }); // not a spurious failure
+  });
+
+  describe("notes (#262)", () => {
+    // Records the transcript each model call was sent, as the Anthropic adapter renders it.
+    function recording(script: ModelReply[]) {
+      const sent: AnthropicMessage[][] = [];
+      const model: Model = (msgs, tools, opts) => {
+        sent.push(toAnthropicMessages(msgs));
+        return scriptedModel(script)(msgs, tools, opts);
+      };
+      return { model, sent };
+    }
+    const operator = { by: "operator:alice", kind: "operator_reply", text: "I told them the refund ships Friday." } as const;
+
+    test("a note while idle joins the log; the next turn reads it as labelled context before its message", async () => {
+      const { store } = memStore();
+      const { model, sent } = recording([{ text: "Noted.", toolCalls: [] }]);
+      const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), model, [], noRuntime);
+      const { noteId } = await s.note(operator);
+      expect(noteId).toMatch(/^n_[0-9A-Z]{26}$/);
+      expect(store.messages().at(-1)).toMatchObject({ role: "note", turnId: noteId, by: "operator:alice", kind: "operator_reply" });
+
+      await s.turn({ turnId: "t1", userText: "what did we promise?" });
+      // One user message: the note's labelled text, then the correspondent's words.
+      expect(sent[0]).toEqual([{
+        role: "user",
+        content: [
+          { type: "text", text: expect.stringContaining("[Note: operator_reply, by operator:alice") },
+          { type: "text", text: "what did we promise?" },
+        ],
+      }]);
+      expect((sent[0]![0]!.content as { text: string }[])[0]!.text).toContain("not something you said");
+      expect(s.transcript()[0]).toMatchObject({ turnId: noteId, user: "", note: { by: "operator:alice", kind: "operator_reply", text: operator.text } });
+    });
+
+    test("a note while parked is held, then read by the resumed turn right after the tool result — never between tool_use and tool_result", async () => {
+      const { store } = memStore();
+      const { model, sent } = recording(APPROVE_SCRIPT);
+      const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), model, [approveTool()], noRuntime);
+      s.start({ turnId: "t1", userText: "refund please", event: slackEvent });
+      await s.result("t1");
+
+      await s.note(operator);
+      // Held: the log still ends on the unanswered tool_use.
+      expect(store.messages().at(-1)).toMatchObject({ role: "assistant", toolCalls: [{ id: "c1" }] });
+
+      s.resume("t1", "approve-1", true, { by: "U1" });
+      await s.result("t1");
+      // The resumed turn's model call: tool_result FIRST, the note's text AFTER it, in one user message.
+      const last = sent.at(-1)!;
+      expect(last.at(-2)).toMatchObject({ role: "assistant", content: [{ type: "text" }, { type: "tool_use", id: "c1" }] });
+      expect(last.at(-1)).toEqual({
+        role: "user",
+        content: [
+          { type: "tool_result", tool_use_id: "c1", content: JSON.stringify({ approved: true }) },
+          { type: "text", text: expect.stringContaining("[Note: operator_reply") },
+        ],
+      });
+      expect(store.getStep("held-notes")).toBeUndefined(); // released
+    });
+
+    test("a note after a completed turn does not make that turn's redelivery ask the model again", async () => {
+      const { store } = memStore();
+      const calls = { n: 0 };
+      const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), scriptedModel([{ text: "Done.", toolCalls: [] }], calls), [], noRuntime);
+      await s.turn({ turnId: "t1", userText: "hi" });
+      await s.note(operator);
+      // A redelivery of t1 (a restart re-runs the same turnId) replays over the note.
+      const again = new AgentSession("ops", "s1", store, new MemBroadcaster(), scriptedModel([{ text: "Done.", toolCalls: [] }], calls), [], noRuntime);
+      expect(await again.turn({ turnId: "t1", userText: "hi" })).toBe("Done.");
+      expect(calls.n).toBe(1);
+    });
+
+    test("a note waits for a running turn and lands after it", async () => {
+      const { store } = memStore();
+      let release!: () => void;
+      const gate = new Promise<void>((r) => { release = r; });
+      const slow: Model = (msgs) => (async function* () { await gate; yield* replyStream({ text: "Done.", toolCalls: [] }); })() as ReturnType<Model>;
+      const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), slow, [], noRuntime);
+      const turn = s.turn({ turnId: "t1", userText: "hi" });
+      const noted = s.note(operator);
+      await new Promise((r) => setTimeout(r, 5));
+      expect(store.messages().some((m) => m.role === "note")).toBe(false); // queued behind the turn
+      release();
+      await turn;
+      await noted;
+      expect(store.messages().map((m) => m.role)).toEqual(["user", "assistant", "note"]);
+    });
+
+    test("held notes join the log ahead of the next turn's opening once the log is clean", async () => {
+      const { store } = memStore();
+      const { model, sent } = recording([{ text: "Noted.", toolCalls: [] }]);
+      // A clean log with a note still held (what a batch closed without a model call leaves).
+      store.putStep("held-notes", [{ role: "note", turnId: "n_X", by: "operator:alice", kind: "operator_reply", text: "held", at: "2026-09-28T00:00:00.000Z" }]);
+      const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), model, [], noRuntime);
+      await s.turn({ turnId: "t1", userText: "hi" });
+      expect(store.messages().map((m) => m.role)).toEqual(["note", "user", "assistant"]);
+      expect((sent[0]![0]!.content as { text: string }[]).map((b) => b.text)).toEqual([expect.stringContaining("held"), "hi"]);
+    });
+
+    test("reset archives notes, the held ones included", async () => {
+      const { store, archives } = memStore();
+      const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), scriptedModel(APPROVE_SCRIPT), [approveTool()], noRuntime);
+      s.start({ turnId: "t1", userText: "refund please", event: slackEvent });
+      await s.result("t1");
+      await s.note(operator); // held behind the park
+      await s.reset();
+      expect(archives[0]!.steps.get("held-notes")).toMatchObject([{ role: "note", text: operator.text }]);
+      expect(store.getStep("held-notes")).toBeUndefined();
+    });
+
+    test("note() rejects a missing field", async () => {
+      const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), scriptedModel([]), [], noRuntime);
+      await expect(s.note({ by: "", kind: "observed", text: "x" })).rejects.toThrow(/"by" must be a non-empty string/);
+      await expect(s.note({ by: "a", kind: "observed", text: "" })).rejects.toThrow(/"text" must be a non-empty string/);
+    });
   });
 });
 
