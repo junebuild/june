@@ -557,7 +557,12 @@ Where it lives is split by what only the engine can do:
   answerer policies (#261), attributed notes (#262), queued inbound while suspended (#263).
   Slack needs every one of them too.
 - **`@junejs/core/supervise`** (a subpath) holds the contract's types and JSON Schema —
-  types only, which keeps core pure.
+  types only, which keeps core pure. Landed in #297 as contract version 1: `PendingAction`,
+  `Decision`, `TurnTrace` (with `traceTurn`, the pure fold from the log), `PendingPage`, the
+  `pending.*` `InboxEvent` kinds, `SuperviseError`, and one draft 2020-12 schema document
+  (`urn:june:supervise:1`). `Decision` there is approve (optionally with an edited answer) or
+  reject (optionally with a note); take over and hand back act on a thread, so they arrive with
+  the email layer. Additions keep the version: clients ignore unknown fields and event kinds.
 - **`@junejs/server`** implements it: the `pending_actions` index, the supervision actions and
   the change feed. It is host code, and the server already hosts the agent DO and `/mcp`; it
   mounts whenever the app has an agent, so approvals work without installing anything.
