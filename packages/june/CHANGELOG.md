@@ -1,5 +1,12 @@
 # @junejs/server
 
+## 1.0.0-dev.42
+
+### Patch Changes
+
+- Updated dependencies [[`b7d4e55`](https://github.com/junebuild/june/commit/b7d4e5529be316c61e32ff363046b2c57480dfdd)]:
+  - @junejs/core@0.2.0-dev.63
+
 ## 1.0.0-dev.41
 
 ### Patch Changes
