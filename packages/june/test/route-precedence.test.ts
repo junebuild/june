@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { createApp } from "../src/app";
+import { juneBuild } from "../src/build";
 import { buildManifest } from "../src/manifest";
 import { createWorker } from "../src/worker";
 
@@ -46,11 +47,26 @@ const resource = (marker: string, param?: string) =>
   `  return new Response(${JSON.stringify(marker)}${param ? ` + ":" + ctx.params[${JSON.stringify(param)}]` : ""},` +
   ` { headers: { "content-type": "text/plain; charset=utf-8" } });\n}\n`;
 
-// Resolve `path` on both sides and assert they agree, then that the winner is
-// `expected` (a substring of the body).
-async function expectBoth(root: string, cases: Array<[path: string, expected: string]>) {
+type Fetcher = { fetch(r: Request): Promise<Response> };
+
+// Resolve `path` in dev and on the worker and assert they agree, then that the
+// winner is `expected` (a substring of the body). The worker is the in-process
+// one (createWorker over buildManifest) unless `bundle` is set: then it is the
+// worker `juneBuild` EMITS, so the code-generated manifest (generatedRoutes
+// included) is what's under test, not the in-process object.
+async function expectBoth(
+  root: string,
+  cases: Array<[path: string, expected: string]>,
+  opts: { bundle?: boolean } = {},
+) {
   const dev = createApp({ appDir: join(root, "app") });
-  const worker = createWorker(await buildManifest(root));
+  let worker: Fetcher;
+  if (opts.bundle) {
+    const { outFile } = await juneBuild(root);
+    worker = ((await import(outFile)) as { default: Fetcher }).default;
+  } else {
+    worker = createWorker(await buildManifest(root));
+  }
   for (const [path, expected] of cases) {
     const [d, w] = await Promise.all([
       dev.fetch(new Request(ORIGIN + path)),
@@ -180,4 +196,27 @@ describe("route precedence: dev ≡ built worker (#312)", () => {
       ["/og/intro", "og:intro"],
     ]);
   });
+
+  // The two cases above run the in-process manifest. Production runs the entry
+  // build.ts GENERATES, whose generatedRoutes field is emitted separately: drop
+  // or garble it there and only this test notices.
+  test("the emitted worker bundle carries the same precedence (generatedRoutes codegen)", async () => {
+    const root = fixture({
+      "app/[slug]/page.tsx": page("app-slug", "slug"),
+      "app/feed.xml/route.ts": resource("rss"),
+      ".june/routes/search/page.tsx": page("kura-search"),
+      ".june/routes/[[...doc]]/page.tsx": page("kura-doc", "doc"),
+      ".june/routes/og/[slug]/route.ts": resource("og", "slug"),
+    });
+    await expectBoth(
+      root,
+      [
+        ["/search", "app-slug:search"],
+        ["/feed.xml", "rss"],
+        ["/og/intro", "og:intro"],
+        ["/guide/intro", "kura-doc:guide/intro"],
+      ],
+      { bundle: true },
+    );
+  }, 60_000);
 });
