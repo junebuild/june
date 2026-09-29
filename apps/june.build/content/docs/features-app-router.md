@@ -25,8 +25,9 @@ Matching priority at each level is **exact static > `[param]` >
 static directory that dead-ends doesn't shadow a dynamic sibling. A
 `route.ts` resource route ranks by the same segment shape as a page, so
 `feed.xml/route.ts` answers `/feed.xml` ahead of a `[slug]/page.tsx`
-sibling; within one tree, a page wins only over a `route.ts` in the same
-directory. A `(group)` is invisible to ranking as well as to the URL: its
+sibling; within one tree, a page wins only over a `route.ts` at the same
+URL path, even when a `(group)` puts the two in different directories
+(`(b)/feed/page.tsx` beats `(a)/feed/route.ts`). A `(group)` is invisible to ranking as well as to the URL: its
 children compete as siblings of the level it sits in, so
 `(marketing)/[slug]/page.tsx` never shadows a static `about/page.tsx`
 next to it, and the group's layout still wraps whichever of its routes
