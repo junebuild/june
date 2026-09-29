@@ -9,7 +9,7 @@ cd my-app && npm run dev
 ```
 
 ```
-june dev      # dev server with watch + browser live-reload (--no-watch, --port)
+june dev      # dev server with watch + browser live-reload (--no-watch, --port, --host)
 june build    # Cloudflare Workers bundle: dist/worker.js + prerendered assets
 june deploy   # build + wrangler upload (--dry-run validates only)
 june gen      # freeze content/**/*.md → app/_content.ts

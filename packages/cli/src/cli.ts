@@ -40,7 +40,7 @@ const HELP = `june — the agent-native React framework
 Usage: june <command> [dir] [options]
 
 Commands:
-  dev      Start the dev server                 --port <n> --no-watch
+  dev      Start the dev server                 --port <n> --host [addr] --no-watch
   build    Build a workerd-ready bundle         --out <dir>
   deploy   Build + deploy (workers/vercel)      --dry-run --prod --skip-migrate --allow-destructive
   gen      Freeze content + agent module        --check
@@ -118,6 +118,8 @@ export async function run(argv: string[]): Promise<number | undefined> {
       await startDevServer({
         appDir: join(root, "app"),
         port: flags.port ? Number(flags.port) : 3000,
+        // Bound to 127.0.0.1 unless asked: a bare --host opens every interface.
+        ...(flags.host ? { hostname: flags.host === true ? "0.0.0.0" : flags.host } : {}),
       });
       return undefined; // server keeps the process alive
     }

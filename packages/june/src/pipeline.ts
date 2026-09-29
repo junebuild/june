@@ -854,6 +854,9 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
     }
   }
 
+  // Which browsers may call /mcp and /api (#308) — the config's allowlists.
+  const originPolicy = { allowedOrigins: agent.allowedOrigins, allowedHosts: agent.allowedHosts };
+
   async function handleRequest(request: Request): Promise<Response> {
       const url = new URL(request.url);
 
@@ -869,6 +872,7 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
           request,
           { request, ...identity },
           mcpServerIdentity(url.origin, { site: docConfig.site, agent }),
+          originPolicy,
         );
       }
       // The REST projection of the same actions: POST /api/<id> dispatches through
@@ -888,7 +892,7 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
         const actionId = apiActionId(url.pathname);
         if (actionId) {
           const identity = cfg.identity ? await cfg.identity(request) : undefined;
-          return apiHandler(request, actionId, { request, ...identity });
+          return apiHandler(request, actionId, { request, ...identity }, originPolicy);
         }
       }
       // The server card is read cross-origin by browser-based MCP clients; its

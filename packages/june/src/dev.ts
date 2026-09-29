@@ -19,8 +19,21 @@ import { findGlobalCss, processCssCached, invalidateCss } from "./css";
 export type DevServerOptions = {
   appDir: string;
   port?: number;
+  // The address to bind. Default 127.0.0.1: the dev server is reachable from this
+  // machine only (MCP: "when running locally, servers SHOULD bind only to
+  // localhost"). "0.0.0.0" opens it to the LAN — `june dev --host`.
+  hostname?: string;
   host?: JuneHost;
 };
+
+// The Host names a dev server answers /mcp and /api for (#308): localhost and its
+// subdomains, plus IP literals (always allowed — rebinding needs a domain name),
+// plus a named --host and whatever the config allows.
+export function devAllowedHosts(configured: readonly string[] | undefined, hostname: string): string[] {
+  const hosts = new Set(["localhost", ".localhost", ...(configured ?? [])]);
+  if (!/^[\d.]+$|:/.test(hostname)) hosts.add(hostname.toLowerCase()); // a name, not 0.0.0.0 / an IP
+  return [...hosts];
+}
 
 // stop() also shuts the app down (its agent runtime, #317); await it to know that's done.
 export type DevServer = Omit<ServeHandle, "stop"> & { url: string; stop(force?: boolean): Promise<void> };
@@ -28,12 +41,12 @@ export type DevServer = Omit<ServeHandle, "stop"> & { url: string; stop(force?: 
 // A taken default port must not be a dead end in dev — walk forward until a
 // port binds (the Vite convention). Probed with node:net, which both hosts
 // implement, so the host interface stays untouched.
-async function findFreePort(start: number, tries = 20): Promise<number> {
+async function findFreePort(start: number, hostname: string, tries = 20): Promise<number> {
   for (let p = start; p < start + tries; p++) {
     const free = await new Promise<boolean>((resolve) => {
       const probe = createNetServer();
       probe.once("error", () => resolve(false));
-      probe.listen(p, () => probe.close(() => resolve(true)));
+      probe.listen(p, hostname, () => probe.close(() => resolve(true)));
     });
     if (free) return p;
   }
@@ -43,10 +56,13 @@ async function findFreePort(start: number, tries = 20): Promise<number> {
 export async function startDevServer({
   appDir,
   port = 3000,
+  hostname = "127.0.0.1",
   host = defaultHost,
 }: DevServerOptions): Promise<DevServer> {
   await installAsyncContext();
-  const config = await loadJuneConfig(appDir);
+  const loaded = await loadJuneConfig(appDir);
+  // The DNS-rebinding check (#308): a local server is exactly what rebinding targets.
+  const config = { ...loaded, agent: { ...loaded.agent, allowedHosts: devAllowedHosts(loaded.agent?.allowedHosts, hostname) } };
 
   // Apply pending migrations before serving — dev auto-applies the SAFE ones; a
   // destructive one is reported and skipped (the server still starts, but the
@@ -58,7 +74,7 @@ export async function startDevServer({
   const app = createApp({ appDir, config });
   await app.warmup();
 
-  const freePort = await findFreePort(port);
+  const freePort = await findFreePort(port, hostname);
   if (freePort !== port) console.log(`[june] port ${port} is taken → using ${freePort}`);
   port = freePort;
 
@@ -66,6 +82,7 @@ export async function startDevServer({
   // dev/built parity) never sees it. See dev-reload.ts.
   const handle = host.serve(withLiveReload((req) => app.fetch(req)), {
     port,
+    hostname,
     earlyHints: () => app.earlyHints(),
   });
 
@@ -89,7 +106,8 @@ export async function startDevServer({
   }
 
   const url = `http://localhost:${handle.port}`;
-  console.log(`june dev → ${url}  (host: ${host.name})`);
+  const lan = hostname === "127.0.0.1" ? "" : `  · listening on ${hostname}`;
+  console.log(`june dev → ${url}  (host: ${host.name})${lan}`);
   return {
     ...handle,
     url,
