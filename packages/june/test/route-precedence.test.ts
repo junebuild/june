@@ -246,6 +246,61 @@ describe("route precedence: dev ≡ built worker (#312)", () => {
     expect(errors).toContain(message);
   });
 
+  // #315 (Next.js-style, opinionated): an optional or catch-all segment ends the
+  // path. Mid-path, dev 404'd while the worker's regex matched, and neither
+  // matched the SvelteKit reading ([[lang]]/about also answering /about) that
+  // developers and models expect. So the shape is an error, not a behavior.
+  test("an optional or catch-all segment followed by more segments: the build refuses, dev reports", async () => {
+    const root = fixture({
+      "app/[[lang]]/about/page.tsx": page("lang-about"),
+      "app/docs/[...slug]/edit/page.tsx": page("edit"),
+      "app/docs/[[...slug]]/og/route.ts": resource("og"),
+      // a (group) after the segment is not a URL segment, so this one is fine
+      "app/notes/[[tag]]/(list)/page.tsx": page("notes", "tag"),
+      "app/files/[...path]/page.tsx": page("files", "path"),
+    });
+    const message = [
+      "[june] an optional or catch-all segment must be the last segment of a route path — nothing may follow it:",
+      "  /[[lang]]/about: app/[[lang]]/about/page.tsx",
+      "  /docs/[...slug]/edit: app/docs/[...slug]/edit/page.tsx",
+      "  /docs/[[...slug]]/og: app/docs/[[...slug]]/og/route.ts",
+      "  Unlike SvelteKit, June does not skip a [[param]] mid-path. For a locale prefix, set i18n.locales in june.config.ts instead of a [[lang]] directory.",
+    ].join("\n");
+    await expect(buildManifest(root)).rejects.toThrow(message);
+    await expect(juneBuild(root)).rejects.toThrow(message);
+
+    const errors: unknown[] = [];
+    const spy = spyOn(console, "error").mockImplementation((...args) => void errors.push(args[0]));
+    try {
+      await createApp({ appDir: join(root, "app") }).warmup();
+    } finally {
+      spy.mockRestore();
+    }
+    expect(errors).toContain(message);
+  });
+
+  test("a trailing optional or catch-all (a (group) after it included) builds and matches in both", async () => {
+    const root = fixture({
+      "app/notes/[[tag]]/(list)/page.tsx": page("notes", "tag"),
+      "app/files/[...path]/page.tsx": page("files", "path"),
+    });
+    await expectBoth(root, [
+      ["/notes", "notes:-"],
+      ["/notes/x", "notes:x"],
+      ["/files/a/b", "files:a/b"],
+    ]);
+  });
+
+  test("the locale hint is only added when a single [[param]] is the culprit", async () => {
+    const root = fixture({ "app/docs/[...slug]/edit/page.tsx": page("edit") });
+    const err = await buildManifest(root).then(
+      () => null,
+      (e: Error) => e.message,
+    );
+    expect(err).toContain("/docs/[...slug]/edit: app/docs/[...slug]/edit/page.tsx");
+    expect(err).not.toContain("i18n.locales");
+  });
+
   test("the same path in app/ and .june/routes/ is not a conflict: app/ wins", async () => {
     const root = fixture({
       "app/(site)/search/page.tsx": page("app-search"),
