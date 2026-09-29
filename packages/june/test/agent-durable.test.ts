@@ -375,6 +375,7 @@ describe("AgentDurableObject", () => {
     expect((await post({ by: "operator:alice", kind: "operator_reply" })).status).toBe(400); // no text
     expect((await post("not json")).status).toBe(400);
     expect((await agent.note({ session: "k1", by: "observer", kind: "observed", text: "seen" })).noteId).toMatch(/^n_/); // the direct API
+    expect(await (await agent.fetch(new Request("https://do/nope"))).text()).toContain("POST /note"); // the 404 lists it
   });
 
   test("a reset archives and carries undelivered announcements in ONE transaction (#260)", async () => {

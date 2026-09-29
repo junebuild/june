@@ -834,7 +834,7 @@ export class AgentDurableObject {
       }
       return Response.json({ transcript: this.transcript() });
     }
-    return new Response("agent DO — POST /turn, POST /resume, POST /reset, or GET /transcript", { status: 404 });
+    return new Response("agent DO — POST /turn, POST /resume, POST /reset, POST /note, or GET /transcript", { status: 404 });
   }
 }
 
