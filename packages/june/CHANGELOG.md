@@ -1,5 +1,11 @@
 # @junejs/server
 
+## 0.1.2
+
+### Patch Changes
+
+- [`22b8758`](https://github.com/junebuild/june/commit/22b8758e80a35f71c833caa26c76fd2c4da3f496) Thanks [@linyiru](https://github.com/linyiru)! - `withAssets` only consults the `ASSETS` binding for GET/HEAD. It used to pass every request there first, and on workerd that consumes the request body, so on any deployed Workers app with assets a POST that fell through to the pipeline arrived with a used stream: `POST /mcp` answered `-32700 Parse error` and actions lost their input. The Bun dev host has no `ASSETS`, so this only showed up after deploy.
+
 ## 0.1.1
 
 ### Patch Changes
