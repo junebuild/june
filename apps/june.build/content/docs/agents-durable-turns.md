@@ -112,10 +112,13 @@ becomes a remote tool, a plain one stays local.
 Two rules follow from classifying by declaration:
 
 - Declare a tool that awaits anything `async`. A plain function that *returns* a
-  Promise is classified local, and its result is committed immediately — both
-  SQL stores `JSON.stringify` it, and a Promise serializes to `{}`. So the step
-  and the transcript record `{}`, the model reads `{}` as the tool's result, and
-  the real work keeps running outside the transaction with its outcome lost.
+  Promise is classified local, and a local tool must return its result
+  synchronously. The engine fails the turn with a `FatalToolError` rather than
+  commit the Promise as the result. When `run` is async but can't be declared
+  `async`, set `mode: "remote"` on the `Tool` or `defineAction`. That covers a
+  wrapper such as `withRetry(async …)`, a function that returns a client's
+  Promise, and code a bundler compiled below ES2017. `mode: "local"` forces the
+  other way.
 - On the in-memory backend `tx` has no rollback, so exactly-once only holds on
   the SQLite and Durable Object stores.
 
@@ -186,8 +189,8 @@ On Workers the Durable Object's `POST /turn` responds with this stream as
 ## Human in the loop
 
 A tool can stop the turn and wait for a person with `ctx.requestInput({ id,
-prompt, schema?, answerers? })`. Only an **async** tool can park. In a sync tool
-the call throws, because a local tool commits inside a transaction that can't be
+prompt, schema?, answerers? })`. Only a remote tool (an `async` one, or one with
+`mode: "remote"`) can park. In a local tool the call throws, because a local tool commits inside a transaction that can't be
 left open. `defineAction` tools get an `ActionContext`, not the tool context, so
 a parking tool is a plain `Tool`:
 

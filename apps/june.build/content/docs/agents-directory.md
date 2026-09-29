@@ -147,7 +147,20 @@ effect as at-least-once and make it idempotent. See
 
 The engine checks for an `async` function specifically
 (`run.constructor.name === "AsyncFunction"`). A plain function that returns a
-promise is still classified as sync.
+promise is still classified as sync, and the turn fails when it returns one:
+a local tool's result must be synchronous. For a `run` that is async without
+the keyword, such as a wrapper, a function returning a client's promise, or
+downleveled code, declare it with `mode: "remote"`:
+
+```ts
+export default defineAction({
+  id: "lookup_stock",
+  description: "Look up stock",
+  input: { type: "object", properties: { item: { type: "string" } }, required: ["item"] },
+  mode: "remote", // run returns a Promise but isn't an `async` function
+  run: withRetry((input) => inventory.lookup(input.item)),
+});
+```
 
 ### Raw tools and `ctx.requestInput`
 
