@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { ACTION_REGISTRY, defineAction } from "@junejs/core/agent";
 import { actionToTool, assembleAgent, assembleDurable, buildSystemPrompt, defineAgent, parseSkill, readSkillTool, surfacePolicies, type AgentModule, type Channel, type Skill } from "@junejs/core/agent-config";
-import type { Tool, ToolContext } from "@junejs/core/agent-runtime";
+import { toolMode, type Tool, type ToolContext } from "@junejs/core/agent-runtime";
 
 // defineAction self-registers globally; isolate the registry per test.
 let preexisting = new Map(ACTION_REGISTRY);
@@ -45,6 +45,24 @@ describe("actionToTool", () => {
 
     expect(tool.run.constructor.name).toBe("AsyncFunction"); // async ⇒ engine treats it remote (at-least-once)
     expect(await tool.run({ item: "widget" }, {} as never)).toEqual({ item: "widget", inStock: 42 });
+  });
+
+  test("a declared mode wins over how run is written (#233)", async () => {
+    // A plain function returning a Promise — a wrapper, or downleveled code — declared remote.
+    const fetchStock = (item: string) => Promise.resolve({ item, inStock: 7 });
+    const wrapped = defineAction({
+      id: "wrapped_lookup",
+      description: "Look up stock through a wrapper",
+      input: { type: "object", properties: { item: { type: "string" } }, required: ["item"] } as const,
+      mode: "remote",
+      run: (input) => fetchStock(input.item),
+    });
+    const tool = actionToTool(wrapped);
+    expect(toolMode(tool.run, tool.mode)).toBe("remote");
+    expect(await tool.run({ item: "widget" }, {} as never)).toEqual({ item: "widget", inStock: 7 });
+
+    const pinnedLocal = defineAction({ id: "pinned_local", description: "d", input: orderSchema, mode: "local", run: async () => ({}) });
+    expect(toolMode(actionToTool(pinnedLocal).run)).toBe("local");
   });
 });
 

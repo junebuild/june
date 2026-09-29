@@ -121,6 +121,9 @@ export type ActionDefinition<I = unknown, O = unknown> = {
   //     RSC dispatch that doesn't thread an identified ActionContext throws.
   // Mark every action that reads user/tenant-scoped data.
   requiresPrincipal?: boolean;
+  // How an agent turn runs it — see Tool.mode (#233). Absent = an `async` run is "remote"
+  // (at-least-once), anything else "local" (exactly-once, must return synchronously).
+  mode?: "local" | "remote";
 };
 
 // `ActionDefinition` is invariant in its input type (the `run` param), so a
@@ -161,6 +164,7 @@ export function defineAction<const S extends JsonSchema, O>(def: {
   run: (input: InferInput<S>, ctx: ActionContext) => O | Promise<O>;
   annotations?: ToolAnnotations;
   requiresPrincipal?: boolean;
+  mode?: "local" | "remote";
 }): ActionDefinition<InferInput<S>, O> {
   const action = def as unknown as ActionDefinition<InferInput<S>, O>;
   const existing = ACTION_REGISTRY.get(def.id);

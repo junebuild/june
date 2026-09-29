@@ -7,7 +7,7 @@
 // this module is the pure config layer it produces.
 
 import type { AnyAction } from "./agent";
-import type { AuthorizeAnswer, ChannelPolicy, InputAnnouncement, InboundEvent, ProactiveTrigger, Tool, ToolContext, ToolSpec, TurnEvent } from "./agent-runtime";
+import { toolMode, type AuthorizeAnswer, type ChannelPolicy, type InputAnnouncement, type InboundEvent, type ProactiveTrigger, type Tool, type ToolContext, type ToolSpec, type TurnEvent } from "./agent-runtime";
 import type { Principal } from "./context";
 import { connectAll, type Connection, type ConnectionReport } from "./connections";
 
@@ -360,11 +360,12 @@ export type AgentDefinition = {
 // dispatch path. Data stays ambient (`import { db }`), never on ctx. Sync/async
 // is PRESERVED so the engine classifies it right: an async action (the common
 // case — it awaits the ambient db) becomes an at-least-once remote tool; a
-// sync action stays an exactly-once local tool. `requiresPrincipal` rides
-// along so the turn engine hides the tool from anonymous turns.
+// sync action stays an exactly-once local tool; a declared `mode` wins (#233).
+// `requiresPrincipal` rides along so the turn engine hides the tool from
+// anonymous turns.
 export function actionToTool(action: AnyAction): Tool {
   const spec: ToolSpec = { name: action.id, description: action.description, input: action.input };
-  const isAsync = action.run.constructor.name === "AsyncFunction";
+  const isAsync = toolMode(action.run, action.mode) === "remote";
   const toActionCtx = (ctx?: ToolContext) => (ctx?.principal ? { user: ctx.principal } : {});
   const tool: Tool = isAsync
     ? { spec, run: async (input: unknown, ctx?: ToolContext) => action.run(input, toActionCtx(ctx)) }
