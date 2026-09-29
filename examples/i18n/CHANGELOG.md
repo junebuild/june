@@ -1,5 +1,12 @@
 # @june-examples/i18n
 
+## 0.0.5-dev.62
+
+### Patch Changes
+
+- Updated dependencies [[`48de649`](https://github.com/junebuild/june/commit/48de649acc7d91afa803e8d4241130ec38d58b70)]:
+  - @junejs/core@0.2.0-dev.61
+
 ## 0.0.5-dev.61
 
 ### Patch Changes
