@@ -77,6 +77,10 @@ export interface SqlStorage {
 export interface DurableStorage {
   sql: SqlStorage;
   transactionSync<T>(fn: () => T): T;
+  // Schedules the object's alarm() — the watchdog and retry for input-announcement delivery
+  // (#260). Optional so a storage without alarms (a test double) still works; delivery then
+  // waits for the next announcement, settled turn or rebuild.
+  setAlarm?(scheduledTime: number): unknown;
 }
 export interface DurableObjectState {
   storage: DurableStorage;
@@ -152,7 +156,7 @@ export class DoSessionStore implements SessionStore {
   // tables + the generation counter are created lazily, so existing objects stay
   // untouched until their first reset. seq keeps counting across generations (DELETE
   // doesn't reset AUTOINCREMENT), so an archived (generation, seq) stays unique.
-  reset(): number {
+  reset(inTx?: () => void): number {
     return this.storage.transactionSync(() => {
       const sql = this.sql;
       sql.exec(`CREATE TABLE IF NOT EXISTS agent_messages_archive (generation INTEGER, seq INTEGER, body TEXT)`);
@@ -165,6 +169,7 @@ export class DoSessionStore implements SessionStore {
       sql.exec("DELETE FROM agent_steps");
       this.setStatus("new");
       sql.exec("INSERT INTO agent_meta (k, v) VALUES ('generation', ?) ON CONFLICT(k) DO UPDATE SET v = ?", String(generation + 1), String(generation + 1));
+      inTx?.(); // writes into the fresh generation, committed with the archive (#260)
       return generation;
     });
   }
@@ -293,6 +298,9 @@ export class AgentDurableObject {
   private readonly services: unknown;
   private readonly authorizeAnswer?: AuthorizeAnswer;
   private readonly onInputAnnouncement?: (a: InputAnnouncement) => void | Promise<void>;
+  private readonly storage: DurableStorage;
+  // Consecutive failed announcement deliveries (#260) — sets the alarm retry's backoff.
+  private announceFailures = 0;
   private resolveResources(): Promise<Resources> {
     return (this.resourcesOpened ??= Promise.resolve(
       typeof this.resourcesInput === "function" ? this.resourcesInput(this.doEnv) : (this.resourcesInput ?? {}),
@@ -336,6 +344,7 @@ export class AgentDurableObject {
     this.services = def.services;
     this.authorizeAnswer = def.authorizeAnswer;
     this.onInputAnnouncement = def.onInputAnnouncement;
+    this.storage = state.storage;
     const name = def.name ?? "agent";
     // Failure observability (#76): a turn that dies after the fast-ACK has no other
     // observable surface on the edge — the webhook already 200'd and runBackground
@@ -345,6 +354,13 @@ export class AgentDurableObject {
     // over reporting; if IT throws, fall back to the default so nothing goes silent.
     // (InProcEventSink already guards emit against a throwing subscriber.)
     const sink = new InProcEventSink();
+    // Announcement watchdog (#260): a park is committed inside a turn, after turn.started, so
+    // arming here comes before its announcement can commit — whichever path started the turn,
+    // a held turn drained later included. Resume, reset and a held inbound turn arm at their
+    // call sites (armWatchdog).
+    sink.subscribe((e) => {
+      if (e.type === "turn.started") this.armWatchdog();
+    });
     sink.subscribe((e) => {
       if (e.type !== "turn.failed") return;
       // The stack already opens with the message; log it INSTEAD of the message line
@@ -459,11 +475,47 @@ export class AgentDurableObject {
       this.session.onAnnounce = async (a) => {
         await ensureScope();
         const resources = await this.ready();
-        return runInScope({ resources, services: this.services }, () => announce(a));
+        try {
+          await runInScope({ resources, services: this.services }, () => announce(a));
+        } catch (err) {
+          // The engine keeps the announcement and logs; retry it on the alarm, 5 s doubling
+          // to 5 min — a quiet session would otherwise hold it until its next activity.
+          this.scheduleAlarm(Math.min(5_000 * 2 ** this.announceFailures, 300_000));
+          this.announceFailures++;
+          throw err;
+        }
+        this.announceFailures = 0;
       };
       void this.session.flushAnnouncements();
     }
     return this.session;
+  }
+
+  // The Durable Object alarm (#260): delivers input announcements left undelivered — a hook
+  // that failed (its retry), or an object that died between committing one and delivering
+  // it (the watchdog). The shell forwards it — `alarm() { return this.agent.alarm(); }`;
+  // june build's does. Resolves the session like any key-less path (the persisted key),
+  // which rebuilds it after an eviction and flushes. Never rejects: a failed delivery
+  // reschedules itself through onAnnounce.
+  async alarm(): Promise<void> {
+    if (!this.onInputAnnouncement) return;
+    await this.resolveSession().flushAnnouncements();
+  }
+  // A watchdog alarm a minute out, armed BEFORE anything can commit an announcement (a
+  // turn starting, a resume, a reset, a held inbound turn): arming after the commit would
+  // leave exactly the window it exists for. A delivery that succeeds leaves it to find
+  // nothing.
+  private armWatchdog(): void {
+    if (this.onInputAnnouncement) this.scheduleAlarm(60_000);
+  }
+  // One alarm per object: the latest schedule wins.
+  private scheduleAlarm(inMs: number): void {
+    const failed = (err: unknown) => console.error(`[june] agent "${this.name}": could not schedule the announcement alarm — delivery waits for the next announcement, turn or rebuild:`, err);
+    try {
+      Promise.resolve(this.storage.setAlarm?.(Date.now() + inMs)).catch(failed);
+    } catch (err) {
+      failed(err);
+    }
   }
 
   // Render a held turn's reply through its source channel (#263), like /turn?deliver=1 does
@@ -517,7 +569,9 @@ export class AgentDurableObject {
   // Session reset (#129) for custom shells — the direct sibling of the /reset route. No
   // scope needed: reset touches only the store (no tools run).
   reset(opts?: { session?: string }): Promise<{ previousSession: string; generation: number }> {
-    return this.resolveSession(opts?.session).reset();
+    const session = this.resolveSession(opts?.session);
+    this.armWatchdog(); // a reset can retire a park (#260)
+    return session.reset();
   }
   // Read-only: folds the durable log. When an identity exists (live, or persisted from a
   // prior life) the session resolves and caches like any other path. Only a read on a
@@ -585,6 +639,7 @@ export class AgentDurableObject {
         // `hostContext` tells onDequeue how to finish a held turn (#263): a delivered one is
         // rendered through its source channel when it runs, exactly as it would be now.
         // start() itself runs turns a restart left held ahead of this one.
+        this.armWatchdog(); // a held turn commits a "held" announcement without starting (#260)
         started = runInScope({ resources, services: this.services }, () =>
           session.start({ userText, turnId, event, trigger, replace, ifSuspended, hostContext: wantsDeliver ? { deliver: true } : undefined }));
       } catch (err) {
@@ -686,6 +741,7 @@ export class AgentDurableObject {
         console.error(`[june] agent "${this.name}": authorizeAnswer failed for input "${inputId}" of turn ${turnId}:`, err);
         return Response.json({ error: `authorizeAnswer failed: ${err instanceof Error ? err.message : String(err)} — the answer was NOT applied` }, { status: 500 });
       }
+      this.armWatchdog(); // the answer commits a "resolved" announcement (#260)
       try {
         runInScope({ resources, services: this.services }, () => session.resume(turnId, inputId, input, { by, granted }));
       } catch (err) {
@@ -729,6 +785,7 @@ export class AgentDurableObject {
       } catch (err) {
         return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 409 });
       }
+      this.armWatchdog(); // a reset can retire a park (#260)
       try {
         return Response.json(await session.reset());
       } catch (err) {

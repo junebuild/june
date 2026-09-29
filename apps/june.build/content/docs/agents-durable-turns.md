@@ -308,10 +308,24 @@ or `DoAgentDef`). It receives an `InputAnnouncement` for each change to a park:
 
 Delivery is durable, at-least-once, and in order. Each announcement is recorded
 in the same transaction as the state change it reports, in an outbox in the
-session's store, and removed only after the hook returns. A hook that throws
-keeps it for the next flush, and a session rebuilt after a crash delivers what
-the earlier one left. Every announcement carries a unique `id` — dedupe on it.
-Nothing is recorded while no hook is set.
+session's store, and removed only after the hook returns — a reset carries the
+undelivered ones into the new generation inside its own transaction. A session
+rebuilt after a crash delivers what the earlier one left. Every announcement
+carries a unique `id` — dedupe on it. Nothing is recorded while no hook is set.
+
+A hook that throws keeps the announcement, which is retried without waiting for
+the session's next activity, backing off from 5 seconds to 5 minutes:
+
+- On the Durable Object, retries run on the object's alarm. A watchdog alarm a
+  minute out is also armed before anything can record an announcement (a turn
+  starting, a resume, a reset, a held turn), so an object that dies between
+  recording one and delivering it still delivers. A custom shell must forward
+  the alarm: `alarm() { return this.agent.alarm(); }` — `june build`'s does.
+- On the native runtime, retries run on a timer, and `createNativeRuntime`
+  delivers every session's leftovers at startup.
+
+A session with a delivery in flight is not `idle()`, so the native runtime never
+evicts it mid-delivery and hands the same announcement over twice.
 
 On the Durable Object the hook runs in the request scope, so it can write a
 cross-session index with the ambient `db` directly. `session.flushAnnouncements()`

@@ -357,6 +357,123 @@ describe("AgentDurableObject", () => {
     }
   });
 
+  test("a reset archives and carries undelivered announcements in ONE transaction (#260)", async () => {
+    const s = await storage();
+    // Fail the carry's own write — the outbox re-put into the fresh generation — inside the reset.
+    let failCarry = false;
+    const faulty: DurableStorage = {
+      ...s,
+      sql: {
+        exec: (q: string, ...b: unknown[]) => {
+          // `agent_steps (` exactly: the archive's own INSERT INTO agent_steps_archive must pass
+          if (failCarry && q.startsWith("INSERT INTO agent_steps (")) throw new Error("disk full");
+          return s.sql.exec(q, ...b);
+        },
+      } as SqlStorage,
+    };
+    const approve: Tool = {
+      spec: { name: "approve", description: "ask a human", input: { type: "object" } },
+      run: async (_i, ctx) => ({ approved: await ctx.requestInput({ id: "a1", prompt: "Send?", answerers: { user: "U1" } }) }),
+    };
+    const model = scriptedModel([{ text: "drafting", toolCalls: [{ id: "c1", name: "approve", input: {} }] }, { text: "sent", toolCalls: [] }]);
+    const errors = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const agent = new AgentDurableObject({ storage: faulty }, { name: "scout", model, tools: [approve], onInputAnnouncement: () => { throw new Error("index down"); } });
+      for await (const _ of sseTurnEvents(await agent.fetch(new Request("https://do/turn", { method: "POST", body: JSON.stringify({ userText: "refund", turnId: "t1" }) })))) { /* to the park */ }
+
+      failCarry = true;
+      expect((await agent.fetch(new Request("https://do/reset", { method: "POST" }))).ok).toBe(false); // the reset failed
+      failCarry = false;
+
+      // Rolled back as a whole: the park still stands and its undelivered announcement is
+      // still there. Two transactions would have archived the park and lost the announcement.
+      const store = new DoSessionStore(s);
+      expect(store.getStatus()).toBe("suspended");
+      expect(store.getStep("suspended")).toMatchObject({ turnId: "t1" });
+      expect((store.getStep("announce-outbox") as { kind: string }[]).map((a) => a.kind)).toEqual(["parked"]);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  describe("announcement alarms (#260)", () => {
+    const approve: Tool = {
+      spec: { name: "approve", description: "ask a human", input: { type: "object" } },
+      run: async (_i, ctx) => ({ approved: await ctx.requestInput({ id: "a1", prompt: "Send?" }) }),
+    };
+    const model = () => scriptedModel([{ text: "drafting", toolCalls: [{ id: "c1", name: "approve", input: {} }] }, { text: "sent", toolCalls: [] }]);
+    const settle = async () => { for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 2)); };
+    const outbox = (s: DurableStorage) => ((new DoSessionStore(s).getStep("announce-outbox") as { kind: string }[] | undefined) ?? []).map((a) => a.kind);
+
+    test("a failing hook schedules a backoff alarm; alarm() delivers once the hook works", async () => {
+      const s = await storage();
+      const alarms: number[] = [];
+      let up = false;
+      const got: string[] = [];
+      const errors = spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const agent = new AgentDurableObject({ storage: { ...s, setAlarm: (t: number) => { alarms.push(t) } } }, {
+          name: "scout", model: model(), tools: [approve],
+          onInputAnnouncement: (a) => { if (!up) throw new Error("index down"); got.push(a.kind); },
+        });
+        const before = Date.now();
+        for await (const _ of sseTurnEvents(await agent.fetch(new Request("https://do/turn", { method: "POST", body: JSON.stringify({ userText: "refund", turnId: "t1" }) })))) { /* to the park */ }
+        await settle();
+        expect(got).toEqual([]);
+        // the watchdog (armed at turn.started, 60 s), then the failure's first backoff step (5 s)
+        expect(alarms.at(-1)!).toBeGreaterThanOrEqual(before + 5_000);
+        expect(alarms.at(-1)!).toBeLessThan(before + 60_000);
+        expect(outbox(s)).toEqual(["parked"]); // kept
+
+        up = true;
+        await agent.alarm();
+        expect(got).toEqual(["parked"]);
+        expect(outbox(s)).toEqual([]);
+      } finally {
+        errors.mockRestore();
+      }
+    });
+
+    test("the watchdog is armed before a park, an answer or a reset can commit an announcement", async () => {
+      const s = await storage();
+      // The outbox at each setAlarm call: armed after the commit, it would already hold the
+      // announcement it is meant to protect.
+      const armed: string[][] = [];
+      const agent = new AgentDurableObject({ storage: { ...s, setAlarm: () => { armed.push(outbox(s)); } } }, {
+        name: "scout", model: model(), tools: [approve], onInputAnnouncement: () => {},
+      });
+      const post = (path: string, body: unknown) => agent.fetch(new Request(`https://do${path}`, { method: "POST", body: JSON.stringify(body) }));
+      for await (const _ of sseTurnEvents(await post("/turn", { userText: "refund", turnId: "t1" }))) { /* to the park */ }
+      expect(armed[0]).toEqual([]); // park
+      await settle();
+
+      armed.length = 0;
+      for await (const _ of sseTurnEvents(await post("/resume", { turnId: "t1", inputId: "a1", input: true }))) { /* the continuation */ }
+      expect(armed[0]).toEqual([]); // answer
+      await settle();
+
+      armed.length = 0;
+      expect((await post("/reset", {})).status).toBe(200);
+      expect(armed[0]).toEqual([]); // reset
+    });
+
+    test("alarm() alone, in a fresh life, delivers what an earlier life left", async () => {
+      const s = await storage();
+      const errors = spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const before = new AgentDurableObject({ storage: s }, { name: "scout", model: model(), tools: [approve], onInputAnnouncement: () => { throw new Error("index down"); } });
+        for await (const _ of sseTurnEvents(await before.fetch(new Request("https://do/turn", { method: "POST", headers: { [SESSION_HEADER]: "k1" }, body: JSON.stringify({ userText: "refund", turnId: "t1" }) })))) { /* to the park */ }
+        await settle(); // let its failed flush log under the spy
+      } finally {
+        errors.mockRestore();
+      }
+      const got: string[] = [];
+      const after = new AgentDurableObject({ storage: s }, { name: "scout", model: model(), tools: [approve], onInputAnnouncement: (a) => { got.push(`${a.kind}:${a.session}`); } });
+      await after.alarm();
+      expect(got).toEqual(["parked:k1"]);
+    });
+  });
+
   test("/resume: an authorizeAnswer that throws is a 500, not a 409, and the answer is not applied", async () => {
     const s = await storage();
     const approve: Tool = {
