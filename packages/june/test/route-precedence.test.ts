@@ -165,6 +165,48 @@ describe("route precedence: dev ≡ built worker (#312)", () => {
     ]);
   });
 
+  // #314: dev tried every (group) dir before the static sibling, so a grouped
+  // [slug] answered /about. A group is invisible in the URL, so its children
+  // rank as siblings of the level it sits in.
+  test("route groups are transparent to ranking: a grouped [slug] does not shadow a static sibling", async () => {
+    const root = fixture({
+      "app/(g)/[slug]/page.tsx": page("group-slug", "slug"),
+      "app/about/page.tsx": page("about"),
+      // the static side inside a group, the dynamic side outside it
+      "app/[section]/page.tsx": page("section", "section"),
+      "app/(marketing)/pricing/page.tsx": page("pricing"),
+      // nested groups, and a catch-all that must still lose to a grouped [param]
+      "app/docs/(a)/(b)/[page]/page.tsx": page("docs-page", "page"),
+      "app/docs/[...rest]/page.tsx": page("docs-rest", "rest"),
+      // a page at a group's root answers the level itself
+      "app/shop/(store)/page.tsx": page("shop-home"),
+      "app/shop/[[...filters]]/page.tsx": page("shop-filters", "filters"),
+    });
+    await expectBoth(root, [
+      ["/about", "about"],
+      ["/pricing", "pricing"],
+      // (g)/[slug] and [section] tie on rank; the name decides, group or not
+      ["/x", "section:x"],
+      ["/docs/intro", "docs-page:intro"],
+      ["/docs/a/b", "docs-rest:a/b"],
+      ["/shop", "shop-home"],
+      ["/shop/red", "shop-filters:red"],
+    ]);
+  });
+
+  test("a group's layout stays in the chain when its child wins by rank", async () => {
+    const root = fixture({
+      "app/(site)/layout.tsx":
+        "export default function L({ children }) { return <div data-group=\"site\">{children}</div>; }\n",
+      "app/(site)/about/page.tsx": page("about"),
+      "app/[slug]/page.tsx": page("slug", "slug"),
+    });
+    await expectBoth(root, [
+      ["/about", 'data-group="site"'],
+      ["/x", "slug:x"],
+    ]);
+  });
+
   test("a bracketed name that is not a param is a static segment, matched literally", async () => {
     const root = fixture({
       // createWorker compiled `docs[v2` into an unterminated character class and threw.
