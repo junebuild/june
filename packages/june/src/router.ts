@@ -6,6 +6,8 @@ import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 
+import { compareSegments } from "./route-rank";
+
 export type RouteMatch = {
   file: string;
   params: Record<string, string>;
@@ -147,8 +149,10 @@ function routePath(appDir: string, file: string) {
 }
 
 // Recursive-descent matcher over the app directory. Priority at every level:
-// exact static segment > [param] > [...catchAll]; route groups `(name)` descend
-// without consuming a URL segment; `_`-prefixed entries never participate.
+// exact static segment > [param] > [...catchAll], required before optional, ties
+// by name (route-rank.ts — the built worker sorts its route table by the same
+// ranking); route groups `(name)` descend without consuming a URL segment;
+// `_`-prefixed entries never participate.
 // Returns the page file, accumulated params (catch-all joins with "/"), and the
 // chain of segments (with their special files) from the app root to the page.
 export async function matchRouteTree(
@@ -164,7 +168,8 @@ export async function matchRouteTree(
     params: Record<string, string>,
     chain: SegmentMatch[],
   ): Promise<RouteTreeMatch | null> {
-    const entries = await listDir(dir);
+    // Ranked, not readdir order, so the pick is the same on every filesystem.
+    const entries = (await listDir(dir)).sort((a, b) => compareSegments(a.name, b.name));
     const segments = [...chain, segmentAt(dir, entries)];
 
     // Terminal: URL consumed → find the page (or resource route) in this dir.
