@@ -22,7 +22,7 @@ import type { Channel, ChannelFactory } from "@junejs/core/agent-config";
 import { createPipeline, type ExtraHandler, type LayoutComponent, type LoadingComponent, type Resolved, type ResolvedResource, type ResourceHandler } from "./pipeline";
 import { durableAgentSurface, durableChannelSurface, type DurableObjectNamespace } from "./agent-durable";
 import { acceptTarget } from "./negotiate";
-import { compareRoutePatterns } from "./route-rank";
+import { compareRoutePatterns, parseSegment } from "./route-rank";
 import { contentTypeFor, RESERVED_PREFIX, safeRelativePath } from "./static-files";
 
 // The slice of workerd's ExecutionContext the worker threads through: webhook
@@ -105,34 +105,19 @@ function compilePattern(pattern: string): { regex: RegExp; names: string[] } {
   let source = "";
   let allOptional = true;
   for (const seg of pattern.split("/").filter(Boolean)) {
-    const oca = seg.match(/^\[\[\.\.\.(\w+)\]\]$/);
-    if (oca) {
-      names.push(oca[1]!);
-      source += "(?:/(.+))?";
-      continue;
-    }
-    const ca = seg.match(/^\[\.\.\.(\w+)\]$/);
-    if (ca) {
-      names.push(ca[1]!);
-      source += "/(.+)";
+    // Same grammar as the dev matcher (route-rank.ts parseSegment).
+    const { kind, name } = parseSegment(seg);
+    if (name) names.push(name);
+    if (kind === "optionalCatchAll") source += "(?:/(.+))?";
+    else if (kind === "optional") source += "(?:/([^/]+))?";
+    else {
+      if (kind === "catchAll") source += "/(.+)";
+      else if (kind === "param") source += "/([^/]+)";
+      // A static segment matches literally: escape every RegExp metacharacter,
+      // brackets included (`docs[v2`, `[slug].png` are static names).
+      else source += "/" + seg.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       allOptional = false;
-      continue;
     }
-    const op = seg.match(/^\[\[(\w+)\]\]$/);
-    if (op) {
-      names.push(op[1]!);
-      source += "(?:/([^/]+))?";
-      continue;
-    }
-    const p = seg.match(/^\[(\w+)\]$/);
-    if (p) {
-      names.push(p[1]!);
-      source += "/([^/]+)";
-      allOptional = false;
-      continue;
-    }
-    source += "/" + seg.replace(/[.*+?^${}()|\\]/g, "\\$&");
-    allOptional = false;
   }
   if (source === "") return { regex: /^\/$/, names };
   return { regex: new RegExp(allOptional ? `^(?:${source}|/)$` : `^${source}$`), names };
