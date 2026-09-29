@@ -14,9 +14,9 @@ order: "20"
 | `layout.tsx` | wraps everything below this segment ([Layouts](/docs/features-layouts)) |
 | `not-found.tsx` | the 404 page (app root today; per-segment is wired in the router, pipeline next) |
 | `[slug]/` | dynamic segment → `ctx.params.slug` |
-| `[[slug]]/` | optional segment — matches with the param set or absent |
-| `[...path]/` | catch-all → `ctx.params.path` (joined string) |
-| `[[...path]]/` | optional catch-all — also matches zero segments |
+| `[[slug]]/` | optional segment — matches with the param set or absent; last segment only |
+| `[...path]/` | catch-all → `ctx.params.path` (joined string), one or more segments; last segment only |
+| `[[...path]]/` | optional catch-all — also matches zero segments; last segment only |
 | `(group)/` | route group — shapes the filesystem, invisible in the URL |
 | `_anything` | never a route — colocate components, tests, models freely |
 
@@ -34,6 +34,13 @@ next to it, and the group's layout still wraps whichever of its routes
 wins. Two files that land on the same path — `(a)/about/page.tsx` and
 `(b)/about/page.tsx` — have no winner: `june build` fails and names both,
 and `june dev` reports them at startup.
+
+An optional or catch-all segment ends the path, as in Next.js: nothing but
+a `(group)` may follow it. `[[lang]]/about/page.tsx` and
+`docs/[...slug]/edit/page.tsx` fail `june build` (and `june dev` reports
+them). June does not read `[[param]]` the SvelteKit way, skippable
+mid-path; a locale prefix belongs in `i18n.locales` in `june.config.ts`,
+which strips it before routing and hands the page `ctx.locale`.
 
 Routes a framework generates into `.june/routes/` (Kura's docs, search and
 og images) are a second tree, consulted only when nothing in `app/`
