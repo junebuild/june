@@ -194,6 +194,22 @@ describe("route precedence: dev ≡ built worker (#312)", () => {
     ]);
   });
 
+  // (a)/blog and (b)/blog are one URL level: they descend together, so neither
+  // group's dir answers before the other's has been ranked in.
+  test("same-named dirs in different groups rank as one level", async () => {
+    const root = fixture({
+      "app/(a)/feed/route.ts": resource("feed-route"),
+      "app/(b)/feed/page.tsx": page("feed-page"),
+      "app/(a)/blog/[slug]/page.tsx": page("blog-slug", "slug"),
+      "app/(b)/blog/about/page.tsx": page("blog-about"),
+    });
+    await expectBoth(root, [
+      ["/feed", "feed-page"], // a page beats a route.ts, whichever group holds it
+      ["/blog/about", "blog-about"],
+      ["/blog/hi", "blog-slug:hi"],
+    ]);
+  });
+
   test("a group's layout stays in the chain when its child wins by rank", async () => {
     const root = fixture({
       "app/(site)/layout.tsx":
