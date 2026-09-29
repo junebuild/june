@@ -8,7 +8,7 @@
 //
 // Fixtures live UNDER the package so their JSX resolves June's configured jsx
 // runtime, and are written at test time because `.june/` is gitignored.
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -208,6 +208,50 @@ describe("route precedence: dev ≡ built worker (#312)", () => {
       ["/blog/about", "blog-about"],
       ["/blog/hi", "blog-slug:hi"],
     ]);
+  });
+
+  // Same-path files have no defined winner (dev would go by group order, the
+  // worker by scan order), so they are an error, not a tie to break.
+  test("two route files resolving to the same path: the build refuses, dev reports", async () => {
+    const root = fixture({
+      "app/(a)/about/page.tsx": page("a-about"),
+      "app/(b)/about/page.tsx": page("b-about"),
+      "app/(a)/[x]/page.tsx": page("a-x"),
+      "app/(b)/[x]/page.tsx": page("b-x"),
+      "app/(a)/feed/route.ts": resource("a-feed"),
+      "app/(b)/feed/route.ts": resource("b-feed"),
+      "app/home/page.tsx": page("home-page"),
+      "app/home/index.tsx": page("home-index"),
+      // a page next to a route.ts is fine (the page wins), so it is not listed
+      "app/ok/page.tsx": page("ok"),
+      "app/ok/route.ts": resource("ok-route"),
+    });
+    const message = [
+      "[june] more than one route file resolves to the same path — keep one per path:",
+      "  /[x]: app/(a)/[x]/page.tsx, app/(b)/[x]/page.tsx",
+      "  /about: app/(a)/about/page.tsx, app/(b)/about/page.tsx",
+      "  /feed: app/(a)/feed/route.ts, app/(b)/feed/route.ts",
+      "  /home: app/home/index.tsx, app/home/page.tsx",
+    ].join("\n");
+    expect(buildManifest(root)).rejects.toThrow(message);
+    expect(juneBuild(root)).rejects.toThrow(message);
+
+    const errors: unknown[] = [];
+    const spy = spyOn(console, "error").mockImplementation((...args) => void errors.push(args[0]));
+    try {
+      await createApp({ appDir: join(root, "app") }).warmup();
+    } finally {
+      spy.mockRestore();
+    }
+    expect(errors).toContain(message);
+  });
+
+  test("the same path in app/ and .june/routes/ is not a conflict: app/ wins", async () => {
+    const root = fixture({
+      "app/(site)/search/page.tsx": page("app-search"),
+      ".june/routes/search/page.tsx": page("kura-search"),
+    });
+    await expectBoth(root, [["/search", "app-search"]]);
   });
 
   test("a group's layout stays in the chain when its child wins by rank", async () => {
