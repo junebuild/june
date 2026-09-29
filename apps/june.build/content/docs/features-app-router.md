@@ -25,7 +25,16 @@ Matching priority at each level is **exact static > `[param]` >
 static directory that dead-ends doesn't shadow a dynamic sibling. A
 `route.ts` resource route ranks by the same segment shape as a page, so
 `feed.xml/route.ts` answers `/feed.xml` ahead of a `[slug]/page.tsx`
-sibling; a page wins only over a `route.ts` in the same directory.
+sibling; within one tree, a page wins only over a `route.ts` in the same
+directory.
+
+Routes a framework generates into `.june/routes/` (Kura's docs, search and
+og images) are a second tree, consulted only when nothing in `app/`
+matches. So every `app/` route comes first, whatever its shape: an
+`app/[slug]/page.tsx` answers `/search` ahead of a generated
+`search/page.tsx` or `search/route.ts`. That makes `app/` the escape hatch
+for overriding a generated route; the ranking above applies inside each
+tree.
 
 ## One matcher, no drift
 
