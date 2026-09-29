@@ -417,6 +417,10 @@ export class JuneAgentDO extends DurableObject {
   fetch(req: Request): Promise<Response> {
     return this.#agent.fetch(req);
   }
+  // Delivers input announcements left undelivered — a failed hook's retry, or the watchdog (#260).
+  alarm(): Promise<void> {
+    return this.#agent.alarm();
+  }
 }
 `
     : "";

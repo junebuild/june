@@ -49,10 +49,11 @@ function memStore() {
     getStatus() { return status; },
     setStatus(s) { status = s; },
     tx(fn) { return fn(); },
-    reset() {
+    reset(inTx) {
       archives.push({ generation, msgs: msgs.splice(0), steps: new Map(steps) });
       steps.clear();
       status = "new";
+      inTx?.();
       return generation++;
     },
     unwrap<H = unknown>(): H { return app as unknown as H; },

@@ -93,7 +93,7 @@ class SqliteSessionStore implements SessionStore {
   // generation (audit trail — never deleted), clear the live rows, status → "new".
   // Archive tables + the generation counter are created lazily here, so existing
   // databases stay untouched until the first reset.
-  reset(): number {
+  reset(inTx?: () => void): number {
     return this.tx(() => {
       this.db.exec(`CREATE TABLE IF NOT EXISTS agent_messages_archive (session_id TEXT, generation INTEGER, seq INTEGER, body TEXT)`);
       this.db.exec(`CREATE TABLE IF NOT EXISTS agent_steps_archive (session_id TEXT, generation INTEGER, id TEXT, output TEXT)`);
@@ -106,6 +106,7 @@ class SqliteSessionStore implements SessionStore {
       this.db.query("DELETE FROM agent_steps WHERE session_id = ?").run(this.sid);
       this.db.query("INSERT INTO agent_sessions (session_id, status) VALUES (?, 'new') ON CONFLICT(session_id) DO UPDATE SET status = 'new'").run(this.sid);
       this.db.query("INSERT INTO agent_session_generations (session_id, generation) VALUES (?, ?) ON CONFLICT(session_id) DO UPDATE SET generation = ?").run(this.sid, generation + 1, generation + 1);
+      inTx?.(); // writes into the fresh generation, committed with the archive (#260)
       return generation;
     });
   }
@@ -131,15 +132,58 @@ export type AgentDef = {
   onInputAnnouncement?: (a: InputAnnouncement) => void | Promise<void>;
 };
 
+// Retries a failed announcement delivery on a timer (#260): the engine keeps an undelivered
+// announcement and flushes again on the next announcement, settled turn or rebuild — but a
+// session that goes quiet would hold it until then. 5 s doubling to 5 min, per session;
+// unref'd, so a pending retry never holds the process open. Owned by the runtime, so the
+// backoff survives an evicted-and-rebuilt actor.
+class AnnouncementRetry {
+  // Explicit fields (not parameter properties) — keep the shipped source erasable.
+  private readonly flush: (agent: string, id: string) => void;
+  private readonly state = new Map<string, { failures: number; timer?: ReturnType<typeof setTimeout> }>();
+  constructor(flush: (agent: string, id: string) => void) {
+    this.flush = flush;
+  }
+  delivered(key: string) {
+    const s = this.state.get(key);
+    if (s?.timer) clearTimeout(s.timer);
+    this.state.delete(key);
+  }
+  failed(key: string, agent: string, id: string) {
+    const s = this.state.get(key) ?? { failures: 0 };
+    this.state.set(key, s);
+    if (s.timer) return; // one retry pending at a time
+    const delay = Math.min(5_000 * 2 ** s.failures, 300_000);
+    s.failures++;
+    s.timer = setTimeout(() => { s.timer = undefined; this.flush(agent, id); }, delay);
+    (s.timer as { unref?: () => void }).unref?.();
+  }
+}
+
 // Install the announcement hook on a freshly built session and deliver what an earlier life
-// of it recorded but never delivered (#260). The flush never rejects; it logs.
-function wireAnnouncements(session: AgentSession, def: AgentDef): AgentSession {
-  if (def.onInputAnnouncement) {
-    session.onAnnounce = def.onInputAnnouncement;
+// of it recorded but never delivered (#260). The flush never rejects; it logs — and a
+// failure schedules a retry.
+function wireAnnouncements(session: AgentSession, def: AgentDef, retry: AnnouncementRetry): AgentSession {
+  const hook = def.onInputAnnouncement;
+  if (hook) {
+    const key = `${session.agent}:${session.id}`;
+    session.onAnnounce = async (a) => {
+      try {
+        await hook(a);
+      } catch (err) {
+        retry.failed(key, session.agent, session.id);
+        throw err; // the engine keeps the announcement and logs
+      }
+      retry.delivered(key);
+    };
     void session.flushAnnouncements();
   }
   return session;
 }
+
+// The step the engine keeps its announcement outbox under (#260) — read by the native
+// runtime's startup scan. Mirrors ANNOUNCE_OUTBOX in @junejs/core/agent-runtime.
+const ANNOUNCE_OUTBOX_STEP = "announce-outbox";
 
 // The runtime-side def for an assembled AgentDefinition (#173): the tools (channel
 // capability tools and read_skill included), the system prompt (instructions + the
@@ -176,6 +220,8 @@ export class NativeRuntime implements Runtime {
   private actors = new Map<string, { session: AgentSession; sink: InProcEventSink }>();
   private readonly agents: Record<string, AgentDef>;
   private readonly db: SyncSqlite;
+  // Retries failed announcement deliveries (#260), across actor rebuilds.
+  private readonly announceRetry = new AnnouncementRetry((agent, id) => { void this.session(agent, id).flushAnnouncements(); });
   private readonly maxSessions: number;
 
   constructor(agents: Record<string, AgentDef>, db: SyncSqlite, opts: NativeRuntimeOptions = {}) {
@@ -208,7 +254,7 @@ export class NativeRuntime implements Runtime {
     if (!def) throw new Error(`unknown agent: ${agent}`);
     const model = def.instructions ? withSystem(def.model, def.instructions) : def.model;
     const sink = new InProcEventSink();
-    const session = wireAnnouncements(new AgentSession(agent, id, new SqliteSessionStore(this.db, key), sink, model, def.tools, this, def.channelInstructions), def);
+    const session = wireAnnouncements(new AgentSession(agent, id, new SqliteSessionStore(this.db, key), sink, model, def.tools, this, def.channelInstructions), def, this.announceRetry);
     this.evictIdle();
     this.actors.set(key, { session, sink });
     return session;
@@ -216,6 +262,19 @@ export class NativeRuntime implements Runtime {
 
   // Number of memoized actors (observability / tests).
   get sessionCount(): number { return this.actors.size; }
+
+  // Deliver announcements an earlier process recorded but never delivered (#260), without
+  // waiting for their sessions to be used again: build every session whose outbox is not
+  // empty — building one flushes it. The agent and session come from the announcement
+  // itself, not from splitting the store key (an agent name may contain ":"). Called once
+  // by createNativeRuntime; safe to call again.
+  recoverAnnouncements(): void {
+    const rows = this.db.query("SELECT output FROM agent_steps WHERE id = ?").all(ANNOUNCE_OUTBOX_STEP) as { output: string }[];
+    for (const { output } of rows) {
+      const [first] = JSON.parse(output) as InputAnnouncement[];
+      if (first && this.agents[first.agent]?.onInputAnnouncement) this.session(first.agent, first.session);
+    }
+  }
 
   // Drop least recently used idle actors until one more fits under the cap. Runs before
   // the new actor is inserted, so the actor being handed out is never a candidate.
@@ -236,7 +295,9 @@ export async function createNativeRuntime(
   path = ":memory:",
   opts: NativeRuntimeOptions = {},
 ): Promise<NativeRuntime> {
-  return new NativeRuntime(agents, await openLocalSqliteSync(path), opts);
+  const runtime = new NativeRuntime(agents, await openLocalSqliteSync(path), opts);
+  runtime.recoverAnnouncements(); // #260
+  return runtime;
 }
 
 // ── memory backend — in-process, ephemeral (no DB, no disk) ───────────────────
@@ -262,12 +323,13 @@ class MemorySessionStore implements SessionStore {
   getStatus(): string { return this.status; }
   setStatus(s: string) { this.status = s; }
   tx<T>(fn: () => T): T { return fn(); } // no rollback: an in-memory store is not a durability tier
-  reset(): number {
+  reset(inTx?: () => void): number {
     const generation = this.generation++;
     this.archives.push({ generation, msgs: this.msgs, steps: this.steps });
     this.msgs = [];
     this.steps = new Map();
     this.status = "new";
+    inTx?.(); // writes into the fresh generation (#260)
     return generation;
   }
   unwrap<H = unknown>(): H { return undefined as unknown as H; }
@@ -277,6 +339,7 @@ export class MemoryRuntime implements Runtime {
   private actors = new Map<string, AgentSession>();
   private stores = new Map<string, MemorySessionStore>();
   private readonly agents: Record<string, AgentDef>;
+  private readonly announceRetry = new AnnouncementRetry((agent, id) => { void this.session(agent, id).flushAnnouncements(); }); // #260
   constructor(agents: Record<string, AgentDef>) {
     assertCoreRuntimeVersion("MemoryRuntime"); // #94: fail power-on, not mid-turn
     this.agents = agents;
@@ -292,7 +355,7 @@ export class MemoryRuntime implements Runtime {
       this.stores.set(key, store);
       // Same def handling as NativeRuntime: switching backend must not change behavior.
       const model = def.instructions ? withSystem(def.model, def.instructions) : def.model;
-      a = wireAnnouncements(new AgentSession(agent, id, store, new InProcEventSink(), model, def.tools, this, def.channelInstructions), def);
+      a = wireAnnouncements(new AgentSession(agent, id, store, new InProcEventSink(), model, def.tools, this, def.channelInstructions), def, this.announceRetry);
       this.actors.set(key, a);
     }
     return a;

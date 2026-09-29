@@ -31,7 +31,10 @@ import type { Principal } from "./context";
 //     held turns with them.
 // v4: AgentSession.onAnnounce / flushAnnouncements() (#260) — the hosts deliver input
 //     announcements with them.
-export const RUNTIME_API_VERSION = 4;
+// v5: SessionStore.reset(inTx) (#260) — the engine carries undelivered announcements across a
+//     reset inside the reset's own transaction; a host store that ignored the callback would
+//     drop them silently.
+export const RUNTIME_API_VERSION = 5;
 
 // `providerState` (#92) is OPAQUE round-trip state a model adapter may attach to a
 // tool call: some providers require it replayed verbatim (Gemini 3+ returns a
@@ -236,7 +239,10 @@ export interface SessionStore {
   // live tables, set status back to "new", and return the archived generation index
   // (0-based). Must commit atomically (one tx). Optional: a store that doesn't implement
   // it makes AgentSession.reset() fail loudly instead of half-clearing.
-  reset?(): number;
+  // `inTx`, when given, runs inside that same transaction AFTER the archive, so its writes
+  // land in the fresh generation and commit (or roll back) with the reset — the engine
+  // carries undelivered input announcements across it this way (#260).
+  reset?(inTx?: () => void): number;
   // Escape hatch to the underlying storage handle, so a local tool can write its
   // own app table inside `tx` (exactly-once). On native this is the host sync
   // SQLite handle; on an edge target it is ctx.storage.sql.
@@ -1302,6 +1308,9 @@ export class AgentSession {
       this.flushAgain = true;
       return this.flushing;
     }
+    // Nothing to deliver (or nobody to deliver to): stay settled. Every turn ends with a
+    // flush, and a flush in flight keeps the actor from being idle() — an empty one must not.
+    if (!this.onAnnounce || this.outbox().length === 0) return Promise.resolve();
     this.flushAgain = false;
     const pass = this.deliverOutbox()
       .catch((err) => { console.error(`[june] agent "${this.agent}" session "${this.id}": delivering an input announcement failed (kept for the next flush):`, err); })
@@ -1354,18 +1363,18 @@ export class AgentSession {
     this.pendingReset = true;
     const op = this.chain.then(() => {
       // A reset retires the park (#260) — say so — and archives every step, the outbox among
-      // them: carry what is undelivered into the new generation. (The archival and the carry
-      // are two transactions; a crash between them loses those announcements — reconcile the
-      // index against pending(), which after a reset reports no park.)
+      // them: carry what is undelivered into the new generation. The carry runs INSIDE the
+      // reset's transaction (store.reset's callback, after the archive), so the archive and
+      // the announcements commit together: a crash can lose neither without the other.
       const parked = store.getStatus() === "suspended" ? (store.getStep("suspended") as SuspendedCheckpoint | undefined) : undefined;
       const undelivered = this.outbox();
-      const generation = store.reset!();
-      if (this.onAnnounce && (parked || undelivered.length)) {
-        store.tx(() => {
-          if (undelivered.length) store.putStep(ANNOUNCE_OUTBOX, undelivered);
-          if (parked) recordAnnouncement(store, announcement({ agent: this.agent, sessionId: this.id }, { kind: "resolved", turnId: parked.turnId, inputId: parked.request.id, outcome: "retired" }));
-        });
-      }
+      const carry = this.onAnnounce && (parked || undelivered.length)
+        ? () => {
+            if (undelivered.length) store.putStep(ANNOUNCE_OUTBOX, undelivered);
+            if (parked) recordAnnouncement(store, announcement({ agent: this.agent, sessionId: this.id }, { kind: "resolved", turnId: parked.turnId, inputId: parked.request.id, outcome: "retired" }));
+          }
+        : undefined;
+      const generation = store.reset!(carry);
       if (parked) this.sink.emit({ type: "input.resolved", turnId: parked.turnId, inputId: parked.request.id, outcome: "retired" });
       void this.flushAnnouncements();
       return { previousSession: `${this.id}#g${generation}`, generation };
@@ -1436,11 +1445,13 @@ export class AgentSession {
   snapshot() { return { transcript: this.transcript(), status: this.store.getStatus() }; }
 
   // True when no in-memory state of this actor matters any more: no turn running or
-  // queued, no reset pending. Everything else (transcript, steps, a suspended park) is in
-  // the store, so a host may drop an idle actor and rebuild it on the next use (#174).
+  // queued, no reset pending, no announcement flush in flight (#260 — the entry being
+  // delivered is still in the outbox, so a rebuilt actor would hand it to the hook again,
+  // in parallel). Everything else (transcript, steps, a suspended park) is in the store, so
+  // a host may drop an idle actor and rebuild it on the next use (#174).
   // Live subscribers are held by the host's sink, not here — the host checks those.
   idle(): boolean {
-    return this.running.size === 0 && !this.pendingReset;
+    return this.running.size === 0 && !this.pendingReset && this.flushing === undefined;
   }
 }
 
