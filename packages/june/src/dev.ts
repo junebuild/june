@@ -29,6 +29,13 @@ export type DevServerOptions = {
 // The Host names a dev server answers /mcp and /api for (#308): localhost and its
 // subdomains, plus IP literals (always allowed — rebinding needs a domain name),
 // plus a named --host and whatever the config allows.
+// The URL to print and return: localhost for loopback or a wildcard bind (it
+// answers there too), else the one address bound — nothing listens on loopback then.
+export function devUrl(hostname: string, port: number): string {
+  if (["127.0.0.1", "0.0.0.0", "::", "localhost"].includes(hostname)) return `http://localhost:${port}`;
+  return `http://${hostname.includes(":") ? `[${hostname}]` : hostname}:${port}`;
+}
+
 export function devAllowedHosts(configured: readonly string[] | undefined, hostname: string): string[] {
   const hosts = new Set(["localhost", ".localhost", ...(configured ?? [])]);
   if (!/^[\d.]+$|:/.test(hostname)) hosts.add(hostname.toLowerCase()); // a name, not 0.0.0.0 / an IP
@@ -105,7 +112,7 @@ export async function startDevServer({
     void processCssCached(appDir).catch(() => {});
   }
 
-  const url = `http://localhost:${handle.port}`;
+  const url = devUrl(hostname, handle.port);
   const lan = hostname === "127.0.0.1" ? "" : `  · listening on ${hostname}`;
   console.log(`june dev → ${url}  (host: ${host.name})${lan}`);
   return {
