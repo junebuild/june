@@ -58,10 +58,14 @@ describe("actionToTool", () => {
       run: (input) => fetchStock(input.item),
     });
     const tool = actionToTool(wrapped);
-    expect(toolMode(tool.run, tool.mode)).toBe("remote");
+    expect(tool.mode).toBe("remote"); // declared on the Tool, not only implied by an async wrapper
+    // Simulate a consumer bundle downleveling the wrapper below ES2017: a plain function.
+    const downleveled: typeof tool.run = (input, ctx) => tool.run(input, ctx);
+    expect(toolMode(downleveled, tool.mode)).toBe("remote");
     expect(await tool.run({ item: "widget" }, {} as never)).toEqual({ item: "widget", inStock: 7 });
 
     const pinnedLocal = defineAction({ id: "pinned_local", description: "d", input: orderSchema, mode: "local", run: async () => ({}) });
+    expect(actionToTool(pinnedLocal).mode).toBe("local");
     expect(toolMode(actionToTool(pinnedLocal).run)).toBe("local");
   });
 });
