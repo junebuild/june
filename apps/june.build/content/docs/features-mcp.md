@@ -114,6 +114,35 @@ didn't match the schema, and a hint points back to `inputSchema`),
 `unauthorized` (a `requiresPrincipal` tool called without a principal), or
 `execution_error` (the action threw).
 
+## Browsers and DNS rebinding
+
+`/mcp` and `/api/<id>` run actions, so they check which browser is calling. A
+request without an `Origin` header passes: CLIs, SDKs, and server-side
+connectors don't send one. A request with an `Origin` must come from your own
+origin or from one you list. Anything else gets `403`. On `/mcp` the body is a
+JSON-RPC error with no `id`, as the spec requires.
+
+An origin check alone doesn't stop DNS rebinding. The attacker's domain
+resolves to `127.0.0.1`, so their page is same-origin with your local server,
+and only the `Host` header gives it away. That's why `june dev` also checks
+`Host`: it answers these endpoints for `localhost`, its subdomains, and IP
+addresses, and nothing else. It also binds `127.0.0.1` only. Pass `--host` to
+open it to your network, for example to test from a phone.
+
+```ts
+defineJune({
+  agent: {
+    // A separate web app that calls the API from the browser.
+    allowedOrigins: ["https://app.example.com"],
+    // Reach `june dev` through a tunnel. Production checks Host only when set.
+    allowedHosts: [".trycloudflare.com"],
+  },
+});
+```
+
+An `allowedHosts` entry is a host name without scheme or port. A leading dot
+also matches its subdomains. A malformed entry in either list fails the build.
+
 ## Try it on this site
 
 This site's search is an action. Call it the way an agent would:

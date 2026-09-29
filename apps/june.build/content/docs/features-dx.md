@@ -47,6 +47,8 @@ that exists to turn things off.
 edits regenerate the frozen manifest first, so the next request is fresh.
 A restart is the *honest* reload on a JS host (a module cache can't be
 selectively invalidated without lying about state); `--no-watch` opts out.
+The dev server listens on `127.0.0.1` only. `--host` opens it to your network
+(`--host 192.168.1.20` binds one address), which is how you test from a phone.
 
 The browser follows by itself: every dev page holds an SSE connection to the
 dev server, and the restart *is* the signal — the connection drops, the page
