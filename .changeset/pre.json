@@ -94,6 +94,7 @@
     "store-hydration-race",
     "streaming-model-p2",
     "string-tool-result",
+    "supervise-contract",
     "test-helpers",
     "theme-color",
     "tool-errors-to-model",
