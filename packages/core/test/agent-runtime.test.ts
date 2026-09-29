@@ -1680,7 +1680,7 @@ describe("suspend / resume (P3 — HITL)", () => {
     const { turnId } = s.start({ turnId: "t1", userText: "go" });
     const r = await s.result(turnId);
     expect(r).toMatchObject({ status: "failed" });
-    expect((r as Extract<typeof r, { status: "failed" }>).error.message).toMatch(/runs sync .* only an async tool can park/);
+    expect((r as Extract<typeof r, { status: "failed" }>).error.message).toMatch(/runs local — only a remote tool \(an async run, or mode: "remote"\) can park/);
   });
 
   test("resume synchronously from an input.requested observer keeps the continuation (running-map race)", async () => {

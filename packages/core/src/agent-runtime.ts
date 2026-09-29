@@ -897,7 +897,7 @@ async function toolStep(
     // and synchronously — an async requestInput would hand it a rejected Promise it can't await,
     // which the local-tool tx would then commit as its checkpointed result.
     requestInput: (req) => {
-      if (!remote) throw new FatalToolError(`requestInput: tool "${call.name}" runs sync (local) — only an async tool can park the turn awaiting input`);
+      if (!remote) throw new FatalToolError(`requestInput: tool "${call.name}" runs local — only a remote tool (an async run, or mode: "remote") can park the turn awaiting input`);
       const answer = store.getStep(`input:${opts.turnId}:${req.id}`);
       if (answer !== undefined) return Promise.resolve((answer as { input: unknown }).input);
       throw new SuspendSignal({ id: req.id, prompt: req.prompt, schema: req.schema, answerers: req.answerers ?? defaultAnswerers(env.event, req.id) }, call.id);

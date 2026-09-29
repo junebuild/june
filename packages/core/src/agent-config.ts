@@ -365,11 +365,13 @@ export type AgentDefinition = {
 // anonymous turns.
 export function actionToTool(action: AnyAction): Tool {
   const spec: ToolSpec = { name: action.id, description: action.description, input: action.input };
-  const isAsync = toolMode(action.run, action.mode) === "remote";
+  const mode = toolMode(action.run, action.mode);
   const toActionCtx = (ctx?: ToolContext) => (ctx?.principal ? { user: ctx.principal } : {});
-  const tool: Tool = isAsync
-    ? { spec, run: async (input: unknown, ctx?: ToolContext) => action.run(input, toActionCtx(ctx)) }
-    : { spec, run: (input: unknown, ctx?: ToolContext) => action.run(input, toActionCtx(ctx)) };
+  // The resolved mode rides on the Tool too: the wrapper's own `async` is not enough, since a
+  // consumer bundling below ES2017 turns it into a plain function the engine would call local.
+  const tool: Tool = mode === "remote"
+    ? { spec, mode, run: async (input: unknown, ctx?: ToolContext) => action.run(input, toActionCtx(ctx)) }
+    : { spec, mode, run: (input: unknown, ctx?: ToolContext) => action.run(input, toActionCtx(ctx)) };
   if (action.requiresPrincipal) tool.requiresPrincipal = true;
   return tool;
 }
