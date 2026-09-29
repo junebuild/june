@@ -30,7 +30,9 @@ directory. A `(group)` is invisible to ranking as well as to the URL: its
 children compete as siblings of the level it sits in, so
 `(marketing)/[slug]/page.tsx` never shadows a static `about/page.tsx`
 next to it, and the group's layout still wraps whichever of its routes
-wins.
+wins. Two files that land on the same path — `(a)/about/page.tsx` and
+`(b)/about/page.tsx` — have no winner: `june build` fails and names both,
+and `june dev` reports them at startup.
 
 Routes a framework generates into `.june/routes/` (Kura's docs, search and
 og images) are a second tree, consulted only when nothing in `app/`
