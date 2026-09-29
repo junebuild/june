@@ -57,6 +57,7 @@
     "global-turn-ids",
     "heading-ids",
     "held-inbound-turns",
+    "input-announcement-hardening",
     "input-announcements",
     "isolate-scoped-resources",
     "llms-sections",
