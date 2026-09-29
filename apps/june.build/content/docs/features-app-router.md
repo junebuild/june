@@ -21,8 +21,11 @@ order: "20"
 | `_anything` | never a route — colocate components, tests, models freely |
 
 Matching priority at each level is **exact static > `[param]` >
-`[...catchAll]`**, with backtracking: a static directory that dead-ends
-doesn't shadow a dynamic sibling.
+`[[param]]` > `[...catchAll]` > `[[...catchAll]]`**, with backtracking: a
+static directory that dead-ends doesn't shadow a dynamic sibling. A
+`route.ts` resource route ranks by the same segment shape as a page, so
+`feed.xml/route.ts` answers `/feed.xml` ahead of a `[slug]/page.tsx`
+sibling; a page wins only over a `route.ts` in the same directory.
 
 ## One matcher, no drift
 
