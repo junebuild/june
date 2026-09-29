@@ -1,5 +1,13 @@
 # @junejs/server
 
+## 1.0.0-dev.44
+
+### Patch Changes
+
+- [#316](https://github.com/junebuild/june/pull/316) [`c893a9a`](https://github.com/junebuild/june/commit/c893a9ac19f6d90af5d37345039559b753dc0f68) Thanks [@linyiru](https://github.com/linyiru)! - `june dev` no longer lets a route group shadow a static sibling ([#314](https://github.com/junebuild/june/issues/314)). The dev matcher tried every `(group)` dir before the exact static dir at the same level, so `app/(g)/[slug]/page.tsx` answered `/about` ahead of `app/about/page.tsx`, while the built worker (which strips groups from patterns) served `about`. A group's children now rank as siblings of the level the group sits in, same-named dirs in different groups (`(a)/blog`, `(b)/blog`) descend together, and a page beats a `route.ts` at the same path whichever group holds it — so dev picks the same route as the built worker. A group's layout still wraps the route that wins.
+
+  Two route files that resolve to the same path in one tree (`(a)/about/page.tsx` and `(b)/about/page.tsx`, or `page.tsx` next to `index.tsx`) have no defined winner, so `june build` now fails and lists them, and `june dev` reports them at startup. A page next to a `route.ts` is still allowed (the page wins), and a path in both `app/` and `.june/routes/` still resolves to `app/`.
+
 ## 1.0.0-dev.43
 
 ### Patch Changes
