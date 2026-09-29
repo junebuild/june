@@ -13,6 +13,8 @@
 import { ACTION_REGISTRY, actionDispatchCode, invokeAction } from "./agent";
 import { MCP_CARD_TEXT_MAX, siteShortName, type AgentConfig, type SiteConfig } from "./config";
 import type { ActionContext } from "./context";
+import { originRejection, type OriginPolicy } from "./origin-policy";
+export { originRejection, type OriginPolicy } from "./origin-policy";
 import {
   decodeHeaderValue,
   ERROR,
@@ -375,11 +377,20 @@ const isModern = (message: unknown): message is Rpc =>
 // version is served statelessly as 2026-07-28; anything else follows the 2025
 // Streamable HTTP rules (initialize → tools/*). JSON responses only — the spec
 // lets the server choose JSON per request.
+//
+// `policy` says which browsers may call (see ./origin-policy): a refused
+// Origin or Host gets the spec's 403, whatever the method or era.
 export async function mcpHandler(
   request: Request,
   ctx: ActionContext = {},
   server: McpServerIdentity = mcpServerIdentity(new URL(request.url).origin),
+  policy: OriginPolicy = {},
 ): Promise<Response> {
+  const refused = originRejection(request, policy);
+  if (refused !== undefined) {
+    // "The HTTP response body MAY comprise a JSON-RPC error response that has no id."
+    return Response.json({ jsonrpc: "2.0", error: { code: ERROR.forbidden, message: `Forbidden: ${refused}` } }, { status: 403 });
+  }
   if (request.method !== "POST") {
     return new Response("MCP endpoint — POST JSON-RPC (Streamable HTTP)", {
       status: 405,
