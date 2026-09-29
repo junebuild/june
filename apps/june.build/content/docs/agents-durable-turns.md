@@ -320,7 +320,7 @@ the session's next activity, backing off from 5 seconds to 5 minutes:
   minute out is also armed before anything can record an announcement (a turn
   starting, a resume, a reset, a held turn), so an object that dies between
   recording one and delivering it still delivers. A custom shell must forward
-  the alarm: `alarm() { return this.agent.alarm(); }` — `june build`'s does.
+  the alarm: `alarm() { return this.#agent.alarm(); }` — `june build`'s does.
 - On the native runtime, retries run on a timer, and `createNativeRuntime`
   delivers every session's leftovers at startup.
 
