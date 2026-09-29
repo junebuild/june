@@ -150,6 +150,12 @@
       "types": "./dist/channels.d.ts",
       "default": "./dist/channels.js"
     },
+    "./supervise": {
+      "source": "./src/supervise.ts",
+      "bun": "./src/supervise.ts",
+      "types": "./dist/supervise.d.ts",
+      "default": "./dist/supervise.js"
+    },
     "./connections": {
       "source": "./src/connections.ts",
       "bun": "./src/connections.ts",
@@ -235,6 +241,8 @@
   "devDependencies": {
     "@modelcontextprotocol/client": "2.1.0",
     "@modelcontextprotocol/server": "2.1.0",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^2.1.1",
     "zod": "^4"
   }
 }
