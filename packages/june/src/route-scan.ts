@@ -8,6 +8,8 @@ import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { basename, join, relative, sep } from "node:path";
 
+import { parseSegment } from "./route-rank";
+
 // The segment layout CHAIN root→leaf: every directory level (route groups
 // included) may contribute a layout.* that wraps routes below it.
 export type RouteEntry = {
@@ -78,8 +80,8 @@ export async function scanAppRoutes(appRoot: string): Promise<RouteEntry[]> {
   const juneRoutesDir = join(appRoot, ".june", "routes");
   const appRoutes = await scanRoutes(appDir);
   const frameworkRoutes = existsSync(juneRoutesDir) ? await scanRoutes(juneRoutesDir) : [];
-  const conflicts = [...routeConflicts(appRoutes), ...routeConflicts(frameworkRoutes)];
-  if (conflicts.length) throw new Error(formatRouteConflicts(conflicts, appRoot));
+  const problems = routeProblems([appRoutes, frameworkRoutes], appRoot);
+  if (problems) throw new Error(problems);
   const appPaths = new Set(appRoutes.map((r) => r.path));
   const generated = frameworkRoutes
     .filter((r) => !appPaths.has(r.path))
@@ -110,9 +112,50 @@ export function routeConflicts(routes: RouteEntry[]): Array<{ path: string; file
     .sort((a, b) => a.path.localeCompare(b.path));
 }
 
-export function formatRouteConflicts(conflicts: Array<{ path: string; files: string[] }>, appRoot: string): string {
-  const lines = conflicts.map(
-    (c) => `  ${c.path}: ${c.files.map((f) => relative(appRoot, f).split(sep).join("/")).join(", ")}`,
-  );
-  return `[june] more than one route file resolves to the same path — keep one per path:\n${lines.join("\n")}`;
+// An optional or catch-all segment ([[x]], [...x], [[...x]]) must END the route
+// path (#315, the Next.js rule, opinionated). Mid-path there is no behavior to
+// keep: dev never matched past a catch-all nor skipped a mid-path [[x]], while
+// the worker's regex did both. A (group) after it is not a URL segment, so it's
+// fine. Returns the offending routes, path-sorted.
+const ENDS_PATH = new Set(["optional", "catchAll", "optionalCatchAll"]);
+const beforeLast = (path: string) => path.split("/").filter(Boolean).slice(0, -1).map((s) => parseSegment(s).kind);
+
+export function misplacedSegments(routes: RouteEntry[]): RouteEntry[] {
+  return routes
+    .filter((r) => beforeLast(r.path).some((k) => ENDS_PATH.has(k)))
+    .sort((a, b) => a.path.localeCompare(b.path) || a.file.localeCompare(b.file));
+}
+
+// Every route-table problem the build refuses and dev reports, as one message
+// (null when there are none). Each tree (app/, .june/routes/) is checked on its
+// own: the same path in both is not a conflict — app/ wins.
+export function routeProblems(trees: RouteEntry[][], appRoot: string): string | null {
+  const rel = (f: string) => relative(appRoot, f).split(sep).join("/");
+  const sections: string[] = [];
+
+  const conflicts = trees.flatMap(routeConflicts);
+  if (conflicts.length) {
+    sections.push(
+      "[june] more than one route file resolves to the same path — keep one per path:\n" +
+        conflicts.map((c) => `  ${c.path}: ${c.files.map(rel).join(", ")}`).join("\n"),
+    );
+  }
+
+  const misplaced = trees.flatMap(misplacedSegments);
+  if (misplaced.length) {
+    const lines = misplaced.map((r) => `  ${r.path}: ${rel(r.file)}`);
+    // Developers (and models) read [[x]] the SvelteKit way, skippable anywhere;
+    // say so when a single optional is the culprit, and point at the real tool.
+    if (misplaced.some((r) => beforeLast(r.path).includes("optional"))) {
+      lines.push(
+        "  Unlike SvelteKit, June does not skip a [[param]] mid-path. For a locale prefix, set i18n.locales in june.config.ts instead of a [[lang]] directory.",
+      );
+    }
+    sections.push(
+      "[june] an optional or catch-all segment must be the last segment of a route path — nothing may follow it:\n" +
+        lines.join("\n"),
+    );
+  }
+
+  return sections.length ? sections.join("\n") : null;
 }
