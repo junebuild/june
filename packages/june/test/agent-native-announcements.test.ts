@@ -7,8 +7,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { InputAnnouncement, Model, ModelDelta, Tool } from "@junejs/core/agent-runtime";
-import { createNativeRuntime, type AgentDef } from "../src/agent-native";
+import type { InputAnnouncement, Model, ModelDelta, Runtime, Tool } from "@junejs/core/agent-runtime";
+import { createNativeRuntime, MemoryRuntime, NativeRuntime, type AgentDef } from "../src/agent-native";
+import { openLocalSqliteSync } from "../src/sqlite-driver";
 
 // Parks on the first call (a tool that asks for input), answers on the continuation.
 const model: Model = (msgs) =>
@@ -37,9 +38,19 @@ async function microtasks(n = 50) {
   for (let i = 0; i < n; i++) await Promise.resolve();
 }
 
+// Every runtime a test builds is closed before its db dir is removed (#317): a runtime left
+// open keeps its failed-delivery retry timer, which fires seconds later — in some other
+// test file — against the deleted database.
+const runtimes: Array<{ close(): void }> = [];
+const open = async (...args: Parameters<typeof createNativeRuntime>) => {
+  const rt = await createNativeRuntime(...args);
+  runtimes.push(rt);
+  return rt;
+};
 const dirs: string[] = [];
 afterEach(() => {
   jest.useRealTimers();
+  while (runtimes.length) runtimes.pop()!.close();
   while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true });
 });
 const dbPath = () => {
@@ -48,7 +59,7 @@ const dbPath = () => {
   return join(dir, "agents.db");
 };
 
-async function park(rt: Awaited<ReturnType<typeof createNativeRuntime>>, agent: string, id: string) {
+async function park(rt: Runtime, agent: string, id: string) {
   const s = rt.session(agent, id);
   s.start({ turnId: "t1", userText: "ship it" });
   await s.result("t1");
@@ -60,7 +71,7 @@ describe("input announcements on the native runtime (#260)", () => {
     try {
       let up = false;
       const got: string[] = [];
-      const rt = await createNativeRuntime({ ops: def((a) => { if (!up) throw new Error("index down"); got.push(a.kind); }) });
+      const rt = await open({ ops: def((a) => { if (!up) throw new Error("index down"); got.push(a.kind); }) });
       jest.useFakeTimers();
       await park(rt, "ops", "s1");
       await microtasks();
@@ -82,21 +93,21 @@ describe("input announcements on the native runtime (#260)", () => {
     const path = dbPath();
     const errors = spyOn(console, "error").mockImplementation(() => {});
     try {
-      const down = await createNativeRuntime({ ops: def(() => { throw new Error("index down"); }) }, path);
+      const down = await open({ ops: def(() => { throw new Error("index down"); }) }, path);
       await park(down, "ops", "s1");
       await waitFor(() => errors.mock.calls.some((c) => String(c[0]).includes("delivering an input announcement failed")));
     } finally {
       errors.mockRestore();
     }
     const got: InputAnnouncement[] = [];
-    await createNativeRuntime({ ops: def((a) => { got.push(a); }) }, path);
+    await open({ ops: def((a) => { got.push(a); }) }, path);
     await waitFor(() => got.length === 1);
     expect(got[0]).toMatchObject({ kind: "parked", agent: "ops", session: "s1", turnId: "t1" });
   });
 
   test("the startup scan finds an agent whose name contains ':' and skips agents without a hook", async () => {
     const path = dbPath();
-    const first = await createNativeRuntime({ "ops:v2": def(() => { throw new Error("down"); }), other: def(() => { throw new Error("down"); }) }, path);
+    const first = await open({ "ops:v2": def(() => { throw new Error("down"); }), other: def(() => { throw new Error("down"); }) }, path);
     const errors = spyOn(console, "error").mockImplementation(() => {});
     try {
       await park(first, "ops:v2", "s1");
@@ -106,7 +117,7 @@ describe("input announcements on the native runtime (#260)", () => {
       errors.mockRestore();
     }
     const got: string[] = [];
-    const next = await createNativeRuntime({ "ops:v2": def((a) => { got.push(`${a.agent}/${a.session}`); }), other: def() }, path);
+    const next = await open({ "ops:v2": def((a) => { got.push(`${a.agent}/${a.session}`); }), other: def() }, path);
     await waitFor(() => got.length === 1);
     expect(got).toEqual(["ops:v2/s1"]);
     expect(next.sessionCount).toBe(1); // only the agent with a hook was built
@@ -116,7 +127,7 @@ describe("input announcements on the native runtime (#260)", () => {
     const seen: string[] = [];
     let release!: () => void;
     const gate = new Promise<void>((r) => { release = r; });
-    const rt = await createNativeRuntime({ ops: def(async (a) => { seen.push(a.id); await gate; }) }, ":memory:", { maxSessions: 1 });
+    const rt = await open({ ops: def(async (a) => { seen.push(a.id); await gate; }) }, ":memory:", { maxSessions: 1 });
     await park(rt, "ops", "s1");
     await waitFor(() => seen.length === 1); // the hook holds the announcement, not yet removed
     rt.session("ops", "s2"); // would evict s1 if it counted as idle
@@ -124,5 +135,56 @@ describe("input announcements on the native runtime (#260)", () => {
     release();
     await new Promise((r) => setTimeout(r, 20));
     expect(seen).toHaveLength(1);
+  });
+});
+
+describe("closing a runtime (#317)", () => {
+  test("close() cancels a pending retry on the native runtime", async () => {
+    const errors = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      let calls = 0;
+      const rt = await open({ ops: def(() => { calls++; throw new Error("index down"); }) });
+      jest.useFakeTimers();
+      await park(rt, "ops", "s1");
+      await microtasks();
+      expect(calls).toBe(1); // failed, a retry is pending
+      rt.close();
+      jest.advanceTimersByTime(300_000);
+      await microtasks();
+      expect(calls).toBe(1); // the retry never ran
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  test("close() cancels a pending retry on the memory runtime", async () => {
+    const errors = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      let calls = 0;
+      const rt = new MemoryRuntime({ ops: def(() => { calls++; throw new Error("index down"); }) });
+      jest.useFakeTimers();
+      await park(rt, "ops", "s1");
+      await microtasks();
+      expect(calls).toBe(1);
+      rt.close();
+      jest.advanceTimersByTime(300_000);
+      await microtasks();
+      expect(calls).toBe(1);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  test("close() closes the db createNativeRuntime opened, never one passed in", async () => {
+    const owned = await createNativeRuntime({ ops: def() }, dbPath());
+    owned.close();
+    owned.close(); // twice is fine
+    expect(() => owned.recoverAnnouncements()).toThrow(); // its handle is closed
+
+    const db = await openLocalSqliteSync(dbPath());
+    const borrowed = new NativeRuntime({ ops: def() }, db);
+    borrowed.close();
+    expect(db.query("SELECT 1 AS one").get()).toEqual({ one: 1 }); // still the caller's, still open
+    db.close();
   });
 });

@@ -141,6 +141,7 @@ class AnnouncementRetry {
   // Explicit fields (not parameter properties) — keep the shipped source erasable.
   private readonly flush: (agent: string, id: string) => void;
   private readonly state = new Map<string, { failures: number; timer?: ReturnType<typeof setTimeout> }>();
+  private stopped = false;
   constructor(flush: (agent: string, id: string) => void) {
     this.flush = flush;
   }
@@ -150,6 +151,7 @@ class AnnouncementRetry {
     this.state.delete(key);
   }
   failed(key: string, agent: string, id: string) {
+    if (this.stopped) return; // the runtime is closed: nothing retries into it
     const s = this.state.get(key) ?? { failures: 0 };
     this.state.set(key, s);
     if (s.timer) return; // one retry pending at a time
@@ -158,7 +160,19 @@ class AnnouncementRetry {
     s.timer = setTimeout(() => { s.timer = undefined; this.flush(agent, id); }, delay);
     (s.timer as { unref?: () => void }).unref?.();
   }
+  // Cancel every pending retry, for good (#317): unref only keeps a timer from holding the
+  // process open — it still fires while the process lives, into a runtime (and a db) that
+  // is gone.
+  stop() {
+    this.stopped = true;
+    for (const s of this.state.values()) if (s.timer) clearTimeout(s.timer);
+    this.state.clear();
+  }
 }
+
+// SQLite handles a runtime opened itself (createNativeRuntime), so close() closes those and
+// never one a caller passed in.
+const ownedDbs = new WeakSet<SyncSqlite>();
 
 // Install the announcement hook on a freshly built session and deliver what an earlier life
 // of it recorded but never delivered (#260). The flush never rejects; it logs — and a
@@ -276,6 +290,20 @@ export class NativeRuntime implements Runtime {
     }
   }
 
+  // Shut the runtime down (#317): cancel pending announcement retries and drop the actors;
+  // close the SQLite handle if createNativeRuntime opened it (a db passed to the constructor
+  // stays the caller's). Call it before discarding a runtime in a process that keeps
+  // running — a test suite, a host that swaps runtimes — or a retry fires later against a
+  // closed or deleted database. Safe to call twice.
+  close(): void {
+    this.announceRetry.stop();
+    this.actors.clear();
+    if (ownedDbs.has(this.db)) {
+      ownedDbs.delete(this.db);
+      this.db.close();
+    }
+  }
+
   // Drop least recently used idle actors until one more fits under the cap. Runs before
   // the new actor is inserted, so the actor being handed out is never a candidate.
   private evictIdle() {
@@ -295,7 +323,9 @@ export async function createNativeRuntime(
   path = ":memory:",
   opts: NativeRuntimeOptions = {},
 ): Promise<NativeRuntime> {
-  const runtime = new NativeRuntime(agents, await openLocalSqliteSync(path), opts);
+  const db = await openLocalSqliteSync(path);
+  ownedDbs.add(db);
+  const runtime = new NativeRuntime(agents, db, opts);
   runtime.recoverAnnouncements(); // #260
   return runtime;
 }
@@ -359,6 +389,13 @@ export class MemoryRuntime implements Runtime {
       this.actors.set(key, a);
     }
     return a;
+  }
+  // Shut the runtime down (#317): cancel pending announcement retries. The state is the
+  // actors themselves, so they are dropped too. Safe to call twice.
+  close(): void {
+    this.announceRetry.stop();
+    this.actors.clear();
+    this.stores.clear();
   }
 }
 
