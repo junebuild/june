@@ -13,6 +13,7 @@
 import type { CacheStoreFactory } from "./cache";
 import type { I18nConfig } from "./i18n";
 import type { JuneDb, ResourceConfig } from "./resources";
+import { validateOriginPolicy } from "./origin-policy";
 
 // The DURABLE conversational agent (the agent/ directory). Distinct from the
 // discoverability flags above, which make a web app agent-readable; this mounts a
@@ -109,6 +110,16 @@ export type AgentConfig = {
   mcp: boolean; // the /mcp execution endpoint
   api: boolean; // the REST projection: POST /api/<action id> + /openapi.json
   webmcp: boolean; // inject WebMCP tool registrations into the view
+  // Which browsers may call /mcp and /api/<id> (#308; see OriginPolicy in ./origin-policy).
+  //   allowedOrigins — origins allowed besides the site's own, e.g. a separate web app
+  //                    that calls the API from the browser. A request without an
+  //                    Origin (CLI, SDK, server-side connector) always passes.
+  //   allowedHosts   — when set, the Host must be an IP literal or match an entry
+  //                    ("example.com", or ".example.com" with its subdomains): the
+  //                    DNS-rebinding check. `june dev` adds "localhost" and ".localhost";
+  //                    add a tunnel's name (".trycloudflare.com") to reach dev through it.
+  allowedOrigins?: string[];
+  allowedHosts?: string[];
   // Optional llms.txt customization for apps built ON June (e.g. the Kura docs framework):
   //   framework — replaces the built-in "canonical names" block so a meta-framework can point
   //               agents at ITS scaffold/scope instead of June's.
@@ -375,6 +386,7 @@ export function validateMcpServer(server: AgentConfig["mcpServer"]): void {
 
 export function resolveAgent(partial?: AgentConfigInput): AgentConfig {
   validateMcpServer(partial?.mcpServer);
+  validateOriginPolicy(partial ?? {});
   const runtime: AgentRuntimeConfig = {
     ...DEFAULT_RUNTIME,
     ...(partial?.runtime ?? {}),

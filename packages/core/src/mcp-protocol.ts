@@ -33,6 +33,9 @@ export const ERROR = {
   methodNotFound: -32601,
   invalidParams: -32602,
   internal: -32603,
+  // Implementation-defined (JSON-RPC's -32000…-32099 server range): a request the
+  // origin policy refused, sent with HTTP 403 — as the official TypeScript SDK does.
+  forbidden: -32000,
   headerMismatch: -32020,
   missingClientCapability: -32021,
   unsupportedProtocolVersion: -32022,

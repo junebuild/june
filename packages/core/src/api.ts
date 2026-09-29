@@ -10,6 +10,7 @@
 
 import { ACTION_REGISTRY, actionDispatchCode, invokeAction, type AnyAction } from "./agent";
 import type { ActionContext } from "./context";
+import { originRejection, type OriginPolicy } from "./origin-policy";
 
 export const API_PREFIX = "/api/";
 
@@ -117,6 +118,7 @@ export type ApiErrorCode =
   | "invalid_json"
   | "invalid_input"
   | "unauthorized"
+  | "forbidden"
   | "execution_error";
 
 // Every failure on this surface has ONE shape, so an agent can branch on `code`
@@ -135,10 +137,16 @@ const schemaHint = (id: string) => `The input schema is operationId "${id}" in /
 
 // ctx (principal + resources) comes from the host, exactly as for /mcp — so a
 // requiresPrincipal action is gated the same way on both surfaces.
-export async function apiHandler(request: Request, id: string, ctx: ActionContext = {}): Promise<Response> {
+export async function apiHandler(request: Request, id: string, ctx: ActionContext = {}, policy: OriginPolicy = {}): Promise<Response> {
   // A HEAD response carries the same status + headers as GET, never a body.
   const reply = (res: Response) =>
     request.method === "HEAD" ? new Response(null, { status: res.status, headers: res.headers }) : res;
+
+  // The JSON content-type rule below stops a cross-site form POST, but not DNS
+  // rebinding, which makes the attacker's page same-origin — the same policy
+  // as /mcp (#308).
+  const refused = originRejection(request, policy);
+  if (refused !== undefined) return reply(apiError(403, "forbidden", refused));
 
   // Resolve first: 405 (and its pointer at the schema) is only for an action
   // /openapi.json actually lists.
