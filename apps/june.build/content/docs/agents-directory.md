@@ -189,8 +189,9 @@ const approveRefund: Tool = {
 export default approveRefund;
 ```
 
-`requestInput` works only from an `async` tool. A sync tool commits in one
-transaction and can't park, so calling it there throws. A raw tool isn't a
+`requestInput` works only from a remote tool: an `async` run, or one with
+`mode: "remote"`. A local tool commits in one transaction and can't park, so
+calling it there throws. A raw tool isn't a
 `defineAction`, so it isn't in the action registry: it doesn't appear on
 `/mcp` or as a server action. Parking and resuming are covered in
 [Durable turns](/docs/agents-durable-turns).
