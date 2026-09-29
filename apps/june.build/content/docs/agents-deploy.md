@@ -198,6 +198,7 @@ The object's HTTP surface:
 | `POST /turn?replace=1` | cancel unfinished turns first (combines with the above) |
 | `POST /resume` | apply a human's answer and stream the continuation (403 unauthorized, 409 stale); `?deliver=1` renders through `deliverResume()` |
 | `POST /reset` | archive the history; returns `{ previousSession, generation }` |
+| `POST /note` | append an attributed note to the history (`{ by, kind, text }` → `{ noteId }`, 400 on a missing field) |
 | `GET /transcript` | the folded transcript |
 
 `POST /turn` also accepts `ifSuspended` in its body. The default `"reject"` 409s
