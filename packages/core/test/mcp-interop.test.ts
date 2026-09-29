@@ -1,5 +1,5 @@
 // mcp-interop.test.ts — June's MCP client and server against the OFFICIAL MCP
-// TypeScript SDK v2 (@modelcontextprotocol/client + server 2.1.0), in-process:
+// TypeScript SDK v2 (@modelcontextprotocol/client + server 2.2.0), in-process:
 // the SDK's client transport takes a `fetch`, and its handlers are
 // Request → Response, so no port is opened.
 //
