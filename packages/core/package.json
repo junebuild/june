@@ -239,8 +239,8 @@
     "directory": "packages/core"
   },
   "devDependencies": {
-    "@modelcontextprotocol/client": "2.1.0",
-    "@modelcontextprotocol/server": "2.1.0",
+    "@modelcontextprotocol/client": "2.2.0",
+    "@modelcontextprotocol/server": "2.2.0",
     "ajv": "^8.20.0",
     "ajv-formats": "^2.1.1",
     "zod": "^4"
