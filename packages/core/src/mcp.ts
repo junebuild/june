@@ -13,7 +13,7 @@
 import { ACTION_REGISTRY, actionDispatchCode, invokeAction } from "./agent";
 import { MCP_CARD_TEXT_MAX, siteShortName, type AgentConfig, type SiteConfig } from "./config";
 import type { ActionContext } from "./context";
-import { originRejection, type OriginPolicy } from "./origin-policy";
+import { corsHeaders, originRejection, preflightResponse, withCors, type OriginPolicy } from "./origin-policy";
 export { originRejection, type OriginPolicy } from "./origin-policy";
 import {
   decodeHeaderValue,
@@ -379,7 +379,8 @@ const isModern = (message: unknown): message is Rpc =>
 // lets the server choose JSON per request.
 //
 // `policy` says which browsers may call (see ./origin-policy): a refused
-// Origin or Host gets the spec's 403, whatever the method or era.
+// Origin or Host gets the spec's 403, whatever the method or era; an allowed
+// cross-origin one gets CORS (its preflight answered here).
 export async function mcpHandler(
   request: Request,
   ctx: ActionContext = {},
@@ -387,10 +388,21 @@ export async function mcpHandler(
   policy: OriginPolicy = {},
 ): Promise<Response> {
   const refused = originRejection(request, policy);
-  if (refused !== undefined) {
-    // "The HTTP response body MAY comprise a JSON-RPC error response that has no id."
-    return Response.json({ jsonrpc: "2.0", error: { code: ERROR.forbidden, message: `Forbidden: ${refused}` } }, { status: 403 });
-  }
+  if (refused !== undefined) return mcpForbidden(refused);
+  const cors = corsHeaders(request, policy);
+  if (cors && request.method === "OPTIONS") return preflightResponse(request, cors);
+  const response = await serveMcp(request, ctx, server);
+  return cors ? withCors(response, cors) : response;
+}
+
+// The spec's answer to a refused Origin: 403, and "the HTTP response body MAY
+// comprise a JSON-RPC error response that has no id". Exported so a host that
+// checks the policy before resolving identity answers with the same body.
+export function mcpForbidden(reason: string): Response {
+  return Response.json({ jsonrpc: "2.0", error: { code: ERROR.forbidden, message: `Forbidden: ${reason}` } }, { status: 403 });
+}
+
+async function serveMcp(request: Request, ctx: ActionContext, server: McpServerIdentity): Promise<Response> {
   if (request.method !== "POST") {
     return new Response("MCP endpoint — POST JSON-RPC (Streamable HTTP)", {
       status: 405,

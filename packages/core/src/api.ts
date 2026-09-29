@@ -10,7 +10,7 @@
 
 import { ACTION_REGISTRY, actionDispatchCode, invokeAction, type AnyAction } from "./agent";
 import type { ActionContext } from "./context";
-import { originRejection, type OriginPolicy } from "./origin-policy";
+import { corsHeaders, originRejection, preflightResponse, withCors, type OriginPolicy } from "./origin-policy";
 
 export const API_PREFIX = "/api/";
 
@@ -138,15 +138,28 @@ const schemaHint = (id: string) => `The input schema is operationId "${id}" in /
 // ctx (principal + resources) comes from the host, exactly as for /mcp — so a
 // requiresPrincipal action is gated the same way on both surfaces.
 export async function apiHandler(request: Request, id: string, ctx: ActionContext = {}, policy: OriginPolicy = {}): Promise<Response> {
+  // The JSON content-type rule in serveApi stops a cross-site form POST, but
+  // not DNS rebinding, which makes the attacker's page same-origin — the same
+  // policy as /mcp (#308). An allowed cross-origin caller gets CORS.
+  const refused = originRejection(request, policy);
+  if (refused !== undefined) return apiForbidden(request, refused);
+  const cors = corsHeaders(request, policy);
+  if (cors && request.method === "OPTIONS") return preflightResponse(request, cors);
+  const response = await serveApi(request, id, ctx);
+  return cors ? withCors(response, cors) : response;
+}
+
+// 403 for a request the origin policy refused. Exported so a host that checks
+// the policy before resolving identity answers with the same body.
+export function apiForbidden(request: Request, reason: string): Response {
+  const res = apiError(403, "forbidden", reason);
+  return request.method === "HEAD" ? new Response(null, { status: res.status, headers: res.headers }) : res;
+}
+
+async function serveApi(request: Request, id: string, ctx: ActionContext): Promise<Response> {
   // A HEAD response carries the same status + headers as GET, never a body.
   const reply = (res: Response) =>
     request.method === "HEAD" ? new Response(null, { status: res.status, headers: res.headers }) : res;
-
-  // The JSON content-type rule below stops a cross-site form POST, but not DNS
-  // rebinding, which makes the attacker's page same-origin — the same policy
-  // as /mcp (#308).
-  const refused = originRejection(request, policy);
-  if (refused !== undefined) return reply(apiError(403, "forbidden", refused));
 
   // Resolve first: 405 (and its pointer at the schema) is only for an action
   // /openapi.json actually lists.
@@ -302,6 +315,7 @@ const ERROR_CODES: ApiErrorCode[] = [
   "invalid_json",
   "invalid_input",
   "unauthorized",
+  "forbidden",
   "execution_error",
 ];
 
@@ -332,6 +346,7 @@ export function openApiDocument(
       "400": errorResponse("The body is not JSON (invalid_json) or does not match the input schema (invalid_input)."),
       "415": errorResponse("The request is not Content-Type: application/json (unsupported_media_type)."),
       ...(action.requiresPrincipal ? { "401": errorResponse("The action requires an authenticated caller (unauthorized).") } : {}),
+      "403": errorResponse("A browser on an origin or host the site doesn't allow made the call (forbidden)."),
       "500": errorResponse("The action threw (execution_error)."),
     };
     paths[apiActionPath(action.id)] = {
