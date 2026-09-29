@@ -48,9 +48,10 @@ import {
   siteSkill,
   sitemapXml,
 } from "@junejs/core/discovery";
-import { mcpHandler, mcpServerIdentity, mcpTools } from "@junejs/core/mcp";
+import { mcpForbidden, mcpHandler, mcpServerIdentity, mcpTools, originRejection } from "@junejs/core/mcp";
 import {
   apiActionId,
+  apiForbidden,
   apiHandler,
   apiNamespaceResponse,
   isApiNamespace,
@@ -867,6 +868,10 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
         // ambient `db` is the SAME resource the UI uses, and — via cfg.identity —
         // the same principal: requiresPrincipal actions and per-call connection
         // auth are live on this surface. ctx carries identity only — not resources.
+        // The origin policy first: a refused browser call must not reach the
+        // identity resolver (its I/O, or a throw that would turn 403 into 500).
+        const refused = originRejection(request, originPolicy);
+        if (refused !== undefined) return mcpForbidden(refused);
         const identity = cfg.identity ? await cfg.identity(request) : undefined;
         return mcpHandler(
           request,
@@ -891,6 +896,8 @@ export function createPipeline(cfg: PipelineConfig): Pipeline {
         }
         const actionId = apiActionId(url.pathname);
         if (actionId) {
+          const refused = originRejection(request, originPolicy);
+          if (refused !== undefined) return apiForbidden(request, refused);
           const identity = cfg.identity ? await cfg.identity(request) : undefined;
           return apiHandler(request, actionId, { request, ...identity }, originPolicy);
         }

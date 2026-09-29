@@ -101,6 +101,23 @@ describe("/mcp mount identity (cfg.identity)", () => {
     expect(json.result.isError).toBe(true);
     expect(json.result.content[0]!.text).toContain("requires an authenticated principal");
   });
+
+  test("a refused Origin is answered before identity resolves: 403, never 500, no resolver I/O (#308)", async () => {
+    let resolved = 0;
+    const p = await mcpPipeline(() => {
+      resolved++;
+      throw new Error("session store down");
+    });
+    const foreign = (path: string, body: string) =>
+      new Request(`http://x${path}`, { method: "POST", headers: { "content-type": "application/json", origin: "https://evil.example" }, body });
+    const mcp = await p.fetch(foreign("/mcp", JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} })));
+    expect(mcp.status).toBe(403);
+    expect(await mcp.json()).toEqual({ jsonrpc: "2.0", error: { code: -32000, message: expect.stringContaining("is not allowed") } });
+    const api = await p.fetch(foreign(`/api/${gatedId}`, "{}"));
+    expect(api.status).toBe(403);
+    expect(((await api.json()) as { error: { code: string } }).error.code).toBe("forbidden");
+    expect(resolved).toBe(0);
+  });
 });
 
 // ── REST projection: POST /api/<id> + /openapi.json on the same pipeline ──

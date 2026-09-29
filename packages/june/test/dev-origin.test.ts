@@ -5,7 +5,7 @@ import { connect } from "node:net";
 import { networkInterfaces } from "node:os";
 import { fileURLToPath } from "node:url";
 
-import { devAllowedHosts, startDevServer, type DevServer } from "../src/dev";
+import { devAllowedHosts, devUrl, startDevServer, type DevServer } from "../src/dev";
 
 const ROOT = fileURLToPath(new URL("../../../examples/basic", import.meta.url));
 const discover = JSON.stringify({
@@ -48,6 +48,17 @@ describe("june dev and DNS rebinding", () => {
       socket.once("error", () => resolve(false));
     });
     expect(reached).toBe(false);
+  });
+});
+
+describe("devUrl", () => {
+  test("localhost for loopback and wildcard binds; the bound address otherwise", () => {
+    expect(devUrl("127.0.0.1", 3000)).toBe("http://localhost:3000");
+    expect(devUrl("0.0.0.0", 3000)).toBe("http://localhost:3000");
+    expect(devUrl("::", 3000)).toBe("http://localhost:3000");
+    expect(devUrl("192.168.1.20", 3000)).toBe("http://192.168.1.20:3000");
+    expect(devUrl("fe80::1", 3000)).toBe("http://[fe80::1]:3000");
+    expect(devUrl("my-mac.local", 3000)).toBe("http://my-mac.local:3000");
   });
 });
 
