@@ -15,6 +15,7 @@ export type RouteEntry = {
   file: string;
   dynamic: boolean;
   resource?: boolean; // a route.* resource route (raw-Response handler), not a page
+  generated?: boolean; // scanned from .june/routes/ — ranks after every app/ route, as in dev
   layouts: string[];
   loading?: string; // nearest loading.tsx up the tree → streaming Suspense fallback
 };
@@ -78,7 +79,10 @@ export async function scanAppRoutes(appRoot: string): Promise<RouteEntry[]> {
   const appRoutes = await scanRoutes(appDir);
   const frameworkRoutes = existsSync(juneRoutesDir) ? await scanRoutes(juneRoutesDir) : [];
   const appPaths = new Set(appRoutes.map((r) => r.path));
-  return [...appRoutes, ...frameworkRoutes.filter((r) => !appPaths.has(r.path))].sort((a, b) =>
+  const generated = frameworkRoutes
+    .filter((r) => !appPaths.has(r.path))
+    .map((r) => ({ ...r, generated: true }));
+  return [...appRoutes, ...generated].sort((a, b) =>
     a.path.localeCompare(b.path),
   );
 }
