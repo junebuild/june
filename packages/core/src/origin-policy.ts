@@ -40,6 +40,44 @@ export function originRejection(request: Request, policy: OriginPolicy = {}): st
   return `Origin "${origin}" is not allowed — add it to agent.allowedOrigins in june.config.ts`;
 }
 
+// CORS for a browser app on an allowed origin — without it, allowedOrigins
+// would admit calls the browser then refuses to send (the preflight) or to
+// read (the response). Only a cross-origin Origin the policy LISTS gets
+// headers, echoing that validated value; same-origin calls need none.
+// Credentials are allowed: listing an origin is trusting it with the
+// visitor's session, the same trust the app's own pages have.
+export function corsHeaders(request: Request, policy: OriginPolicy = {}): Record<string, string> | undefined {
+  const origin = request.headers.get("origin");
+  if (origin === null || origin === new URL(request.url).origin) return undefined;
+  if (!policy.allowedOrigins?.some((o) => normalizeOrigin(o) === origin.toLowerCase())) return undefined;
+  return { "access-control-allow-origin": origin, "access-control-allow-credentials": "true", vary: "Origin" };
+}
+
+// The answer to a CORS preflight (OPTIONS) from an allowed origin: POST, with
+// whatever headers it asked for (the MCP ones include per-tool Mcp-Param-*).
+export function preflightResponse(request: Request, cors: Record<string, string>): Response {
+  const asked = request.headers.get("access-control-request-headers");
+  return new Response(null, {
+    status: 204,
+    headers: {
+      ...cors,
+      "access-control-allow-methods": "POST",
+      ...(asked ? { "access-control-allow-headers": asked } : {}),
+      "access-control-max-age": "600",
+      vary: "Origin, Access-Control-Request-Headers",
+    },
+  });
+}
+
+// A handler's response with the CORS headers added (Vary appended, not replaced).
+export function withCors(response: Response, cors: Record<string, string>): Response {
+  for (const [name, value] of Object.entries(cors)) {
+    if (name === "vary" && response.headers.has("vary")) response.headers.append("vary", value);
+    else response.headers.set(name, value);
+  }
+  return response;
+}
+
 // The config's shape errors, so a bad entry fails the build instead of every request.
 export function validateOriginPolicy(policy: OriginPolicy): void {
   for (const o of policy.allowedOrigins ?? []) {

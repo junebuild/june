@@ -98,6 +98,73 @@ describe("the endpoints refuse with 403", () => {
   });
 });
 
+describe("CORS for an allowed origin", () => {
+  let preexisting = new Map(ACTION_REGISTRY);
+  beforeEach(() => {
+    preexisting = new Map(ACTION_REGISTRY);
+    ACTION_REGISTRY.clear();
+    defineAction({ id: "ping", description: "Ping.", input: { type: "object", properties: {} }, run: () => ({ pong: true }) });
+  });
+  afterEach(() => {
+    ACTION_REGISTRY.clear();
+    for (const [id, a] of preexisting) ACTION_REGISTRY.set(id, a);
+  });
+
+  const policy: OriginPolicy = { allowedOrigins: ["https://app.example.com"] };
+  const APP = "https://app.example.com";
+  const list = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} });
+
+  for (const [name, call] of [
+    ["/mcp", (r: Request) => mcpHandler(r, {}, undefined, policy)],
+    ["/api", (r: Request) => apiHandler(r, "ping", {}, policy)],
+  ] as const) {
+    const url = `https://api.example.com${name === "/mcp" ? "/mcp" : "/api/ping"}`;
+
+    test(`${name}: the preflight is answered — POST, the asked headers, credentials, Vary`, async () => {
+      const res = await call(req(url, { origin: APP, "access-control-request-method": "POST", "access-control-request-headers": "content-type, mcp-protocol-version, mcp-param-region" }, { method: "OPTIONS" }));
+      expect(res.status).toBe(204);
+      expect(Object.fromEntries(res.headers)).toMatchObject({
+        "access-control-allow-origin": APP,
+        "access-control-allow-credentials": "true",
+        "access-control-allow-methods": "POST",
+        "access-control-allow-headers": "content-type, mcp-protocol-version, mcp-param-region",
+      });
+      expect(res.headers.get("vary")).toContain("Origin");
+    });
+
+    test(`${name}: the response is readable by the allowed origin, and only by it`, async () => {
+      const body = name === "/mcp" ? list : "{}";
+      const ok = await call(req(url, { origin: APP, "content-type": "application/json" }, { method: "POST", body }));
+      expect(ok.status).toBe(200);
+      expect(ok.headers.get("access-control-allow-origin")).toBe(APP);
+      expect(ok.headers.get("vary")).toContain("Origin");
+      // Same-origin needs no CORS; a refused origin gets 403 without it.
+      const own = await call(req(url, { origin: "https://api.example.com", "content-type": "application/json" }, { method: "POST", body }));
+      expect(own.headers.get("access-control-allow-origin")).toBeNull();
+      const evil = await call(req(url, { origin: "https://evil.example", "access-control-request-method": "POST" }, { method: "OPTIONS" }));
+      expect(evil.status).toBe(403);
+      expect(evil.headers.get("access-control-allow-origin")).toBeNull();
+    });
+  }
+
+  test("a preflight with no policy entry stays the old 405", async () => {
+    const res = await mcpHandler(req("https://api.example.com/mcp", {}, { method: "OPTIONS" }));
+    expect(res.status).toBe(405);
+  });
+});
+
+describe("the published API contract lists the 403 (#308)", () => {
+  test("GET /api's error codes and every OpenAPI operation", async () => {
+    ACTION_REGISTRY.clear();
+    defineAction({ id: "ping", description: "Ping.", input: { type: "object", properties: {} }, run: () => ({ pong: true }) });
+    const { apiIndex, openApiDocument } = await import("@junejs/core/api");
+    expect(apiIndex("https://example.com").errors.codes).toContain("forbidden");
+    const doc = openApiDocument("https://example.com") as { paths: Record<string, { post: { responses: Record<string, unknown> } }> };
+    expect(Object.keys(doc.paths["/api/ping"]!.post.responses)).toContain("403");
+    ACTION_REGISTRY.clear();
+  });
+});
+
 describe("config", () => {
   test("resolveAgent passes the allowlists through", () => {
     const agent = resolveAgent({ allowedOrigins: ["https://app.example.com"], allowedHosts: [".example.com"] });
