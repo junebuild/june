@@ -4,7 +4,7 @@
 // end to end; this pins the ranking itself.
 import { describe, expect, test } from "bun:test";
 
-import { compareRoutePatterns, compareSegments, segmentRank } from "../src/route-rank";
+import { compareRoutePatterns, compareSegments, parseSegment, segmentRank } from "../src/route-rank";
 
 describe("route-rank", () => {
   test("segment ranks: static < [param] < [[param]] < [...rest] < [[...rest]]", () => {
@@ -12,6 +12,17 @@ describe("route-rank", () => {
     // Not a param: a bracket that isn't a whole segment stays static.
     expect(segmentRank("[slug].png")).toBe(0);
     expect(segmentRank("[foo-bar]")).toBe(0);
+  });
+
+  test("parseSegment: a param name is an identifier, and brackets must pair", () => {
+    expect(parseSegment("[slug]")).toEqual({ kind: "param", name: "slug" });
+    expect(parseSegment("[[_v2]]")).toEqual({ kind: "optional", name: "_v2" });
+    expect(parseSegment("[...path]")).toEqual({ kind: "catchAll", name: "path" });
+    expect(parseSegment("[[...path]]")).toEqual({ kind: "optionalCatchAll", name: "path" });
+    // The dev matcher's grammar: no leading digit, no dash, balanced brackets.
+    for (const s of ["[1]", "[1a]", "[foo-bar]", "[[x]", "[x]]", "[slug].png", "docs[v2", "[]", "feed.xml"]) {
+      expect({ s, kind: parseSegment(s).kind }).toEqual({ s, kind: "static" });
+    }
   });
 
   test("siblings sort by rank, then by name", () => {

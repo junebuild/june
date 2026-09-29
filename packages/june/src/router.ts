@@ -6,7 +6,7 @@ import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 
-import { compareSegments } from "./route-rank";
+import { compareSegments, parseSegment } from "./route-rank";
 
 export type RouteMatch = {
   file: string;
@@ -89,13 +89,13 @@ function isSpecialFile(file: string) {
 }
 
 const isRouteGroup = (name: string) => /^\(.+\)$/.test(name);
-const isParamDir = (name: string) => /^\[([A-Za-z_][A-Za-z0-9_]*)\]$/.test(name);
+const isParamDir = (name: string) => parseSegment(name).kind === "param";
 // [[slug]] / [[...slug]] — match like their required forms, and ALSO match the
 // segment being absent (the param is then simply missing from ctx.params).
-const isOptionalDir = (name: string) => /^\[\[([A-Za-z_][A-Za-z0-9_]*)\]\]$/.test(name);
-const isOptionalCatchAllDir = (name: string) => /^\[\[\.\.\.([A-Za-z_][A-Za-z0-9_]*)\]\]$/.test(name);
-const isCatchAllDir = (name: string) => /^\[\.\.\.([A-Za-z_][A-Za-z0-9_]*)\]$/.test(name);
-const paramName = (name: string) => name.replace(/^\[+(\.\.\.)?|\]+$/g, "");
+const isOptionalDir = (name: string) => parseSegment(name).kind === "optional";
+const isOptionalCatchAllDir = (name: string) => parseSegment(name).kind === "optionalCatchAll";
+const isCatchAllDir = (name: string) => parseSegment(name).kind === "catchAll";
+const paramName = (name: string) => parseSegment(name).name!;
 
 type DirEntry = { name: string; dir: boolean };
 

@@ -149,6 +149,26 @@ describe("route precedence: dev ≡ built worker (#312)", () => {
     ]);
   });
 
+  test("a bracketed name that is not a param is a static segment, matched literally", async () => {
+    const root = fixture({
+      // createWorker compiled `docs[v2` into an unterminated character class and threw.
+      "app/docs[v2/page.tsx": page("docs-v2"),
+      // `[slug].png` must not become the character class [slug] + ".png".
+      "app/og/[slug].png/page.tsx": page("literal-png"),
+      "app/og/[name]/page.tsx": page("og-name", "name"),
+      // `[1]` is not an identifier: static in dev, so [slug] answers /x.
+      "app/[1]/page.tsx": page("one"),
+      "app/[slug]/page.tsx": page("slug", "slug"),
+    });
+    await expectBoth(root, [
+      ["/docs[v2", "docs-v2"],
+      ["/og/[slug].png", "literal-png"],
+      ["/og/s.png", "og-name:s.png"],
+      ["/x", "slug:x"],
+      ["/[1]", "one"],
+    ]);
+  });
+
   test("app/ is consulted before .june/routes/, as in dev: an app [slug] answers before a generated static page", async () => {
     const root = fixture({
       "app/[slug]/page.tsx": page("app-slug", "slug"),
