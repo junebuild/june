@@ -96,6 +96,7 @@
     "slack-stream-hardening",
     "social-meta-defaults",
     "soft-nav-script-execution",
+    "sqlite-durable-wal",
     "static-discovery-origin",
     "store-hydration-race",
     "streaming-model-p2",
