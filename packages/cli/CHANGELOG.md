@@ -1,5 +1,24 @@
 # @junejs/cli
 
+## 0.1.0-dev.5
+
+### Minor Changes
+
+- [#309](https://github.com/junebuild/june/pull/309) [`7736376`](https://github.com/junebuild/june/commit/77363765ea883c3f620fd5c0b713c5f871b822c3) Thanks [@linyiru](https://github.com/linyiru)! - `/mcp` and `/api/<id>` validate `Origin` and `Host`, and `june dev` binds `127.0.0.1` ([#308](https://github.com/junebuild/june/issues/308)).
+
+  - **Origin (every host).** MCP 2026-07-28 requires servers to validate `Origin` against DNS rebinding and to answer an invalid one with 403. `mcpHandler` and `apiHandler` take an `OriginPolicy`. A request without an `Origin` passes, because CLIs, SDKs, and server-side connectors don't send one. A present `Origin` must be the request's own or listed in `agent.allowedOrigins`. Otherwise the answer is `403`: on `/mcp` a JSON-RPC error with no `id` (`-32000`), on `/api` `{ error: { code: "forbidden" } }`.
+  - **CORS for listed origins.** A cross-origin browser app in `agent.allowedOrigins` gets its preflight answered (`POST`, the requested headers) and responses with `Access-Control-Allow-Origin`, `Access-Control-Allow-Credentials: true`, and `Vary: Origin`. Same-origin calls get no CORS headers.
+  - **Checked before identity.** The pipeline applies the policy before `identity(request)`, so a refused call triggers no resolver I/O, and a throwing resolver can't turn the 403 into a 500. `mcpForbidden` and `apiForbidden` build the same 403 bodies for custom hosts. `GET /api` and every OpenAPI operation now list the `forbidden` / 403 response.
+  - **Host (DNS rebinding).** After a rebind the attacker's page is same-origin, so only `Host` gives it away. When `agent.allowedHosts` is set, `Host` must be an IP literal or match an entry: `"example.com"`, or `".example.com"` for it and its subdomains. `june dev` always allows `localhost` and `.localhost`. The official conformance scenario `dns-rebinding-protection` now passes on both protocol eras.
+  - **BREAKING (dev only): `june dev` binds `127.0.0.1`.** It used to listen on every interface. `june dev --host` restores that, and `--host <addr>` binds one address (the printed URL follows it). Behind a tunnel, add its domain to `agent.allowedHosts` (e.g. `".trycloudflare.com"`) to reach `/mcp` and `/api`. Production (`june start`, Workers) binds and routes as before.
+  - Malformed `allowedOrigins` or `allowedHosts` entries fail when the config resolves. `originRejection` and `OriginPolicy` are exported from `@junejs/core/mcp` for custom hosts.
+
+### Patch Changes
+
+- Updated dependencies [[`7736376`](https://github.com/junebuild/june/commit/77363765ea883c3f620fd5c0b713c5f871b822c3), [`10b0119`](https://github.com/junebuild/june/commit/10b01190b98521890b36e599b1953bfca635625e), [`29504fe`](https://github.com/junebuild/june/commit/29504fe04c286b76b0d9727b1d222910ad5a9c82)]:
+  - @junejs/core@0.2.0-dev.65
+  - @junejs/server@1.0.0-dev.45
+
 ## 0.1.0-dev.4
 
 ### Minor Changes
