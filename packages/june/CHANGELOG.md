@@ -1,5 +1,41 @@
 # @junejs/server
 
+## 1.0.0-dev.45
+
+### Minor Changes
+
+- [#309](https://github.com/junebuild/june/pull/309) [`7736376`](https://github.com/junebuild/june/commit/77363765ea883c3f620fd5c0b713c5f871b822c3) Thanks [@linyiru](https://github.com/linyiru)! - `/mcp` and `/api/<id>` validate `Origin` and `Host`, and `june dev` binds `127.0.0.1` ([#308](https://github.com/junebuild/june/issues/308)).
+
+  - **Origin (every host).** MCP 2026-07-28 requires servers to validate `Origin` against DNS rebinding and to answer an invalid one with 403. `mcpHandler` and `apiHandler` take an `OriginPolicy`. A request without an `Origin` passes, because CLIs, SDKs, and server-side connectors don't send one. A present `Origin` must be the request's own or listed in `agent.allowedOrigins`. Otherwise the answer is `403`: on `/mcp` a JSON-RPC error with no `id` (`-32000`), on `/api` `{ error: { code: "forbidden" } }`.
+  - **CORS for listed origins.** A cross-origin browser app in `agent.allowedOrigins` gets its preflight answered (`POST`, the requested headers) and responses with `Access-Control-Allow-Origin`, `Access-Control-Allow-Credentials: true`, and `Vary: Origin`. Same-origin calls get no CORS headers.
+  - **Checked before identity.** The pipeline applies the policy before `identity(request)`, so a refused call triggers no resolver I/O, and a throwing resolver can't turn the 403 into a 500. `mcpForbidden` and `apiForbidden` build the same 403 bodies for custom hosts. `GET /api` and every OpenAPI operation now list the `forbidden` / 403 response.
+  - **Host (DNS rebinding).** After a rebind the attacker's page is same-origin, so only `Host` gives it away. When `agent.allowedHosts` is set, `Host` must be an IP literal or match an entry: `"example.com"`, or `".example.com"` for it and its subdomains. `june dev` always allows `localhost` and `.localhost`. The official conformance scenario `dns-rebinding-protection` now passes on both protocol eras.
+  - **BREAKING (dev only): `june dev` binds `127.0.0.1`.** It used to listen on every interface. `june dev --host` restores that, and `--host <addr>` binds one address (the printed URL follows it). Behind a tunnel, add its domain to `agent.allowedHosts` (e.g. `".trycloudflare.com"`) to reach `/mcp` and `/api`. Production (`june start`, Workers) binds and routes as before.
+  - Malformed `allowedOrigins` or `allowedHosts` entries fail when the config resolves. `originRejection` and `OriginPolicy` are exported from `@junejs/core/mcp` for custom hosts.
+
+- [#323](https://github.com/junebuild/june/pull/323) [`29504fe`](https://github.com/junebuild/june/commit/29504fe04c286b76b0d9727b1d222910ad5a9c82) Thanks [@linyiru](https://github.com/linyiru)! - `NativeRuntime` and `MemoryRuntime` gain `close(): Promise<void>` ([#317](https://github.com/junebuild/june/issues/317)), and `createAgentRuntime` now returns an `InProcessRuntime` (a `Runtime` with `close()`).
+
+  On `close()`:
+
+  - Pending input-announcement retries are cancelled, and no new session opens.
+  - `NativeRuntime` then waits until every actor is idle, because a running turn or an announcement delivery in flight still writes the store after its hook or model call returns.
+  - The actors are dropped. On a runtime built by `createNativeRuntime`, the SQLite database it opened is closed. A database passed to `new NativeRuntime` stays the caller's.
+  - Calling it twice is safe.
+  - If `createNativeRuntime` fails to start (bad `maxSessions`, unreadable leftovers), it closes the database it opened before rethrowing.
+
+  `JuneApp` gains `close()`, which shuts down the agent runtime `createApp` built for an `agent/` directory. The dev server's `stop()` now returns a promise and awaits it.
+
+  Why: the retry timer is `unref`'d, so it never held a process open, but it still fired while the process lived. A runtime discarded in a long-running process, such as a test suite, would retry seconds later against a closed or deleted database.
+
+### Patch Changes
+
+- [#320](https://github.com/junebuild/june/pull/320) [`10b0119`](https://github.com/junebuild/june/commit/10b01190b98521890b36e599b1953bfca635625e) Thanks [@linyiru](https://github.com/linyiru)! - An optional or catch-all segment (`[[param]]`, `[...rest]`, `[[...rest]]`) must now be the last segment of a route path, as in Next.js ([#315](https://github.com/junebuild/june/issues/315)). `june build` fails and lists routes such as `[[lang]]/about/page.tsx` or `docs/[...slug]/edit/page.tsx`, and `june dev` reports them at startup. A `(group)` after the segment is still fine.
+
+  These shapes had no consistent behavior to keep: `june dev` never matched past a catch-all nor skipped a mid-path `[[param]]` (404), while the built worker's regex did both (200). June does not adopt SvelteKit's reading, where a `[[param]]` is skippable anywhere; the error says so and points a locale prefix at `i18n.locales`.
+
+- Updated dependencies [[`7736376`](https://github.com/junebuild/june/commit/77363765ea883c3f620fd5c0b713c5f871b822c3)]:
+  - @junejs/core@0.2.0-dev.65
+
 ## 1.0.0-dev.44
 
 ### Patch Changes
