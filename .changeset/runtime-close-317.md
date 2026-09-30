@@ -9,5 +9,8 @@ On `close()`:
 - `NativeRuntime` then waits until every actor is idle, because a running turn or an announcement delivery in flight still writes the store after its hook or model call returns.
 - The actors are dropped. On a runtime built by `createNativeRuntime`, the SQLite database it opened is closed. A database passed to `new NativeRuntime` stays the caller's.
 - Calling it twice is safe.
+- If `createNativeRuntime` fails to start (bad `maxSessions`, unreadable leftovers), it closes the database it opened before rethrowing.
+
+`JuneApp` gains `close()`, which shuts down the agent runtime `createApp` built for an `agent/` directory. The dev server's `stop()` now returns a promise and awaits it.
 
 Why: the retry timer is `unref`'d, so it never held a process open, but it still fired while the process lived. A runtime discarded in a long-running process, such as a test suite, would retry seconds later against a closed or deleted database.
