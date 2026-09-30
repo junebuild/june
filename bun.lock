@@ -153,7 +153,7 @@
     },
     "packages/june": {
       "name": "@junejs/server",
-      "version": "1.0.0-dev.45",
+      "version": "1.0.0-dev.46",
       "dependencies": {
         "@junejs/db": ">=0.1.0-dev.2",
         "@momiji-rs/sparkdown": "^0.0.4",
