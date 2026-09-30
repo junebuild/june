@@ -22,7 +22,8 @@ export type DevServerOptions = {
   host?: JuneHost;
 };
 
-export type DevServer = ServeHandle & { url: string };
+// stop() also shuts the app down (its agent runtime, #317); await it to know that's done.
+export type DevServer = Omit<ServeHandle, "stop"> & { url: string; stop(force?: boolean): Promise<void> };
 
 // A taken default port must not be a dead end in dev — walk forward until a
 // port binds (the Vite convention). Probed with node:net, which both hosts
@@ -89,5 +90,12 @@ export async function startDevServer({
 
   const url = `http://localhost:${handle.port}`;
   console.log(`june dev → ${url}  (host: ${host.name})`);
-  return { ...handle, url };
+  return {
+    ...handle,
+    url,
+    async stop(force?: boolean) {
+      handle.stop(force);
+      await app.close();
+    },
+  };
 }

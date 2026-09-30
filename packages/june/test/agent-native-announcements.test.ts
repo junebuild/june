@@ -4,13 +4,19 @@
 
 import { afterEach, describe, expect, jest, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import type { InputAnnouncement, Model, ModelDelta, Runtime, Tool } from "@junejs/core/agent-runtime";
 import { createAgentRuntime, createNativeRuntime, MemoryRuntime, NativeRuntime, type AgentDef } from "../src/agent-native";
 import { openLocalSqliteSync } from "../src/sqlite-driver";
+import { createApp } from "../src/app";
+import { startDevServer } from "../src/dev";
+
+// Fixtures written at test time live UNDER the package so their JSX resolves June's runtime.
+const PKG_DIR = fileURLToPath(new URL("..", import.meta.url));
 
 // Parks on the first call (a tool that asks for input), answers on the continuation.
 const model: Model = (msgs) =>
@@ -219,6 +225,48 @@ describe("closing a runtime (#317)", () => {
       expect(closeSpy).toHaveBeenCalledTimes(1);
     } finally {
       closeSpy.mockRestore();
+    }
+  });
+
+  // The app owns the runtime it builds for an agent/ directory, so the app's close() and
+  // the dev server's stop() must shut it down; nobody else can reach it.
+  test("createApp's close() shuts down the agent runtime it built", async () => {
+    const root = mkdtempSync(join(PKG_DIR, ".tmp-close-"));
+    dirs.push(root);
+    mkdirSync(join(root, "app", "agent"), { recursive: true });
+    writeFileSync(join(root, "app", "page.tsx"), "export default function P() { return <main>home</main>; }\n");
+    writeFileSync(join(root, "app", "agent", "instructions.md"), "You help.\n");
+    const closeSpy = spyOn(NativeRuntime.prototype, "close");
+    try {
+      const idle = createApp({ appDir: join(root, "app") });
+      await idle.close(); // nothing built yet: nothing to close, and close() builds nothing
+      expect(closeSpy).not.toHaveBeenCalled();
+
+      const app = createApp({ appDir: join(root, "app") });
+      expect((await app.fetch(new Request("http://june.test/"))).status).toBe(200); // builds the runtime
+      await app.close();
+      expect(closeSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      closeSpy.mockRestore();
+    }
+  });
+
+  test("the dev server's stop() shuts the app's agent runtime down", async () => {
+    const root = mkdtempSync(join(PKG_DIR, ".tmp-close-"));
+    dirs.push(root);
+    mkdirSync(join(root, "app", "agent"), { recursive: true });
+    writeFileSync(join(root, "app", "page.tsx"), "export default function P() { return <main>home</main>; }\n");
+    writeFileSync(join(root, "app", "agent", "instructions.md"), "You help.\n");
+    const closeSpy = spyOn(NativeRuntime.prototype, "close");
+    const log = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const server = await startDevServer({ appDir: join(root, "app"), port: 4531 });
+      expect((await fetch(`${server.url}/`)).status).toBe(200); // builds the runtime
+      await server.stop(true);
+      expect(closeSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      closeSpy.mockRestore();
+      log.mockRestore();
     }
   });
 
