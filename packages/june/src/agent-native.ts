@@ -426,10 +426,13 @@ export type AgentBackend = "native" | "memory" | "durable";
 // Build an in-process runtime for the chosen backend. Throws for `durable` (that
 // target is the DO the worker constructs, not an in-process object) — so the
 // choice is explicit and a mis-selection fails loudly.
+// An in-process runtime: a Runtime the host owns, so it can shut it down (#317).
+export type InProcessRuntime = Runtime & { close(): Promise<void> };
+
 export async function createAgentRuntime(
   agents: Record<string, AgentDef>,
   opts: { backend?: AgentBackend; path?: string; maxSessions?: number } = {},
-): Promise<Runtime> {
+): Promise<InProcessRuntime> {
   const backend = opts.backend ?? "native";
   if (backend === "memory") return new MemoryRuntime(agents);
   if (backend === "native") return createNativeRuntime(agents, opts.path, { maxSessions: opts.maxSessions });
