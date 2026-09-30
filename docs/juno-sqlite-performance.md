@@ -74,7 +74,12 @@ WAL vs the default rollback journal, `synchronous=NORMAL`:
 | insert (autocommit) | 32.6k/s | 1.47k/s | **~22x** |
 | point select | 378k/s | 125k/s | ~3x |
 
-→ Local file DBs should default to `journal_mode=WAL; synchronous=NORMAL`.
+→ Local file DBs default to `journal_mode=WAL; synchronous=FULL` (shipped in
+`sqlite-driver.ts`). Not `NORMAL`: in WAL mode it skips the per-commit fsync, and
+on a VM power cut right after an acknowledged commit that commit was gone 5 times
+out of 5 — the same as the DELETE journal at `FULL`. WAL at `FULL` kept it 5 of 5
+(2026-09-30, a Firecracker guest, raw bun:sqlite). The insert rate above was
+measured at `NORMAL`; `FULL` adds one fsync per commit.
 
 ### 2. `.raw()` + a codegen'd row mapper
 

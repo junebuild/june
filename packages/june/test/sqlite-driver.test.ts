@@ -3,9 +3,13 @@
 // actionable guidance. The round-trip runs on whichever runtime hosts the suite
 // (bun:sqlite or node:sqlite); the help message is unit-tested directly.
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
   openLocalSqlite,
+  openLocalSqliteSync,
   nodeSqliteHelp,
   NODE_SQLITE_MIN_LTS,
   NODE_SQLITE_MIN_ODD,
@@ -40,6 +44,63 @@ describe("openLocalSqlite", () => {
     ).rejects.toThrow("boom");
     expect(await db.query("select v from t")).toEqual([{ v: "committed" }]);
     await db.close();
+  });
+});
+
+describe("durable journal on file databases", () => {
+  const pragmas = async (path: string) => {
+    const db = await openLocalSqliteSync(path);
+    const out = {
+      journal: (db.query("PRAGMA journal_mode").get() as { journal_mode: string }).journal_mode,
+      sync: (db.query("PRAGMA synchronous").get() as { synchronous: number }).synchronous,
+    };
+    db.close();
+    return out;
+  };
+
+  test("a file database opens in WAL with synchronous=FULL", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "june-sqlite-"));
+    try {
+      expect(await pragmas(join(dir, "app.sqlite"))).toEqual({ journal: "wal", sync: 2 });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an existing DELETE-mode file is switched to WAL on open", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "june-sqlite-"));
+    const path = join(dir, "old.sqlite");
+    try {
+      const { Database } = (await import("bun:sqlite")) as typeof import("bun:sqlite");
+      const old = new Database(path, { create: true });
+      old.exec("PRAGMA journal_mode=DELETE");
+      old.exec("create table t (v text)");
+      old.close();
+      expect((await pragmas(path)).journal).toBe("wal");
+      // the mode persists in the file, so a plain sqlite3 / other reader sees WAL too
+      const again = new Database(path);
+      expect((again.query("PRAGMA journal_mode").get() as { journal_mode: string }).journal_mode).toBe("wal");
+      again.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test(":memory: is left alone", async () => {
+    expect((await pragmas(":memory:")).journal).toBe("memory");
+  });
+
+  test("the native agent store is a WAL file", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "june-agent-"));
+    const path = join(dir, "agent.db");
+    try {
+      const { createNativeRuntime } = await import("../src/agent-native");
+      const rt = await createNativeRuntime({}, path);
+      await rt.close();
+      expect((await pragmas(path)).journal).toBe("wal");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
