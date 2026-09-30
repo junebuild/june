@@ -60,6 +60,7 @@ type RouteEntry = {
   file: string;
   dynamic: boolean;
   resource?: boolean; // a route.* resource route (raw-Response handler), not a page
+  generated?: boolean; // scanned from .june/routes/ — ranks after every app/ route, as in dev
   layouts: string[];
   loading?: string; // nearest loading.tsx up the tree → streaming Suspense fallback
 };
@@ -372,8 +373,9 @@ export async function buildManifest(appRoot: string): Promise<WorkerManifest> {
   const appPaths = new Set(appRoutes.map((r) => r.path));
   const scanned = [
     ...appRoutes,
-    ...frameworkRoutes.filter((r) => !appPaths.has(r.path)),
+    ...frameworkRoutes.filter((r) => !appPaths.has(r.path)).map((r) => ({ ...r, generated: true })),
   ].sort((a, b) => a.path.localeCompare(b.path));
+  const generatedRoutes = scanned.filter((r) => r.generated).map((r) => r.path);
 
   const layoutCache = new Map<string, ImportedLayout | null>();
   const loadCached = async (f: string): Promise<ImportedLayout | null> => {
@@ -445,6 +447,7 @@ export async function buildManifest(appRoot: string): Promise<WorkerManifest> {
     routes,
     dynamicRoutes,
     resourceRoutes,
+    ...(generatedRoutes.length ? { generatedRoutes } : {}),
     layoutChains,
     layoutBoundaries,
     loadings,
@@ -493,7 +496,7 @@ export async function juneBuild(
   const appPaths2 = new Set(appRoutes2.map((r) => r.path));
   const routes = [
     ...appRoutes2,
-    ...frameworkRoutes2.filter((r) => !appPaths2.has(r.path)),
+    ...frameworkRoutes2.filter((r) => !appPaths2.has(r.path)).map((r) => ({ ...r, generated: true })),
   ].sort((a, b) => a.path.localeCompare(b.path));
   if (routes.length === 0) throw new Error(`no page.* routes found under ${appDir} or .june/routes/`);
 
@@ -650,6 +653,12 @@ export async function juneBuild(
   const resourceRoutesField = resources.length
     ? `\n  resourceRoutes: [\n${resources.join("\n")}\n  ],`
     : "";
+  // .june/routes/ patterns rank after every app/ route (dev falls back to them).
+  // Only emitted when there are some, so bundles without them stay byte-identical.
+  const generatedPaths = routes.filter((r) => r.generated).map((r) => r.path);
+  const generatedRoutesField = generatedPaths.length
+    ? `\n  generatedRoutes: ${JSON.stringify(generatedPaths)},`
+    : "";
   // Only emitted when some route declares a boundary, so boundary-less bundles
   // stay byte-identical (additive manifest field, like resources).
   const layoutBoundariesField = boundaries.length
@@ -733,7 +742,7 @@ ${statics.join("\n")}
   },
   dynamicRoutes: [
 ${dynamics.join("\n")}
-  ],${resourceRoutesField}
+  ],${resourceRoutesField}${generatedRoutesField}
   layoutChains: {
 ${chains.join("\n")}
   },${layoutBoundariesField}

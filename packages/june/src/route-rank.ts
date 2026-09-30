@@ -7,15 +7,32 @@
 //
 // Worker-safe: no node:* imports.
 
+export type SegmentKind = "static" | "param" | "optional" | "catchAll" | "optionalCatchAll";
+
+// The one segment grammar: a param name is an identifier ([A-Za-z_][A-Za-z0-9_]*).
+// Anything else in brackets (`[1]`, `[foo-bar]`, `[slug].png`) is a STATIC
+// segment named literally, in dev, in the ranking and in the worker's regex.
+const DYNAMIC = /^\[(\[)?(\.\.\.)?([A-Za-z_][A-Za-z0-9_]*)\](\])?$/;
+
+export function parseSegment(segment: string): { kind: SegmentKind; name?: string } {
+  const m = segment.match(DYNAMIC);
+  // Brackets must pair: `[[x]]` or `[x]`, never `[[x]` / `[x]]`.
+  if (!m || !!m[1] !== !!m[4]) return { kind: "static" };
+  const optional = !!m[1];
+  const catchAll = !!m[2];
+  const kind: SegmentKind = catchAll
+    ? optional ? "optionalCatchAll" : "catchAll"
+    : optional ? "optional" : "param";
+  return { kind, name: m[3] };
+}
+
+const RANK: Record<SegmentKind, number> = { static: 0, param: 1, optional: 2, catchAll: 3, optionalCatchAll: 4 };
+
 // Per-segment rank, most specific first: static, [param], [[param]], [...rest],
 // [[...rest]]. Optional sits after its required form, so `[slug]` answers
 // before `[[slug]]` when a segment is present.
 export function segmentRank(segment: string): number {
-  if (/^\[\[\.\.\.\w+\]\]$/.test(segment)) return 4;
-  if (/^\[\.\.\.\w+\]$/.test(segment)) return 3;
-  if (/^\[\[\w+\]\]$/.test(segment)) return 2;
-  if (/^\[\w+\]$/.test(segment)) return 1;
-  return 0;
+  return RANK[parseSegment(segment).kind];
 }
 
 // Sibling order within one directory level: by rank, then by name so a tie

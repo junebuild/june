@@ -19,6 +19,7 @@ import type { Resources } from "@junejs/core/resources";
 
 import { createPipeline, type ExtraHandler, type LayoutComponent, type LoadingComponent, type Resolved, type ResolvedResource, type ResourceHandler } from "./pipeline";
 import { durableAgentSurface, type DurableObjectNamespace } from "./agent-durable";
+import { compareRoutePatterns, parseSegment } from "./route-rank";
 import { contentTypeFor, RESERVED_PREFIX, safeRelativePath } from "./static-files";
 
 export type WorkerManifest = {
@@ -27,8 +28,13 @@ export type WorkerManifest = {
   // Dynamic patterns in file-route syntax ("/posts/[slug]", "/docs/[...path]").
   dynamicRoutes?: Array<{ pattern: string; def: BrandedRoute }>;
   // Resource routes (app/**/route.*): a raw-Response handler keyed by its pattern
-  // (static or dynamic). Matched after pages, so a page never gets shadowed.
+  // (static or dynamic). Ranked with the pages by segment shape (route-rank.ts),
+  // exactly as `june dev` resolves; a page wins only at the SAME pattern.
   resourceRoutes?: Array<{ pattern: string; handler: ResourceHandler }>;
+  // Patterns scanned from .june/routes/ (framework-generated, e.g. Kura). Dev
+  // consults app/ first and falls back to .june/routes/, so every one of these
+  // ranks after every app/ route. Absent → all routes are app/ routes.
+  generatedRoutes?: string[];
   // Layout chains (root→leaf) keyed by route path / dynamic pattern. The build
   // freezes the same chain the dev server loads from app/layout.* files.
   layoutChains?: Record<string, LayoutComponent[]>;
@@ -66,7 +72,13 @@ export type WorkerManifest = {
   services?: (env?: unknown) => unknown;
 };
 
-type Compiled = { regex: RegExp; names: string[]; def: BrandedRoute; pattern: string };
+// One row of the worker's route table: a page (def) or a resource route (handler).
+type Compiled = {
+  regex: RegExp;
+  names: string[];
+  pattern: string;
+  generated: boolean;
+} & ({ def: BrandedRoute; handler?: undefined } | { def?: undefined; handler: ResourceHandler });
 
 // "/posts/[slug]" | "/docs/[...path]" | "/notes/[[tag]]" → matcher. Optional
 // segments ([[x]], [[...x]]) wrap slash + capture together so absence matches;
@@ -76,34 +88,19 @@ function compilePattern(pattern: string): { regex: RegExp; names: string[] } {
   let source = "";
   let allOptional = true;
   for (const seg of pattern.split("/").filter(Boolean)) {
-    const oca = seg.match(/^\[\[\.\.\.(\w+)\]\]$/);
-    if (oca) {
-      names.push(oca[1]!);
-      source += "(?:/(.+))?";
-      continue;
-    }
-    const ca = seg.match(/^\[\.\.\.(\w+)\]$/);
-    if (ca) {
-      names.push(ca[1]!);
-      source += "/(.+)";
+    // Same grammar as the dev matcher (route-rank.ts parseSegment).
+    const { kind, name } = parseSegment(seg);
+    if (name) names.push(name);
+    if (kind === "optionalCatchAll") source += "(?:/(.+))?";
+    else if (kind === "optional") source += "(?:/([^/]+))?";
+    else {
+      if (kind === "catchAll") source += "/(.+)";
+      else if (kind === "param") source += "/([^/]+)";
+      // A static segment matches literally: escape every RegExp metacharacter,
+      // brackets included (`docs[v2`, `[slug].png` are static names).
+      else source += "/" + seg.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       allOptional = false;
-      continue;
     }
-    const op = seg.match(/^\[\[(\w+)\]\]$/);
-    if (op) {
-      names.push(op[1]!);
-      source += "(?:/([^/]+))?";
-      continue;
-    }
-    const p = seg.match(/^\[(\w+)\]$/);
-    if (p) {
-      names.push(p[1]!);
-      source += "/([^/]+)";
-      allOptional = false;
-      continue;
-    }
-    source += "/" + seg.replace(/[.*+?^${}()|\\]/g, "\\$&");
-    allOptional = false;
   }
   if (source === "") return { regex: /^\/$/, names };
   return { regex: new RegExp(allOptional ? `^(?:${source}|/)$` : `^${source}$`), names };
@@ -112,16 +109,23 @@ function compilePattern(pattern: string): { regex: RegExp; names: string[] } {
 export function createWorker(
   manifest: WorkerManifest,
 ): { fetch(request: Request, env?: unknown): Promise<Response> } {
-  const dynamic: Compiled[] = (manifest.dynamicRoutes ?? []).map((d) => ({
-    ...compilePattern(d.pattern),
-    def: d.def,
-    pattern: d.pattern,
-  }));
-  const resources = (manifest.resourceRoutes ?? []).map((r) => ({
-    ...compilePattern(r.pattern),
-    handler: r.handler,
-    pattern: r.pattern,
-  }));
+  // Pages and resource routes in ONE table, ordered the way `june dev` resolves
+  // (#312): app/ before .june/routes/, then segment shape (static > [param] >
+  // [...catchAll], required before optional), then a page before a resource
+  // route at the same pattern. The kind of route never outranks the shape.
+  const generated = new Set(manifest.generatedRoutes ?? []);
+  const row = (pattern: string) => ({ ...compilePattern(pattern), pattern, generated: generated.has(pattern) });
+  const table: Compiled[] = [
+    ...Object.entries(manifest.routes).map(([pattern, def]) => ({ ...row(pattern), def })),
+    ...(manifest.dynamicRoutes ?? []).map((d) => ({ ...row(d.pattern), def: d.def })),
+    ...(manifest.resourceRoutes ?? []).map((r) => ({ ...row(r.pattern), handler: r.handler })),
+  ];
+  table.sort(
+    (a, b) =>
+      Number(a.generated) - Number(b.generated) ||
+      compareRoutePatterns(a.pattern, b.pattern) ||
+      Number(!!a.handler) - Number(!!b.handler),
+  );
   const routeList = [
     ...Object.keys(manifest.routes),
     ...(manifest.dynamicRoutes ?? []).map((d) => d.pattern),
@@ -131,6 +135,17 @@ export function createWorker(
   const loadingFor = (key: string): LoadingComponent | undefined => manifest.loadings?.[key];
   const boundaryFor = (key: string): { index: number; key: string } | null =>
     manifest.layoutBoundaries?.[key] ?? null;
+  const resolvedPage = (def: BrandedRoute, key: string, params: Record<string, string>): Resolved => {
+    const b = boundaryFor(key);
+    return {
+      def,
+      params,
+      chain: chainFor(key),
+      boundaryIndex: b?.index ?? null,
+      boundaryKey: b?.key ?? null,
+      loading: loadingFor(key),
+    };
+  };
 
   // The worker's env (D1/KV/R2 bindings) arrives per fetch and is stable across
   // requests in an isolate; we capture the latest and hand it to the env-aware
@@ -172,52 +187,21 @@ export function createWorker(
     resources: provider ? () => provider(currentEnv) : undefined,
     services: servicesProvider ? () => (servicesCache ??= { v: servicesProvider(currentEnv) }).v : undefined,
     resolve: async (pathname): Promise<Resolved | ResolvedResource | null> => {
+      // Fast path: an app/ static page outranks every other route for its path.
       const staticDef = manifest.routes[pathname];
-      if (staticDef) {
-        const b = boundaryFor(pathname);
-        return {
-          def: staticDef,
-          params: {},
-          chain: chainFor(pathname),
-          boundaryIndex: b?.index ?? null,
-          boundaryKey: b?.key ?? null,
-          loading: loadingFor(pathname),
-        };
-      }
-      for (const d of dynamic) {
-        const m = pathname.match(d.regex);
-        if (m) {
-          // Optional segments leave their capture undefined — the param is
-          // then absent, matching the dev matcher's semantics.
-          const params = Object.fromEntries(
-            d.names.flatMap((n, i) => {
-              const v = m[i + 1];
-              return v === undefined ? [] : [[n, decodeURIComponent(v)]];
-            }),
-          );
-          const b = boundaryFor(d.pattern);
-          return {
-            def: d.def,
-            params,
-            chain: chainFor(d.pattern),
-            boundaryIndex: b?.index ?? null,
-            boundaryKey: b?.key ?? null,
-            loading: loadingFor(d.pattern),
-          };
-        }
-      }
-      // Resource routes after pages (so a page is never shadowed by one).
-      for (const r of resources) {
+      if (staticDef && !generated.has(pathname)) return resolvedPage(staticDef, pathname, {});
+      for (const r of table) {
         const m = pathname.match(r.regex);
-        if (m) {
-          const params = Object.fromEntries(
-            r.names.flatMap((n, i) => {
-              const v = m[i + 1];
-              return v === undefined ? [] : [[n, decodeURIComponent(v)]];
-            }),
-          );
-          return { handler: r.handler, params };
-        }
+        if (!m) continue;
+        // Optional segments leave their capture undefined — the param is
+        // then absent, matching the dev matcher's semantics.
+        const params = Object.fromEntries(
+          r.names.flatMap((n, i) => {
+            const v = m[i + 1];
+            return v === undefined ? [] : [[n, decodeURIComponent(v)]];
+          }),
+        );
+        return r.handler ? { handler: r.handler, params } : resolvedPage(r.def, r.pattern, params);
       }
       return null;
     },
