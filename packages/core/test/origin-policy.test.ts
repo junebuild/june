@@ -155,13 +155,19 @@ describe("CORS for an allowed origin", () => {
 
 describe("the published API contract lists the 403 (#308)", () => {
   test("GET /api's error codes and every OpenAPI operation", async () => {
+    // The registry is process-global: other files' actions must survive this test.
+    const preexisting = new Map(ACTION_REGISTRY);
     ACTION_REGISTRY.clear();
-    defineAction({ id: "ping", description: "Ping.", input: { type: "object", properties: {} }, run: () => ({ pong: true }) });
-    const { apiIndex, openApiDocument } = await import("@junejs/core/api");
-    expect(apiIndex("https://example.com").errors.codes).toContain("forbidden");
-    const doc = openApiDocument("https://example.com") as { paths: Record<string, { post: { responses: Record<string, unknown> } }> };
-    expect(Object.keys(doc.paths["/api/ping"]!.post.responses)).toContain("403");
-    ACTION_REGISTRY.clear();
+    try {
+      defineAction({ id: "ping", description: "Ping.", input: { type: "object", properties: {} }, run: () => ({ pong: true }) });
+      const { apiIndex, openApiDocument } = await import("@junejs/core/api");
+      expect(apiIndex("https://example.com").errors.codes).toContain("forbidden");
+      const doc = openApiDocument("https://example.com") as { paths: Record<string, { post: { responses: Record<string, unknown> } }> };
+      expect(Object.keys(doc.paths["/api/ping"]!.post.responses)).toContain("403");
+    } finally {
+      ACTION_REGISTRY.clear();
+      for (const [id, a] of preexisting) ACTION_REGISTRY.set(id, a);
+    }
   });
 });
 
