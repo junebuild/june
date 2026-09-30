@@ -137,18 +137,19 @@ speed; for pure local it is strictly slower.
 ## How this maps to our code (the roadmap)
 
 Today the local adapter (`asyncSqlite` in `packages/june/src/sqlite-driver.ts`)
-keeps the surface async over synchronous driver work — the right shape — but
-leaves the three knobs above unclaimed. Prioritized:
+keeps the surface async over synchronous driver work — the right shape. Of the
+work below, WAL (at `synchronous=FULL`) and the prepared-statement cache have
+shipped; the raw + mapper read path and Juno's stable SQL shapes remain.
+Prioritized:
 
 1. **Set WAL on open — shipped.** `openLocalSqliteSync()` sets
    `PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL` on file DBs (skipped for
    `:memory:`, where WAL is a no-op). `FULL`, not the `NORMAL` first proposed
    here: see knob 1 above for the power-cut measurement.
-2. **Cache prepared statements by SQL string.** The Node path adapts as
-   `query: (sql) => db.prepare(sql)`, so it **re-prepares on every call**
-   (parse + compile bytecode each time). `bun:sqlite`'s `db.query()` already
-   memoizes — so the two runtimes are asymmetric today. Add a `Map<sql, stmt>`
-   in the adapter to make the Node path match.
+2. **Cache prepared statements by SQL string — shipped.** The Node path adapts
+   as `query: (sql) => db.prepare(sql)`, which re-prepares on every call;
+   `asyncSqlite` now keeps a `Map<sql, stmt>`, so each SQL string compiles once
+   on Node too, matching `bun:sqlite`'s memoized `db.query()`.
 3. **Offer a raw + mapper path for reads.** `query()`/`get()` use object mode.
    A `.raw()` + codegen mapper variant recovers ~1.7x on bulk reads. This is an
    adapter-level concern; Juno stays unaware.
