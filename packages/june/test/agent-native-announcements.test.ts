@@ -3,6 +3,7 @@
 // what the previous process left, and an actor mid-delivery is not evicted.
 
 import { afterEach, describe, expect, jest, spyOn, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -208,6 +209,16 @@ describe("closing a runtime (#317)", () => {
       const rt = await createAgentRuntime({ ops: def() }, { backend });
       await rt.close();
       expect(() => rt.session("ops", "s1")).toThrow(/closed/);
+    }
+  });
+
+  test("a createNativeRuntime that fails to start closes the db it opened", async () => {
+    const closeSpy = spyOn(Database.prototype, "close");
+    try {
+      await expect(createNativeRuntime({ ops: def() }, ":memory:", { maxSessions: 0 })).rejects.toThrow(RangeError);
+      expect(closeSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      closeSpy.mockRestore();
     }
   });
 
