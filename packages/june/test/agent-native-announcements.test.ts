@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { InputAnnouncement, Model, ModelDelta, Runtime, Tool } from "@junejs/core/agent-runtime";
-import { createNativeRuntime, MemoryRuntime, NativeRuntime, type AgentDef } from "../src/agent-native";
+import { createAgentRuntime, createNativeRuntime, MemoryRuntime, NativeRuntime, type AgentDef } from "../src/agent-native";
 import { openLocalSqliteSync } from "../src/sqlite-driver";
 
 // Parks on the first call (a tool that asks for input), answers on the continuation.
@@ -200,6 +200,14 @@ describe("closing a runtime (#317)", () => {
       expect(errors.mock.calls.map((c) => String(c[0]) + String(c[1] ?? ""))).toEqual([]); // the write-back found the db open
     } finally {
       errors.mockRestore();
+    }
+  });
+
+  test("createAgentRuntime hands back a runtime that can be closed, on both backends", async () => {
+    for (const backend of ["native", "memory"] as const) {
+      const rt = await createAgentRuntime({ ops: def() }, { backend });
+      await rt.close();
+      expect(() => rt.session("ops", "s1")).toThrow(/closed/);
     }
   });
 
