@@ -1,5 +1,16 @@
 # @junejs/server
 
+## 0.1.3
+
+### Patch Changes
+
+- [#324](https://github.com/junebuild/june/pull/324) [`2acf6a5`](https://github.com/junebuild/june/commit/2acf6a53d87f17460b4523d84c401b5f9c53a3b7) Thanks [@linyiru](https://github.com/linyiru)! - The built worker now ranks pages and resource routes the way `june dev` does ([#312](https://github.com/junebuild/june/issues/312), backport of [#313](https://github.com/junebuild/june/issues/313)). It used to try static pages, then dynamic pages in manifest order, then resource routes. So `[slug]/page.tsx` answered `/feed.xml` ahead of `feed.xml/route.ts`, and a root `[[...slug]]` (Kura) swallowed `/og/*`: 200 in dev, 404 on Workers.
+
+  - Pages and resource routes now resolve from one table ranked the way dev does: `app/` before `.june/routes/`, then per segment static > `[param]` > `[[param]]` > `[...rest]` > `[[...rest]]`, then a page before a resource route at the same pattern. The segment shape decides precedence, not the route kind.
+  - The dev matcher orders sibling directories by the same ranking instead of `readdir` order, so `[slug]` answers before `[[slug]]` on every filesystem.
+  - A bracketed name that is not an identifier (`[1]`, `docs[v2`, `[slug].png`) is a static segment in dev and on the worker alike, matched literally.
+  - The manifest gains an optional `generatedRoutes` field (patterns from `.june/routes/`), emitted only when there are some.
+
 ## 0.1.2
 
 ### Patch Changes
