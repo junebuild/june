@@ -80,12 +80,19 @@ Bun.serve({ fetch: async (req) => (await mounted.surface(req)) ?? new Response("
   `"native"` (the default) or `"memory"`, and throws for `"durable"`.
 - **`await runtime.close()`** shuts an in-process runtime down (the factories
   return an `InProcessRuntime`, which has it). It cancels pending announcement
-  retries and opens no new session right away. It then waits for running turns
-  and announcement deliveries to finish, drops the actors, and closes the SQLite
-  database `createNativeRuntime` opened (a database you passed to
-  `new NativeRuntime` stays open). Call it before discarding a runtime in a
-  process that keeps running, such as a test suite. Otherwise a retry timer
-  fires later against a closed or deleted database.
+  retries and opens no new session right away. What happens next depends on the
+  backend:
+  - **`NativeRuntime`** waits for running turns and announcement deliveries to
+    finish, drops the actors, and closes the SQLite database
+    `createNativeRuntime` opened (a database you passed to `new NativeRuntime`
+    stays open).
+  - **`MemoryRuntime`** drops its actors at once and does not wait. Work still
+    in flight finishes against its own in-memory store.
+
+  Call it before discarding a runtime in a process that keeps running, such as
+  a test suite. Otherwise a retry timer fires later against a closed or deleted
+  database. The runtime `createApp` builds for an `agent/` directory is closed
+  by the app's `close()`, which the dev server's `stop()` awaits.
 
 ### Session actors and eviction
 
