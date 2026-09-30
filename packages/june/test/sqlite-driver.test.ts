@@ -10,6 +10,7 @@ import { join } from "node:path";
 import {
   openLocalSqlite,
   openLocalSqliteSync,
+  useDurableJournal,
   nodeSqliteHelp,
   NODE_SQLITE_MIN_LTS,
   NODE_SQLITE_MIN_ODD,
@@ -84,6 +85,18 @@ describe("durable journal on file databases", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  test("a failing PRAGMA closes the handle and rethrows the original error", () => {
+    const locked = new Error("database is locked");
+    let closed = 0;
+    const fake = {
+      query: () => { throw new Error("unused"); },
+      exec: () => { throw locked; },
+      close: () => { closed++; throw new Error("close failed too"); },
+    };
+    expect(() => useDurableJournal(fake, "/tmp/locked.sqlite")).toThrow(locked);
+    expect(closed).toBe(1);
   });
 
   test(":memory: is left alone", async () => {

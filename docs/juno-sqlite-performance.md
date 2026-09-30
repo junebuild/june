@@ -140,10 +140,10 @@ Today the local adapter (`asyncSqlite` in `packages/june/src/sqlite-driver.ts`)
 keeps the surface async over synchronous driver work — the right shape — but
 leaves the three knobs above unclaimed. Prioritized:
 
-1. **Set WAL on open (biggest, cheapest win).** `openLocalSqlite()` does not set
-   `journal_mode`/`synchronous`. Add `PRAGMA journal_mode=WAL;
-   PRAGMA synchronous=NORMAL` for file DBs (skip for `:memory:`, where WAL is a
-   no-op). ~22x on writes, ~3x on point reads — for two lines.
+1. **Set WAL on open — shipped.** `openLocalSqliteSync()` sets
+   `PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL` on file DBs (skipped for
+   `:memory:`, where WAL is a no-op). `FULL`, not the `NORMAL` first proposed
+   here: see knob 1 above for the power-cut measurement.
 2. **Cache prepared statements by SQL string.** The Node path adapts as
    `query: (sql) => db.prepare(sql)`, so it **re-prepares on every call**
    (parse + compile bytecode each time). `bun:sqlite`'s `db.query()` already

@@ -143,10 +143,22 @@ declare const Bun: unknown;
 // turn 5 times out of 5; with WAL + FULL, 0 of 5. FULL is set explicitly: it is a
 // build-time default, and WAL at synchronous=NORMAL skips the per-commit fsync.
 // journal_mode=WAL persists in the file; `:memory:` has no journal to change.
-function useDurableJournal(db: SyncSqlite, path: string): SyncSqlite {
+// A PRAGMA that throws (a locked file mid-switch) closes the handle it was handed,
+// so a retry is not blocked by a descriptor nobody can reach; the original error
+// is what surfaces. Exported for the unit test of that path.
+export function useDurableJournal(db: SyncSqlite, path: string): SyncSqlite {
   if (path === ":memory:" || path === "") return db;
-  db.exec("PRAGMA journal_mode=WAL");
-  db.exec("PRAGMA synchronous=FULL");
+  try {
+    db.exec("PRAGMA journal_mode=WAL");
+    db.exec("PRAGMA synchronous=FULL");
+  } catch (err) {
+    try {
+      db.close();
+    } catch {
+      // the setup error is the one worth reporting
+    }
+    throw err;
+  }
   return db;
 }
 
