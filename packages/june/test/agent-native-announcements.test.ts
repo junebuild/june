@@ -41,16 +41,16 @@ async function microtasks(n = 50) {
 // Every runtime a test builds is closed before its db dir is removed (#317): a runtime left
 // open keeps its failed-delivery retry timer, which fires seconds later — in some other
 // test file — against the deleted database.
-const runtimes: Array<{ close(): void }> = [];
+const runtimes: Array<{ close(): Promise<void> }> = [];
 const open = async (...args: Parameters<typeof createNativeRuntime>) => {
   const rt = await createNativeRuntime(...args);
   runtimes.push(rt);
   return rt;
 };
 const dirs: string[] = [];
-afterEach(() => {
+afterEach(async () => {
   jest.useRealTimers();
-  while (runtimes.length) runtimes.pop()!.close();
+  while (runtimes.length) await runtimes.pop()!.close();
   while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true });
 });
 const dbPath = () => {
@@ -148,7 +148,7 @@ describe("closing a runtime (#317)", () => {
       await park(rt, "ops", "s1");
       await microtasks();
       expect(calls).toBe(1); // failed, a retry is pending
-      rt.close();
+      await rt.close();
       jest.advanceTimersByTime(300_000);
       await microtasks();
       expect(calls).toBe(1); // the retry never ran
@@ -166,7 +166,7 @@ describe("closing a runtime (#317)", () => {
       await park(rt, "ops", "s1");
       await microtasks();
       expect(calls).toBe(1);
-      rt.close();
+      await rt.close();
       jest.advanceTimersByTime(300_000);
       await microtasks();
       expect(calls).toBe(1);
@@ -175,15 +175,43 @@ describe("closing a runtime (#317)", () => {
     }
   });
 
+  // The flush is not awaited by whoever triggered it, and after the hook resolves it writes
+  // the outbox back. Closing the owned db under it would recreate the very failure close()
+  // exists to prevent, so close() waits for in-flight work first.
+  test("close() waits for a delivery in flight before closing the owned db", async () => {
+    const errors = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      let release!: () => void;
+      const gate = new Promise<void>((r) => { release = r; });
+      const seen: string[] = [];
+      const rt = await createNativeRuntime({ ops: def(async (a) => { seen.push(a.kind); await gate; }) });
+      await park(rt, "ops", "s1");
+      await waitFor(() => seen.length === 1); // the hook holds the delivery open
+
+      let closed = false;
+      const closing = rt.close().then(() => { closed = true; });
+      await new Promise((r) => setTimeout(r, 30));
+      expect(closed).toBe(false); // still waiting on the delivery
+      expect(() => rt.session("ops", "s2")).toThrow(/closed/); // no new work meanwhile
+
+      release();
+      await closing;
+      expect(closed).toBe(true);
+      expect(errors.mock.calls.map((c) => String(c[0]) + String(c[1] ?? ""))).toEqual([]); // the write-back found the db open
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
   test("close() closes the db createNativeRuntime opened, never one passed in", async () => {
     const owned = await createNativeRuntime({ ops: def() }, dbPath());
-    owned.close();
-    owned.close(); // twice is fine
+    await owned.close();
+    await owned.close(); // twice is fine
     expect(() => owned.recoverAnnouncements()).toThrow(); // its handle is closed
 
     const db = await openLocalSqliteSync(dbPath());
     const borrowed = new NativeRuntime({ ops: def() }, db);
-    borrowed.close();
+    await borrowed.close();
     expect(db.query("SELECT 1 AS one").get()).toEqual({ one: 1 }); // still the caller's, still open
     db.close();
   });

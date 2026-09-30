@@ -237,6 +237,7 @@ export class NativeRuntime implements Runtime {
   // Retries failed announcement deliveries (#260), across actor rebuilds.
   private readonly announceRetry = new AnnouncementRetry((agent, id) => { void this.session(agent, id).flushAnnouncements(); });
   private readonly maxSessions: number;
+  private closing: Promise<void> | undefined; // set by close() (#317)
 
   constructor(agents: Record<string, AgentDef>, db: SyncSqlite, opts: NativeRuntimeOptions = {}) {
     assertCoreRuntimeVersion("NativeRuntime"); // #94: fail power-on, not mid-turn
@@ -258,6 +259,9 @@ export class NativeRuntime implements Runtime {
   session(agent: string, id: string): AgentSession {
     const key = `${agent}:${id}`;
     const hit = this.actors.get(key);
+    // A closing runtime still serves the actors it has (their turns are finishing), but
+    // builds no new one.
+    if (!hit && this.closing) throw new Error(`NativeRuntime is closed: cannot open session "${key}"`);
     if (hit) {
       // most recently used → the tail (Map iteration order is insertion order)
       this.actors.delete(key);
@@ -290,18 +294,27 @@ export class NativeRuntime implements Runtime {
     }
   }
 
-  // Shut the runtime down (#317): cancel pending announcement retries and drop the actors;
-  // close the SQLite handle if createNativeRuntime opened it (a db passed to the constructor
-  // stays the caller's). Call it before discarding a runtime in a process that keeps
-  // running — a test suite, a host that swaps runtimes — or a retry fires later against a
-  // closed or deleted database. Safe to call twice.
-  close(): void {
-    this.announceRetry.stop();
-    this.actors.clear();
-    if (ownedDbs.has(this.db)) {
-      ownedDbs.delete(this.db);
-      this.db.close();
-    }
+  // Shut the runtime down (#317). Pending announcement retries are cancelled and no new
+  // session opens at once; then it waits until every actor is idle — a running turn or an
+  // announcement delivery in flight still writes the store after its hook or model call
+  // returns — before dropping the actors and closing the SQLite handle createNativeRuntime
+  // opened (a db passed to the constructor stays the caller's). So it resolves only after
+  // in-flight work finishes. Call it before discarding a runtime in a process that keeps
+  // running (a test suite, a host that swaps runtimes), or a retry fires later against a
+  // closed or deleted database. Safe to call twice: both calls resolve together.
+  close(): Promise<void> {
+    this.closing ??= (async () => {
+      this.announceRetry.stop();
+      while ([...this.actors.values()].some((a) => !a.session.idle())) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      this.actors.clear();
+      if (ownedDbs.has(this.db)) {
+        ownedDbs.delete(this.db);
+        this.db.close();
+      }
+    })();
+    return this.closing;
   }
 
   // Drop least recently used idle actors until one more fits under the cap. Runs before
@@ -370,6 +383,7 @@ export class MemoryRuntime implements Runtime {
   private stores = new Map<string, MemorySessionStore>();
   private readonly agents: Record<string, AgentDef>;
   private readonly announceRetry = new AnnouncementRetry((agent, id) => { void this.session(agent, id).flushAnnouncements(); }); // #260
+  private closed = false; // set by close() (#317)
   constructor(agents: Record<string, AgentDef>) {
     assertCoreRuntimeVersion("MemoryRuntime"); // #94: fail power-on, not mid-turn
     this.agents = agents;
@@ -379,6 +393,7 @@ export class MemoryRuntime implements Runtime {
     const key = `${agent}:${id}`;
     let a = this.actors.get(key);
     if (!a) {
+      if (this.closed) throw new Error(`MemoryRuntime is closed: cannot open session "${key}"`);
       const def = this.agents[agent];
       if (!def) throw new Error(`unknown agent: ${agent}`);
       const store = new MemorySessionStore();
@@ -390,9 +405,12 @@ export class MemoryRuntime implements Runtime {
     }
     return a;
   }
-  // Shut the runtime down (#317): cancel pending announcement retries. The state is the
-  // actors themselves, so they are dropped too. Safe to call twice.
-  close(): void {
+  // Shut the runtime down (#317): cancel pending announcement retries and open no new
+  // session. The state is the actors themselves, so they are dropped too; with no store
+  // to close there is nothing to wait for — work still in flight finishes against its own
+  // in-memory store. Safe to call twice.
+  async close(): Promise<void> {
+    this.closed = true;
     this.announceRetry.stop();
     this.actors.clear();
     this.stores.clear();
