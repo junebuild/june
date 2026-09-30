@@ -338,9 +338,22 @@ export async function createNativeRuntime(
 ): Promise<NativeRuntime> {
   const db = await openLocalSqliteSync(path);
   ownedDbs.add(db);
-  const runtime = new NativeRuntime(agents, db, opts);
-  runtime.recoverAnnouncements(); // #260
-  return runtime;
+  let runtime: NativeRuntime | undefined;
+  try {
+    runtime = new NativeRuntime(agents, db, opts);
+    runtime.recoverAnnouncements(); // #260
+    return runtime;
+  } catch (err) {
+    // Nobody else holds this handle (a bad maxSessions, unreadable leftovers). A recovery
+    // that failed part-way may already have deliveries in flight, so go through close(),
+    // which waits for them before closing the db.
+    if (runtime) await runtime.close();
+    else {
+      ownedDbs.delete(db);
+      db.close();
+    }
+    throw err;
+  }
 }
 
 // ── memory backend — in-process, ephemeral (no DB, no disk) ───────────────────
