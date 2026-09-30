@@ -135,6 +135,21 @@ export function makeWarningFilter(original: EmitWarning): EmitWarning {
 // runtime, which is exactly what the typeof guard checks.
 declare const Bun: unknown;
 
+// A file database commits durably: WAL, fsynced on every commit. SQLite's default
+// rollback journal (DELETE mode) commits by unlinking the journal, and at
+// synchronous=FULL it does not fsync the directory after that unlink — so a power
+// cut right after a commit can bring the journal back, and the next open rolls the
+// committed transaction back. On a VM power cut that lost the last committed agent
+// turn 5 times out of 5; with WAL + FULL, 0 of 5. FULL is set explicitly: it is a
+// build-time default, and WAL at synchronous=NORMAL skips the per-commit fsync.
+// journal_mode=WAL persists in the file; `:memory:` has no journal to change.
+function useDurableJournal(db: SyncSqlite, path: string): SyncSqlite {
+  if (path === ":memory:" || path === "") return db;
+  db.exec("PRAGMA journal_mode=WAL");
+  db.exec("PRAGMA synchronous=FULL");
+  return db;
+}
+
 // Open a LOCAL *synchronous* sqlite handle on whichever runtime we're under —
 // bun:sqlite under Bun, node:sqlite under Node. This is the raw synchronous
 // surface: asyncSqlite() wraps it as the edge-safe async JuneDb (below), while
@@ -148,7 +163,7 @@ export async function openLocalSqliteSync(path: string): Promise<SyncSqlite> {
     const { Database } = (await import(specifier)) as {
       Database: new (p: string, o?: { create?: boolean }) => SyncSqlite;
     };
-    return new Database(path, { create: true });
+    return useDurableJournal(new Database(path, { create: true }), path);
   }
 
   // Node: node:sqlite is a builtin, but only flag-free on a recent-enough
@@ -172,11 +187,14 @@ export async function openLocalSqliteSync(path: string): Promise<SyncSqlite> {
   }
   const db = new mod.DatabaseSync(path);
   // Adapt node:sqlite (prepare()) to the query()-shaped SyncSqlite surface.
-  return {
-    query: (sql) => db.prepare(sql),
-    exec: (sql) => db.exec(sql),
-    close: () => db.close(),
-  };
+  return useDurableJournal(
+    {
+      query: (sql) => db.prepare(sql),
+      exec: (sql) => db.exec(sql),
+      close: () => db.close(),
+    },
+    path,
+  );
 }
 
 // Open a LOCAL sqlite file (or ":memory:") as the async JuneDb — the single seam
