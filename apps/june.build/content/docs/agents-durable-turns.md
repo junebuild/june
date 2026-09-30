@@ -326,8 +326,8 @@ the session's next activity, backing off from 5 seconds to 5 minutes:
   recording one and delivering it still delivers. A custom shell must forward
   the alarm: `alarm() { return this.#agent.alarm(); }` — `june build`'s does.
 - On the native runtime, retries run on a timer, and `createNativeRuntime`
-  delivers every session's leftovers at startup. `runtime.close()` cancels
-  the pending timers.
+  delivers every session's leftovers at startup. `await runtime.close()`
+  cancels the pending timers and waits for a delivery in flight.
 
 A session with a delivery in flight is not `idle()`, so the native runtime never
 evicts it mid-delivery and hands the same announcement over twice.

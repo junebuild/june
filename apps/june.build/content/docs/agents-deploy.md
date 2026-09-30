@@ -78,12 +78,14 @@ Bun.serve({ fetch: async (req) => (await mounted.surface(req)) ?? new Response("
   streaming variants.
 - **`createAgentRuntime(agents, { backend, path, maxSessions })`** picks
   `"native"` (the default) or `"memory"`, and throws for `"durable"`.
-- **`runtime.close()`** shuts an in-process runtime down: it cancels pending
-  announcement retries, drops the actors, and closes the SQLite database
-  `createNativeRuntime` opened (a database you passed to `new NativeRuntime`
-  stays open). Call it before discarding a runtime in a process that keeps
-  running, such as a test suite. Otherwise a retry timer fires later against a
-  closed or deleted database.
+- **`await runtime.close()`** shuts an in-process runtime down (the factories
+  return an `InProcessRuntime`, which has it). It cancels pending announcement
+  retries and opens no new session right away. It then waits for running turns
+  and announcement deliveries to finish, drops the actors, and closes the SQLite
+  database `createNativeRuntime` opened (a database you passed to
+  `new NativeRuntime` stays open). Call it before discarding a runtime in a
+  process that keeps running, such as a test suite. Otherwise a retry timer
+  fires later against a closed or deleted database.
 
 ### Session actors and eviction
 
