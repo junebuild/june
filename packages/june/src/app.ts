@@ -30,7 +30,7 @@ import { findMiddlewareFile, isResourceFile, listRoutes, matchRouteTree, resolve
 import { routeProblems, scanRoutes } from "./route-scan";
 import { createPipeline, type ExtraHandler, type LayoutComponent, type MiddlewareHandler, type Pipeline, type Resolved, type ResourceHandler } from "./pipeline";
 import { discoverAgent } from "./agent-discover";
-import { createAgentRuntime, mountAgent, toAgentDef } from "./agent-native";
+import { createAgentRuntime, mountAgent, toAgentDef, type InProcessRuntime } from "./agent-native";
 import { anthropic } from "@junejs/core/agent-models";
 import { resolveBoundary } from "./segment";
 import { memoizeResources } from "./resources";
@@ -66,6 +66,10 @@ export type JuneApp = {
   warmup(): Promise<void>;
   routePaths(): Promise<string[]>;
   earlyHints(): string[];
+  // Shut down what the app started (#317): the agent runtime built for an agent/
+  // directory — its pending announcement retries, its in-flight turns, its SQLite
+  // handle. Resolves once they finish. A no-op when no runtime was built.
+  close(): Promise<void>;
 };
 
 // Import a layout file's default export as a layout component (memoized), plus
@@ -227,6 +231,8 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
   // pipeline is built lazily on first fetch, memoized after.
   let pipelinePromise: Promise<Pipeline> | undefined;
   const getPipeline = (): Promise<Pipeline> => (pipelinePromise ??= buildPipeline());
+  // The agent runtime buildPipeline creates, kept so close() can shut it down (#317).
+  let agentRuntime: InProcessRuntime | undefined;
   async function buildPipeline(): Promise<Pipeline> {
     // Wire CSS Modules BEFORE any route import: the runtime interceptor must be
     // active so `import "x.module.css"` in a route resolves to the scoped map,
@@ -265,6 +271,7 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
       // toAgentDef: tools, prompt AND the per-surface policies (#149) from the one
       // definition — channelInstructions was previously dropped on this path (#173).
       const rt = await createAgentRuntime({ [def.name]: toAgentDef(def, model) }, { backend });
+      agentRuntime = rt;
       const mounted = mountAgent(def, rt, { chatPath: agent.runtime.chat.path, channels: agent.runtime.channels });
       agentSurface = (req) => mounted.surface(req);
       await mounted.startAll();
@@ -461,5 +468,11 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
     },
     routePaths,
     earlyHints: () => config.earlyHints ?? [],
+    async close() {
+      // A pipeline still being built may be about to create the runtime: let it finish
+      // (its failure is the fetch's to report, not close()'s).
+      await pipelinePromise?.catch(() => {});
+      await agentRuntime?.close();
+    },
   };
 }
