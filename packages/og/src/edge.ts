@@ -10,6 +10,8 @@
 // load regardless of use). Lazy-loading defers it to first render — edge/Node OG works at runtime
 // (the consumer installs @vercel/og), and a static-prerendered route, never invoked, pulls nothing.
 import type { ReactElement } from "react";
+
+import { ogResponseHeaders } from "./headers";
 export type { ImageResponseOptions } from "./types";
 export { loadGoogleFont, loadDefaultFonts, hasCJK, OG_HEADERS } from "./fonts";
 export type { OgFont } from "./fonts";
@@ -24,13 +26,7 @@ export class ImageResponse extends Response {
     const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
     super(readable, {
       status: options.status ?? 200,
-      headers: {
-        "cache-control": "public, max-age=86400, stale-while-revalidate=604800",
-        ...options.headers,
-        // Contract (types.ts): callers may merge/override any header EXCEPT content-type
-        // — set it last so it always wins and the body is always served as a PNG.
-        "content-type": "image/png",
-      },
+      headers: ogResponseHeaders(options),
     });
     (_import("@vercel/og") as Promise<{ ImageResponse: VercelImageResponse }>)
       .then(({ ImageResponse: VercelOg }) => {

@@ -104,26 +104,24 @@ const envelopeContract = (
       expect(res.headers.get("cache-control")).toBe(node.OG_HEADERS["cache-control"]);
       await finish(res);
     });
+
+    // Header names are case-insensitive. An object spread keeps "Cache-Control"
+    // and "cache-control" as two keys and `new Headers` appends both, so a
+    // title-case caller header must still replace the default, not join it.
+    test("title-case caller headers replace the defaults", async () => {
+      const res = new Ctor(blankCard(), {
+        headers: { "Content-Type": "text/html", "Cache-Control": "no-store" },
+      });
+      expect(res.headers.get("content-type")).toBe("image/png");
+      expect(res.headers.get("cache-control")).toBe("no-store");
+      await finish(res);
+    });
   });
 };
 
 envelopeContract("node", node.ImageResponse);
 envelopeContract("edge", edge.ImageResponse);
 envelopeContract("workerd", workerd.ImageResponse, "cancel");
-
-describe("workerd: header casing", () => {
-  // The reported failure is specifically two casings of one name. A caller that
-  // passes title-case keys (what workers-og itself uses) must still replace the
-  // defaults, not append a second Cache-Control or Content-Type.
-  test("title-case caller headers replace the defaults", async () => {
-    const res = new workerd.ImageResponse(blankCard(), {
-      headers: { "Content-Type": "text/html", "Cache-Control": "no-store" },
-    });
-    expect(res.headers.get("content-type")).toBe("image/png");
-    expect(res.headers.get("cache-control")).toBe("no-store");
-    await res.body?.cancel();
-  });
-});
 
 describe("node: full render", () => {
   test("renders a PNG with the requested dimensions", async () => {
