@@ -93,6 +93,7 @@ Verified against `main` at 8958705 on 2026-10-01.
 | Durable turns | ✅ log-replay + step checkpoints; one Durable Object per session on Workers, SQLite in dev; sync tools exactly-once through `ctx.store` | `agent-runtime.ts`, `agent-durable.ts` |
 | Streaming | ✅ `Model` returns `AsyncIterable<ModelDelta>`; `TurnEvent` stream; `observeTurnEvents` | `agent-runtime.ts:139`, `turn-events.ts` |
 | HITL | ✅ `ctx.requestInput`, answerers, `onInputAnnouncement`, notes, supervise | `agent-runtime.ts`, `supervise.ts` |
+| Native session persistence | ⚠️ the auto-mount opens SQLite as `:memory:`: durable within a process, gone after a restart; file-backed only when the runtime is mounted by hand with a path | `agent-native.ts:331-339`, `agents-deploy.md` |
 | Cancellation | ✅ `session.cancel(turnId)` | `agent-runtime.ts:1182` |
 | Proactive turns | ✅ `ProactiveTrigger` + channel `deliver` | `agent-config.ts`, `channels.ts` |
 | Subagents | ⚠️ native proof of concept only: `subagent: true` is a marker; the tool body itself opens a child with `ctx.runtime.session(...)`. The Durable Object host rejects every child-session request (cross-DO wiring not implemented). No directory slot, no isolation contract, no docs | `agent-runtime.ts:184,221`, `agent-durable.ts` (`crossDoUnsupported`), `core/test/agent-runtime.test.ts` |
@@ -130,8 +131,13 @@ Supporting claims, in order of how hard they are to copy:
    pages and call the same actions.
 3. **Durability without a workflow service.** Sessions run on June's own log-replay engine:
    on Workers each session is a Durable Object (no queue to provision, a parked session holds
-   no compute); on native hosts sessions persist in local SQLite inside the app process, where
-   a parked session costs storage but no extra service.
+   no compute); on native hosts sessions live in SQLite inside the app process, where a parked
+   session costs storage but no extra service. **Today the native auto-mount opens that SQLite
+   as `:memory:`** (`createNativeRuntime`'s default; `agents-deploy.md` documents it as gone
+   after a restart), so native restart durability currently requires mounting the runtime with
+   a file path. This RFC makes a file-backed store the default for production native hosts
+   (§10); until then the claim holds for Workers and for explicitly file-backed native
+   runtimes only.
 4. **Operators are first-class.** Supervise, notes, answerers, the inbox contract — humans
    working alongside the agent are designed in, not bolted on.
 
@@ -282,6 +288,13 @@ separate, explicit limit:
   step checkpoints its measured duration, and the accumulated total is the sum of committed
   steps plus the step in flight, so a long human approval never exhausts the budget and a
   replay does not count a step twice.
+- **Crash accounting.** A step that dies mid-flight has no completion record, and a start
+  timestamp alone would count the downtime. So a running step writes a durable **heartbeat**
+  (charged active time so far) every `heartbeatMs` (default 5 s). On recovery the lost step
+  is charged up to its last heartbeat plus one full interval, conservatively; downtime after
+  that is not charged. Overrun is therefore bounded by one interval per crash, and a turn's
+  crash-retry count is itself capped (`maxAttempts`), so repeated crashes cannot let it run
+  past `maxActiveMs` indefinitely.
 - On reaching a limit the turn ends with `turn.failed { reason: "budget", limit }` by default,
   or parks for an operator to extend it (`onLimit: "ask"`) through the existing
   `requestInput` path.
@@ -391,11 +404,11 @@ A Markdown form is also accepted: `schedules/daily_digest.md` with `cron`, `time
   DST included: a local 09:00 stays 09:00 local across a DST change; a local time skipped by
   a spring-forward fires once at the next valid minute, and one repeated by a fall-back fires
   once. Occurrences are identified by their UTC instant, so the deduplication above holds.
-- Hosts: Workers → Cron Triggers evaluate only in UTC and know no time zones, so `june build`
-  does not emit the user's expression verbatim. UTC schedules emit their own expression; when
-  any schedule has a non-UTC `timezone`, it emits one UTC dispatcher trigger (every minute)
-  that wakes a scheduler DO, which computes due local-time occurrences and dispatches each
-  exactly as above. Native → an in-process scheduler with the same due-time computation that,
+- Hosts: Workers → Cron Triggers evaluate only in UTC, know no time zones, and count against
+  an account-level trigger quota. So `june build` never emits the user's expressions: it
+  emits **one shared UTC dispatcher trigger** (every minute) for all schedules, UTC or not,
+  which wakes a scheduler DO that computes due occurrences and dispatches each exactly as
+  above. A project uses one Cron Trigger regardless of how many schedule files it has. Native → an in-process scheduler with the same due-time computation that,
   on start, catches up missed occurrences within a configurable window (`catchUp`, default:
   the latest missed occurrence only).
 - Dynamic schedules (created by a tool at runtime) are a later slice on DO alarms.
@@ -435,9 +448,15 @@ Cross-session context, scoped to a principal or tenant.
   the model *said* using them stays in the transcript, which later participants and the model
   can read. Counting speakers after the fact is too late. So every session gets an access
   policy at creation, fixed for its lifetime:
-  - **`owner`**: only the opening principal may read or send (§9.1). Private recall is
-    allowed. A turn from anyone else (another user, an anonymous message) is refused; it is
-    never run against this history.
+  - **`owner`**: only the opening principal may send, and read except for the operator
+    exception below (§9.1). Private recall is allowed. A turn from anyone else (another user,
+    an anonymous message) is refused; it is never run against this history.
+  - **Operators are a deliberate, audited exception for `owner` sessions.** Reading an owner
+    session (whose answers may derive from private memory) needs a separate
+    `read:owner-session` right granted through the app's fail-closed authorize hook (the
+    inbox work, #297), not the general operator role. Every such read is recorded as an
+    audit note on the session. An app that grants no one that right has owner sessions no
+    operator can read.
   - **`shared`** (any shareable thread: a Slack channel thread, a group email, an operator
     inbox thread): private recall is off. Recall is allowed only if `memory.ts` declares a
     shared scope (`shared: "thread"` or `scope: "tenant"`), whose records every permitted
@@ -463,7 +482,10 @@ in two kinds with different guarantees:
   the idempotency key. The exact subset is enumerated from the engine as part of this slice.
 - **Live hooks** (`onLive`) receive every event, including live-only ones that are never
   persisted or replayed (`message.delta`, `reasoning.delta`, `turn.started`, `turn.failed`
-  and others). They are best-effort: at-most-once, lost on a crash or a host restart.
+  and others). They are best-effort in both directions: events can be **lost** (a crash or
+  host restart) and **duplicated** (each crash-replay attempt re-emits `turn.started`, and a
+  retried, uncheckpointed model call re-emits its deltas). Each live event carries the
+  turn id and an attempt number so a hook that needs uniqueness can deduplicate itself.
 
 This is also the attachment point for OpenTelemetry export (`@junejs/server/otel`), mapping turn →
 span, step → child span, tool call → child span.
@@ -575,8 +597,9 @@ client consumes sessions, one authenticated protocol serves all of them:
   (the app's auth, or a June-issued scoped token as in the inbox work); a session id is an
   identifier, never a bearer capability. Each operation is authorized against that session
   separately: *read* (snapshot, events) for those the session's access policy (§7.3)
-  admits — the owner alone for an `owner` session, permitted participants for a `shared`
-  one — and authorized operators; *send* for callers that policy allows to speak, whose message then runs under their
+  admits — the owner for an `owner` session (plus operators holding the audited
+  `read:owner-session` right, §7.3), permitted participants and authorized operators for a
+  `shared` one; *send* for callers that policy allows to speak, whose message then runs under their
   own principal (§6.2 eligibility); *respond* only for the request's `answerers`, as today;
   *cancel* for the turn's speaker and operators. An unauthorized caller gets the same 404 as
   a missing session, so ids cannot be probed.
@@ -622,6 +645,12 @@ React in today (§3). The slice therefore includes:
   an `app/page.tsx`, and check that `june dev` and `june build` still discover the root
   `agent/` (one HTTP turn succeeds) and that adding an `app/agent/` beside it fails assembly
   with the precedence error (§4.3).
+- **Persistent by default in production.** The native auto-mount keeps `:memory:` for
+  `june dev` only when asked (`agent.runtime.store: "memory"`); otherwise, and always for
+  `june start` and the agent-only entrypoint, it opens a file-backed SQLite store
+  (`.june/agent.db`, configurable). The §7.2 execution inbox and restart scanner presuppose
+  this: with a `:memory:` store there is nothing to recover, and the scanner says so at
+  startup instead of implying durability.
 - `create-june` gains `--template agent`, whose `package.json` lists no React. A package split
   stays optional.
 - `june info` prints the full agent manifest (slots, subagents, schedules, memory provider,
