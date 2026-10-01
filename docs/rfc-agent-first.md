@@ -369,8 +369,24 @@ A Markdown form is also accepted: `schedules/daily_digest.md` with `cron`, `time
 - **Guarantee: at-least-once per occurrence, with idempotent turns.** Each firing is a
   persisted *occurrence* `(schedule, scheduledTime)`. Its session id (for `fresh`) and turn id
   are derived deterministically from the occurrence, so redelivery after a crash between
-  dispatch and bookkeeping reaches the same turn instead of starting a second one. The
-  occurrence is marked done only after the turn is accepted.
+  dispatch and bookkeeping reaches the same turn instead of starting a second one.
+- **Acceptance is a durable handoff, not an ACK.** Deterministic ids and checkpoints alone do
+  not wake anything up: today `AgentSession.begin` queues a normal start on an in-memory
+  promise chain, and the DO alarm retries input announcements, not interrupted turns. A host
+  could ACK, the occurrence could be marked done, and a crash could then leave no component
+  responsible for the turn. So:
+  - The receiver accepts by writing the turn into a **durable execution inbox** in the
+    session store (turn id, trigger, seed), in the same transaction that produces the ACK.
+  - A **restart scanner** owns everything in that inbox: on Workers an alarm armed before the
+    ACK commits (as the announcement watchdog is today); natively a startup scan. It resumes
+    any accepted turn that has not reached a terminal state.
+  - The occurrence is marked done only after that durable ACK. Until a receiver provides the
+    inbox guarantee, recovery responsibility stays with the occurrence (it is redelivered).
+  - The inbox is an engine capability, not schedule-specific: proactive turns from any source
+    and inbound channel turns use the same path.
+  - **Acceptance test:** kill the receiver right after the ACK, and again mid-step; restart it
+    with no new user message and no new cron occurrence; the same turn id resumes and
+    completes exactly once (at-least-once for remote tools, as today).
 - **Time zones.** `cron` is interpreted in the schedule's IANA `timezone` (default `UTC`),
   DST included: a local 09:00 stays 09:00 local across a DST change; a local time skipped by
   a spring-forward fires once at the next valid minute, and one repeated by a fall-back fires
@@ -414,11 +430,26 @@ Cross-session context, scoped to a principal or tenant.
   default provider's table has the scope key in its primary key, so a cross-scope read is not
   expressible through it. Custom providers receive the same scope key and the docs state that
   keying on anything else is a tenant-isolation bug.
-- **Scope changes inside a session.** Because recall is a per-turn overlay, a later turn with
-  a different (or no) scope never sees records recalled for an earlier speaker. What the model
-  *said* using those records does stay in the transcript, so for sessions where more than one
-  distinct principal has spoken, memory is off by default; `memory.ts` must opt in with
-  `shared: "thread"` to allow it, making the boundary an explicit, reviewable policy.
+- **The memory boundary is decided before the first recall, from the session's access
+  policy.** A per-turn overlay keeps raw records from outliving a scope change, but anything
+  the model *said* using them stays in the transcript, which later participants and the model
+  can read. Counting speakers after the fact is too late. So every session gets an access
+  policy at creation, fixed for its lifetime:
+  - **`owner`**: only the opening principal may read or send (§9.1). Private recall is
+    allowed. A turn from anyone else (another user, an anonymous message) is refused; it is
+    never run against this history.
+  - **`shared`** (any shareable thread: a Slack channel thread, a group email, an operator
+    inbox thread): private recall is off. Recall is allowed only if `memory.ts` declares a
+    shared scope (`shared: "thread"` or `scope: "tenant"`), whose records every permitted
+    participant may see.
+  - Channels declare the policy their sessions get (a Slack DM is `owner`, a channel thread is
+    `shared`); a session cannot switch from `owner` to `shared`. If an owner-bound conversation
+    needs to bring someone in, that **forks** a new `shared` session: the new participant sees
+    only what is explicitly carried over, never the private history.
+  - **Test case:** A opens a session, gets an answer that used A's private memory, then B joins
+    (a Slack thread reply; an inbox participant add). B's turn must not see A's answer or
+    records — refused under `owner`, or a fork under `shared` — and an anonymous follow-up
+    gets the same treatment.
 
 ### 7.4 `hooks/`
 
@@ -478,12 +509,26 @@ processes; June has neither for the model.
   - Each backend declares whether its filesystem is **persistent** (survives restarts, e.g. a
     mounted volume keyed by the identity) or **ephemeral**.
   - If reacquisition finds the sandbox gone (ephemeral backend, or a persistent one that was
-    lost), the runtime opens a fresh sandbox under a new generation, reseeds `/workspace`, and
-    appends a `sandbox.reset` note to the transcript telling the model that earlier files and
-    processes are gone. It never silently pretends continuity.
-  - **Restart conformance case:** write a file in one step, kill the host (DO eviction, process
-    kill), resume; a persistent backend must read the file back, and an ephemeral one must
-    produce `sandbox.reset` before the next sandbox tool call.
+    lost), the runtime opens a fresh sandbox under a new generation and reseeds `/workspace`.
+    It never silently pretends continuity.
+  - **Generation reconciliation on resume, before any pending work.** A lazy check inside
+    `getSandbox()` is not enough: the engine resumes a batch's unanswered tool calls before
+    asking the model again, so a later call in the batch could run in generation N+1 on
+    assumptions from the lost generation N, and a model-only continuation would never notice.
+    So whenever a session with a sandbox identity resumes (crash replay, DO wake, input
+    resume), the engine first reacquires the sandbox. If the generation changed:
+    - calls of the batch that already completed stay checkpointed and are **never re-run** to
+      rebuild files — their external effects happened;
+    - every call of the batch still pending gets a synthetic result in one transaction
+      ("not run: the sandbox from generation N was lost"), as cancellation does today;
+    - a `sandbox.reset` note is appended, and control returns to the **model**, which
+      re-plans with the knowledge that files and processes are gone.
+  - **Restart conformance cases:** (1) write a file in one step, kill the host (DO eviction,
+    process kill), resume: a persistent backend reads the file back; an ephemeral one produces
+    `sandbox.reset` before any further tool runs. (2) Lose the sandbox between two calls of one
+    batch: the first call's result stays, the second is answered "not run", the model is asked
+    next. (3) Lose it before a model-only continuation: the reset note precedes that model
+    call.
 - Default tools `bash`, `read_file`, `write_file` occupy `tools/` slots and are replaceable or
   disableable like any authored tool. They are **off** unless `sandbox.ts` exists.
 - **Backends must prove the isolation they claim.** Each backend declares capabilities —
@@ -529,8 +574,9 @@ client consumes sessions, one authenticated protocol serves all of them:
 - **Authentication and per-session authorization.** Every endpoint authenticates the caller
   (the app's auth, or a June-issued scoped token as in the inbox work); a session id is an
   identifier, never a bearer capability. Each operation is authorized against that session
-  separately: *read* (snapshot, events) for the session's participants and authorized
-  operators; *send* for callers allowed to speak in it, whose message then runs under their
+  separately: *read* (snapshot, events) for those the session's access policy (§7.3)
+  admits — the owner alone for an `owner` session, permitted participants for a `shared`
+  one — and authorized operators; *send* for callers that policy allows to speak, whose message then runs under their
   own principal (§6.2 eligibility); *respond* only for the request's `answerers`, as today;
   *cancel* for the turn's speaker and operators. An unauthorized caller gets the same 404 as
   a missing session, so ids cannot be probed.
@@ -563,8 +609,10 @@ React in today (§3). The slice therefore includes:
   optional peers of `@junejs/server`, with every renderer import behind entrypoints that only
   the app path loads.
 - **Entrypoints:** an agent-only path for `june dev` and `june build` that discovers `agent/`,
-  serves its channels and session protocol, and never imports the renderer, the App Router or
-  the RSC pipeline when there is no `app/` directory.
+  serves its **existing** surfaces (the HTTP chat endpoint and mounted channels), and never
+  imports the renderer, the App Router or the RSC pipeline when there is no `app/` directory.
+  This slice deliberately does not wait for the §9.1 session protocol; slice 13 adds the
+  protocol to this entrypoint, and its own tests then run on the same React-free fixture.
 - **Source rule:** a lint rule like the existing zero-`node:*` rule (`agent*.ts`,
   `channels.ts`, `connections.ts`, `supervise.ts` may not import `react`).
 - **Acceptance fixture:** CI packs the packages (`npm pack`), installs them into a clean
@@ -587,16 +635,16 @@ Each slice ships independently, with docs on june.build and a `stability.md` ent
 | # | slice | depends on | size |
 | --- | --- | --- | --- |
 | 1 | Positioning: README, home, docs order | — | S |
-| 2 | Agent-only packaging: optional React peers, agent-only CLI entrypoints, `--template agent`, packed-package fixture (§10) | — | M |
+| 2 | Agent-only packaging: optional React peers, agent-only CLI entrypoints over the existing HTTP/channel surfaces, `--template agent`, packed-package fixture (§10) | — | M |
 | 3 | Model contract: usage + context window, abort signal, adapter conformance (§6.0) | — | M |
 | 4 | Compaction (§6.1) | 3 | M |
 | 5 | Turn budgets (§6.4) | 3 | S |
-| 6 | `schedules/` (§7.2), Workers Cron + native scheduler | — | M |
+| 6 | Durable execution inbox + restart scanner, then `schedules/` (§7.2), Workers Cron + native scheduler | — | M–L |
 | 7 | Steering / turn policy (§6.2) | 3 | M |
 | 8 | Multi-provider models (§6.3) | 3 | M |
 | 9 | `subagents/` slot + cross-DO child routing + delegated policy (§7.1) | — | L |
 | 10 | `evals/` + `june eval` (§7.5) | 8 helps | M |
-| 11 | `memory.ts` (§7.3) | 4 | M |
+| 11 | Session access policy (`owner` / `shared`, fork) + `memory.ts` (§7.3) | 4 | M |
 | 12 | `hooks/` + OTel (§7.4) | — | S |
 | 13 | Session protocol: snapshot, cursor, send / respond / cancel (§9.1) | 7 (`turnPolicy` on send) | M |
 | 14 | `useAgent()` + generative UI (§9.2) | 13 | M |
