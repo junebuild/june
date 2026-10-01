@@ -26,26 +26,31 @@ export type { OgFont } from "./fonts";
 export class ImageResponse extends Response {
   constructor(element: ReactElement, options: import("./types").ImageResponseOptions = {}) {
     let cancelled = false;
-    const body = new ReadableStream<Uint8Array>({
-      async pull(controller) {
-        // Never forward options.headers — workers-og spreads them onto title-case keys.
-        const rendered = new WorkersOgImageResponse(element, {
-          width: options.width,
-          height: options.height,
-          fonts: options.fonts,
-          emoji: options.emoji,
-          debug: options.debug,
-        });
-        const bytes = new Uint8Array(await rendered.arrayBuffer());
-        // The reader cancelled while the render ran: the stream is closed, drop the bytes.
-        if (cancelled) return;
-        controller.enqueue(bytes);
-        controller.close();
+    const body = new ReadableStream<Uint8Array>(
+      {
+        async pull(controller) {
+          // Never forward options.headers — workers-og spreads them onto title-case keys.
+          const rendered = new WorkersOgImageResponse(element, {
+            width: options.width,
+            height: options.height,
+            fonts: options.fonts,
+            emoji: options.emoji,
+            debug: options.debug,
+          });
+          const bytes = new Uint8Array(await rendered.arrayBuffer());
+          // The reader cancelled while the render ran: the stream is closed, drop the bytes.
+          if (cancelled) return;
+          controller.enqueue(bytes);
+          controller.close();
+        },
+        cancel() {
+          cancelled = true;
+        },
       },
-      cancel() {
-        cancelled = true;
-      },
-    });
+      // highWaterMark 0: pull() only answers a read. The default (1) pulls once start()
+      // settles to fill the queue, which would start the WASM render with no reader.
+      { highWaterMark: 0 },
+    );
     super(body, { status: options.status ?? 200, headers: ogResponseHeaders(options) });
   }
 }
