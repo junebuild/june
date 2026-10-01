@@ -295,6 +295,20 @@ separate, explicit limit:
   that is not charged. Overrun is therefore bounded by one interval per crash, and a turn's
   crash-retry count is itself capped (`maxAttempts`), so repeated crashes cannot let it run
   past `maxActiveMs` indefinitely.
+- **Synchronous local tools are the exception to heartbeats.** A local tool runs inside a
+  synchronous `store.tx` (`agent-runtime.ts:928-932`), so no timer can fire or commit while it
+  runs, and a crash rolls the whole call back. They are accounted differently:
+  - Before entering the transaction, the engine durably records the call's entry. A call
+    found entered but uncommitted on recovery is charged a fixed `localCallChargeMs`
+    (default 30 s), conservatively, whatever it actually ran.
+  - A local call that returns is charged its measured duration; one that exceeds
+    `localCallChargeMs` is reported as a contract violation (local tools are meant to be
+    short, transactional writes), so the conservative charge stays an honest upper bound for
+    well-behaved tools.
+  - A local call cannot be preempted. A runaway synchronous loop is a hang, not a crash, and
+    is bounded by the host (the isolate's CPU limit on Workers; a process watchdog
+    natively), not by this budget. Long work belongs in an async (remote) tool, which does
+    heartbeat.
 - On reaching a limit the turn ends with `turn.failed { reason: "budget", limit }` by default,
   or parks for an operator to extend it (`onLimit: "ask"`) through the existing
   `requestInput` path.
@@ -339,12 +353,22 @@ would work in dev and fail on the primary edge host.
 - **Delegated policy — identity is not enough.** Passing the same `principal` alone would let a
   surface that denies a write tool on the parent reach it through a child that has it. So the
   `delegate_<name>` call carries a **policy envelope**: the turn's `principal`, `initiator`,
-  inbound `source`, and the parent turn's effective `deniedTools`. The child's effective tool
-  set is its own tools, filtered by the same principal gate, by its own
-  `surfaces[source].denyTools`, and by the parent's denied names (a denial applies to a child
-  tool of the same name); tools may also declare capability tags (`capabilities: ["write"]`)
-  and a surface may deny by tag, which crosses the boundary regardless of tool names. The
-  envelope is persisted with the child's start and suspend checkpoints, so replay and resume
+  inbound `source`, and an explicit **capability allowlist** derived from the parent's policy.
+  Tool names cannot be the boundary — a child can expose the same operation under another
+  name — so the boundary is capabilities, and it fails closed:
+  - Every tool reachable through delegation (every tool in a `subagents/<name>/` tree) must
+    declare `capabilities` (e.g. `["orders:read"]`, `["orders:write"]`). An unclassified
+    subagent tool fails assembly.
+  - The allowlist is the union of the capabilities of the parent tools that are **active on
+    this turn** — after the principal gate and the surface's `denyTools`. A parent tool with no
+    declared capabilities contributes nothing, so an unclassified parent grants nothing.
+  - A child tool is exposed only if every capability it declares is in the allowlist (or
+    granted, below), and additionally passes the child's own principal gate and
+    `surfaces[source].denyTools`.
+  - A surface may also deny by capability (`denyCapabilities`), which removes those
+    capabilities from the allowlist directly.
+
+  The envelope is persisted with the child's start and suspend checkpoints, so replay and resume
   re-derive the same set, and it travels in the payload on both native dispatch and
   sibling-DO RPC (the child DO is reached only through the parent's worker, never directly
   from the network).
