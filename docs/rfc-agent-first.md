@@ -150,8 +150,13 @@ is removed. What changes:
 - **App-first** (today): `npm create june` → an app with an optional `agent/`.
 - **Agent-first** (new): `npm create june -- --template agent` → `agent/` + `june.config.ts`,
   no `app/` pages, no React or react-dom installed — a packaging contract with an acceptance
-  test, not just a template change (§10). Adding `app/` later turns it into a full June app
-  with no migration, because both doors build the same assembly.
+  test, not just a template change (§10). The agent-only template keeps the agent at the
+  project root (`agent/`, as a standalone Worker does today), while a full app uses
+  `app/agent/`. **Precedence:** discovery looks for `app/agent/` first and falls back to a
+  root `agent/`; when both exist, assembly fails with an error naming both paths, so an agent
+  never silently disappears or doubles. Adding `app/` later therefore turns the project into a
+  full June app with no move required; moving `agent/` under `app/` is optional. Both doors
+  build the same assembly.
 
 ## 5. Design principles
 
@@ -254,7 +259,10 @@ The `Model` seam is already provider-agnostic; only adapters are missing.
   optional peer like `@anthropic-ai/sdk` today, each mapping its finish reasons onto
   `ModelFinish`.
 - `agent.ts` may pass a function `(ctx) => modelId` for per-turn selection (tenant, surface,
-  cost tier).
+  cost tier). **It is resolved once, when the turn opens, and the resolved id is checkpointed
+  with the turn opening**; every step, crash-replay and resume of that turn reuses it, so a
+  tenant config change or a restart mid-turn never switches provider or model inside one
+  durable turn. The next turn resolves again.
 - The live contract suite gains one replayed agent loop per adapter (see the model-eval replay
   practice) so adapters are judged on tool-calling behavior, not just text. Every adapter must
   also pass the §6.0 conformance tests.
@@ -265,9 +273,15 @@ Compaction keeps the context small; it does not bound how much work a turn does.
 can keep calling tools indefinitely while staying under the context limit. Budgets are a
 separate, explicit limit:
 
-- `limits: { maxSteps, maxToolCalls, maxOutputTokens, maxWallClockMs }` per turn in
+- `limits: { maxSteps, maxToolCalls, maxOutputTokens, maxActiveMs }` per turn in
   `agent.ts`, overridable per surface and per schedule; token totals come from the §6.0
   checkpointed usage, so a replay counts the same.
+- **`maxActiveMs` budgets execution time, not elapsed time.** The clock runs only while the
+  turn is executing a model call or a tool. It is paused while the turn is queued, parked for
+  input (including an `onLimit: "ask"` park) or waiting for redelivery after a crash. Each
+  step checkpoints its measured duration, and the accumulated total is the sum of committed
+  steps plus the step in flight, so a long human approval never exhausts the budget and a
+  replay does not count a step twice.
 - On reaching a limit the turn ends with `turn.failed { reason: "budget", limit }` by default,
   or parks for an operator to extend it (`onLimit: "ask"`) through the existing
   `requestInput` path.
@@ -357,9 +371,17 @@ A Markdown form is also accepted: `schedules/daily_digest.md` with `cron`, `time
   are derived deterministically from the occurrence, so redelivery after a crash between
   dispatch and bookkeeping reaches the same turn instead of starting a second one. The
   occurrence is marked done only after the turn is accepted.
-- Hosts: Workers → `june build` emits Cron Triggers and routes them into the agent's DO;
-  native → an in-process scheduler that, on start, catches up missed occurrences within a
-  configurable window (`catchUp`, default: the latest missed occurrence only).
+- **Time zones.** `cron` is interpreted in the schedule's IANA `timezone` (default `UTC`),
+  DST included: a local 09:00 stays 09:00 local across a DST change; a local time skipped by
+  a spring-forward fires once at the next valid minute, and one repeated by a fall-back fires
+  once. Occurrences are identified by their UTC instant, so the deduplication above holds.
+- Hosts: Workers → Cron Triggers evaluate only in UTC and know no time zones, so `june build`
+  does not emit the user's expression verbatim. UTC schedules emit their own expression; when
+  any schedule has a non-UTC `timezone`, it emits one UTC dispatcher trigger (every minute)
+  that wakes a scheduler DO, which computes due local-time occurrences and dispatches each
+  exactly as above. Native → an in-process scheduler with the same due-time computation that,
+  on start, catches up missed occurrences within a configurable window (`catchUp`, default:
+  the latest missed occurrence only).
 - Dynamic schedules (created by a tool at runtime) are a later slice on DO alarms.
 
 ### 7.3 `memory.ts`
@@ -372,8 +394,10 @@ Cross-session context, scoped to a principal or tenant.
   session end, only from turns of the same scope. Recalled records are injected as a per-turn
   overlay — never appended to the persisted message history — so they are excluded from the
   summarizer and cannot outlive a scope change. They are attributed in the prompt (like
-  notes: information, not instructions). Recall results are cached per scope within a session
-  to keep the per-turn cost low.
+  notes: information, not instructions). Recall runs once per turn, at the turn opening; its
+  result is checkpointed with the turn and reused by every step, replay and resume of that
+  turn only. There is no cache across turns: the next turn recalls again, so a long-lived
+  session sees memory captured elsewhere and its own pre-compaction capture.
 - **Default provider is the app's own `db`** (a Juno table keyed by principal), so memory is
   ordinary app data: queryable, migratable, deletable on a user's request. This is a concrete
   case of "the agent lives inside the app".
@@ -444,7 +468,22 @@ The largest and last slice. Agents that analyze data or touch code need a filesy
 processes; June has neither for the model.
 
 - Contract `Sandbox { run, spawn, readFile, writeFile, setNetworkPolicy }`, opened lazily per
-  session by `ctx.getSandbox()`, handle checkpointed so replay resumes the same sandbox.
+  session by `ctx.getSandbox()`.
+- **Durable identity, not a durable filesystem by assumption.** A checkpointed handle does not
+  keep a sandbox alive through a DO eviction, container loss or native restart, and completed
+  sandbox steps are skipped on replay, so a lost filesystem would leave the transcript
+  claiming writes that no longer exist. Therefore:
+  - The session checkpoints a **sandbox identity** (backend, id, and a generation number), not
+    a live handle. `ctx.getSandbox()` reacquires by identity after any restart.
+  - Each backend declares whether its filesystem is **persistent** (survives restarts, e.g. a
+    mounted volume keyed by the identity) or **ephemeral**.
+  - If reacquisition finds the sandbox gone (ephemeral backend, or a persistent one that was
+    lost), the runtime opens a fresh sandbox under a new generation, reseeds `/workspace`, and
+    appends a `sandbox.reset` note to the transcript telling the model that earlier files and
+    processes are gone. It never silently pretends continuity.
+  - **Restart conformance case:** write a file in one step, kill the host (DO eviction, process
+    kill), resume; a persistent backend must read the file back, and an ephemeral one must
+    produce `sandbox.reset` before the next sandbox tool call.
 - Default tools `bash`, `read_file`, `write_file` occupy `tools/` slots and are replaceable or
   disableable like any authored tool. They are **off** unless `sandbox.ts` exists.
 - **Backends must prove the isolation they claim.** Each backend declares capabilities —
@@ -531,7 +570,10 @@ React in today (§3). The slice therefore includes:
 - **Acceptance fixture:** CI packs the packages (`npm pack`), installs them into a clean
   directory with an agent-only project, and runs `june dev` (one HTTP turn) and `june build`
   with no `react`, `react-dom` or `app/` present. It fails if either command resolves a React
-  module.
+  module. The same fixture then covers the **agent-only → app transition**: install React, add
+  an `app/page.tsx`, and check that `june dev` and `june build` still discover the root
+  `agent/` (one HTTP turn succeeds) and that adding an `app/agent/` beside it fails assembly
+  with the precedence error (§4.3).
 - `create-june` gains `--template agent`, whose `package.json` lists no React. A package split
   stays optional.
 - `june info` prints the full agent manifest (slots, subagents, schedules, memory provider,
@@ -556,7 +598,7 @@ Each slice ships independently, with docs on june.build and a `stability.md` ent
 | 10 | `evals/` + `june eval` (§7.5) | 8 helps | M |
 | 11 | `memory.ts` (§7.3) | 4 | M |
 | 12 | `hooks/` + OTel (§7.4) | — | S |
-| 13 | Session protocol: snapshot, cursor, send / respond / cancel (§9.1) | — | M |
+| 13 | Session protocol: snapshot, cursor, send / respond / cancel (§9.1) | 7 (`turnPolicy` on send) | M |
 | 14 | `useAgent()` + generative UI (§9.2) | 13 | M |
 | 15 | Sandbox with backend conformance (§8) | — | L |
 
