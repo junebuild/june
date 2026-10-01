@@ -49,6 +49,9 @@ beforeEach(() => {
 describe("workerd: body delegation", () => {
   test("the render starts when the body is read, not when the response is built", async () => {
     const res = new ImageResponse(card());
+    // A ReadableStream with the default highWaterMark (1) pulls on its own
+    // once start() settles, with no reader. Let those microtasks run first.
+    await Bun.sleep(0);
     expect(calls).toHaveLength(0);
     await res.arrayBuffer();
     expect(calls).toHaveLength(1);
