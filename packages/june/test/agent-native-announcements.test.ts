@@ -143,6 +143,25 @@ describe("input announcements on the native runtime (#260)", () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(seen).toHaveLength(1);
   });
+
+  test("a retry that fires after the database failed logs instead of throwing out of the timer", async () => {
+    const errors = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const db = await openLocalSqliteSync(":memory:");
+      const rt = new NativeRuntime({ ops: def(() => { throw new Error("index down"); }) }, db, { maxSessions: 1 });
+      runtimes.push(rt); // close() stops its retry; it leaves this caller-owned db alone
+      jest.useFakeTimers();
+      await park(rt, "ops", "s1"); // the delivery fails: a retry is scheduled
+      await microtasks();
+      rt.session("ops", "s2"); // evicts the idle s1, so the retry rebuilds it…
+      db.close(); // …over a database that now fails every read (the runtime itself is still open)
+      expect(() => jest.advanceTimersByTime(5_000)).not.toThrow();
+      await microtasks();
+      expect(errors.mock.calls.some((c) => String(c[0]).includes("reading the input announcement outbox failed"))).toBe(true);
+    } finally {
+      errors.mockRestore();
+    }
+  });
 });
 
 describe("closing a runtime (#317)", () => {
