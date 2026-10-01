@@ -233,6 +233,12 @@ the inbox) people correct themselves mid-turn: "actually, the other order."
   always finishes and commits first. Once assistant text has streamed, steering applies at the
   next step boundary.
 - Default per channel: `steer` for conversational channels, `queue` for HTTP and email.
+- **Eligibility for folding and steering.** A turn runs under one trusted `principal`, one
+  source/target and one effective policy (principal gate, `denyTools`). A queued message may
+  fold into, and a steering message may join, a turn only when all three are identical to that
+  turn's. Any other message — another speaker in a shared thread, an anonymous message, a
+  different surface — starts a separate turn under its own identity. This keeps one user's
+  message from ever executing under another user's tool authorization.
 - Pure input answers (`session.resume`) never steer.
 - Durability: the steer is recorded in the log before the abort, so replay reproduces it.
 - New TurnEvent: `turn.steered`.
@@ -418,8 +424,17 @@ evals/
 - A case is an input (message, or a scripted multi-turn exchange), optional seeded `db` state,
   and assertions: tool called / not called with matching input, final text matches, a
   `judge()` rubric scored by a model, or a ground-truth grader over the resulting `db` state.
-- Runs the **full agent loop with the real tools** against a scratch database (the replay
-  method we already use in practice); connections are stubbed at the `fetch` seam.
+- Runs the **full agent loop with the real tool code** against a scratch database (the replay
+  method we already use in practice).
+- **No production side effects by default.** A scratch `db` and a stubbed `fetch` are not
+  enough: actions can post to channels, write `kv`/`blob`, open a sandbox or call SDKs
+  directly. The eval host therefore binds **deny-or-stub test adapters for every external
+  capability**: channel delivery records instead of posting, `kv`/`blob` are scratch
+  instances, the sandbox is a disposable local backend, connections resolve to recorded
+  fixtures, and outbound network from tool code is blocked (a direct call fails the case with
+  a clear error rather than reaching a real service). A real integration is used only when a
+  case opts in by name (`live: ["slack"]`), and `june eval` refuses live cases unless
+  `--allow-live` is passed.
 - `june eval [--model <id>] [--repeat n]` reports pass rate per case and variance across
   repeats, so a model or prompt change is judged on numbers.
 
@@ -471,7 +486,15 @@ client consumes sessions, one authenticated protocol serves all of them:
   live), and a cursor older than retention returns an explicit "resnapshot" signal rather than
   a silent gap.
 - **Operations:** send a message (with `turnPolicy`), respond to an input request, cancel a
-  turn — each authorized against the caller's verified identity, like `answerers` today.
+  turn.
+- **Authentication and per-session authorization.** Every endpoint authenticates the caller
+  (the app's auth, or a June-issued scoped token as in the inbox work); a session id is an
+  identifier, never a bearer capability. Each operation is authorized against that session
+  separately: *read* (snapshot, events) for the session's participants and authorized
+  operators; *send* for callers allowed to speak in it, whose message then runs under their
+  own principal (§6.2 eligibility); *respond* only for the request's `answerers`, as today;
+  *cancel* for the turn's speaker and operators. An unauthorized caller gets the same 404 as
+  a missing session, so ids cannot be probed.
 - It should share shape and auth with the inbox API (`/_june/inbox/v1`, #297) rather than
   become a second operator API.
 - **Acceptance cases:** reconnect during a pending approval shows the same prompt and accepts
