@@ -26,8 +26,9 @@ This RFC makes that explicit:
    and June lacks today: context compaction, steering, multi-provider models, schedules,
    memory, declared subagents, evals, hooks, and a sandbox.
 3. **Keep the moat.** None of this replaces what June does that a backend-only agent framework
-   cannot: one `defineAction` that is simultaneously UI action, MCP tool, HTTP endpoint and
-   agent tool; an app that is itself an agent-readable surface; edge-native durability.
+   cannot: one `defineAction` that can serve as UI action, MCP tool, HTTP endpoint and agent
+   tool from a single definition (§3 lists the conditions); an app whose pages and actions are
+   agent-readable; durable sessions on the edge as well as natively.
 
 The guiding sentence: **learn eve's harness, bet on what eve does not have.**
 
@@ -94,7 +95,7 @@ Verified against `main` at 8958705 on 2026-10-01.
 | HITL | ✅ `ctx.requestInput`, answerers, `onInputAnnouncement`, notes, supervise | `agent-runtime.ts`, `supervise.ts` |
 | Cancellation | ✅ `session.cancel(turnId)` | `agent-runtime.ts:1182` |
 | Proactive turns | ✅ `ProactiveTrigger` + channel `deliver` | `agent-config.ts`, `channels.ts` |
-| Subagents | ⚠️ runtime only: a tool with `subagent: true` spawns a child session via `ctx.runtime`; no directory slot, no isolation contract, no docs | `agent-runtime.ts:184,221` |
+| Subagents | ⚠️ native proof of concept only: `subagent: true` is a marker; the tool body itself opens a child with `ctx.runtime.session(...)`. The Durable Object host rejects every child-session request (cross-DO wiring not implemented). No directory slot, no isolation contract, no docs | `agent-runtime.ts:184,221`, `agent-durable.ts` (`crossDoUnsupported`), `core/test/agent-runtime.test.ts` |
 | Schedules | ❌ no primitive; a cron is only mentioned as a possible *caller* of a proactive turn | `agent-runtime.ts:1156` |
 | Context compaction | ❌ none | no match for `compact` in `packages/` sources |
 | Steering / queue policy | ❌ none (a new message while a turn runs is chained behind it) | `AgentSession.start` chain |
@@ -103,8 +104,8 @@ Verified against `main` at 8958705 on 2026-10-01.
 | Sandbox + shell/file tools | ❌ none | — |
 | Evals | ❌ none (the model-eval replay method exists only as practice, not a product) | — |
 | Observability | ⚠️ `instrumentation.ts` traces; no OpenTelemetry export | `instrumentation.ts` |
-| One definition, every surface | ✅ `defineAction` = UI server action + `/mcp` tool + `POST /api/<id>` + agent tool, one authorization path, `requiresPrincipal` | `agent.ts`, `mcp.ts` |
-| App as an agent surface | ✅ `.md`, `.json`, `llms.txt`, sitemap, API catalog, MCP server (2026-07-28 + 2025 fallback) | `discovery.ts`, `mcp.ts` |
+| One definition, every surface | ✅ with conditions: a described `defineAction` is a UI server action and an `/mcp` tool; it is also `POST /api/<id>` only when its id round-trips as one URL path segment (`isRoutableActionId`); it is an agent tool only when exported from `agent/tools/` (or otherwise included in the agent assembly). One authorization path, `requiresPrincipal` | `agent.ts`, `mcp.ts`, `api.ts:54-81` |
+| App as an agent surface | ✅ three separate mechanisms: page routes derive `.md` / `.json` projections unless a route disables them (`json: false`, `md: false`); `llms.txt`, sitemap and the API catalog derive from the route list plus the action registry; the MCP server lists tools from the action registry, not the route graph (2026-07-28 + 2025 fallback). Resource `route.*` files are arbitrary `Response` handlers with no projections | `route.ts:91-98`, `discovery.ts`, `mcp.ts`, `app.ts` |
 | React-free agent runtime | ✅ at module level: the agent modules import no React; `react` is an optional peer of `@junejs/core`; `examples/agent-edge` is a standalone Worker | `packages/core/package.json` |
 
 Read as a whole: **the durable core is ahead; the harness around it is behind.**
@@ -118,15 +119,19 @@ Read as a whole: **the durable core is ahead; the harness around it is behind.**
 
 Supporting claims, in order of how hard they are to copy:
 
-1. **One capability definition.** A `defineAction` is the UI's server action, the agent's tool,
-   the app's MCP tool and an HTTP endpoint, behind one authorization gate. Nothing drifts
+1. **One capability definition.** One `defineAction` serves as the UI's server action and the
+   app's MCP tool, becomes the agent's tool when the agent assembles it, and is an HTTP
+   endpoint when its id is URL-routable — all behind one authorization gate. Nothing drifts
    because nothing is duplicated. A backend-only agent framework structurally cannot offer
    this: its tools and the app's endpoints are two codebases.
-2. **The app is an agent surface.** Every route answers in HTML, `.md` and `.json`; the route
-   graph derives `llms.txt` and an MCP server. Your *own* agent and *other people's* agents
-   read the same thing.
-3. **Edge-native durability.** A session is a Durable Object: no workflow service, no queue
-   to provision, parked sessions cost nothing.
+2. **The app is an agent surface.** Page routes answer in HTML, `.md` and `.json` by default;
+   the route list and the action registry derive `llms.txt` and the API catalog; the action
+   registry backs the MCP server. Your *own* agent and *other people's* agents read the same
+   pages and call the same actions.
+3. **Durability without a workflow service.** Sessions run on June's own log-replay engine:
+   on Workers each session is a Durable Object (no queue to provision, a parked session holds
+   no compute); on native hosts sessions persist in local SQLite inside the app process, where
+   a parked session costs storage but no extra service.
 4. **Operators are first-class.** Supervise, notes, answerers, the inbox contract — humans
    working alongside the agent are designed in, not bolted on.
 
@@ -248,8 +253,11 @@ evals/                NEW — beside agent/, not inside it
 
 ### 7.1 `subagents/<name>/`
 
-Promote the existing runtime mechanism (a tool with `subagent: true` that runs a child
-session) into a slot.
+Turn the native proof of concept (a tool body that opens a child with
+`ctx.runtime.session(...)`) into a slot that works on every host. **This slice includes
+cross-host child routing**: on Workers, a child session is a sibling Durable Object reached
+over DO RPC, replacing today's `crossDoUnsupported` runtime. Shipping the slot without it
+would work in dev and fail on the primary edge host.
 
 - A subagent directory uses the same convention: `agent.ts` (with a required `description`),
   optional `instructions.md`, `tools/`, `skills/`, `connections/`, nested `subagents/`.
@@ -259,8 +267,10 @@ session) into a slot.
 - **Isolation:** a subagent inherits nothing implicitly — not tools, not instructions, not
   connections. It *does* inherit the turn's `principal` and `initiator`, so authorization
   stays the caller's, never widened by delegation.
-- Durability: already at-least-once with an idempotent child `turnId` (`agent-runtime.ts:922`);
-  a child that parks for input parks the parent's tool call.
+- Durability: at-least-once with an idempotent child `turnId` (`agent-runtime.ts:922`) on
+  native today; the sibling-DO path must derive the child's DO id and `turnId`
+  deterministically from the parent's session, turn and call ids so a redelivered call reaches
+  the same child turn. A child that parks for input parks the parent's tool call.
 - Operators see child sessions linked from the parent's transcript.
 
 ### 7.2 `schedules/`
@@ -284,9 +294,14 @@ A Markdown form is also accepted: `schedules/daily_digest.md` with `cron`, `time
   delivers through the target channel's existing proactive `deliver` path.
 - **Session policy:** `session: "fresh"` (default, one session per firing) or
   `session: "<stable id>"` (one long-running session, which is where compaction matters).
+- **Guarantee: at-least-once per occurrence, with idempotent turns.** Each firing is a
+  persisted *occurrence* `(schedule, scheduledTime)`. Its session id (for `fresh`) and turn id
+  are derived deterministically from the occurrence, so redelivery after a crash between
+  dispatch and bookkeeping reaches the same turn instead of starting a second one. The
+  occurrence is marked done only after the turn is accepted.
 - Hosts: Workers → `june build` emits Cron Triggers and routes them into the agent's DO;
-  native → an in-process scheduler with a durable last-fired record so a restart neither
-  skips nor double-fires a slot.
+  native → an in-process scheduler that, on start, catches up missed occurrences within a
+  configurable window (`catchUp`, default: the latest missed occurrence only).
 - Dynamic schedules (created by a tool at runtime) are a later slice on DO alarms.
 
 ### 7.3 `memory.ts`
@@ -301,14 +316,30 @@ Cross-session context, scoped to a principal or tenant.
 - **Default provider is the app's own `db`** (a Juno table keyed by principal), so memory is
   ordinary app data: queryable, migratable, deletable on a user's request. This is a concrete
   case of "the agent lives inside the app".
-- Scoping is mandatory: a provider receives `ctx.principal` and must key on it. A memory slot
-  with no scope fails assembly.
+- **Scoping is enforced by the framework, not trusted to the provider.** The runtime derives
+  a mandatory scope key from trusted identity only (the turn's `principal`, falling back to
+  the session's `initiator`; a schedule must declare a fixed scope in its definition) and
+  passes providers an already-scoped handle, never a raw store. With no trusted scope, recall
+  returns nothing and capture is refused (fail closed), and a `memory.*` TurnEvent records
+  the skip. The default provider's table has the scope key in its primary key, so a
+  cross-scope read is not expressible through it. Custom providers receive the same scope key
+  and the docs state that keying on anything else is a tenant-isolation bug.
 
 ### 7.4 `hooks/`
 
-Each file default-exports `(event: TurnEvent, ctx) => void | Promise<void>`. Hooks observe;
-they never alter the turn. They run after the event is committed and are at-least-once. This
-is also the attachment point for OpenTelemetry export (`@junejs/server/otel`), mapping turn →
+Hooks observe; they never alter the turn. `TurnEvent` mixes two kinds of event, so hooks come
+in two kinds with different guarantees:
+
+- **Durable hooks** (`hooks/*.ts` exporting `onCommitted`) receive only the *committed*
+  subset — events that correspond to a record in the session log (a committed step, a tool
+  result, an input request, a note, a resolution). They are fed from a per-session outbox
+  written in the same transaction as the record, and run at-least-once with the record id as
+  the idempotency key. The exact subset is enumerated from the engine as part of this slice.
+- **Live hooks** (`onLive`) receive every event, including live-only ones that are never
+  persisted or replayed (`message.delta`, `reasoning.delta`, `turn.started`, `turn.failed`
+  and others). They are best-effort: at-most-once, lost on a crash or a host restart.
+
+This is also the attachment point for OpenTelemetry export (`@junejs/server/otel`), mapping turn →
 span, step → child span, tool call → child span.
 
 ### 7.5 `evals/`
@@ -379,7 +410,7 @@ Each slice ships independently, with docs on june.build and a `stability.md` ent
 | 3 | `schedules/` (§7.2), Workers Cron + native scheduler | — | M |
 | 4 | Steering / turn policy (§6.2) | — | M |
 | 5 | Multi-provider models (§6.3) | — | M |
-| 6 | `subagents/` slot (§7.1) | — | M |
+| 6 | `subagents/` slot + cross-DO child routing (§7.1) | — | L |
 | 7 | `evals/` + `june eval` (§7.5) | 5 helps | M |
 | 8 | `memory.ts` (§7.3) | 2 | M |
 | 9 | `hooks/` + OTel (§7.4) | — | S |
