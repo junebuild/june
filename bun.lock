@@ -203,7 +203,7 @@
     },
     "packages/og": {
       "name": "@junejs/og",
-      "version": "0.0.6",
+      "version": "0.0.7-dev.0",
       "devDependencies": {
         "@resvg/resvg-js": "^2.6.2",
         "@types/react": "catalog:",
