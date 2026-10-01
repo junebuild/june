@@ -72,6 +72,7 @@
     "native-eviction-review",
     "native-run-stream",
     "native-session-eviction",
+    "og-workerd-headers",
     "openapi-connections-real-world",
     "optional-segments-last-315",
     "oxc-parser-0151",
