@@ -106,7 +106,7 @@ Verified against `main` at 8958705 on 2026-10-01.
 | Observability | ⚠️ `instrumentation.ts` traces; no OpenTelemetry export | `instrumentation.ts` |
 | One definition, every surface | ✅ with conditions: a described `defineAction` is a UI server action and an `/mcp` tool; it is also `POST /api/<id>` only when its id round-trips as one URL path segment (`isRoutableActionId`); it is an agent tool only when exported from `agent/tools/` (or otherwise included in the agent assembly). One authorization path, `requiresPrincipal` | `agent.ts`, `mcp.ts`, `api.ts:54-81` |
 | App as an agent surface | ✅ three separate mechanisms: page routes derive `.md` / `.json` projections unless a route disables them (`json: false`, `md: false`); `llms.txt`, sitemap and the API catalog derive from the route list plus the action registry; the MCP server lists tools from the action registry, not the route graph (2026-07-28 + 2025 fallback). Resource `route.*` files are arbitrary `Response` handlers with no projections | `route.ts:91-98`, `discovery.ts`, `mcp.ts`, `app.ts` |
-| React-free agent runtime | ✅ at module level: the agent modules import no React; `react` is an optional peer of `@junejs/core`; `examples/agent-edge` is a standalone Worker | `packages/core/package.json` |
+| React-free agent runtime | ⚠️ source only: the agent modules import no React, and `examples/agent-edge` is a standalone Worker. Packaging does not follow: `react-dom` is a required peer of `@junejs/core` (only `react` is optional), `@junejs/server` requires both `react` and `react-dom`, and the CLI's app path mounts the agent through the web application | `packages/core/package.json`, `packages/june/package.json` |
 
 Read as a whole: **the durable core is ahead; the harness around it is behind.**
 
@@ -149,8 +149,9 @@ is removed. What changes:
 
 - **App-first** (today): `npm create june` → an app with an optional `agent/`.
 - **Agent-first** (new): `npm create june -- --template agent` → `agent/` + `june.config.ts`,
-  no `app/` pages, no React dependency installed. Adding `app/` later turns it into a full
-  June app with no migration, because both doors build the same assembly.
+  no `app/` pages, no React or react-dom installed — a packaging contract with an acceptance
+  test, not just a template change (§10). Adding `app/` later turns it into a full June app
+  with no migration, because both doors build the same assembly.
 
 ## 5. Design principles
 
@@ -163,19 +164,38 @@ is removed. What changes:
 3. **Replay-safe by construction.** Each new feature states its delivery guarantee
    (exactly-once through `ctx.store`, at-least-once otherwise) and where it checkpoints.
 4. **Credentials never reach model-controlled compute.** This already holds for connections;
-   the sandbox (§8) must preserve it.
+   the sandbox (§8) must preserve it, and a backend that cannot prove it does not start.
 5. **Reuse the app.** Where an agent needs storage (memory, eval runs, schedules), the default
    backend is the app's own `db`/`kv`, not a new service.
 
 ## 6. Harness
 
+### 6.0 Prerequisite: the Model contract
+
+Compaction, steering and budgets all need things the `Model` seam does not carry today: the
+terminal `done` delta has only `reply` and `finish`, and `Model` takes no abort signal —
+`modelStep` polls cancellation only when the next delta arrives, so a provider that is silent
+before its first token cannot be interrupted. One shared slice fixes the seam first:
+
+- **Usage and model metadata:** `done` gains `usage: { inputTokens, outputTokens,
+  cacheReadTokens?, cacheWriteTokens? }`, checkpointed with the reply so replay sees the same
+  numbers. Each adapter exposes `contextWindow` (and `maxOutputTokens`) for the model id it
+  resolved.
+- **Provider-level cancellation:** `Model` opts gain `signal: AbortSignal`; adapters pass it to
+  the provider SDK so an in-flight request is aborted, not merely abandoned at the next delta.
+  The per-delta poll stays as a fallback for adapters that cannot abort.
+- **Conformance tests per adapter:** usage present on `done`; abort before the first token
+  ends the iterator promptly against a deliberately silent stub provider; abort after partial
+  output discards it without a checkpoint.
+
 ### 6.1 Context compaction
 
-A long session must not overflow the model's context window.
+A long session must not overflow the model's context window. Depends on §6.0.
 
-- **Trigger:** before each model call, estimate input tokens (the last provider-reported input
-  count plus an estimate of messages appended since) against `compaction.thresholdPercent`
-  (default `0.85`) of the model's context window.
+- **Trigger:** before each model call, estimate input tokens (the last checkpointed
+  provider-reported `usage.inputTokens` plus an estimate of messages appended since; a
+  character-based estimate only when the provider reports no usage) against
+  `compaction.thresholdPercent` (default `0.85`) of the adapter's `contextWindow`.
 - **Stage 1 — trim:** shorten oversized tool results in older history (keep head and tail,
   record the elision). If that frees enough, stop.
 - **Stage 2 — summarize:** replace older turns with a single **checkpoint** message that
@@ -208,7 +228,8 @@ the inbox) people correct themselves mid-turn: "actually, the other order."
 - `turnPolicy: "queue"` (today's behavior, made explicit): the message starts the next turn;
   adjacent queued messages may fold into one turn, preserving order.
 - `turnPolicy: "steer"`: if the running turn has not started emitting assistant text, abort the
-  pending model call, append the new message, and continue **the same turn**. An executing tool
+  pending model call through the §6.0 `signal`, append the new message, and continue **the
+  same turn**. An executing tool
   always finishes and commits first. Once assistant text has streamed, steering applies at the
   next step boundary.
 - Default per channel: `steer` for conversational channels, `queue` for HTTP and email.
@@ -229,7 +250,23 @@ The `Model` seam is already provider-agnostic; only adapters are missing.
 - `agent.ts` may pass a function `(ctx) => modelId` for per-turn selection (tenant, surface,
   cost tier).
 - The live contract suite gains one replayed agent loop per adapter (see the model-eval replay
-  practice) so adapters are judged on tool-calling behavior, not just text.
+  practice) so adapters are judged on tool-calling behavior, not just text. Every adapter must
+  also pass the §6.0 conformance tests.
+
+### 6.4 Turn budgets
+
+Compaction keeps the context small; it does not bound how much work a turn does. A tool loop
+can keep calling tools indefinitely while staying under the context limit. Budgets are a
+separate, explicit limit:
+
+- `limits: { maxSteps, maxToolCalls, maxOutputTokens, maxWallClockMs }` per turn in
+  `agent.ts`, overridable per surface and per schedule; token totals come from the §6.0
+  checkpointed usage, so a replay counts the same.
+- On reaching a limit the turn ends with `turn.failed { reason: "budget", limit }` by default,
+  or parks for an operator to extend it (`onLimit: "ask"`) through the existing
+  `requestInput` path.
+- A session-level `maxTotalTokens` covers long-running sessions (a stable-id schedule, §7.2)
+  across turns.
 
 ## 7. Directory slots
 
@@ -265,8 +302,23 @@ would work in dev and fail on the primary edge host.
 - The parent gets one tool per subagent, `delegate_<name>({ task })`, returning the child's
   final text plus a session reference.
 - **Isolation:** a subagent inherits nothing implicitly — not tools, not instructions, not
-  connections. It *does* inherit the turn's `principal` and `initiator`, so authorization
-  stays the caller's, never widened by delegation.
+  connections.
+- **Delegated policy — identity is not enough.** Passing the same `principal` alone would let a
+  surface that denies a write tool on the parent reach it through a child that has it. So the
+  `delegate_<name>` call carries a **policy envelope**: the turn's `principal`, `initiator`,
+  inbound `source`, and the parent turn's effective `deniedTools`. The child's effective tool
+  set is its own tools, filtered by the same principal gate, by its own
+  `surfaces[source].denyTools`, and by the parent's denied names (a denial applies to a child
+  tool of the same name); tools may also declare capability tags (`capabilities: ["write"]`)
+  and a surface may deny by tag, which crosses the boundary regardless of tool names. The
+  envelope is persisted with the child's start and suspend checkpoints, so replay and resume
+  re-derive the same set, and it travels in the payload on both native dispatch and
+  sibling-DO RPC (the child DO is reached only through the parent's worker, never directly
+  from the network).
+- **Widening is an explicit grant.** A child may hold a capability the parent's surface denies
+  only if the parent's `agent.ts` lists it under `subagents.<name>.grants`, reviewed as
+  policy. Without a grant, delegation never widens what the turn may do; with one, that is the
+  stated exception.
 - Durability: at-least-once with an idempotent child `turnId` (`agent-runtime.ts:922`) on
   native today; the sibling-DO path must derive the child's DO id and `turnId`
   deterministically from the parent's session, turn and call ids so a redelivered call reaches
@@ -310,20 +362,33 @@ Cross-session context, scoped to a principal or tenant.
 
 - Contract: `recall(ctx) → records`, `capture(ctx, transcriptSlice)`, and optional
   model-facing tools (`remember`, `forget`).
-- Lifecycle: recall at session start and after each compaction; capture before compaction and
-  at session end. Recalled records are excluded from the summarizer and attributed in the
-  prompt (like notes: information, not instructions).
+- Lifecycle: recall **per turn**, for that turn's scope; capture before compaction and at
+  session end, only from turns of the same scope. Recalled records are injected as a per-turn
+  overlay — never appended to the persisted message history — so they are excluded from the
+  summarizer and cannot outlive a scope change. They are attributed in the prompt (like
+  notes: information, not instructions). Recall results are cached per scope within a session
+  to keep the per-turn cost low.
 - **Default provider is the app's own `db`** (a Juno table keyed by principal), so memory is
   ordinary app data: queryable, migratable, deletable on a user's request. This is a concrete
   case of "the agent lives inside the app".
 - **Scoping is enforced by the framework, not trusted to the provider.** The runtime derives
-  a mandatory scope key from trusted identity only (the turn's `principal`, falling back to
-  the session's `initiator`; a schedule must declare a fixed scope in its definition) and
-  passes providers an already-scoped handle, never a raw store. With no trusted scope, recall
-  returns nothing and capture is refused (fail closed), and a `memory.*` TurnEvent records
-  the skip. The default provider's table has the scope key in its primary key, so a
-  cross-scope read is not expressible through it. Custom providers receive the same scope key
-  and the docs state that keying on anything else is a tenant-isolation bug.
+  a mandatory scope key from the **current turn's authorized identity only** — the turn's
+  resolved `principal` (or the tenant derived from it, when `memory.ts` declares
+  `scope: "tenant"`). There is **no fallback to `initiator`**: like the `requiresPrincipal`
+  gate, memory keys off the current speaker, so an anonymous follow-up in an
+  operator-opened thread does not see or write the operator's memory. Background work with no
+  inbound speaker (schedules, owner-driven jobs) must declare an explicit execution identity
+  (`runAs`) in its definition, which the operator configures and reviews. Providers get an
+  already-scoped handle, never a raw store. With no authorized scope, recall returns nothing
+  and capture is refused (fail closed), and a `memory.*` TurnEvent records the skip. The
+  default provider's table has the scope key in its primary key, so a cross-scope read is not
+  expressible through it. Custom providers receive the same scope key and the docs state that
+  keying on anything else is a tenant-isolation bug.
+- **Scope changes inside a session.** Because recall is a per-turn overlay, a later turn with
+  a different (or no) scope never sees records recalled for an earlier speaker. What the model
+  *said* using those records does stay in the transcript, so for sessions where more than one
+  distinct principal has spoken, memory is off by default; `memory.ts` must opt in with
+  `shared: "thread"` to allow it, making the boundary an explicit, reviewable policy.
 
 ### 7.4 `hooks/`
 
@@ -363,12 +428,24 @@ evals/
 The largest and last slice. Agents that analyze data or touch code need a filesystem and
 processes; June has neither for the model.
 
-- Contract `Sandbox { run, spawn, readFile, writeFile, setNetworkPolicy? }`, opened lazily per
+- Contract `Sandbox { run, spawn, readFile, writeFile, setNetworkPolicy }`, opened lazily per
   session by `ctx.getSandbox()`, handle checkpointed so replay resumes the same sandbox.
 - Default tools `bash`, `read_file`, `write_file` occupy `tools/` slots and are replaceable or
   disableable like any authored tool. They are **off** unless `sandbox.ts` exists.
-- Backends: Cloudflare Sandbox/Containers on Workers; local Docker (or a subprocess sandbox
-  where Docker is unavailable) in dev.
+- **Backends must prove the isolation they claim.** Each backend declares capabilities —
+  filesystem isolation (no host paths beyond `/workspace`), environment isolation (no
+  inherited host env), and enforceable network policy (deny-all plus the broker). At startup
+  the configured policy is checked against them; if the selected backend cannot enforce it,
+  the agent **refuses to start** with shell/file tools enabled. There is no silent fallback.
+- Backends: Cloudflare Sandbox/Containers on Workers; local Docker in dev. A plain subprocess
+  backend qualifies only with specified OS isolation (a separate user, a filesystem jail, a
+  scrubbed environment and a network namespace or equivalent). An intentionally unsafe local
+  mode exists only as an explicit `unsafeLocal: true`, logs on every session, and is refused
+  by `june build`.
+- **Backend conformance suite:** from inside the sandbox, a direct outbound request to a
+  public host fails; reading a canary host secret (an env var set on the host, a canary file
+  outside `/workspace`) fails; a request through the broker to an allowed host succeeds with
+  the credential injected and never visible inside the sandbox.
 - `agent/sandbox/workspace/**` seeds `/workspace`; skills are materialized for shell access.
 - **Credential brokering:** the sandbox never receives connection or provider secrets.
   Authenticated egress goes through an app-side proxy that injects credentials per allowed
@@ -380,9 +457,34 @@ processes; June has neither for the model.
 
 React is not demoted to irrelevance; it moves to where it is the best tool.
 
-- **`useAgent()`**: a hook (and an island) that subscribes to a session's `TurnEvent` SSE
-  stream, renders deltas, tool progress and input requests, and sends messages and input
-  answers. It is the web channel's client half.
+### 9.1 Prerequisite: a reconnectable session protocol
+
+There is no reusable subscription surface for a client yet: replay catch-up is in-process
+only, no host exposes a reconnectable events endpoint, and a pending `input.requested` is not
+folded into replay. A browser reload during an approval would lose the prompt. Before any
+client consumes sessions, one authenticated protocol serves all of them:
+
+- **Snapshot:** `GET` a session → status, pending input requests (prompt, schema, who may
+  answer), the transcript head, and the event cursor it reflects.
+- **Events:** an SSE stream from a cursor. The cursor is versioned and monotonic per session;
+  resuming from a snapshot's cursor is gap-free (structural events folded from the log, then
+  live), and a cursor older than retention returns an explicit "resnapshot" signal rather than
+  a silent gap.
+- **Operations:** send a message (with `turnPolicy`), respond to an input request, cancel a
+  turn — each authorized against the caller's verified identity, like `answerers` today.
+- It should share shape and auth with the inbox API (`/_june/inbox/v1`, #297) rather than
+  become a second operator API.
+- **Acceptance cases:** reconnect during a pending approval shows the same prompt and accepts
+  the answer; reconnect after a host restart (DO eviction, native process restart) resumes
+  from the cursor with no lost or duplicated structural events.
+
+The plain client SDK, the TUI and `useAgent()` all consume this one protocol.
+
+### 9.2 React on top of it
+
+- **`useAgent()`**: a hook (and an island) built on the §9.1 protocol: it snapshots, streams
+  from the cursor, renders deltas, tool progress and pending input requests, and sends
+  messages, input answers and cancels. It is the web channel's client half.
 - **Generative UI:** a tool may return a registered island reference
   (`{ ui: "OrderCard", props }`) alongside its text result. The web channel renders the island
   in the stream; non-web channels use the text. This is something a backend-only framework
@@ -391,10 +493,24 @@ React is not demoted to irrelevance; it moves to where it is the best tool.
 
 ## 10. Packaging
 
-- No package split in v0. The agent modules are already React-free; we **enforce** it with a
-  lint rule like the existing zero-`node:*` rule (`agent*.ts`, `channels.ts`, `connections.ts`,
-  `supervise.ts` may not import `react`).
-- `create-june` gains `--template agent`. Its `package.json` does not list React.
+"No React installed" (§4.3) is an **install/build acceptance contract**. Checking source
+imports alone cannot establish it, because the dependency graph and the CLI's entrypoints pull
+React in today (§3). The slice therefore includes:
+
+- **Peers:** `react-dom` becomes optional in `@junejs/core`; `react` and `react-dom` become
+  optional peers of `@junejs/server`, with every renderer import behind entrypoints that only
+  the app path loads.
+- **Entrypoints:** an agent-only path for `june dev` and `june build` that discovers `agent/`,
+  serves its channels and session protocol, and never imports the renderer, the App Router or
+  the RSC pipeline when there is no `app/` directory.
+- **Source rule:** a lint rule like the existing zero-`node:*` rule (`agent*.ts`,
+  `channels.ts`, `connections.ts`, `supervise.ts` may not import `react`).
+- **Acceptance fixture:** CI packs the packages (`npm pack`), installs them into a clean
+  directory with an agent-only project, and runs `june dev` (one HTTP turn) and `june build`
+  with no `react`, `react-dom` or `app/` present. It fails if either command resolves a React
+  module.
+- `create-june` gains `--template agent`, whose `package.json` lists no React. A package split
+  stays optional.
 - `june info` prints the full agent manifest (slots, subagents, schedules, memory provider,
   sandbox backend) next to the routes.
 - Revisit an `@junejs/agent` package only if install size or the docs story demands it.
@@ -405,20 +521,25 @@ Each slice ships independently, with docs on june.build and a `stability.md` ent
 
 | # | slice | depends on | size |
 | --- | --- | --- | --- |
-| 1 | Positioning: README, home, docs order, `--template agent`, React-free lint | — | S |
-| 2 | Compaction (§6.1) | — | M |
-| 3 | `schedules/` (§7.2), Workers Cron + native scheduler | — | M |
-| 4 | Steering / turn policy (§6.2) | — | M |
-| 5 | Multi-provider models (§6.3) | — | M |
-| 6 | `subagents/` slot + cross-DO child routing (§7.1) | — | L |
-| 7 | `evals/` + `june eval` (§7.5) | 5 helps | M |
-| 8 | `memory.ts` (§7.3) | 2 | M |
-| 9 | `hooks/` + OTel (§7.4) | — | S |
-| 10 | `useAgent()` + generative UI (§9) | — | M |
-| 11 | Sandbox (§8) | — | L |
+| 1 | Positioning: README, home, docs order | — | S |
+| 2 | Agent-only packaging: optional React peers, agent-only CLI entrypoints, `--template agent`, packed-package fixture (§10) | — | M |
+| 3 | Model contract: usage + context window, abort signal, adapter conformance (§6.0) | — | M |
+| 4 | Compaction (§6.1) | 3 | M |
+| 5 | Turn budgets (§6.4) | 3 | S |
+| 6 | `schedules/` (§7.2), Workers Cron + native scheduler | — | M |
+| 7 | Steering / turn policy (§6.2) | 3 | M |
+| 8 | Multi-provider models (§6.3) | 3 | M |
+| 9 | `subagents/` slot + cross-DO child routing + delegated policy (§7.1) | — | L |
+| 10 | `evals/` + `june eval` (§7.5) | 8 helps | M |
+| 11 | `memory.ts` (§7.3) | 4 | M |
+| 12 | `hooks/` + OTel (§7.4) | — | S |
+| 13 | Session protocol: snapshot, cursor, send / respond / cancel (§9.1) | — | M |
+| 14 | `useAgent()` + generative UI (§9.2) | 13 | M |
+| 15 | Sandbox with backend conformance (§8) | — | L |
 
-Recommended first two: **1** (cheap, changes how every later slice is read) and **2 + 3**
-together (small, and they decide whether an agent can run for long and act on its own).
+Recommended order to start: **1** (cheap, changes how every later slice is read), then **3**
+(it unblocks four slices), then **4 + 6** together (they decide whether an agent can run for
+long and act on its own).
 
 ## 12. Non-goals
 
@@ -437,5 +558,5 @@ together (small, and they decide whether an agent can run for long and act on it
 4. **Memory consent.** Should capture require an explicit tool call by default (opt-in
    memory) rather than automatic capture?
 5. **Sandbox backend on Workers.** Cloudflare Sandbox vs Containers directly: cost per idle
-   session and cold start need measuring before slice 11.
+   session and cold start need measuring before slice 15.
 6. **Eval cost.** A default `--repeat` and a model budget guard for `june eval` in CI.
