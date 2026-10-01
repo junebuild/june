@@ -565,16 +565,33 @@ processes; June has neither for the model.
     resume), the engine first reacquires the sandbox. If the generation changed:
     - calls of the batch that already completed stay checkpointed and are **never re-run** to
       rebuild files — their external effects happened;
-    - every call of the batch still pending gets a synthetic result in one transaction
-      ("not run: the sandbox from generation N was lost"), as cancellation does today;
+    - a missing result checkpoint does **not** prove a call never ran: the remote-tool path
+      awaits the external effect before checkpointing its result, so a publish or payment
+      can succeed and the host crash before the record. Every tool call therefore writes a
+      durable **entry record** (call id and operation id, the same record §6.4 uses for local
+      calls) before it starts, and pending calls split three ways:
+      - **provably unstarted** (no entry record): a synthetic "not run: the sandbox from
+        generation N was lost" result, in one transaction, as cancellation does today;
+      - **started, uncommitted, and not sandbox-bound**: unaffected by the reset — recovered
+        exactly as today (re-run under the same operation id, which tools use as their
+        idempotency key);
+      - **started, uncommitted, and sandbox-bound** (the tool declares `usesSandbox`): the
+        outcome is **in doubt**, and a generation change never clears that. If the tool
+        implements `reconcile({ operationId, input }, ctx)`, the engine asks it for the real
+        outcome under the original operation id and records that. Otherwise the call parks
+        for an operator decision ("ran" with a supplied result, or "did not run") through
+        `requestInput`, and the model never sees "not run" for it.
     - a `sandbox.reset` note is appended, and control returns to the **model**, which
-      re-plans with the knowledge that files and processes are gone.
+      re-plans with the knowledge that files and processes are gone and that any in-doubt
+      call was resolved as recorded, so it does not issue a duplicate under a fresh key.
   - **Restart conformance cases:** (1) write a file in one step, kill the host (DO eviction,
     process kill), resume: a persistent backend reads the file back; an ephemeral one produces
     `sandbox.reset` before any further tool runs. (2) Lose the sandbox between two calls of one
     batch: the first call's result stays, the second is answered "not run", the model is asked
     next. (3) Lose it before a model-only continuation: the reset note precedes that model
-    call.
+    call. (4) A sandbox-bound tool's remote effect succeeds, the host crashes before its
+    result checkpoint, and the sandbox is lost: the call is in doubt, not "not run"; it is
+    resolved by `reconcile` or an operator, and no second effect is issued.
 - Default tools `bash`, `read_file`, `write_file` occupy `tools/` slots and are replaceable or
   disableable like any authored tool. They are **off** unless `sandbox.ts` exists.
 - **Backends must prove the isolation they claim.** Each backend declares capabilities —
@@ -658,7 +675,7 @@ React in today (§3). The slice therefore includes:
 - **Entrypoints:** an agent-only path for `june dev` and `june build` that discovers `agent/`,
   serves its **existing** surfaces (the HTTP chat endpoint and mounted channels), and never
   imports the renderer, the App Router or the RSC pipeline when there is no `app/` directory.
-  This slice deliberately does not wait for the §9.1 session protocol; slice 13 adds the
+  This slice deliberately does not wait for the §9.1 session protocol; slice 14 adds the
   protocol to this entrypoint, and its own tests then run on the same React-free fixture.
 - **Source rule:** a lint rule like the existing zero-`node:*` rule (`agent*.ts`,
   `channels.ts`, `connections.ts`, `supervise.ts` may not import `react`).
@@ -697,11 +714,12 @@ Each slice ships independently, with docs on june.build and a `stability.md` ent
 | 8 | Multi-provider models (§6.3) | 3 | M |
 | 9 | `subagents/` slot + cross-DO child routing + delegated policy (§7.1) | — | L |
 | 10 | `evals/` + `june eval` (§7.5) | 8 helps | M |
-| 11 | Session access policy (`owner` / `shared`, fork) + `memory.ts` (§7.3) | 4 | M |
-| 12 | `hooks/` + OTel (§7.4) | — | S |
-| 13 | Session protocol: snapshot, cursor, send / respond / cancel (§9.1) | 7 (`turnPolicy` on send) | M |
-| 14 | `useAgent()` + generative UI (§9.2) | 13 | M |
-| 15 | Sandbox with backend conformance (§8) | — | L |
+| 11 | Session access policy: `owner` / `shared`, fork, the audited `read:owner-session` exception (§7.3) — one core contract shared by memory and the protocol | — | S |
+| 12 | `memory.ts` (§7.3) | 4, 11 | M |
+| 13 | `hooks/` + OTel (§7.4) | — | S |
+| 14 | Session protocol: snapshot, cursor, send / respond / cancel (§9.1) | 7 (`turnPolicy` on send), 11 (authorization) | M |
+| 15 | `useAgent()` + generative UI (§9.2) | 14 | M |
+| 16 | Sandbox with backend conformance and in-doubt call reconciliation (§8) | — | L |
 
 Recommended order to start: **1** (cheap, changes how every later slice is read), then **3**
 (it unblocks four slices), then **4 + 6** together (they decide whether an agent can run for
@@ -724,5 +742,5 @@ long and act on its own).
 4. **Memory consent.** Should capture require an explicit tool call by default (opt-in
    memory) rather than automatic capture?
 5. **Sandbox backend on Workers.** Cloudflare Sandbox vs Containers directly: cost per idle
-   session and cold start need measuring before slice 15.
+   session and cold start need measuring before slice 16.
 6. **Eval cost.** A default `--repeat` and a model budget guard for `june eval` in CI.
