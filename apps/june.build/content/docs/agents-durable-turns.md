@@ -317,8 +317,11 @@ undelivered ones into the new generation inside its own transaction. A session
 rebuilt after a crash delivers what the earlier one left. Every announcement
 carries a unique `id` — dedupe on it. Nothing is recorded while no hook is set.
 
-A hook that throws keeps the announcement, which is retried without waiting for
-the session's next activity, backing off from 5 seconds to 5 minutes:
+Delivery never raises into its caller: a flush is fired and forgotten — including
+by the native retry timer, where a throw would be uncaught. A hook that throws, or
+a store read that fails (a closed or failing database), is logged and the
+announcement kept for the next flush. A failed hook is also retried without waiting
+for the session's next activity, backing off from 5 seconds to 5 minutes:
 
 - On the Durable Object, retries run on the object's alarm. A watchdog alarm a
   minute out is also armed before anything can record an announcement (a turn
