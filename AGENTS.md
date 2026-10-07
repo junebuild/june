@@ -4,7 +4,7 @@ Guidance for coding agents (Claude Code, Codex, Copilot, Cursor, and others) wor
 
 June is a React framework where one route definition serves humans (streamed HTML) and agents
 (`.md`, `.json`, MCP at `/mcp`), and an `agent/` directory turns an app into an agent. It is a
-0.0.x preview: APIs change between releases.
+pre-1.0 preview (packages publish under the `dev` tag): APIs change between releases.
 
 ## Commands
 
@@ -62,7 +62,7 @@ portable `createWorker(manifest)` bundle for Workers (default), Vercel, Deno, or
 export; an adapter never re-bundles.
 
 **Agent runtime.** `core/src/agent-runtime.ts` is the durable turn engine. It depends only on
-the `SessionStore`, `Broadcaster` and `Model` seams, and replays a session from its `messages`
+the `SessionStore`, `EventSink` and `Model` seams, and replays a session from its `messages`
 log with memoized step checkpoints. `june/src/agent-native.ts` implements those seams over local
 SQLite (`bun:sqlite` or `node:sqlite`); `agent-durable.ts` implements them on a Cloudflare
 Durable Object, one DO per session, using structural types instead of importing
@@ -70,8 +70,8 @@ Durable Object, one DO per session, using structural types instead of importing
 a server action and an MCP tool. `core/src/supervise.ts` is the operator supervision contract
 (parked inputs, decisions) that the server's inbox API implements.
 
-**MCP.** `core/src/mcp.ts` is hand-rolled on Web standards (the official SDK's server transport
-is Node-coupled) and serves both protocol eras: 2026-07-28 first, 2025 as fallback.
+**MCP.** `core/src/mcp.ts` is a hand-rolled `Request → Response` handler, identical on every
+host, and serves both protocol eras: 2026-07-28 first, 2025 as fallback.
 `core/test/mcp-interop.test.ts` checks interop against the official SDK v2. It runs under
 `bun test` but is excluded from `tsc`, because the SDK's dependencies export raw TS under the
 `source` condition.
@@ -98,4 +98,4 @@ is Node-coupled) and serves both protocol eras: 2026-07-28 first, 2025 as fallba
 - Docs pages in `apps/june.build/content/docs/*.md` list the code they describe in `sources:`
   frontmatter. On PRs that touch `packages/**`, the Kura Curator bot commits doc updates onto the
   PR branch without regenerating `app/_content.ts`. Run `git pull --rebase` before pushing,
-  then `bun run gen`; never force-push over the bot's commits.
+  then `bun run gen` in `apps/june.build`; never force-push over the bot's commits.
