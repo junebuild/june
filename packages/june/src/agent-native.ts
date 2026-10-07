@@ -3,9 +3,9 @@
 // SessionStore = a session-scoped view over one shared synchronous SQLite handle
 // (bun:sqlite under Bun, node:sqlite under Node — the same handle openLocalSqlite
 // wraps as the async JuneDb, opened here directly because the durability tx must
-// be synchronous). Broadcaster = an in-process subscriber set. Turn serialization
+// be synchronous). EventSink = an in-process subscriber set. Turn serialization
 // comes from the AgentSession actor in core. On the edge target this same shape
-// is reimplemented over a Durable Object's ctx.storage.sql (build order step 5).
+// is reimplemented over a Durable Object's ctx.storage.sql (agent-durable.ts).
 
 import {
   AgentSession,
