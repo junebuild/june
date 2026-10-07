@@ -37,7 +37,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.2
+          bun-version-file: package.json
 
       - uses: actions/setup-node@v4
         with:
@@ -121,7 +121,8 @@ jobs:
       # on the spike's detection in src/libc.ts.
       - name: Harness in Alpine
         run: |
-          docker run --rm -v "$PWD:/w" -w /w oven/bun:1.4.2-alpine sh -euc '
+          bun_version=$(jq -r '.packageManager | sub("^bun@"; "")' ../../package.json)
+          docker run --rm -v "$PWD:/w" -w /w "oven/bun:${bun_version}-alpine" sh -euc '
             bun install --frozen-lockfile
             bun harness/probe.ts --raw || echo "(OpenTUI alone picks the glibc build)"
             bun harness/probe.ts

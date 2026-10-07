@@ -8,7 +8,8 @@ pre-1.0 preview (packages publish under the `dev` tag): APIs change between rele
 
 ## Commands
 
-Bun is the toolchain (CI pins `bun-version: 1.4.2` in every workflow; bump all pins together).
+Bun is the toolchain. Its version has one source, `packageManager` in the root `package.json`:
+every workflow's `setup-bun` reads it.
 Node 24 is needed only for the Node-host and packed-tarball smokes.
 
 ```bash
