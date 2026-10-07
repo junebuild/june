@@ -1,13 +1,13 @@
 // MCP server — projects the unified action registry as MCP tools over a
 // Web-Standards (Request -> Response) handler, mounted at /mcp.
 //
-// Why a hand-rolled handler instead of the official SDK's server transport:
-// `@modelcontextprotocol/sdk`'s StreamableHTTPServerTransport is Node-coupled
-// (node:http IncomingMessage/ServerResponse), which breaks June's
-// Web-Standards + Cloudflare story. The protocol surface we need (server/discover
-// or initialize, tools/list, tools/call) is small and stateless, so we implement
-// it directly against the Streamable HTTP shape — identical on the native runtime
-// and on Workers. Both protocol eras are served (see mcpHandler); the official
+// Why a hand-rolled handler instead of the official SDK's server transport: the SDK
+// does ship a Web-standard one (WebStandardStreamableHTTPServerTransport, which the
+// interop test drives), but using it would make the SDK a runtime dependency of this
+// pure contract layer, where today it is a devDependency for tests only. The protocol
+// surface we need (server/discover or initialize, tools/list, tools/call) is small
+// and stateless, so we implement it directly against the Streamable HTTP shape —
+// identical on the native runtime and on Workers. Both protocol eras are served (see mcpHandler); the official
 // SDK v2 client and server verify interop in test/mcp-interop.test.ts.
 
 import { ACTION_REGISTRY, actionDispatchCode, invokeAction } from "./agent";

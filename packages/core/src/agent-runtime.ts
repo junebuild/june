@@ -1,9 +1,9 @@
 // agent-runtime.ts — the durable turn engine and its seams.
 //
 // A pure contract layer (zero node:*): the engine depends ONLY on three seams —
-// SessionStore, Broadcaster, Model. No SQLite, no HTTP, no platform. The SAME
+// SessionStore, EventSink, Model. No SQLite, no HTTP, no platform. The SAME
 // code runs over the native seam (@junejs/server's agent-native, on the host
-// SQLite driver) and, later, over a Cloudflare Durable Object. It is the sibling
+// SQLite driver) and over a Cloudflare Durable Object (agent-durable). It is the sibling
 // of agent.ts (the defineAction registry the runtime consumes), not a
 // replacement.
 //
