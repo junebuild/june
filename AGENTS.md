@@ -9,8 +9,14 @@ pre-1.0 preview (packages publish under the `dev` tag): APIs change between rele
 ## Commands
 
 Bun is the toolchain. Its version has one source, `packageManager` in the root `package.json`:
-every workflow's `setup-bun` reads it.
+every workflow's `setup-bun` reads it, and so does `flake.nix`. Bump it with
+`bun scripts/bump-bun.ts <version>`, which also rewrites the release hashes in `nix/bun.json`.
 Node 24 is needed only for the Node-host and packed-tarball smokes.
+
+`nix develop` (optional) gives that exact toolchain: the pinned Bun, Node 24 and jq, on
+aarch64-darwin, x86_64-linux and aarch64-linux. Prefix any command below with
+`nix develop -c` to run it there. `nix flake check` verifies the pinned Bun reports the
+`packageManager` version.
 
 ```bash
 bun install
