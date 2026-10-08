@@ -98,17 +98,18 @@ jobs:
       - name: Built worker on workerd
         run: bun scripts/smoke-workerd.ts
 
-  # The toolchain flake.nix pins (what `nix develop` gives a maintainer or an agent sandbox)
-  # runs the full check on both Linux systems the flake supports, so a pass inside the flake
-  # means the same as a pass in the jobs above. `nix flake check` also fails when
-  # nix/bun.json falls out of step with package.json's packageManager.
+  # The toolchain flake.nix pins, in the form agents get it: the sandbox image, built and
+  # loaded on both Linux systems the flake supports, runs every check above from a fresh copy
+  # of the tree as its unprivileged user (scripts/smoke-sandbox-image.sh). `nix flake check`
+  # also builds the devShell and fails when nix/bun.json falls out of step with
+  # package.json's packageManager.
   nix:
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, ubuntu-24.04-arm]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -117,8 +118,5 @@ jobs:
       - name: Flake check
         run: nix flake check
 
-      - name: Install
-        run: nix develop -c bun install --frozen-lockfile
-
-      - name: Typecheck and test
-        run: nix develop -c bun run ci
+      - name: Sandbox image
+        run: bash scripts/smoke-sandbox-image.sh
