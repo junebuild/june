@@ -1,6 +1,6 @@
 {
   # Optional: `bun install && bun run ci` with your own Bun and Node 24 stays the supported path.
-  # This flake pins that same toolchain for maintainers, agent sandboxes and one CI lane, so a
+  # This flake pins that same toolchain for maintainers, dev containers and one CI lane, so a
   # result from any of them means the same thing.
   description = "June development environment";
 
@@ -49,7 +49,7 @@
           };
         });
 
-      # The one toolchain: the devShell and the agent sandbox image both carry exactly this.
+      # The one toolchain: the devShell and the dev image both carry exactly this.
       toolchainFor = pkgs: [
         (bunFor pkgs)
         pkgs.nodejs_24 # the Node-host and packed-tarball smokes; tsdown needs Node ≥ 22.18
@@ -63,7 +63,7 @@
           bun = bunFor pkgs;
         }
         // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
-          sandbox-image = import ./nix/sandbox-image.nix {
+          dev-image = import ./nix/dev-image.nix {
             inherit pkgs;
             toolchain = toolchainFor pkgs;
           };

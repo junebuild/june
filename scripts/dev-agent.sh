@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # One coding agent per dev container, each with its own clone of June, built from the June dev
-# image (nix/sandbox-image.nix). Claude Code runs in a tmux session inside the container, so you
+# image (nix/dev-image.nix). Claude Code runs in a tmux session inside the container, so you
 # can detach (Ctrl-b d) and the agent keeps working; running the script again re-attaches.
 #
 # A dev container is NOT a June Sandbox: the agent's harness, and the credentials below, run
@@ -22,13 +22,13 @@
 #                             requests: read/write; issues: read).
 #
 # Optional:
-#   DEV_AGENT_IMAGE            default ghcr.io/junebuild/june-sandbox:latest
+#   DEV_AGENT_IMAGE            default ghcr.io/junebuild/june-dev:latest
 #   DEV_AGENT_CLAUDE_SETTINGS  a settings.json to use inside instead of the default
 #   DEV_AGENT_CPUS / _MEMORY   resource limits, default 4 / 16g
 #   GIT_AUTHOR_NAME / _EMAIL   commit identity, default the host's git config
 set -euo pipefail
 
-image=${DEV_AGENT_IMAGE:-ghcr.io/junebuild/june-sandbox:latest}
+image=${DEV_AGENT_IMAGE:-ghcr.io/junebuild/june-dev:latest}
 repo=https://github.com/junebuild/june
 prefix=june-
 
