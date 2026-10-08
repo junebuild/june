@@ -48,6 +48,13 @@ let
     nogroup:x:65534:
     EOF
     echo 'hosts: files dns' > $out/etc/nsswitch.conf
+    # The devcontainer CLI reads this on attach and logs a failure without it.
+    cat > $out/etc/os-release <<EOF
+    NAME="June dev image"
+    ID=june-dev
+    PRETTY_NAME="June dev image (Nix)"
+    HOME_URL="https://github.com/junebuild/june"
+    EOF
   '';
 in
 pkgs.dockerTools.streamLayeredImage {

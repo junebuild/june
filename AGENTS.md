@@ -27,7 +27,8 @@ docker run --rm -it ghcr.io/junebuild/june-dev:latest   # published from main, a
 nix build .#dev-image && ./result | docker load          # or build it: june-dev:latest
 ```
 
-`scripts/dev-agent.sh <issue>` runs Claude Code on a GitHub issue in its own dev container: a
+`.devcontainer/devcontainer.json` opens this checkout in the dev image (VS Code, Codespaces, the
+devcontainer CLI). `scripts/dev-agent.sh <issue>` runs Claude Code on a GitHub issue in its own dev container: a
 fresh clone, bypass permissions, inside a tmux session you can detach from. Credentials come in
 by name from `CLAUDE_CODE_OAUTH_TOKEN` and `GH_TOKEN`; the header of the script has the rest.
 
