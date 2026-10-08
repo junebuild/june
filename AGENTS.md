@@ -18,13 +18,13 @@ aarch64-darwin, x86_64-linux and aarch64-linux. Prefix any command below with
 `nix develop -c` to run it there. `nix flake check` verifies the pinned Bun reports the
 `packageManager` version.
 
-For an isolated agent sandbox on Linux, the flake also builds an OCI image with the same
-toolchain plus git, gh, ripgrep and the usual shell tools (`nix/sandbox-image.nix`). It runs as
+For a dev container on Linux, the flake also builds an OCI image, the dev image, with the same
+toolchain plus git, gh, ripgrep and the usual shell tools (`nix/dev-image.nix`). It runs as
 the unprivileged user `agent` in `/workspace` and needs no Nix at run time:
 
 ```bash
-docker run --rm -it ghcr.io/junebuild/june-sandbox:latest   # published from main, amd64 + arm64
-nix build .#sandbox-image && ./result | docker load          # or build it: june-sandbox:latest
+docker run --rm -it ghcr.io/junebuild/june-dev:latest   # published from main, amd64 + arm64
+nix build .#dev-image && ./result | docker load          # or build it: june-dev:latest
 ```
 
 `scripts/dev-agent.sh <issue>` runs Claude Code on a GitHub issue in its own dev container: a
@@ -48,7 +48,7 @@ cd packages/june && bun run build            # tsdown → dist/ (only needed for
 bash scripts/smoke-packed.sh                          # published tarballs as an npm user gets them
 node --conditions=source --import tsx scripts/smoke-node.ts   # dev server on node:http, no Bun
 bun scripts/smoke-workerd.ts                          # `june build` examples/basic, run it on workerd
-bash scripts/smoke-sandbox-image.sh                   # all of the above inside the sandbox image (Linux, Nix, Docker)
+bash scripts/smoke-dev-image.sh                   # all of the above inside the dev image (Linux, Nix, Docker)
 
 cd apps/june.build && bun run gen            # regenerate app/_content.ts after editing content/
 ```
