@@ -47,18 +47,20 @@ for (const [system, asset] of Object.entries(ASSETS)) {
   hashes[system] = `sha256-${Buffer.from(hex, "hex").toString("base64")}`;
 }
 
+// Validate both files before writing either: a half-applied bump leaves nix/bun.json and
+// packageManager disagreeing, which the flake refuses to evaluate.
 const root = join(import.meta.dir, "..");
-writeFileSync(join(root, "nix", "bun.json"), `${JSON.stringify({ version, hashes }, null, 2)}\n`);
-
-// Rewrite only the packageManager line, so the rest of package.json keeps its formatting.
 const pkgPath = join(root, "package.json");
 const pkg = readFileSync(pkgPath, "utf8");
-const next = pkg.replace(/("packageManager":\s*")bun@[^"]+(")/, `$1bun@${version}$2`);
-if (next === pkg && !pkg.includes(`"bun@${version}"`)) {
+const PACKAGE_MANAGER = /("packageManager":\s*")bun@[^"]+(")/;
+if (!PACKAGE_MANAGER.test(pkg)) {
   console.error('package.json has no "packageManager": "bun@…" field to update');
   process.exit(1);
 }
-writeFileSync(pkgPath, next);
+
+// Rewrite only the packageManager line, so the rest of package.json keeps its formatting.
+writeFileSync(pkgPath, pkg.replace(PACKAGE_MANAGER, `$1bun@${version}$2`));
+writeFileSync(join(root, "nix", "bun.json"), `${JSON.stringify({ version, hashes }, null, 2)}\n`);
 
 console.log(`Bun ${version}: package.json packageManager and nix/bun.json updated.`);
 console.log("Also bump @types/bun to match, then run bun install and bun run ci.");
