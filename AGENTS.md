@@ -27,6 +27,14 @@ docker run --rm -it ghcr.io/junebuild/june-sandbox:latest   # published from mai
 nix build .#sandbox-image && ./result | docker load          # or build it: june-sandbox:latest
 ```
 
+`scripts/dev-agent.sh <issue>` runs Claude Code on a GitHub issue in its own dev container: a
+fresh clone, bypass permissions, inside a tmux session you can detach from. Credentials come in
+by name from `CLAUDE_CODE_OAUTH_TOKEN` and `GH_TOKEN`; the header of the script has the rest.
+
+Two words, two things: a **dev container** is where a coding agent works *on* June, with its
+harness and credentials inside. A **Sandbox** is the framework primitive (#348) where an agent
+built *with* June runs its shell commands, with the harness and secrets kept outside.
+
 ```bash
 bun install
 bun run ci                                   # typecheck + full test suite (what CI's `check` job runs)
