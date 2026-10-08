@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
-# One coding agent per container, each with its own clone of June, in the agent sandbox image
-# (nix/sandbox-image.nix). Claude Code runs in a tmux session inside the container, so you can
-# detach (Ctrl-b d) and the agent keeps working; running the script again re-attaches.
+# One coding agent per dev container, each with its own clone of June, built from the June dev
+# image (nix/sandbox-image.nix). Claude Code runs in a tmux session inside the container, so you
+# can detach (Ctrl-b d) and the agent keeps working; running the script again re-attaches.
 #
-#   scripts/agent-sandbox.sh 333        # container june-333: Claude Code starts on issue #333
-#   scripts/agent-sandbox.sh spike      # container june-spike: Claude Code, no starting prompt
-#   scripts/agent-sandbox.sh ls         # list sandboxes
-#   scripts/agent-sandbox.sh rm 333     # remove one (its clone and any unpushed work go with it)
+# A dev container is NOT a June Sandbox: the agent's harness, and the credentials below, run
+# inside it, so the container limits what the agent can touch on the host, not what it can do
+# with those credentials. Scope them accordingly.
+#
+#   scripts/dev-agent.sh 333        # container june-333: Claude Code starts on issue #333
+#   scripts/dev-agent.sh spike      # container june-spike: Claude Code, no starting prompt
+#   scripts/dev-agent.sh ls         # list dev containers
+#   scripts/dev-agent.sh rm 333     # remove one (its clone and any unpushed work go with it)
 #
 # Needs Docker on the host. Nothing on the host is mounted in: the container sees its own clone
 # and the variables below, nothing else. Pass credentials as environment variables; the script
@@ -18,17 +22,18 @@
 #                             requests: read/write; issues: read).
 #
 # Optional:
-#   AGENT_SANDBOX_IMAGE            default ghcr.io/junebuild/june-sandbox:latest
-#   AGENT_SANDBOX_CLAUDE_SETTINGS  a settings.json to use inside instead of the default
-#   AGENT_SANDBOX_CPUS / _MEMORY   resource limits, default 4 / 16g
-#   GIT_AUTHOR_NAME / _EMAIL       commit identity, default the host's git config
+#   DEV_AGENT_IMAGE            default ghcr.io/junebuild/june-sandbox:latest
+#   DEV_AGENT_CLAUDE_SETTINGS  a settings.json to use inside instead of the default
+#   DEV_AGENT_CPUS / _MEMORY   resource limits, default 4 / 16g
+#   GIT_AUTHOR_NAME / _EMAIL   commit identity, default the host's git config
 set -euo pipefail
 
-image=${AGENT_SANDBOX_IMAGE:-ghcr.io/junebuild/june-sandbox:latest}
+image=${DEV_AGENT_IMAGE:-ghcr.io/junebuild/june-sandbox:latest}
 repo=https://github.com/junebuild/june
 prefix=june-
 
-usage() { sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+# The header comment above is the help text.
+usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit "${1:-0}"; }
 
 attach() {
   # Inside tmux the agent survives a detach; a dead session falls back to a shell.
@@ -67,8 +72,8 @@ git_email=${GIT_AUTHOR_EMAIL:-$(git config --get user.email 2>/dev/null || true)
 echo "→ the agent commits as: ${git_name:-?} <${git_email:-?}> (override: GIT_AUTHOR_NAME / GIT_AUTHOR_EMAIL)"
 
 settings='{ "skipDangerousModePermissionPrompt": true }'
-if [ -n "${AGENT_SANDBOX_CLAUDE_SETTINGS:-}" ]; then
-  settings=$(cat "$AGENT_SANDBOX_CLAUDE_SETTINGS")
+if [ -n "${DEV_AGENT_CLAUDE_SETTINGS:-}" ]; then
+  settings=$(cat "$DEV_AGENT_CLAUDE_SETTINGS")
 fi
 
 prompt=""
@@ -81,7 +86,7 @@ docker pull -q "$image" >/dev/null || echo "warning: could not pull $image; usin
 # The container only idles; the work happens in the tmux session started below.
 docker run -d --init --name "$container" --hostname "$container" \
   --cap-drop=ALL --security-opt=no-new-privileges --pids-limit=4096 \
-  --cpus="${AGENT_SANDBOX_CPUS:-4}" --memory="${AGENT_SANDBOX_MEMORY:-16g}" \
+  --cpus="${DEV_AGENT_CPUS:-4}" --memory="${DEV_AGENT_MEMORY:-16g}" \
   -e CLAUDE_CODE_OAUTH_TOKEN -e ANTHROPIC_API_KEY -e GH_TOKEN \
   -e GIT_NAME="$git_name" -e GIT_EMAIL="$git_email" \
   -e CLAUDE_SETTINGS="$settings" -e AGENT_PROMPT="$prompt" -e REPO="$repo" \
