@@ -74,6 +74,7 @@ pkgs.dockerTools.streamLayeredImage {
       openssh
       ripgrep
       fd
+      tmux # scripts/agent-sandbox.sh keeps each agent in a session you can detach from
       python3Minimal # scripts/smoke-packed.sh edits package.json with it
     ])
     ++ [
