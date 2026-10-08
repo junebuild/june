@@ -40,6 +40,7 @@ cd packages/june && bun run build            # tsdown → dist/ (only needed for
 bash scripts/smoke-packed.sh                          # published tarballs as an npm user gets them
 node --conditions=source --import tsx scripts/smoke-node.ts   # dev server on node:http, no Bun
 bun scripts/smoke-workerd.ts                          # `june build` examples/basic, run it on workerd
+bash scripts/smoke-sandbox-image.sh                   # all of the above inside the sandbox image (Linux, Nix, Docker)
 
 cd apps/june.build && bun run gen            # regenerate app/_content.ts after editing content/
 ```
