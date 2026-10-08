@@ -27,6 +27,10 @@ docker run --rm -it ghcr.io/junebuild/june-sandbox:latest   # published from mai
 nix build .#sandbox-image && ./result | docker load          # or build it: june-sandbox:latest
 ```
 
+`scripts/agent-sandbox.sh <issue>` runs Claude Code on a GitHub issue in its own container: a
+fresh clone, bypass permissions, inside a tmux session you can detach from. Credentials come in
+by name from `CLAUDE_CODE_OAUTH_TOKEN` and `GH_TOKEN`; the header of the script has the rest.
+
 ```bash
 bun install
 bun run ci                                   # typecheck + full test suite (what CI's `check` job runs)
