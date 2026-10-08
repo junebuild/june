@@ -48,19 +48,31 @@
             inherit sources;
           };
         });
+
+      # The one toolchain: the devShell and the agent sandbox image both carry exactly this.
+      toolchainFor = pkgs: [
+        (bunFor pkgs)
+        pkgs.nodejs_24 # the Node-host and packed-tarball smokes; tsdown needs Node ≥ 22.18
+        pkgs.jq
+      ];
     in
     {
-      packages = forAllSystems (pkgs: {
-        bun = bunFor pkgs;
-      });
+      packages = forAllSystems (
+        pkgs:
+        {
+          bun = bunFor pkgs;
+        }
+        // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+          sandbox-image = import ./nix/sandbox-image.nix {
+            inherit pkgs;
+            toolchain = toolchainFor pkgs;
+          };
+        }
+      );
 
       devShells = forAllSystems (pkgs: {
         default = pkgs.mkShellNoCC {
-          packages = [
-            (bunFor pkgs)
-            pkgs.nodejs_24 # the Node-host and packed-tarball smokes; tsdown needs Node ≥ 22.18
-            pkgs.jq
-          ];
+          packages = toolchainFor pkgs;
         };
       });
 
