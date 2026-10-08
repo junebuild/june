@@ -18,6 +18,15 @@ aarch64-darwin, x86_64-linux and aarch64-linux. Prefix any command below with
 `nix develop -c` to run it there. `nix flake check` verifies the pinned Bun reports the
 `packageManager` version.
 
+For an isolated agent sandbox on Linux, the flake also builds an OCI image with the same
+toolchain plus git, gh, ripgrep and the usual shell tools (`nix/sandbox-image.nix`). It runs as
+the unprivileged user `agent` in `/workspace` and needs no Nix at run time:
+
+```bash
+nix build .#sandbox-image && ./result | docker load
+docker run --rm -it june-sandbox:latest
+```
+
 ```bash
 bun install
 bun run ci                                   # typecheck + full test suite (what CI's `check` job runs)
