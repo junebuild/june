@@ -14,7 +14,7 @@ on:
       - nix/**
       - package.json
       - .github/workflows/sandbox-image.yml
-  workflow_dispatch:
+  workflow_dispatch: # re-publish main; any other ref is skipped by the `if` below
 
 permissions:
   contents: read
@@ -29,6 +29,9 @@ env:
 
 jobs:
   build:
+    # Only main publishes: a manual run can pick any ref, and an unmerged branch must never
+    # replace `latest`. `manifest` needs this job, so it skips too.
+    if: github.ref == 'refs/heads/main'
     strategy:
       fail-fast: true
       matrix:
