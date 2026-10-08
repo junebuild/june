@@ -1,8 +1,8 @@
-name: sandbox-image
+name: dev-image
 
-# Publishes the agent sandbox image (nix/sandbox-image.nix) to ghcr.io/junebuild/june-sandbox,
+# Publishes the dev image (nix/dev-image.nix) to ghcr.io/junebuild/june-dev,
 # for amd64 and arm64, so an agent platform or a machine without Nix can `docker pull` it.
-# Each architecture is built and pushed only after scripts/smoke-sandbox-image.sh passes on it,
+# Each architecture is built and pushed only after scripts/smoke-dev-image.sh passes on it,
 # so a published image has run the full check. Tags: `latest` and the commit SHA.
 
 on:
@@ -13,7 +13,7 @@ on:
       - flake.lock
       - nix/**
       - package.json
-      - .github/workflows/sandbox-image.yml
+      - .github/workflows/dev-image.yml
   workflow_dispatch: # re-publish main; any other ref is skipped by the `if` below
 
 permissions:
@@ -21,11 +21,11 @@ permissions:
   packages: write
 
 concurrency:
-  group: sandbox-image
+  group: dev-image
   cancel-in-progress: false
 
 env:
-  IMAGE: ghcr.io/junebuild/june-sandbox
+  IMAGE: ghcr.io/junebuild/june-dev
 
 jobs:
   build:
@@ -45,16 +45,16 @@ jobs:
 
       - uses: cachix/install-nix-action@v31
 
-      # Builds and loads june-sandbox:latest, then runs every check inside it.
+      # Builds and loads june-dev:latest, then runs every check inside it.
       - name: Build and verify
-        run: bash scripts/smoke-sandbox-image.sh
+        run: bash scripts/smoke-dev-image.sh
 
       - name: Push ${{ matrix.arch }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-          docker tag june-sandbox:latest "$IMAGE:${{ github.sha }}-${{ matrix.arch }}"
+          docker tag june-dev:latest "$IMAGE:${{ github.sha }}-${{ matrix.arch }}"
           docker push "$IMAGE:${{ github.sha }}-${{ matrix.arch }}"
 
   # One multi-arch tag over the two per-architecture images.

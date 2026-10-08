@@ -1,8 +1,10 @@
-# The agent sandbox: an OCI image carrying the toolchain `nix develop` gives, plus what a coding
-# agent needs to clone, change, test and push June. Nothing in it needs Nix at run time:
+# The June dev image: an OCI image carrying the toolchain `nix develop` gives, plus what a coding
+# agent needs to clone, change, test and push June. It backs the dev container
+# (scripts/dev-agent.sh, .devcontainer/) and is not itself a June Sandbox (#348). Nothing in it
+# needs Nix at run time:
 #
-#   nix build .#sandbox-image && ./result | docker load
-#   docker run --rm -it june-sandbox:latest
+#   nix build .#dev-image && ./result | docker load
+#   docker run --rm -it june-dev:latest
 #
 # It runs as the unprivileged `agent` user (uid 1000) in /workspace. Prebuilt npm binaries
 # (workerd under wrangler, oxc-parser's native addon) expect a standard Linux loader, which a Nix
@@ -33,7 +35,7 @@ let
   ];
 
   # Users, groups and name resolution, so tools that look up $USER or resolve hosts work.
-  etc = pkgs.runCommand "sandbox-etc" { } ''
+  etc = pkgs.runCommand "dev-image-etc" { } ''
     mkdir -p $out/etc
     cat > $out/etc/passwd <<EOF
     root:x:0:0:root:/root:/bin/bash
@@ -46,10 +48,17 @@ let
     nogroup:x:65534:
     EOF
     echo 'hosts: files dns' > $out/etc/nsswitch.conf
+    # The devcontainer CLI reads this on attach and logs a failure without it.
+    cat > $out/etc/os-release <<EOF
+    NAME="June dev image"
+    ID=june-dev
+    PRETTY_NAME="June dev image (Nix)"
+    HOME_URL="https://github.com/junebuild/june"
+    EOF
   '';
 in
 pkgs.dockerTools.streamLayeredImage {
-  name = "june-sandbox";
+  name = "june-dev";
   tag = "latest";
 
   contents =
@@ -96,7 +105,7 @@ pkgs.dockerTools.streamLayeredImage {
     # permissions). No revision label: it would change the image on every commit.
     Labels = {
       "org.opencontainers.image.source" = "https://github.com/junebuild/june";
-      "org.opencontainers.image.description" = "June agent sandbox: the pinned Bun, Node 24 and dev tools";
+      "org.opencontainers.image.description" = "June dev image: the pinned Bun, Node 24 and dev tools";
       "org.opencontainers.image.licenses" = "MIT";
     };
     User = "agent";

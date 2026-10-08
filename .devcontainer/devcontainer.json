@@ -1,0 +1,13 @@
+// The June dev container: the dev image (nix/dev-image.nix) with this checkout mounted, for
+// VS Code, GitHub Codespaces, the devcontainer CLI, and agent platforms that read this file.
+// Same toolchain as `nix develop` and CI's nix job. scripts/dev-agent.sh runs a coding agent
+// on an issue in the same image without a mount.
+{
+  "name": "June",
+  "image": "ghcr.io/junebuild/june-dev:latest",
+  "remoteUser": "agent",
+  // updateRemoteUserUID stays at its default (on, for Linux hosts): the CLI rewrites agent's
+  // uid/gid to the host user's with sed on /etc/passwd and chowns its home, which works on the
+  // dev image, so a checkout owned by any uid stays writable.
+  "postCreateCommand": "bun install --frozen-lockfile"
+}

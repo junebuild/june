@@ -98,9 +98,9 @@ jobs:
       - name: Built worker on workerd
         run: bun scripts/smoke-workerd.ts
 
-  # The toolchain flake.nix pins, in the form agents get it: the sandbox image, built and
+  # The toolchain flake.nix pins, in the form agents get it: the dev image, built and
   # loaded on both Linux systems the flake supports, runs every check above from a fresh copy
-  # of the tree as its unprivileged user (scripts/smoke-sandbox-image.sh). `nix flake check`
+  # of the tree as its unprivileged user (scripts/smoke-dev-image.sh). `nix flake check`
   # also builds the devShell and fails when nix/bun.json falls out of step with
   # package.json's packageManager.
   nix:
@@ -118,5 +118,5 @@ jobs:
       - name: Flake check
         run: nix flake check
 
-      - name: Sandbox image
-        run: bash scripts/smoke-sandbox-image.sh
+      - name: Dev image
+        run: bash scripts/smoke-dev-image.sh
