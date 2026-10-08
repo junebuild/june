@@ -1,0 +1,72 @@
+name: sandbox-image
+
+# Publishes the agent sandbox image (nix/sandbox-image.nix) to ghcr.io/junebuild/june-sandbox,
+# for amd64 and arm64, so an agent platform or a machine without Nix can `docker pull` it.
+# Each architecture is built and pushed only after scripts/smoke-sandbox-image.sh passes on it,
+# so a published image has run the full check. Tags: `latest` and the commit SHA.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - flake.nix
+      - flake.lock
+      - nix/**
+      - package.json
+      - .github/workflows/sandbox-image.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: sandbox-image
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/junebuild/june-sandbox
+
+jobs:
+  build:
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { arch: amd64, os: ubuntu-latest }
+          - { arch: arm64, os: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v31
+
+      # Builds and loads june-sandbox:latest, then runs every check inside it.
+      - name: Build and verify
+        run: bash scripts/smoke-sandbox-image.sh
+
+      - name: Push ${{ matrix.arch }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker tag june-sandbox:latest "$IMAGE:${{ github.sha }}-${{ matrix.arch }}"
+          docker push "$IMAGE:${{ github.sha }}-${{ matrix.arch }}"
+
+  # One multi-arch tag over the two per-architecture images.
+  manifest:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish multi-arch tags
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker buildx imagetools create \
+            -t "$IMAGE:latest" \
+            -t "$IMAGE:${{ github.sha }}" \
+            "$IMAGE:${{ github.sha }}-amd64" \
+            "$IMAGE:${{ github.sha }}-arm64"
+          docker buildx imagetools inspect "$IMAGE:latest"

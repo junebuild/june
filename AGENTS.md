@@ -23,8 +23,8 @@ toolchain plus git, gh, ripgrep and the usual shell tools (`nix/sandbox-image.ni
 the unprivileged user `agent` in `/workspace` and needs no Nix at run time:
 
 ```bash
-nix build .#sandbox-image && ./result | docker load
-docker run --rm -it june-sandbox:latest
+docker run --rm -it ghcr.io/junebuild/june-sandbox:latest   # published from main, amd64 + arm64
+nix build .#sandbox-image && ./result | docker load          # or build it: june-sandbox:latest
 ```
 
 ```bash
