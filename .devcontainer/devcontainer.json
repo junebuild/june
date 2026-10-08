@@ -6,9 +6,8 @@
   "name": "June",
   "image": "ghcr.io/junebuild/june-dev:latest",
   "remoteUser": "agent",
-  // The image has no usermod/groupmod to rewrite the agent user's uid (Nix images carry no
-  // shadow tools), so `agent` (uid 1000) writes to the mounted checkout only when the host
-  // owner is uid 1000 too, as the first user on most Linux hosts is.
-  "updateRemoteUserUID": false,
+  // updateRemoteUserUID stays at its default (on, for Linux hosts): the CLI rewrites agent's
+  // uid/gid to the host user's with sed on /etc/passwd and chowns its home, which works on the
+  // dev image, so a checkout owned by any uid stays writable.
   "postCreateCommand": "bun install --frozen-lockfile"
 }
