@@ -91,6 +91,13 @@ pkgs.dockerTools.streamLayeredImage {
   '';
 
   config = {
+    # The source label links the published ghcr.io package to the repository (and its access
+    # permissions). No revision label: it would change the image on every commit.
+    Labels = {
+      "org.opencontainers.image.source" = "https://github.com/junebuild/june";
+      "org.opencontainers.image.description" = "June agent sandbox: the pinned Bun, Node 24 and dev tools";
+      "org.opencontainers.image.licenses" = "MIT";
+    };
     User = "agent";
     WorkingDir = "/workspace";
     Cmd = [ "bash" ];
