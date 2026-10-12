@@ -1,0 +1,29 @@
+# The Typst → PDF engine behind @junejs/pdf-typst-wasm, built for wasm32-unknown-unknown.
+# Its own workspace (the empty [workspace] table): no other crate graph in the repo can absorb
+# it, and its typst pins stay isolated from runtime/.
+[package]
+name = "june-pdf-typst-wasm"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.92"
+publish = false
+
+[workspace]
+
+[lib]
+# cdylib: the .wasm module the npm package ships. rlib: so tests/ can use the safe API.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+comemo = "0.5.1"
+typst = "0.15.1"
+typst-assets = { version = "0.15.1", features = ["fonts"] }
+typst-layout = "0.15.1"
+typst-pdf = "0.15.1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
