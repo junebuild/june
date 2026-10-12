@@ -2241,9 +2241,37 @@ describe("files as turn output (docs/rfc-agent-files.md)", () => {
     expect(await s1.result("t1")).toMatchObject({ status: "failed" });
     const s2 = new AgentSession("ops", "s1", store, new MemBroadcaster(), callRender, [render(runs)], noRuntime);
     s2.files = files;
+    const replayed: TurnEvent[] = [];
+    s2.observe((e) => replayed.push(e));
     expect(await s2.turn({ turnId: "t1", userText: "go" })).toBe("The report is attached.");
     expect(runs.n).toBe(1);
     expect(files.size).toBe(1);
+    // The crash struck between the commit and the emission: the replay still announces the
+    // file, once, so the renderer subscribed to it can deliver it.
+    expect(replayed.filter((e) => e.type === "file.attached")).toHaveLength(1);
+  });
+
+  test("a file announced before a park is not announced again when the turn resumes", async () => {
+    // render → approve (parks) → answer.
+    const model: Model = (msgs) => {
+      const tools = msgs.filter((m) => m.role === "tool").length;
+      if (tools === 0) return replyStream({ text: "", toolCalls: [{ id: "c1", name: "render", input: {} }] });
+      if (tools === 1) return replyStream({ text: "", toolCalls: [{ id: "c2", name: "approve", input: {} }] });
+      return replyStream({ text: "Sent.", toolCalls: [] });
+    };
+    const approve: Tool = {
+      spec: { name: "approve", description: "", input: { type: "object" } },
+      run: async (_i, ctx) => ({ ok: await ctx.requestInput({ id: "send", prompt: "Send it?" }) }),
+    };
+    const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), model, [render(), approve], noRuntime);
+    s.files = memoryFileStore();
+    const events: TurnEvent[] = [];
+    s.observe((e) => events.push(e));
+    s.start({ turnId: "t1", userText: "go" });
+    expect(await s.result("t1")).toMatchObject({ status: "suspended" });
+    s.resume("t1", "send", true);
+    expect(await s.result("t1")).toEqual({ status: "completed", text: "Sent." });
+    expect(events.filter((e) => e.type === "file.attached")).toHaveLength(1);
   });
 
   test("without a file store, ctx.files.put fails the turn and names the configuration", async () => {
