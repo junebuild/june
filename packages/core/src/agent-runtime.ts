@@ -14,6 +14,7 @@
 //     on replay. The checkpoint key ALWAYS carries the session dimension (the
 //     SessionStore is session-scoped) so keys cannot leak across sessions.
 
+import { fileRefsIn, type FileRef, type FileStore } from "./agent-files";
 import type { Principal } from "./context";
 
 // ── domain ──────────────────────────────────────────────────────────────────
@@ -36,7 +37,9 @@ import type { Principal } from "./context";
 //     drop them silently.
 // v6: AgentSession.note() and the `note` Msg role (#262) — the Durable Object's /note route
 //     and note() call it.
-export const RUNTIME_API_VERSION = 6;
+// v7: AgentSession.files, ToolContext.files and the file.attached event — the hosts install
+//     the session's FileStore (docs/rfc-agent-files.md).
+export const RUNTIME_API_VERSION = 7;
 
 // `providerState` (#92) is OPAQUE round-trip state a model adapter may attach to a
 // tool call: some providers require it replayed verbatim (Gemini 3+ returns a
@@ -214,6 +217,11 @@ export interface ToolContext {
   // turn fails loudly). `answerers` says who may answer (see Answerers); it defaults to the turn's
   // speaker only when the channel attests that identity.
   requestInput(req: { id: string; prompt: string; schema?: unknown; answerers?: Answerers }): Promise<unknown>;
+  // Where a tool puts a file it produces (docs/rfc-agent-files.md): put() stores the bytes
+  // and returns a FileRef; return the ref in the result and the engine emits file.attached
+  // for the channel to deliver. Always present: on a session whose host installed no store,
+  // put() fails the turn with a message naming the missing configuration.
+  files: FileStore;
 }
 export type Tool = {
   spec: ToolSpec;
@@ -478,6 +486,9 @@ export type TurnEvent =
   | { type: "action.requested"; turnId: string; call: ToolCall }
   // `error`: the tool threw; `result` is `{ error }` and the model was told (#232).
   | { type: "action.completed"; turnId: string; call: ToolCall; result: unknown; error?: string }
+  // A FileRef found in a tool's result (docs/rfc-agent-files.md), one event per file, right
+  // after that call's action.completed. Structural: derived from the tool message in the log.
+  | { type: "file.attached"; turnId: string; callId: string; file: FileRef }
   | { type: "message.completed"; turnId: string; text: string }
   | { type: "input.requested"; turnId: string; request: InputRequest }
   // The park of `turnId` ended (#260): answered by `by`, or retired by a session reset. Live
@@ -566,7 +577,7 @@ export async function runTurn(
   model: Model,
   tools: Tool[],
   opts: { turnId: string; userText: string; crash?: Crash; cancelled?: () => CancelReason | undefined },
-  env: { runtime: Runtime; agent: string; sessionId: string; event?: InboundEvent; systemOverlay?: string; systemMode?: "append" | "replace"; deniedTools?: string[]; trigger?: TurnTrigger; announce?: boolean },
+  env: { runtime: Runtime; agent: string; sessionId: string; event?: InboundEvent; systemOverlay?: string; systemMode?: "append" | "replace"; deniedTools?: string[]; trigger?: TurnTrigger; announce?: boolean; files?: FileStore },
 ): Promise<string> {
   // Cancellation (#129) is polled at CHECKPOINT BOUNDARIES only — before the opening
   // commits, before each model call, between model deltas, and between tool calls — so a
@@ -882,7 +893,7 @@ async function toolStep(
   call: ToolCall,
   stepId: string,
   opts: { turnId: string; crash?: Crash },
-  env: { runtime: Runtime; agent: string; sessionId: string; event?: InboundEvent; initiator?: Principal },
+  env: { runtime: Runtime; agent: string; sessionId: string; event?: InboundEvent; initiator?: Principal; files?: FileStore },
 ) {
   if (store.getStep(stepId) !== undefined) return;
   const tool = tools.find((t) => t.spec.name === call.name);
@@ -902,6 +913,7 @@ async function toolStep(
       if (answer !== undefined) return Promise.resolve((answer as { input: unknown }).input);
       throw new SuspendSignal({ id: req.id, prompt: req.prompt, schema: req.schema, answerers: req.answerers ?? defaultAnswerers(env.event, req.id) }, call.id);
     },
+    files: env.files ?? NO_FILE_STORE,
   };
 
   assertCrash(opts.crash, "before-tool-commit", stepId); // nothing done → safe clean re-run
@@ -954,7 +966,18 @@ async function toolStep(
   if (remote || error !== undefined) store.tx(() => record(out, error));
   assertCrash(opts.crash, "after-tool-commit", stepId); // committed → replay skips (no duplicate side effect)
   sink.emit({ type: "action.completed", turnId: opts.turnId, call, result: out, ...(error !== undefined ? { error } : {}) });
+  if (error === undefined) for (const file of fileRefsIn(out)) sink.emit({ type: "file.attached", turnId: opts.turnId, callId: call.id, file });
 }
+
+// The store a tool gets when its host installed none: storing a file is a deployment
+// misconfiguration the model can't fix, so put() fails the turn instead of handing the model
+// an error to retry. get() finds nothing, like any store asked for a file it doesn't hold.
+const NO_FILE_STORE: FileStore = {
+  put: async () => {
+    throw new FatalToolError("ctx.files: this agent's host has no file store — configure a blob resource (resources.blob) or pass `files` to the runtime");
+  },
+  get: async () => null,
+};
 
 // ── transcript fold (pure; used by observe/transcript surfaces) ───────────────
 export type Turn = {
@@ -1069,6 +1092,10 @@ export class AgentSession {
   // one is set; the host sets it after constructing the session and then calls
   // flushAnnouncements() to deliver what an earlier life left undelivered.
   onAnnounce?: (a: InputAnnouncement) => void | Promise<void>;
+  // Where this session's tools store the files they produce (ctx.files) — set by the host
+  // after constructing the session, like onAnnounce. Absent: a tool's ctx.files.put fails
+  // the turn naming the missing configuration.
+  files?: FileStore;
   private flushing?: Promise<void>;
   private flushAgain = false;
   // Explicit fields + assignment (not constructor parameter properties): June
@@ -1168,7 +1195,7 @@ export class AgentSession {
         this.model,
         this.tools,
         { turnId, userText: input.userText, crash: input.crash, cancelled: () => this.cancelRequests.get(turnId) },
-        { runtime: this.runtime, agent: this.agent, sessionId: this.id, event: input.event, systemOverlay: policy?.overlay, systemMode: policy?.overlayMode, deniedTools: policy?.denyTools, trigger: input.trigger, announce: !!this.onAnnounce },
+        { runtime: this.runtime, agent: this.agent, sessionId: this.id, event: input.event, systemOverlay: policy?.overlay, systemMode: policy?.overlayMode, deniedTools: policy?.denyTools, trigger: input.trigger, announce: !!this.onAnnounce, files: this.files },
       );
     };
     this.track(turnId, this.chain.then(() => this.withTerminal(turnId, run)));
@@ -1310,7 +1337,7 @@ export class AgentSession {
         this.model,
         this.tools,
         { turnId, userText: suspended.userText, cancelled: () => this.cancelRequests.get(turnId) },
-        { runtime: this.runtime, agent: this.agent, sessionId: this.id, event: suspended.event, systemOverlay: suspended.systemOverlay, systemMode: suspended.systemMode, deniedTools: suspended.deniedTools, trigger: { kind: "resume", callId: suspended.callId }, announce: !!this.onAnnounce },
+        { runtime: this.runtime, agent: this.agent, sessionId: this.id, event: suspended.event, systemOverlay: suspended.systemOverlay, systemMode: suspended.systemMode, deniedTools: suspended.deniedTools, trigger: { kind: "resume", callId: suspended.callId }, announce: !!this.onAnnounce, files: this.files },
       );
     this.track(turnId, this.chain.then(() => this.withTerminal(turnId, run)));
     return { turnId };
@@ -1554,6 +1581,7 @@ export class AgentSession {
           result: m.result,
           ...(m.isError ? { error: String((m.result as { error?: unknown } | undefined)?.error ?? "tool failed") } : {}),
         });
+        if (!m.isError) for (const file of fileRefsIn(m.result)) out.push({ type: "file.attached", turnId, callId: m.toolCallId, file });
       }
     }
     // terminal iff the last assistant message has no tool calls — same condition the live
