@@ -17,6 +17,7 @@
 
 import {
   AgentSession,
+  FatalToolError,
   grantAnswer,
   ResumeAuthorizationError,
   withSystem,
@@ -39,6 +40,7 @@ import {
 } from "@junejs/core/agent-runtime";
 import type { Principal } from "@junejs/core/context";
 import type { Resources } from "@junejs/core/resources";
+import { blobFileStore, type FileStore } from "@junejs/core/agent-files";
 import { observeTurnEvents } from "./turn-events";
 import {
   channelDispatch,
@@ -255,6 +257,10 @@ export type DoAgentDef = {
   // Receives this session's input announcements (#260) — run inside the request scope, so it
   // can write the app's cross-session index with the ambient db.
   onInputAnnouncement?: (a: InputAnnouncement) => void | Promise<void>;
+  // Where this session's tools store the files they produce (docs/rfc-agent-files.md), and
+  // where host-side delivery reads them back. Default: the `blob` of `resources` (an R2
+  // bucket), under agent-files/. Without either, a tool's ctx.files.put fails the turn.
+  files?: FileStore;
 };
 
 // The agent runtime INSIDE a Durable Object. A plain class (constructor takes the
@@ -300,6 +306,7 @@ export class AgentDurableObject {
   private readonly authorizeAnswer?: AuthorizeAnswer;
   private readonly onInputAnnouncement?: (a: InputAnnouncement) => void | Promise<void>;
   private readonly storage: DurableStorage;
+  private readonly files: FileStore;
   // Consecutive failed announcement deliveries (#260) — sets the alarm retry's backoff.
   private announceFailures = 0;
   private resolveResources(): Promise<Resources> {
@@ -347,6 +354,15 @@ export class AgentDurableObject {
     this.onInputAnnouncement = def.onInputAnnouncement;
     this.storage = state.storage;
     const name = def.name ?? "agent";
+    // The blob resource opens with the rest of resources, lazily — the store is installed
+    // on the session before then, and only a tool that stores a file opens it.
+    this.files =
+      def.files ??
+      blobFileStore(async () => {
+        const blob = (await this.resolveResources()).blob;
+        if (!blob) throw new FatalToolError(`agent "${name}": no file store — declare a blob resource (DoAgentDef.resources) or pass DoAgentDef.files`);
+        return blob;
+      });
     // Failure observability (#76): a turn that dies after the fast-ACK has no other
     // observable surface on the edge — the webhook already 200'd and runBackground
     // swallows the rejection unless the channel wired onError. Subscribing HERE (the
@@ -459,6 +475,7 @@ export class AgentDurableObject {
     if (key !== undefined && key !== "self" && stored === undefined) this.store.setSessionKey(key);
     this.sessionKey = resolved;
     this.session = new AgentSession(this.name, resolved, this.store, this.sink, this.model, this.tools, crossDoUnsupported, this.channelInstructions);
+    this.session.files = this.files;
     // A held turn (#263) that asked for delivery is rendered through its source channel when
     // it finally runs — possibly in a later life of this object, which is why the ask rides
     // in the turn's hostContext and this hook is installed on every rebuild.
@@ -537,7 +554,7 @@ export class AgentDurableObject {
       const events: AsyncIterable<TurnEvent> = { [Symbol.asyncIterator]: () => it };
       const target = { channelId: event.channelId, threadId: event.threadId, recipientUserId: event.user?.id, recipientTeamId: event.teamId };
       this.ready()
-        .then((resources) => runInScope({ resources, services: this.services }, () => channel.deliver!(target, events, { session: this.sessionKey })))
+        .then((resources) => runInScope({ resources, services: this.services }, () => channel.deliver!(target, events, { session: this.sessionKey, files: this.files })))
         .catch(logRenderFailure)
         .finally(() => { void it.return?.(); });
     } catch (err) {
@@ -682,7 +699,7 @@ export class AgentDurableObject {
           const events: AsyncIterable<TurnEvent> = { [Symbol.asyncIterator]: () => it };
           const target = { channelId: event!.channelId, threadId: event!.threadId, recipientUserId: event!.user?.id, recipientTeamId: event!.teamId };
           Promise.resolve()
-            .then(() => runInScope({ resources, services: this.services }, () => deliverChannel!.deliver!(target, events, { session: this.sessionKey })))
+            .then(() => runInScope({ resources, services: this.services }, () => deliverChannel!.deliver!(target, events, { session: this.sessionKey, files: this.files })))
             .catch(logRenderFailure)
             .finally(() => { void it.return?.(); });
         } catch (err) {
@@ -770,7 +787,7 @@ export class AgentDurableObject {
           const it = observeTurnEvents(session, turnId)[Symbol.asyncIterator]();
           const events: AsyncIterable<TurnEvent> = { [Symbol.asyncIterator]: () => it };
           Promise.resolve()
-            .then(() => runInScope({ resources, services: this.services }, () => resumeChannel!.deliverResume!(target!, events, { session: this.sessionKey })))
+            .then(() => runInScope({ resources, services: this.services }, () => resumeChannel!.deliverResume!(target!, events, { session: this.sessionKey, files: this.files })))
             .catch(logRenderFailure)
             .finally(() => { void it.return?.(); });
         } catch (err) {
@@ -1079,6 +1096,9 @@ export function durableChannelSurface(
     // agentName must have one provider.
     services?: (env: unknown) => unknown;
     waitUntil?: (p: Promise<unknown>) => void;
+    // Where the channels read the files a turn attached (docs/rfc-agent-files.md) — the
+    // same storage the Durable Object's tools write, opened from this isolate's env.
+    files?: FileStore;
   },
 ): (req: Request) => Promise<Response | null> {
   const resolved = opts.channels.map((c) => resolveChannel(c, opts.env));
@@ -1088,6 +1108,7 @@ export function durableChannelSurface(
     agent: { name: opts.agentName, instructions: "", tools: [], skills: [], channels: [], connections: [] } satisfies AgentDefinition,
     services: resolveServices(opts.services, opts.env, opts.agentName),
     waitUntil: opts.waitUntil,
+    files: opts.files,
     run: async (message, o) => {
       const namespace = getNamespace();
       if (!namespace) throw new Error("durableChannelSurface: no Durable Object namespace bound (env.AGENT)");

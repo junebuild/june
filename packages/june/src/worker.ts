@@ -18,6 +18,7 @@ import type { I18nConfig } from "@junejs/core/i18n";
 import type { Resources } from "@junejs/core/resources";
 
 import type { Channel, ChannelFactory } from "@junejs/core/agent-config";
+import { blobFileStore } from "@junejs/core/agent-files";
 
 import { createPipeline, type ExtraHandler, type LayoutComponent, type LoadingComponent, type Resolved, type ResolvedResource, type ResourceHandler } from "./pipeline";
 import { durableAgentSurface, durableChannelSurface, type DurableObjectNamespace } from "./agent-durable";
@@ -219,6 +220,15 @@ export function createWorker(
               env: locals?.env,
               services: servicesProvider,
               waitUntil: locals?.ctx?.waitUntil?.bind(locals.ctx),
+              // The blob resource the agent's Durable Object stores files in, opened from
+              // this isolate's env — the channels read attached files back from it.
+              files: provider
+                ? blobFileStore(async () => {
+                    const blob = (await provider(locals?.env)).blob;
+                    if (!blob) throw new Error(`agent "${agentName}": no blob resource bound in this isolate — attached files can't be read`);
+                    return blob;
+                  })
+                : undefined,
             });
             return channels(req);
           };
