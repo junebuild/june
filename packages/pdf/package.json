@@ -25,7 +25,8 @@
     "build": "tsdown"
   },
   "dependencies": {
-    "@junejs/core": ">=0.2.0-dev.65"
+    "@junejs/core": ">=0.2.0-dev.65",
+    "marked": "^18.0.14"
   },
   "keywords": [
     "june",
