@@ -94,6 +94,15 @@ into one message via `chat.startStream` / `appendStream` / `stopStream`
 thinking…"` shows Slack's presence line under the composer while the turn runs
 (needs the Agents & AI Apps feature; fails harmlessly elsewhere).
 
+**File attachments.** When a tool answers with a file (`ctx.files.put`), the
+channel uploads each one into the reply's thread after the reply text, through
+Slack's external-upload flow (`files.getUploadURLExternal` → the bytes →
+`files.completeUploadExternal`). Add the **`files:write`** scope. The upload is
+best-effort: the turn has already completed, so a file that can't be read or
+uploaded is reported through `onError` and noted in the thread (`_(couldn't
+attach …)_`) rather than failing the turn. See
+[Files & PDF](/docs/agents-files).
+
 **Pre-tool text.** With `stream: true`, text a model writes before calling a
 tool ("Let me search the docs…") streams into the answer. Set
 `intermediateText: "status"` to render it as progress instead — a task-timeline
