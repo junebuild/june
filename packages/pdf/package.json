@@ -17,8 +17,7 @@
       "bun": "./src/typst.ts",
       "types": "./dist/typst.d.ts",
       "default": "./dist/typst.js"
-    },
-    "./skills/pdf-report.md": "./skills/pdf-report.md"
+    }
   },
   "files": [
     "dist",
