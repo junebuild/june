@@ -101,15 +101,21 @@ export type PdfDocument = { markdown: string; title?: string; author?: string; l
 
 | | |
 | --- | --- |
-| compiler WASM | 28.3 MB raw, 10.8 MB gzip |
+| compiler WASM | 28.3 MB raw (10.8 MB gzip) |
 | init (incl. default text + CJK font assets from jsdelivr) | ~550 ms, once per process |
 | compile a one-page document with a table | ~26 ms |
 | output | 14 KB, fonts subset and embedded |
 
 Consequences:
 
-- **Not on Cloudflare Workers.** 10.8 MB gzip exceeds the Workers bundle limit. On Workers,
-  pick another renderer — the reason the interface exists.
+- **Cloudflare Workers: the size fits, and memory is the constraint.** Workers allow 64 MiB
+  per Worker, uncompressed, on Free and Paid alike (developers.cloudflare.com/workers/platform/limits,
+  read 2026-10-12; there is no compressed limit). What binds is memory: an isolate's
+  concurrent requests share 128 MB, and a render takes 13–40 MB of WASM memory. CPU binds
+  too: the Free plan allows 10 ms per request, and one page compiles in 12–28 ms. A spike
+  of a PDF-only build without typst.ts's IDE features (poc/typst-workers on
+  spike/typst-workers) is 18.9 MiB and renders a page in 66–98 ms end to end on local
+  workerd. `typstRenderer` itself is not yet verified on workerd.
 - **Fonts are the renderer's job.** typst.ts's bundled CJK asset is a Simplified Chinese
   subset and lacks Traditional characters (週 was missing in the test). `typstRenderer`
   accepts font bytes or URLs; Traditional Chinese needs e.g. Noto Sans TC.

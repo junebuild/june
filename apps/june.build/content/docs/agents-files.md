@@ -94,8 +94,10 @@ const browserRenderer: PdfRenderer = {
 loads on the first render (measured: about half a second, once per process), then takes
 tens of milliseconds per page.
 
-- It runs on Bun, Node and Deno. It does **not** run on Cloudflare Workers, because the
-  compiler's WASM alone is larger than the Workers bundle limit. Use another renderer there.
+- It is verified on Bun and Node. On Cloudflare Workers the 28 MB module fits the 64 MiB
+  Worker size limit, but the renderer is not yet verified on workerd. There, pass the
+  compiled module as `wasm`, keep in mind that an isolate's requests share 128 MB of
+  memory, and use Workers Paid: one page takes more than the Free plan's 10 ms of CPU.
 - Fonts: by default it fetches typst.ts's hosted Latin fonts and a Simplified Chinese
   font. Traditional Chinese, Japanese and Korean need a font that covers them:
   `typstRenderer({ fonts: [notoSansTcBytes], fontFamilies: ["Noto Sans TC"] })`. Pass
