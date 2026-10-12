@@ -35,7 +35,8 @@ import { createAgentRuntime, mountAgent } from "../src/agent-native";
 import { defineChannel, DeliverUnsupportedError, type AgentDefinition, type Channel } from "@junejs/core/agent-config";
 import { openLocalSqliteSync } from "../src/sqlite-driver";
 import { db, currentServices, requestLocal } from "@junejs/db";
-import type { JuneDb } from "@junejs/core/resources";
+import type { JuneBlob, JuneDb } from "@junejs/core/resources";
+import { memoryFileStore } from "@junejs/core/agent-files";
 
 // A stand-in for ctx.storage: the Cloudflare SqlStorage surface (synchronous
 // .exec() + a synchronous transaction) over bun:sqlite.
@@ -1648,5 +1649,49 @@ describe("AgentDurableObject — turn control (#129)", () => {
     expect(await res!.json()).toEqual({ previousSession: "k1#g0", generation: 0 });
     expect(seenUrls[0]).toContain("replace=1");
     expect(seenUrls[1]).toContain("/reset");
+  });
+});
+
+describe("AgentDurableObject — agent files (docs/rfc-agent-files.md)", () => {
+  const callRender: Model = (msgs) =>
+    replyStream(
+      msgs.some((m) => m.role === "tool")
+        ? { text: "Attached.", toolCalls: [] }
+        : { text: "", toolCalls: [{ id: "c1", name: "render", input: {} }] },
+    );
+  const render: Tool = {
+    spec: { name: "render", description: "render a report", input: { type: "object" } },
+    run: async (_input: unknown, ctx) => ctx.files.put(new TextEncoder().encode("%PDF-1.7"), { name: "r.pdf", mediaType: "application/pdf" }),
+  };
+  const memBlob = (): JuneBlob & { keys: string[] } => {
+    const m = new Map<string, Uint8Array>();
+    return {
+      get keys() { return [...m.keys()]; },
+      async get(k) { return m.get(k) ?? null; },
+      async put(k, d) { m.set(k, typeof d === "string" ? new TextEncoder().encode(d) : d); },
+      async delete(k) { m.delete(k); },
+      async list() { return [...m.keys()]; },
+    };
+  };
+
+  test("by default a tool's file lands in the blob resource, under agent-files/", async () => {
+    const blob = memBlob();
+    const agent = new AgentDurableObject({ storage: await storage() }, { name: "ops", model: callRender, tools: [render], resources: async () => ({ blob }) });
+    expect(await agent.turn({ turnId: "t1", userText: "report" })).toBe("Attached.");
+    expect(blob.keys).toEqual([expect.stringMatching(/^agent-files\/[0-9a-f]{64}$/)]);
+  });
+
+  test("DoAgentDef.files wins over the blob resource", async () => {
+    const blob = memBlob();
+    const files = memoryFileStore();
+    const agent = new AgentDurableObject({ storage: await storage() }, { name: "ops", model: callRender, tools: [render], resources: { blob }, files });
+    expect(await agent.turn({ turnId: "t1", userText: "report" })).toBe("Attached.");
+    expect(files.size).toBe(1);
+    expect(blob.keys).toEqual([]);
+  });
+
+  test("with neither, the turn fails and names both ways to configure one", async () => {
+    const agent = new AgentDurableObject({ storage: await storage() }, { name: "ops", model: callRender, tools: [render] });
+    await expect(agent.turn({ turnId: "t1", userText: "report" })).rejects.toThrow(/DoAgentDef\.resources\) or pass DoAgentDef\.files/);
   });
 });
