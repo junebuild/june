@@ -54,6 +54,12 @@ for each `FileRef` in the tool's result (the result itself, or nested in arrays 
 objects a few levels down). It is a **structural** event: derived from the tool message in the
 log, so `observe({ replay: true })` folds it back like `action.completed`. No new durable state.
 
+Delivery keys off the live event, so the engine records that a step's files were announced.
+A crash after the tool committed but before the emission leaves no record, and the replay
+announces them at turn start; a resume after a park finds the record and does not announce
+files already delivered above the approval prompt. This is at-least-once: a crash between the
+emission and the record announces them twice.
+
 A tool that returns a `FileRef` is the whole contract — a tool author does not emit events, and
 a channel author reads one event type instead of scanning arbitrary tool results.
 

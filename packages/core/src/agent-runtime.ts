@@ -632,6 +632,9 @@ export async function runTurn(
   }
   store.setStatus("running");
   sink.emit({ type: "turn.started", turnId: opts.turnId, trigger });
+  // A crash between a tool's commit and its file.attached emission left those files
+  // unannounced; the replay's renderer is subscribed now, so announce them (see announceFiles).
+  announcePendingFiles(store, sink, opts.turnId);
 
   // Principal gate: on a turn without a resolved trusted identity, requiresPrincipal
   // tools are absent by construction — not listed to the model, not resolvable by
@@ -966,7 +969,40 @@ async function toolStep(
   if (remote || error !== undefined) store.tx(() => record(out, error));
   assertCrash(opts.crash, "after-tool-commit", stepId); // committed → replay skips (no duplicate side effect)
   sink.emit({ type: "action.completed", turnId: opts.turnId, call, result: out, ...(error !== undefined ? { error } : {}) });
-  if (error === undefined) for (const file of fileRefsIn(out)) sink.emit({ type: "file.attached", turnId: opts.turnId, callId: call.id, file });
+  if (error === undefined) announceFiles(store, sink, stepId, opts.turnId, call.id, out);
+}
+
+// Emit file.attached for a tool result's FileRefs, then mark the step announced. Delivery
+// keys off these LIVE events, and the marker is what tells a replay whether they went out:
+//   • a crash after the tool committed but before this ran leaves no marker, so the replay
+//     announces them (announcePendingFiles) — otherwise the files would never be delivered;
+//   • a resume after a park finds the marker on every earlier step, so files already
+//     delivered above the approval prompt are not uploaded again.
+// At-least-once: a crash between the emission and the marker announces them twice.
+function announceFiles(store: SessionStore, sink: EventSink, stepId: string, turnId: string, callId: string, result: unknown): void {
+  const files = fileRefsIn(result);
+  if (files.length === 0) return;
+  const marker = `files:${stepId}`;
+  if (store.getStep(marker) !== undefined) return;
+  for (const file of files) sink.emit({ type: "file.attached", turnId, callId, file });
+  store.tx(() => {
+    if (store.getStep(marker) === undefined) store.putStep(marker, true); // putStep is insert-only
+  });
+}
+
+// The turn's committed, successful tool results whose files were never announced — the
+// crash window above. A tool message's step id is rebuilt the way toolStep built it: the
+// index of the assistant message that made the call, plus the call id.
+function announcePendingFiles(store: SessionStore, sink: EventSink, turnId: string): void {
+  const msgs = store.messages();
+  for (let i = 0; i < msgs.length; i++) {
+    const m = msgs[i]!;
+    if (m.role !== "tool" || m.turnId !== turnId || m.isError) continue;
+    let at = i - 1;
+    while (at >= 0 && !(msgs[at]!.role === "assistant" && (msgs[at] as Extract<Msg, { role: "assistant" }>).toolCalls.some((c) => c.id === m.toolCallId))) at--;
+    if (at < 0) continue;
+    announceFiles(store, sink, toolStepId(at, m.toolCallId), turnId, m.toolCallId, m.result);
+  }
 }
 
 // The store a tool gets when its host installed none: storing a file is a deployment
