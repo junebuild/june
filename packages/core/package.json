@@ -126,6 +126,12 @@
       "types": "./dist/agent.d.ts",
       "default": "./dist/agent.js"
     },
+    "./agent-files": {
+      "source": "./src/agent-files.ts",
+      "bun": "./src/agent-files.ts",
+      "types": "./dist/agent-files.d.ts",
+      "default": "./dist/agent-files.js"
+    },
     "./agent-runtime": {
       "source": "./src/agent-runtime.ts",
       "bun": "./src/agent-runtime.ts",
