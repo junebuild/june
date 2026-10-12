@@ -1433,7 +1433,18 @@ export class AgentSession {
     }
     // Nothing to deliver (or nobody to deliver to): stay settled. Every turn ends with a
     // flush, and a flush in flight keeps the actor from being idle() — an empty one must not.
-    if (!this.onAnnounce || this.outbox().length === 0) return Promise.resolve();
+    if (!this.onAnnounce) return Promise.resolve();
+    // Reading the outbox touches the store, which can throw (a closed or failing database).
+    // Callers fire this and forget it — from a timer, too, where a throw is an uncaught
+    // exception — so a store error is logged like a delivery error, not thrown.
+    let pending: number;
+    try {
+      pending = this.outbox().length;
+    } catch (err) {
+      console.error(`[june] agent "${this.agent}" session "${this.id}": reading the input announcement outbox failed (kept for the next flush):`, err);
+      return Promise.resolve();
+    }
+    if (pending === 0) return Promise.resolve();
     this.flushAgain = false;
     const pass = this.deliverOutbox()
       .catch((err) => { console.error(`[june] agent "${this.agent}" session "${this.id}": delivering an input announcement failed (kept for the next flush):`, err); })

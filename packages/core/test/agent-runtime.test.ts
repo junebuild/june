@@ -1576,6 +1576,30 @@ describe("suspend / resume (P3 — HITL)", () => {
       expect(got).toMatchObject([{ kind: "parked", turnId: "t1" }]);
       expect(s.undeliveredAnnouncements()).toEqual([]);
     });
+
+    test("a store that fails to read the outbox is logged, never thrown — flushes are fired and forgotten, from timers too", async () => {
+      const { s, got, store } = announced();
+      s.onAnnounce = () => { throw new Error("index down"); };
+      const errors = spyOn(console, "error").mockImplementation(() => {});
+      try {
+        s.start({ turnId: "t1", userText: "refund please", event: slackEvent });
+        await s.result("t1"); // parked; the delivery failed, so the announcement is kept
+
+        const getStep = store.getStep.bind(store);
+        store.getStep = () => { throw new Error("disk I/O error"); }; // e.g. the database closed underneath
+        let flush: Promise<void> | undefined;
+        expect(() => { flush = s.flushAnnouncements(); }).not.toThrow();
+        expect(await flush).toBeUndefined(); // resolves, doesn't reject
+        expect(errors.mock.calls.some((c) => String(c[0]).includes("reading the input announcement outbox failed"))).toBe(true);
+
+        store.getStep = getStep; // the store recovers: the next flush delivers what was kept
+        s.onAnnounce = (a) => { got.push(a); };
+        await s.flushAnnouncements();
+        expect(got.map((a) => a.kind)).toEqual(["parked"]);
+      } finally {
+        errors.mockRestore();
+      }
+    });
   });
 
   test("resume validates the turnId and the inputId against the pending request", async () => {
