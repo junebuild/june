@@ -25,6 +25,8 @@ import {
 } from "@junejs/core/config";
 import type { DocumentConfig } from "@junejs/core/document";
 import { runWithTrace, type RequestTrace } from "@junejs/core/instrumentation";
+import { blobFileStore, memoryFileStore } from "@junejs/core/agent-files";
+import type { JuneBlob } from "@junejs/core/resources";
 
 import { findMiddlewareFile, isResourceFile, listRoutes, matchRouteTree, resolveNotFound, routeFiles, type SegmentMatch } from "./router";
 import { routeProblems, scanRoutes } from "./route-scan";
@@ -34,6 +36,7 @@ import { createAgentRuntime, mountAgent, toAgentDef, type InProcessRuntime } fro
 import { anthropic } from "@junejs/core/agent-models";
 import { resolveBoundary } from "./segment";
 import { memoizeResources } from "./resources";
+import { localBlob } from "./blob";
 import {
   findClientEntry,
   bundleClientSplit,
@@ -270,7 +273,15 @@ export function createApp({ appDir: appDirInput, config = {} }: CreateAppOptions
       const model = anthropic({ model: def.model });
       // toAgentDef: tools, prompt AND the per-surface policies (#149) from the one
       // definition — channelInstructions was previously dropped on this path (#173).
-      const rt = await createAgentRuntime({ [def.name]: toAgentDef(def, model) }, { backend });
+      // Agent files (docs/rfc-agent-files.md) live in the app's blob resource; an app that
+      // declares none gets the local default directory. The memory backend keeps them in
+      // memory, like everything else it holds.
+      let blobOpened: Promise<JuneBlob> | undefined;
+      const files =
+        backend === "memory"
+          ? memoryFileStore()
+          : blobFileStore(() => (blobOpened ??= resources().then(async (r) => r.blob ?? (await localBlob().open()))));
+      const rt = await createAgentRuntime({ [def.name]: toAgentDef(def, model) }, { backend, files });
       agentRuntime = rt;
       const mounted = mountAgent(def, rt, { chatPath: agent.runtime.chat.path, channels: agent.runtime.channels });
       agentSurface = (req) => mounted.surface(req);
