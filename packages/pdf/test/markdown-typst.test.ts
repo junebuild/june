@@ -23,6 +23,8 @@ describe("markdownToTypst — text", () => {
     expect(t("<b>bold</b> text<!-- note -->")).toBe('#"bold text";');
     expect(t("returns Vec<String> or <placeholder>")).toBe('#"returns Vec<String> or <placeholder>";');
     expect(t("a<br>b")).toBe('#"a";#linebreak();#"b";');
+    expect(t('a<br class="page" />b')).toBe('#"a";#linebreak();#"b";');
+    expect(t("a<brx>b")).toBe('#"a<brx>b";'); // not a br element
   });
 
   test("soft breaks: a space between words, nothing between CJK characters", () => {

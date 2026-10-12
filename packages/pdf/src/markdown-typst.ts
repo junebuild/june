@@ -218,7 +218,7 @@ function htmlText(s: string): string {
 }
 
 function isBreak(html: string): boolean {
-  return /^<br\s*\/?>$/i.test(html.trim());
+  return /^<br\b[^>]*>$/i.test(html.trim()); // <br>, <br/>, <br class="…">
 }
 
 const NAMED: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", "#39": "'" };
