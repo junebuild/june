@@ -12,6 +12,12 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./typst": {
+      "source": "./src/typst.ts",
+      "bun": "./src/typst.ts",
+      "types": "./dist/typst.d.ts",
+      "default": "./dist/typst.js"
+    },
     "./skills/pdf-report.md": "./skills/pdf-report.md"
   },
   "files": [
@@ -27,6 +33,22 @@
   "dependencies": {
     "@junejs/core": ">=0.2.0-dev.65",
     "marked": "^18.0.14"
+  },
+  "peerDependencies": {
+    "@myriaddreamin/typst.ts": "^0.7.0",
+    "@myriaddreamin/typst-ts-web-compiler": "^0.7.0"
+  },
+  "peerDependenciesMeta": {
+    "@myriaddreamin/typst.ts": {
+      "optional": true
+    },
+    "@myriaddreamin/typst-ts-web-compiler": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@myriaddreamin/typst.ts": "^0.7.0",
+    "@myriaddreamin/typst-ts-web-compiler": "^0.7.0"
   },
   "keywords": [
     "june",
