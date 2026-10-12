@@ -70,3 +70,15 @@ describe("pdfFilename", () => {
     expect([...pdfFilename("字".repeat(300))].length).toBe(104);
   });
 });
+
+describe("skills/pdf-report.md", () => {
+  test("parses as a skill that names the tool it drives", async () => {
+    const { parseSkill } = await import("@junejs/core/agent-config");
+    const { readFile } = await import("node:fs/promises");
+    const skill = parseSkill("pdf-report", await readFile(new URL("../skills/pdf-report.md", import.meta.url), "utf8"));
+    expect(skill.name).toBe("pdf-report");
+    expect(skill.description).toContain("render_pdf");
+    expect(skill.whenToUse).toContain("PDF");
+    expect(skill.body).toContain("render_pdf");
+  });
+});
