@@ -1,0 +1,5 @@
+# The toolchain CI and local builds share; rustup installs it on first use.
+[toolchain]
+channel = "1.99.0"
+targets = ["wasm32-unknown-unknown"]
+profile = "minimal"
