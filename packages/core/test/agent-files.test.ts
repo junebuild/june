@@ -108,3 +108,35 @@ describe("blobFileStore over a lazily opened blob", () => {
     expect(opened).toBe(2);
   });
 });
+
+describe("memoryFileStore retention", () => {
+  const meta = { name: "f.bin", mediaType: "application/octet-stream" };
+  const bytesOf = (n: number, fill: number) => new Uint8Array(n).fill(fill);
+
+  test("past maxBytes the least recently used files go", async () => {
+    const files = memoryFileStore({ maxBytes: 10 });
+    const a = await files.put(bytesOf(4, 1), meta);
+    const b = await files.put(bytesOf(4, 2), meta);
+    await files.get(a.id); // a is now more recent than b
+    const c = await files.put(bytesOf(4, 3), meta); // 12 > 10: drop the LRU, b
+    expect(await files.get(b.id)).toBeNull();
+    expect(await files.get(a.id)).not.toBeNull();
+    expect(await files.get(c.id)).not.toBeNull();
+    expect(files.bytes).toBe(8);
+  });
+
+  test("storing the same bytes again neither duplicates nor counts twice", async () => {
+    const files = memoryFileStore({ maxBytes: 10 });
+    await files.put(bytesOf(4, 1), meta);
+    await files.put(bytesOf(4, 1), meta);
+    expect([files.size, files.bytes]).toEqual([1, 4]);
+  });
+
+  test("a file larger than the cap is kept, alone", async () => {
+    const files = memoryFileStore({ maxBytes: 10 });
+    await files.put(bytesOf(4, 1), meta);
+    const big = await files.put(bytesOf(20, 2), meta);
+    expect(files.size).toBe(1);
+    expect(await files.get(big.id)).not.toBeNull();
+  });
+});

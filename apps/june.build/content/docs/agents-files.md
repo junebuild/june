@@ -70,6 +70,12 @@ and an action receives only the caller's identity.
 | `createAgentRuntime` / `createNativeRuntime` | the `files` option |
 | `AgentDurableObject` | `DoAgentDef.files`, else the `blob` of its `resources`, under `agent-files/` |
 
+Files are kept for delivery, not as an archive. `memoryFileStore` drops the least recently
+used files past 64 MiB (`maxBytes`). The blob store never deletes, because content-addressed
+files may be shared between turns: expire them with an R2 lifecycle rule on the
+`agent-files/` prefix (a few days covers redelivery), and clear `.june/blob/agent-files/` in
+development.
+
 `mountAgent` and `durableChannelSurface` pass the store to the channels
 (`ChannelContext.files`), and host-side delivery passes it to `deliver` /
 `deliverResume`. Without a store, `ctx.files.put` fails the turn and says what to configure.
