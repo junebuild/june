@@ -1,0 +1,45 @@
+{
+  "name": "@junejs/pdf",
+  "version": "0.0.0",
+  "description": "June — PDF output as an agent capability: a render_pdf tool over a replaceable PdfRenderer (Typst on WebAssembly by default).",
+  "type": "module",
+  "license": "MIT",
+  "homepage": "https://june.build",
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "bun": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./skills/pdf-report.md": "./skills/pdf-report.md"
+  },
+  "files": [
+    "dist",
+    "src",
+    "skills"
+  ],
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "build": "tsdown"
+  },
+  "dependencies": {
+    "@junejs/core": ">=0.2.0-dev.65"
+  },
+  "keywords": [
+    "june",
+    "agent",
+    "pdf",
+    "typst",
+    "wasm"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/junebuild/june.git",
+    "directory": "packages/pdf"
+  }
+}

@@ -217,6 +217,13 @@
         "react": "catalog:",
       },
     },
+    "packages/pdf": {
+      "name": "@junejs/pdf",
+      "version": "0.0.0",
+      "dependencies": {
+        "@junejs/core": ">=0.2.0-dev.65",
+      },
+    },
   },
   "catalog": {
     "@types/react": "^19.3.0",
@@ -425,6 +432,8 @@
     "@junejs/juno": ["@junejs/juno@workspace:packages/juno"],
 
     "@junejs/og": ["@junejs/og@workspace:packages/og"],
+
+    "@junejs/pdf": ["@junejs/pdf@workspace:packages/pdf"],
 
     "@junejs/server": ["@junejs/server@workspace:packages/june"],
 
