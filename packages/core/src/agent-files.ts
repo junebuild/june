@@ -79,17 +79,20 @@ const ID = /^[0-9a-f]{64}$/;
 
 // A FileStore over the app's blob resource (local directory in dev, R2 on Cloudflare). Files
 // live under `prefix` so they can't collide with the app's own blob keys. Only the bytes are
-// stored: the name and media type ride the FileRef, which the reader always has.
-export function blobFileStore(blob: JuneBlob, opts: { prefix?: string } = {}): FileStore {
+// stored: the name and media type ride the FileRef, which the reader always has. `blob` may
+// be a thunk: hosts open resources asynchronously (a Durable Object binds them from env), and
+// the store is installed on a session before any tool needs it.
+export function blobFileStore(blob: JuneBlob | (() => JuneBlob | Promise<JuneBlob>), opts: { prefix?: string } = {}): FileStore {
   const prefix = opts.prefix ?? "agent-files/";
+  const open = typeof blob === "function" ? blob : () => blob;
   return {
     async put(data, meta) {
       const ref = await refFor(data, meta);
-      await blob.put(`${prefix}${ref.id}`, data);
+      await (await open()).put(`${prefix}${ref.id}`, data);
       return ref;
     },
     async get(id) {
-      return ID.test(id) ? blob.get(`${prefix}${id}`) : null;
+      return ID.test(id) ? (await open()).get(`${prefix}${id}`) : null;
     },
   };
 }

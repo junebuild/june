@@ -1165,7 +1165,7 @@ export async function receive(
   if (!ctx.runStream) throw new Error("receive: the host provides no runStream — proactive delivery needs a streaming host (the edge Durable Object or the native mountAgent)");
   if (!channel.deliver) throw new Error(`receive: channel "${channel.name}" has no deliver() — it can't render an agent-initiated turn`);
   const events = ctx.runStream(opts.seed, { session: opts.session, turnId: opts.turnId, trigger: opts.trigger });
-  await channel.deliver(opts.target, events, { session: opts.session });
+  await channel.deliver(opts.target, events, { session: opts.session, files: ctx.files });
 }
 
 // Slack Web API envelope shape (only the fields the read tools touch). `[k: string]`
