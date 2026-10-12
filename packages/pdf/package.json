@@ -47,6 +47,7 @@
     }
   },
   "devDependencies": {
+    "@junejs/server": ">=1.0.0-dev.46",
     "@myriaddreamin/typst.ts": "^0.7.0",
     "@myriaddreamin/typst-ts-web-compiler": "^0.7.0"
   },
