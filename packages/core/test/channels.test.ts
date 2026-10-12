@@ -6,6 +6,7 @@
 import { afterEach, beforeEach, describe, expect, setSystemTime, test } from "bun:test";
 import { channelFetch, defineChannel, DeliverUnsupportedError, resolveChannel, type AgentDefinition, type Channel, type ChannelContext } from "@junejs/core/agent-config";
 import type { InboundEvent, ToolContext, TurnEvent } from "@junejs/core/agent-runtime";
+import { memoryFileStore, type FileRef } from "@junejs/core/agent-files";
 import { crispChannel, deriveCrispIdentity, httpChannel, slackChannel, receive, verifySlackSignature, verifyCrispSignature, verifyCrispUrlKey, tryParseJson, timestampFresh, normalizeSlackEvent, normalizeCrispEvent, isCrispEvent, feedbackBlocks, resetSlackCounters, type ChannelRejection, type CrispIdentity, type CrispWebhookEnvelope, type SlackIdentity } from "@junejs/core/channels";
 
 const enc = new TextEncoder();
@@ -2444,5 +2445,140 @@ describe("slackChannel respondWhen + channelType", () => {
     expect(type({ type: "message", channel_type: "app_home", text: "hi", channel: "C4", ts: "1" })).toBe("unknown");
     expect(type({ type: "reaction_added", user: "U1", reaction: "tada", item: { type: "message", channel: "C1", ts: "1" } })).toBe("unknown");
     expect(type({ type: "reaction_added", user: "U1", reaction: "tada", item: { type: "message", channel: "D1", ts: "1" } })).toBe("im");
+  });
+});
+
+describe("slackChannel — attached files (docs/rfc-agent-files.md)", () => {
+  const secret = "shhh";
+  async function signed(body: string) {
+    const ts = String(Math.floor(Date.now() / 1000));
+    const sig = `v0=${await hmacHex(secret, `v0:${ts}:${body}`)}`;
+    return new Request("http://x/channels/slack", { method: "POST", headers: { "x-slack-request-timestamp": ts, "x-slack-signature": sig }, body });
+  }
+  // Every outbound call in order, with its body decoded by content type: JSON, form, or bytes.
+  type Call = { url: string; body: unknown; bytes?: string };
+  let seen: Call[] = [];
+  function uploadStub(overrides: Partial<Record<string, unknown>> = {}) {
+    seen = [];
+    globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+      const u = String(url);
+      const type = new Headers(init?.headers).get("content-type") ?? "";
+      const raw = init?.body;
+      const call: Call = { url: u, body: undefined };
+      if (raw instanceof Uint8Array) call.bytes = new TextDecoder().decode(raw);
+      else if (typeof raw === "string") call.body = type.startsWith("application/x-www-form-urlencoded") ? Object.fromEntries(new URLSearchParams(raw)) : JSON.parse(raw);
+      seen.push(call);
+      const m = u.split("/").pop()!;
+      if (m in overrides) return Response.json(overrides[m]);
+      if (m === "files.getUploadURLExternal") return Response.json({ ok: true, upload_url: "https://files.slack.test/upload/F1", file_id: "F1" });
+      if (m === "files.completeUploadExternal") return Response.json({ ok: true, files: [{ id: "F1" }] });
+      if (u.startsWith("https://files.slack.test/")) return new Response("OK - 8");
+      return Response.json({ ok: true });
+    }) as typeof fetch;
+  }
+  const methods = () => seen.map((c) => (c.url.startsWith("https://files.slack.test/") ? "UPLOAD" : c.url.split("/").pop()!));
+
+  async function stored(text = "%PDF-1.7") {
+    const files = memoryFileStore();
+    const file = await files.put(new TextEncoder().encode(text), { name: "report.pdf", mediaType: "application/pdf" });
+    return { files, file };
+  }
+  function turn(file: FileRef, ...extra: TurnEvent[]): () => AsyncIterable<TurnEvent> {
+    return async function* () {
+      yield { type: "turn.started", turnId: "t1", trigger: { kind: "proactive", by: "x" } } as TurnEvent;
+      yield { type: "file.attached", turnId: "t1", callId: "c1", file } as TurnEvent;
+      yield* extra;
+      yield { type: "turn.completed", turnId: "t1", text: "The report is attached." } as TurnEvent;
+    };
+  }
+
+  test("deliver(): the reply posts first, then the file uploads into the same thread", async () => {
+    uploadStub();
+    const { files, file } = await stored();
+    const ch = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test" });
+    await ch.deliver!({ channelId: "C1", threadId: "5.5" }, turn(file)(), { files });
+    const m = methods();
+    expect(m.slice(-3)).toEqual(["files.getUploadURLExternal", "UPLOAD", "files.completeUploadExternal"]);
+    expect(m.slice(0, -3)).toContain("chat.postMessage");
+    expect(seen.find((c) => c.url.endsWith("files.getUploadURLExternal"))!.body).toEqual({ filename: "report.pdf", length: "8" });
+    expect(seen.find((c) => c.url.startsWith("https://files.slack.test/"))!.bytes).toBe("%PDF-1.7");
+    const done = seen.find((c) => c.url.endsWith("files.completeUploadExternal"))!.body as Record<string, string>;
+    expect(done.channel_id).toBe("C1");
+    expect(done.thread_ts).toBe("5.5");
+    expect(JSON.parse(done.files!)).toEqual([{ id: "F1", title: "report.pdf" }]);
+  });
+
+  test("the same file attached twice uploads once", async () => {
+    uploadStub();
+    const { files, file } = await stored();
+    const ch = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test" });
+    await ch.deliver!({ channelId: "C1" }, turn(file, { type: "file.attached", turnId: "t1", callId: "c2", file } as TurnEvent)(), { files });
+    expect(methods().filter((m) => m === "UPLOAD")).toHaveLength(1);
+  });
+
+  test("no file store: nothing uploads and onError says why", async () => {
+    uploadStub();
+    const { file } = await stored();
+    const errors: string[] = [];
+    const ch = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", onError: (e) => errors.push(String((e as Error).message)) });
+    await ch.deliver!({ channelId: "C1" }, turn(file)());
+    expect(methods()).not.toContain("files.getUploadURLExternal");
+    expect(errors).toEqual([expect.stringContaining("no file store")]);
+  });
+
+  test("a file the store doesn't hold is noted in the thread and reported, not thrown", async () => {
+    uploadStub();
+    const { file } = await stored();
+    const errors: string[] = [];
+    const ch = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", onError: (e) => errors.push(String((e as Error).message)) });
+    await ch.deliver!({ channelId: "C1", threadId: "5.5" }, turn(file)(), { files: memoryFileStore() });
+    expect(errors).toEqual([expect.stringContaining("couldn't attach report.pdf")]);
+    const note = seen.filter((c) => c.url.endsWith("chat.postMessage")).at(-1)!.body as { text: string; thread_ts: string };
+    expect(note).toMatchObject({ text: "_(couldn't attach report.pdf)_", thread_ts: "5.5" });
+  });
+
+  test("a missing files:write scope names the scope to add", async () => {
+    uploadStub({ "files.getUploadURLExternal": { ok: false, error: "missing_scope" } });
+    const { files, file } = await stored();
+    const errors: string[] = [];
+    const ch = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", onError: (e) => errors.push(String((e as Error).message)) });
+    await ch.deliver!({ channelId: "C1" }, turn(file)(), { files });
+    expect(errors).toEqual([expect.stringMatching(/missing_scope.*files:write/)]);
+  });
+
+  test("inbound reply (post-once path): ctx.files feeds the upload after the reply", async () => {
+    uploadStub();
+    const { files, file } = await stored();
+    const ch = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test" });
+    const ctx = ctxWith(async () => "unused");
+    ctx.files = files;
+    ctx.runStream = turn(file);
+    await ch.webhook!(await signed(JSON.stringify({ type: "event_callback", event: { type: "message", text: "report", channel: "C1", ts: "1.1", user: "U1" } })), ctx);
+    await flush();
+    expect(methods()).toEqual(["chat.postMessage", "files.getUploadURLExternal", "UPLOAD", "files.completeUploadExternal"]);
+  });
+
+  test("a parked turn uploads the files so far above the approval prompt", async () => {
+    uploadStub();
+    const { files, file } = await stored();
+    const ch = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test" });
+    async function* parked() {
+      yield { type: "file.attached", turnId: "t1", callId: "c1", file } as TurnEvent;
+      yield { type: "input.requested", turnId: "t1", request: { id: "send", prompt: "Email it to finance?", answerers: { user: "U1" } } } as TurnEvent;
+    }
+    await ch.deliver!({ channelId: "C1" }, parked(), { files });
+    expect(methods()).toEqual(["files.getUploadURLExternal", "UPLOAD", "files.completeUploadExternal", "chat.postMessage"]);
+  });
+
+  test("deliverResume(): files from the continuation upload after the outcome", async () => {
+    uploadStub();
+    const { files, file } = await stored();
+    const ch = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test" });
+    async function* continuation() {
+      yield { type: "file.attached", turnId: "t1", callId: "c1", file } as TurnEvent;
+      yield { type: "turn.completed", turnId: "t1", text: "Sent." } as TurnEvent;
+    }
+    await ch.deliverResume!({ channelId: "C1", threadId: "5.5", messageTs: "9.9" }, continuation(), { files });
+    expect(methods()).toEqual(["chat.update", "chat.update", "files.getUploadURLExternal", "UPLOAD", "files.completeUploadExternal"]);
   });
 });

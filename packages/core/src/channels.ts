@@ -8,6 +8,7 @@
 //   export default slackChannel({ signingSecret: process.env.SLACK_SIGNING_SECRET! , botToken: ... })
 
 import { DeliverUnsupportedError, type Channel, type ChannelContext, type DeliveryTarget, type ResumeDeliveryTarget } from "./agent-config";
+import type { FileRef, FileStore } from "./agent-files";
 import type { InboundEvent, InputRequest, ProactiveTrigger, Tool, ToolContext, TurnEvent } from "./agent-runtime";
 import type { Principal } from "./context";
 
@@ -252,6 +253,11 @@ export function httpChannel(opts: { path?: string; mcp?: (req: Request) => Promi
       };
     },
   };
+}
+
+// One upload per file per render: two tool calls may return the same (content-addressed) file.
+function collectFile(into: FileRef[], file: FileRef): void {
+  if (!into.some((f) => f.id === file.id)) into.push(file);
 }
 
 // ── slack — Events API inbound (signed) → durable turn → chat.postMessage out.
@@ -565,8 +571,9 @@ export function slackChannel(opts: {
   // (a delta, the final one-shot reply, or a failure note) — so a tool-only / empty / no-output
   // turn posts NOTHING (no empty streamed message). When startStream is unavailable (older app),
   // content accumulates and is posted once via chat.postMessage — including a failure note.
-  async function streamRender(surface: DeliveryTarget, events: AsyncIterable<TurnEvent>, session?: string) {
+  async function streamRender(surface: DeliveryTarget, events: AsyncIterable<TurnEvent>, session?: string, files?: FileStore) {
     const { channelId, threadId } = surface;
+    const attached: FileRef[] = []; // file.attached refs, uploaded once the reply text is out
     let streamTs: string | undefined;
     let started = false; // startStream attempted (regardless of success)
     let stoppedByUser = false; // the human hit Slack's Stop — the message is final, cease rendering
@@ -677,6 +684,7 @@ export function slackChannel(opts: {
           if (title) await pushChunk({ type: "task_update", id: e.call.id, title: title.slice(0, 256), status });
         }
         else if (e.type === "turn.completed") finalText = e.text;
+        else if (e.type === "file.attached") collectFile(attached, e.file);
         else if (e.type === "turn.failed") { await push("\n_(the turn failed)_"); await finish(); return; }
         else if (e.type === "turn.cancelled") {
           // Cancelled (#129): close what already streamed with a note so the half-answer
@@ -693,6 +701,7 @@ export function slackChannel(opts: {
           // the turn parked awaiting a human: finalize any streamed text, then post the prompt
           // with Approve/Deny buttons. The interaction handler (below) routes the click to resume.
           if (started) await finish();
+          await deliverFiles(files, channelId, threadId, attached); // the work so far, above the prompt
           const promptTs = await postApproval(channelId, threadId, e.turnId, e.request, session);
           // the prompt normally auto-clears the status; if it failed to post (reported via
           // onError, not thrown), clear explicitly — nothing else ever will
@@ -702,10 +711,11 @@ export function slackChannel(opts: {
       }
       if (!streamed && finalText.trim()) await push(finalText); // one-shot: the whole reply once
       const posted = started ? await finish() : false; // nothing pushed (tool-only/empty) ⇒ never started ⇒ post nothing
+      const uploaded = await deliverFiles(files, channelId, threadId, attached);
       // when NOTHING actually posted — never started, or a task chunk tried to start a
       // stream that startStream couldn't open — nothing will ever auto-clear the status;
       // clear it now instead of leaving "is thinking…" to Slack's 2-minute timeout.
-      if (!posted && statusShown && threadId) await setStatus(channelId, threadId, "");
+      if (!posted && !uploaded && statusShown && threadId) await setStatus(channelId, threadId, "");
     } catch (err) {
       await push("\n_(the turn failed)_").catch(() => {}); // starts the stream/buffer if not yet
       await finish().catch(() => {});
@@ -724,6 +734,7 @@ export function slackChannel(opts: {
       { channelId: event.channelId, threadId: event.threadId, recipientUserId: event.user?.id, recipientTeamId: event.teamId },
       ctx.runStream!(userText, { session, event, replace }),
       session,
+      ctx.files,
     );
   }
   // Post-once render that still understands HITL. The plain ctx.run path collapses the turn
@@ -735,8 +746,10 @@ export function slackChannel(opts: {
     if (opts.status && event.threadId) await setStatus(event.channelId, event.threadId, opts.status);
     try {
       let finalText = "";
+      const attached: FileRef[] = [];
       for await (const e of ctx.runStream!(userText, { session, event, replace })) {
         if (e.type === "turn.completed") finalText = e.text;
+        else if (e.type === "file.attached") collectFile(attached, e.file);
         else if (e.type === "turn.failed") throw new Error(e.error.message, { cause: e.error }); // full TurnError rides along
         else if (e.type === "turn.cancelled") {
           // Cancelled (#129): this turn's reply will never come. Post nothing, and leave
@@ -746,6 +759,7 @@ export function slackChannel(opts: {
           return;
         }
         else if (e.type === "input.requested") {
+          await deliverFiles(ctx.files, event.channelId, event.threadId, attached);
           const promptTs = await postApproval(event.channelId, event.threadId, e.turnId, e.request, session);
           // a failed prompt post (reported, not thrown) leaves nothing to auto-clear the status
           if (!promptTs && opts.status && event.threadId) await setStatus(event.channelId, event.threadId, "");
@@ -753,7 +767,8 @@ export function slackChannel(opts: {
         }
       }
       if (finalText.trim()) await postMessage(event.channelId, finalText, event.threadId);
-      else if (opts.status && event.threadId) await setStatus(event.channelId, event.threadId, ""); // tool-only: nothing posts to auto-clear
+      const uploaded = await deliverFiles(ctx.files, event.channelId, event.threadId, attached);
+      if (!finalText.trim() && !uploaded && opts.status && event.threadId) await setStatus(event.channelId, event.threadId, ""); // tool-only: nothing posts to auto-clear
     } catch (err) {
       // a failed turn posts nothing — clear the status instead of leaving "is thinking…"
       // stuck until Slack's 2-minute timeout
@@ -841,7 +856,7 @@ export function slackChannel(opts: {
         throw err; // still record via onError
       }
       try {
-        await resumeRender(target, prependResult(first, it), session);
+        await resumeRender(target, prependResult(first, it), session, ctx.files);
       } finally {
         // Close the manual iterator on every exit so an SSE-backed resumeStream isn't left
         // open (resumeRender's for-await only closes iterators IT created).
@@ -870,22 +885,70 @@ export function slackChannel(opts: {
   // on a re-park). ONE renderer shared by the worker-side fallback and the channel's
   // deliverResume() (invoked by the turn's host on a delivered resume), so both isolates
   // render identically.
-  async function resumeRender(target: ResumeDeliveryTarget, events: AsyncIterable<TurnEvent>, session?: string) {
+  async function resumeRender(target: ResumeDeliveryTarget, events: AsyncIterable<TurnEvent>, session?: string, files?: FileStore) {
     const { channelId, threadId, messageTs } = target;
     try {
       await updateMessage(channelId, messageTs, "_Working…_"); // resume accepted: drop the buttons; show progress
       let final = "";
+      const attached: FileRef[] = [];
       for await (const ev of events) {
         if (ev.type === "turn.completed") final = ev.text;
+        else if (ev.type === "file.attached") collectFile(attached, ev.file);
         else if (ev.type === "turn.failed") { await updateMessage(channelId, messageTs, "_(the turn failed)_"); return; }
-        else if (ev.type === "input.requested") { await postApproval(channelId, threadId, ev.turnId, ev.request, session); await updateMessage(channelId, messageTs, "_(awaiting more input…)_"); return; }
+        else if (ev.type === "input.requested") {
+          await deliverFiles(files, channelId, threadId, attached);
+          await postApproval(channelId, threadId, ev.turnId, ev.request, session);
+          await updateMessage(channelId, messageTs, "_(awaiting more input…)_");
+          return;
+        }
       }
       await updateMessage(channelId, messageTs, final.trim() || "_(done)_");
+      await deliverFiles(files, channelId, threadId, attached);
     } catch (err) {
       // the continuation stream dropped mid-flight (the resume itself was accepted)
       await updateMessage(channelId, messageTs, "_(the turn failed)_").catch(() => {});
       throw err;
     }
+  }
+  // Files the turn attached (docs/rfc-agent-files.md), uploaded into the reply's thread after
+  // the text that describes them. Best-effort like the rest of the reply path: the turn has
+  // already completed, so a file that can't be read or uploaded is reported via onError and
+  // noted in the thread — never thrown. Returns whether anything posted (the status line
+  // auto-clears on a post).
+  async function deliverFiles(files: FileStore | undefined, channel: string, thread_ts: string | undefined, refs: FileRef[]): Promise<boolean> {
+    if (!refs.length) return false;
+    if (!files) {
+      opts.onError?.(new Error(`slack: ${refs.length} attached file(s) not delivered — the host gave the channel no file store`));
+      return false;
+    }
+    for (const ref of refs) {
+      try {
+        const data = await files.get(ref.id);
+        if (!data) throw new Error(`the file store does not hold ${ref.id}`);
+        await uploadFile(channel, thread_ts, ref, data);
+      } catch (err) {
+        opts.onError?.(new Error(`slack: couldn't attach ${ref.name}: ${err instanceof Error ? err.message : String(err)}`, { cause: err }));
+        await postMessage(channel, `_(couldn't attach ${ref.name})_`, thread_ts).catch(() => {});
+      }
+    }
+    return true;
+  }
+  // Slack's external upload flow (files.upload is retired): reserve an upload URL, POST the
+  // bytes to it, then complete the upload into the channel/thread. Both Web API calls take
+  // form-encoded arguments; `files` rides as a JSON string.
+  async function uploadFile(channel: string, thread_ts: string | undefined, ref: FileRef, data: Uint8Array) {
+    const form = (params: Record<string, string>): RequestInit => ({
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded", authorization: `Bearer ${opts.botToken}` },
+      body: new URLSearchParams(params).toString(),
+    });
+    const scopeHint = (error?: string) => (error === "missing_scope" ? " — add the files:write scope and reinstall the app" : "");
+    const reserved = (await (await fetch(`${api}/files.getUploadURLExternal`, form({ filename: ref.name, length: String(data.byteLength) }))).json().catch(() => ({}))) as { ok?: boolean; error?: string; upload_url?: string; file_id?: string };
+    if (!reserved.ok || !reserved.upload_url || !reserved.file_id) throw new Error(`files.getUploadURLExternal failed (${reserved.error ?? "no response"})${scopeHint(reserved.error)}`);
+    const sent = await fetch(reserved.upload_url, { method: "POST", headers: { "content-type": ref.mediaType }, body: data.slice() });
+    if (!sent.ok) throw new Error(`the upload URL answered HTTP ${sent.status}`);
+    const done = (await (await fetch(`${api}/files.completeUploadExternal`, form({ files: JSON.stringify([{ id: reserved.file_id, title: ref.name }]), channel_id: channel, ...(thread_ts ? { thread_ts } : {}) }))).json().catch(() => ({}))) as { ok?: boolean; error?: string };
+    if (!done.ok) throw new Error(`files.completeUploadExternal failed (${done.error ?? "no response"})${scopeHint(done.error)}`);
   }
   // Slack Web API read helper: GET with query params + bearer token. Read methods
   // (conversations.replies, reactions.get, users.info) all accept this shape. Returns
@@ -923,10 +986,10 @@ export function slackChannel(opts: {
     // Proactive delivery (§9): render an agent-initiated turn's stream to a target thread,
     // the same renderer as an inbound reply — progressive edits, HITL prompts, final text.
     // `opts.session` routes an HITL prompt's resume back to the caller-chosen session.
-    deliver: (target, events, o) => streamRender(target, events, o?.session),
+    deliver: (target, events, o) => streamRender(target, events, o?.session, o?.files),
     // Resumed-continuation renderer, host-invokable (delivered resume): same function the
     // worker-side fallback uses, so rendering is identical wherever the continuation runs.
-    deliverResume: (target, events, o) => resumeRender(target, events, o?.session),
+    deliverResume: (target, events, o) => resumeRender(target, events, o?.session, o?.files),
     // Deterministic outbound post (#89): one app-authored message over the channel's own
     // auth/transport, returning its (channel, ts) identity. Throws loudly on a platform
     // error — unlike the best-effort reply path, the app initiated this and must know.
