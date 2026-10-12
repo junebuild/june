@@ -317,6 +317,7 @@ describe("docs", () => {
       "agents-directory",
       "agents-channels",
       "agents-connections",
+      "agents-files",
       "agents-durable-turns",
       "agents-deploy",
     ]) {
