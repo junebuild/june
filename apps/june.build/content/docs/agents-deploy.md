@@ -119,8 +119,9 @@ long-running host.
 ### Version guard
 
 The server↔core runtime contract is versioned, now at
-`RUNTIME_API_VERSION = 6` (the latest bump: `AgentSession.note()` and the `note`
-message role, which the Durable Object's `/note` route calls). `NativeRuntime`,
+`RUNTIME_API_VERSION = 7` (the latest bump: `AgentSession.files`,
+`ToolContext.files`, and the `file.attached` event, which the hosts install a
+`FileStore` for). `NativeRuntime`,
 `MemoryRuntime`, and `AgentDurableObject` check it at construction. If a package manager nests a
 second, older `@junejs/core` under `@junejs/server`, you get an error naming both
 versions at startup, not a failure in the middle of a turn. Dedupe to one core.
