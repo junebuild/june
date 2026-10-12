@@ -1,9 +1,11 @@
 // typstRenderer — a PdfRenderer on the Typst compiler built for WebAssembly
 // (@myriaddreamin/typst.ts). Markdown → Typst source (markdown-typst.ts) → PDF, in process,
-// with no browser and no native binary: it runs wherever a 28 MB WASM module can load —
-// Bun, Node, Deno — but NOT on Cloudflare Workers, whose bundle limit the module alone
-// exceeds (10.8 MB gzip). Measured 2026-10-12 on Bun 1.3.14: ~550 ms to initialize once per
-// process (fonts included), then ~30 ms per one-page document.
+// with no browser and no native binary. Verified on Bun and Node. Cloudflare Workers allow
+// 64 MiB uncompressed per Worker, so the 28 MB module fits, but this renderer is not yet
+// verified on workerd: there, pass the compiled module as `wasm` (the default loader reads
+// it with node:fs), mind the 128 MB of memory an isolate's requests share, and expect the
+// Free plan's 10 ms of CPU to be too little. Measured 2026-10-12 on Bun 1.3.14: ~550 ms to
+// initialize once per process (fonts included), then ~30 ms per one-page document.
 //
 // A separate entry (@junejs/pdf/typst) so an app that renders with something else never
 // references the compiler, and the compiler itself is imported on the first render, so an

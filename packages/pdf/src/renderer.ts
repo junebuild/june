@@ -1,8 +1,8 @@
 // The PdfRenderer seam (docs/rfc-agent-files.md §4). PDF output is a capability an app
 // opts into, and HOW the PDF is produced is the app's choice: Typst on WebAssembly runs in
-// any JS host with ~28 MB to spare, but not on Cloudflare Workers (the WASM alone exceeds
-// the bundle limit); a headless browser renders HTML/CSS faithfully but needs one; a remote
-// service needs none of it locally. So the tool depends on this interface only, and every
+// process but costs a 28 MB module and tens of MB of memory per document; a headless
+// browser renders HTML/CSS faithfully but needs one; a remote service needs none of it
+// locally. So the tool depends on this interface only, and every
 // engine — the bundled typstRenderer, or one an app writes — implements it.
 
 // What a renderer is asked to produce. Markdown is the input because it is what a model
