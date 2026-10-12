@@ -232,11 +232,14 @@ Two helpers from `@junejs/server/agent-durable` route to those objects:
   the request sends `Accept: text/event-stream` and returns `{ text }` otherwise.
   A session key that can't go in a header gets a 400.
 - **`durableChannelSurface(getNamespace, { agentName, channels, env, services?,
-  waitUntil? })`** mounts the channel webhooks. It resolves `(env) => Channel`
-  factories with the worker's `env` and gives channels a `ctx` whose `run`,
-  `runStream`, `runDetached`, `runDelivered`, `resumeStream`, `resumeDelivered`,
-  and `resetSession` all call the session's Durable Object. The `services` bag is
-  memoized per `(env, agentName)`.
+  waitUntil?, files? })`** mounts the channel webhooks. It resolves `(env) =>
+  Channel` factories with the worker's `env` and gives channels a `ctx` whose
+  `run`, `runStream`, `runDetached`, `runDelivered`, `resumeStream`,
+  `resumeDelivered`, and `resetSession` all call the session's Durable Object.
+  The `services` bag is memoized per `(env, agentName)`. Pass `files` (the same
+  store the Durable Object's tools write to) so the channels can read an attached
+  file's bytes back and deliver them — a Slack upload is rendered from this
+  worker isolate. See [Files & PDF](/docs/agents-files).
 
 In a built June app you don't write either. The generated worker mounts both
 when the manifest names an agent, reading `env.AGENT` from **the current
