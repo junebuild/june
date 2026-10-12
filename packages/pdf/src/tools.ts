@@ -1,7 +1,8 @@
 // pdfTools — PDF output as an agent capability (docs/rfc-agent-files.md §4):
 //
 //   // agent/tools/pdf.ts
-//   import { pdfTools, typstRenderer } from "@junejs/pdf";
+//   import { pdfTools } from "@junejs/pdf";
+//   import { typstRenderer } from "@junejs/pdf/typst";
 //   export default pdfTools({ renderer: typstRenderer() });
 //
 // One tool, render_pdf: Markdown in, a FileRef out. The bytes go to ctx.files (the host's

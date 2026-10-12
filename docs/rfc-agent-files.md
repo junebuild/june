@@ -15,7 +15,8 @@ This RFC adds **files as turn output**, as a primitive every capability can use,
 
 ```ts
 // agent/tools/pdf.ts
-import { pdfTools, typstRenderer } from "@junejs/pdf";
+import { pdfTools } from "@junejs/pdf";
+import { typstRenderer } from "@junejs/pdf/typst";
 export default pdfTools({ renderer: typstRenderer() });
 ```
 
