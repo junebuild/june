@@ -22,6 +22,7 @@ import {
   type Tool,
 } from "@junejs/core/agent-runtime";
 import { buildSystemPrompt, channelFetch, type AgentDefinition, type ChannelContext } from "@junejs/core/agent-config";
+import type { FileStore } from "@junejs/core/agent-files";
 import { openLocalSqliteSync, type SyncSqlite } from "./sqlite-driver";
 import { assertCoreRuntimeVersion } from "./core-version";
 import { observeTurnEvents } from "./turn-events";
@@ -221,6 +222,10 @@ export type NativeRuntimeOptions = {
   // dropped; their state is in SQLite, so the next session() rebuilds them transparently.
   // Busy actors are never dropped, so the count can exceed the cap while they run.
   maxSessions?: number;
+  // Where the sessions' tools store the files they produce (docs/rfc-agent-files.md), and
+  // where mountAgent's channels read them back to deliver. Absent: ctx.files.put fails the
+  // turn naming the missing configuration.
+  files?: FileStore;
 };
 
 // The native Runtime: a registry of agent definitions over one SQLite handle,
@@ -238,11 +243,13 @@ export class NativeRuntime implements Runtime {
   private readonly announceRetry = new AnnouncementRetry((agent, id) => { void this.session(agent, id).flushAnnouncements(); });
   private readonly maxSessions: number;
   private closing: Promise<void> | undefined; // set by close() (#317)
+  readonly files: FileStore | undefined;
 
   constructor(agents: Record<string, AgentDef>, db: SyncSqlite, opts: NativeRuntimeOptions = {}) {
     assertCoreRuntimeVersion("NativeRuntime"); // #94: fail power-on, not mid-turn
     this.agents = agents;
     this.db = db;
+    this.files = opts.files;
     const max = opts.maxSessions ?? 1000;
     // At least one actor is always retained (the one being handed out), so a cap below 1
     // means nothing, and NaN would compare false and evict every idle actor on each miss.
@@ -272,7 +279,9 @@ export class NativeRuntime implements Runtime {
     if (!def) throw new Error(`unknown agent: ${agent}`);
     const model = def.instructions ? withSystem(def.model, def.instructions) : def.model;
     const sink = new InProcEventSink();
-    const session = wireAnnouncements(new AgentSession(agent, id, new SqliteSessionStore(this.db, key), sink, model, def.tools, this, def.channelInstructions), def, this.announceRetry);
+    const built = new AgentSession(agent, id, new SqliteSessionStore(this.db, key), sink, model, def.tools, this, def.channelInstructions);
+    built.files = this.files;
+    const session = wireAnnouncements(built, def, this.announceRetry);
     this.evictIdle();
     this.actors.set(key, { session, sink });
     return session;
@@ -397,9 +406,11 @@ export class MemoryRuntime implements Runtime {
   private readonly agents: Record<string, AgentDef>;
   private readonly announceRetry = new AnnouncementRetry((agent, id) => { void this.session(agent, id).flushAnnouncements(); }); // #260
   private closed = false; // set by close() (#317)
-  constructor(agents: Record<string, AgentDef>) {
+  readonly files: FileStore | undefined;
+  constructor(agents: Record<string, AgentDef>, opts: { files?: FileStore } = {}) {
     assertCoreRuntimeVersion("MemoryRuntime"); // #94: fail power-on, not mid-turn
     this.agents = agents;
+    this.files = opts.files;
   }
   agentDef(name: string): AgentDef | undefined { return this.agents[name]; }
   session(agent: string, id: string): AgentSession {
@@ -413,7 +424,9 @@ export class MemoryRuntime implements Runtime {
       this.stores.set(key, store);
       // Same def handling as NativeRuntime: switching backend must not change behavior.
       const model = def.instructions ? withSystem(def.model, def.instructions) : def.model;
-      a = wireAnnouncements(new AgentSession(agent, id, store, new InProcEventSink(), model, def.tools, this, def.channelInstructions), def, this.announceRetry);
+      const built = new AgentSession(agent, id, store, new InProcEventSink(), model, def.tools, this, def.channelInstructions);
+      built.files = this.files;
+      a = wireAnnouncements(built, def, this.announceRetry);
       this.actors.set(key, a);
     }
     return a;
@@ -440,15 +453,15 @@ export type AgentBackend = "native" | "memory" | "durable";
 // target is the DO the worker constructs, not an in-process object) — so the
 // choice is explicit and a mis-selection fails loudly.
 // An in-process runtime: a Runtime the host owns, so it can shut it down (#317).
-export type InProcessRuntime = Runtime & { close(): Promise<void> };
+export type InProcessRuntime = Runtime & { close(): Promise<void>; readonly files?: FileStore };
 
 export async function createAgentRuntime(
   agents: Record<string, AgentDef>,
-  opts: { backend?: AgentBackend; path?: string; maxSessions?: number } = {},
+  opts: { backend?: AgentBackend; path?: string; maxSessions?: number; files?: FileStore } = {},
 ): Promise<InProcessRuntime> {
   const backend = opts.backend ?? "native";
-  if (backend === "memory") return new MemoryRuntime(agents);
-  if (backend === "native") return createNativeRuntime(agents, opts.path, { maxSessions: opts.maxSessions });
+  if (backend === "memory") return new MemoryRuntime(agents, { files: opts.files });
+  if (backend === "native") return createNativeRuntime(agents, opts.path, { maxSessions: opts.maxSessions, files: opts.files });
   throw new Error("backend 'durable' is the Cloudflare Durable Object target — construct AgentDurableObject in your worker, not via createAgentRuntime");
 }
 
@@ -485,7 +498,7 @@ function warnOnDrift(agent: AgentDefinition, runtime: Runtime) {
 export function mountAgent(
   agent: AgentDefinition,
   runtime: Runtime,
-  opts: { chatPath?: string; channels?: boolean; services?: unknown } = {},
+  opts: { chatPath?: string; channels?: boolean; services?: unknown; files?: FileStore } = {},
 ): {
   surface: (req: Request) => Promise<Response | null>;
   fetch: (req: Request) => Promise<Response | null>;
@@ -498,6 +511,8 @@ export function mountAgent(
   const ctx: ChannelContext = {
     agent,
     services: opts.services, // same DI bag reachable from channel hooks (parity with durableChannelSurface)
+    // The runtime's file store, so a channel can deliver the files the turn's tools stored.
+    files: opts.files ?? (runtime as { files?: FileStore }).files,
     run: (message, o) =>
       runtime.session(agent.name, o?.session ?? "default").turn({ turnId: o?.turnId, userText: message, event: o?.event, trigger: o?.trigger, replace: o?.replace }),
     // FIRE-AND-FORGET (#77): start() without awaiting the result. Native has no waitUntil
