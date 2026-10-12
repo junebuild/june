@@ -1894,7 +1894,8 @@ describe("slackChannel.diagnose", () => {
     const missing = Object.fromEntries(d.scopes.missing.map((m) => [m.scope, m.neededFor]));
     // includes the ALWAYS-mounted capability tools' scopes — a green diagnose must mean
     // the model can actually run slack_resolve_user / slack_add_reaction, not just webhooks
-    expect(Object.keys(missing).sort()).toEqual(["app_mentions:read", "assistant:write", "reactions:read", "reactions:write", "users:read"]);
+    expect(Object.keys(missing).sort()).toEqual(["app_mentions:read", "assistant:write", "files:write", "reactions:read", "reactions:write", "users:read"]);
+    expect(missing["files:write"]).toContain("uploading files"); // attached-file uploads (docs/rfc-agent-files.md)
     expect(missing["assistant:write"]).toContain("streamed replies"); // stream + status merged into ONE entry
     expect(missing["assistant:write"]).toContain("status line");
     expect(missing["reactions:read"]).toContain("reaction events"); // feature + tool merged into ONE entry

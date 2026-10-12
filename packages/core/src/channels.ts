@@ -1050,6 +1050,9 @@ export function slackChannel(opts: {
       need("reactions:read", "the slack_list_reactions tool");
       need("users:read", "the slack_resolve_user tool");
       need("reactions:write", "the slack_add_reaction tool");
+      // Like the tools: uploads run whenever a tool attaches a file, which the channel can't
+      // know in advance, so a green diagnose must cover them (docs/rfc-agent-files.md §3).
+      need("files:write", "uploading files a turn attaches (files.getUploadURLExternal)");
       const missing = auth.ok
         ? [...needs].filter(([scope]) => !granted.includes(scope)).map(([scope, why]) => ({ scope, neededFor: why.join("; ") }))
         : [];
