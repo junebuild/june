@@ -13,7 +13,8 @@
     "@junejs/i18n": "0.0.29",
     "@junejs/server": "0.1.1",
     "@junejs/juno": "0.0.30",
-    "@junejs/og": "0.0.6"
+    "@junejs/og": "0.0.6",
+    "@junejs/pdf": "0.0.0"
   },
   "changesets": [
     "action-identity-annotations",
@@ -23,6 +24,7 @@
     "agent-catalogs",
     "agent-compile",
     "agent-edge-channels",
+    "agent-files",
     "agent-google-drive",
     "agent-messages-index",
     "agent-preflight-resolve",
@@ -77,6 +79,7 @@
     "optional-segments-last-315",
     "oxc-parser-0151",
     "oxc-parser-0152",
+    "pdf-package",
     "png-favicons",
     "provider-state",
     "requestinput-answerers",
