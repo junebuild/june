@@ -166,8 +166,10 @@ export default defineAction({
 
 A tool file may also default-export a raw `Tool` (`{ spec, run }`). A
 `defineAction`'s `run` only gets `{ user }`. A raw tool's `run` gets the full
-`ToolContext`, which includes `event`, `principal`, `initiator`, `store`, and
-`requestInput`. It's the only way to park a turn for human input:
+`ToolContext`, which includes `event`, `principal`, `initiator`, `store`,
+`files`, and `requestInput`. It's the only way to park a turn for human input,
+and the only way to produce a file (`ctx.files`, see
+[Files & PDF](/docs/agents-files)):
 
 ```ts
 // app/agent/tools/approve_refund.ts
