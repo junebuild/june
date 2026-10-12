@@ -144,6 +144,8 @@ See [Stability](/docs/stability) for where each piece stands.
   `agent.ts` fields, per-surface instructions, tools, skills, models.
 - [Channels](/docs/agents-channels): HTTP, Slack, and Crisp inbound, plus channel tools.
 - [Connections](/docs/agents-connections): external MCP, OpenAPI, and provider tool sources.
+- [Files & PDF](/docs/agents-files): a tool answers with a file, the turn emits
+  `file.attached`, and the channel delivers it; `@junejs/pdf` builds PDF output on it.
 - [Durable turns](/docs/agents-durable-turns): checkpoints, exactly-once and
   at-least-once tools, and human-in-the-loop.
 - [Deploy](/docs/agents-deploy): one Durable Object per session on Cloudflare Workers.

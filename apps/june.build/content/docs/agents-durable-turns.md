@@ -156,6 +156,7 @@ Every turn emits typed `TurnEvent`s as it runs:
 | `message.completed` | an assistant message was committed with text |
 | `action.requested` | the model asked for a tool call |
 | `action.completed` | a tool call's result was committed; `error` is set when the tool threw (see [When a tool throws](#when-a-tool-throws)) |
+| `file.attached` | a tool returned a file; emitted after `action.completed` for each `FileRef` in the result, and folded back on `observe({ replay: true })` (see [Files](/docs/agents-files)) |
 | `input.requested` | the turn parked, waiting for a human |
 | `input.resolved` | a parked turn's input was answered or retired; carries `outcome` (`answered` / `retired`) and `by`. Live only |
 | `turn.completed` | final text |
@@ -506,7 +507,7 @@ export default {
 
 - **A mid-turn subscriber has no catch-up over the wire.** `observe(cb, { turnId,
   replay: true })` folds the logged events (`message.completed`,
-  `action.requested` / `completed`, `turn.completed`) before live ones, but only
+  `action.requested` / `completed`, `file.attached`, `turn.completed`) before live ones, but only
   in-process. It skips `turn.started`, `turn.failed`, `turn.cancelled`, and a
   pending `input.requested`. `runStream`, the Durable Object's SSE, and delivered
   renders all subscribe live when the turn starts, and there is no public
