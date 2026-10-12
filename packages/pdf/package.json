@@ -1,6 +1,6 @@
 {
   "name": "@junejs/pdf",
-  "version": "0.0.0",
+  "version": "0.1.0-dev.0",
   "description": "June — PDF output as an agent capability: a render_pdf tool over a replaceable PdfRenderer (Typst on WebAssembly by default).",
   "type": "module",
   "license": "MIT",
@@ -30,7 +30,7 @@
     "build": "tsdown"
   },
   "dependencies": {
-    "@junejs/core": ">=0.2.0-dev.65",
+    "@junejs/core": ">=0.2.0-dev.66",
     "marked": "^18.0.14"
   },
   "peerDependencies": {
@@ -46,7 +46,7 @@
     }
   },
   "devDependencies": {
-    "@junejs/server": ">=1.0.0-dev.46",
+    "@junejs/server": ">=1.0.0-dev.47",
     "@myriaddreamin/typst.ts": "^0.7.0",
     "@myriaddreamin/typst-ts-web-compiler": "^0.7.0"
   },
