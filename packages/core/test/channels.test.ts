@@ -2537,6 +2537,16 @@ describe("slackChannel — attached files (docs/rfc-agent-files.md)", () => {
     expect(note).toMatchObject({ text: "_(couldn't attach report.pdf)_", thread_ts: "5.5" });
   });
 
+  test("a filename can't smuggle a mention into the fallback note", async () => {
+    uploadStub();
+    const files = memoryFileStore();
+    const file = await files.put(new TextEncoder().encode("x"), { name: "<!channel> & <@U1>.pdf", mediaType: "application/pdf" });
+    const ch = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", onError: () => {} });
+    await ch.deliver!({ channelId: "C1" }, turn(file)(), { files: memoryFileStore() }); // a store without the bytes → the note
+    const note = seen.filter((c) => c.url.endsWith("chat.postMessage")).at(-1)!.body as { text: string };
+    expect(note.text).toBe("_(couldn't attach &lt;!channel&gt; &amp; &lt;@U1&gt;.pdf)_");
+  });
+
   test("a missing files:write scope names the scope to add", async () => {
     uploadStub({ "files.getUploadURLExternal": { ok: false, error: "missing_scope" } });
     const { files, file } = await stored();

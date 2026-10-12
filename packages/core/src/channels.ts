@@ -255,6 +255,13 @@ export function httpChannel(opts: { path?: string; mcp?: (req: Request) => Promi
   };
 }
 
+// Text from a tool result (a filename) placed in a message the channel posts: Slack reads
+// `<…>` as a mention or link (`<!channel>`, `<@U…>`) and `&` as an entity, so escape exactly
+// those three, as Slack's formatting docs require.
+function escapeMrkdwn(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 // One upload per file per render: two tool calls may return the same (content-addressed) file.
 function collectFile(into: FileRef[], file: FileRef): void {
   if (!into.some((f) => f.id === file.id)) into.push(file);
@@ -928,7 +935,7 @@ export function slackChannel(opts: {
         await uploadFile(channel, thread_ts, ref, data);
       } catch (err) {
         opts.onError?.(new Error(`slack: couldn't attach ${ref.name}: ${err instanceof Error ? err.message : String(err)}`, { cause: err }));
-        await postMessage(channel, `_(couldn't attach ${ref.name})_`, thread_ts).catch(() => {});
+        await postMessage(channel, `_(couldn't attach ${escapeMrkdwn(ref.name)})_`, thread_ts).catch(() => {});
       }
     }
     return true;
