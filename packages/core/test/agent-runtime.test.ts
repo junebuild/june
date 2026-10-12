@@ -28,6 +28,7 @@ import {
   type InputAnnouncement,
 } from "@junejs/core/agent-runtime";
 import { toAnthropicMessages, type AnthropicMessage } from "@junejs/core/agent-models";
+import { memoryFileStore } from "@junejs/core/agent-files";
 
 // ── an in-memory SessionStore (pure). `app` is the side-effect target a local
 // tool writes via unwrap() — stands in for "any table a tool writes in the same
@@ -2180,5 +2181,74 @@ describe("a run that returns a Promise without being async (#233)", () => {
   test('mode: "local" on an async function is honored — and so fails the same way', async () => {
     const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), scriptedModel(SCRIPT), [lookup(async () => ({ inStock: 7 }), "local")], noRuntime);
     await expect(s.turn({ turnId: "t1", userText: "go" })).rejects.toThrow(/returned a Promise but runs local/);
+  });
+});
+
+describe("files as turn output (docs/rfc-agent-files.md)", () => {
+  // Call `render` once, then answer.
+  const callRender: Model = (msgs) =>
+    replyStream(
+      msgs.some((m) => m.role === "tool")
+        ? { text: "The report is attached.", toolCalls: [] }
+        : { text: "", toolCalls: [{ id: "c1", name: "render", input: {} }] },
+    );
+  const render = (runs?: { n: number }): Tool => ({
+    spec: { name: "render", description: "render a report", input: { type: "object" } },
+    run: async (_input: unknown, ctx) => {
+      if (runs) runs.n++;
+      const file = await ctx.files.put(new TextEncoder().encode("%PDF-1.7 report"), { name: "report.pdf", mediaType: "application/pdf" });
+      return { ok: true, file };
+    },
+  });
+
+  test("a tool stores bytes through ctx.files; the log keeps only the ref, and file.attached follows action.completed", async () => {
+    const { store } = memStore();
+    const s = new AgentSession("ops", "s1", store, new MemBroadcaster(), callRender, [render()], noRuntime);
+    const files = memoryFileStore();
+    s.files = files;
+    const events: TurnEvent[] = [];
+    s.observe((e) => events.push(e));
+    expect(await s.turn({ turnId: "t1", userText: "report please" })).toBe("The report is attached.");
+
+    const types = events.map((e) => e.type);
+    expect(types.indexOf("file.attached")).toBe(types.indexOf("action.completed") + 1);
+    const attached = events.find((e) => e.type === "file.attached") as Extract<TurnEvent, { type: "file.attached" }>;
+    expect(attached).toMatchObject({ turnId: "t1", callId: "c1", file: { $june: "file", name: "report.pdf", mediaType: "application/pdf", size: 15 } });
+    expect(new TextDecoder().decode((await files.get(attached.file.id))!)).toBe("%PDF-1.7 report");
+    const toolMsg = store.messages().find((m) => m.role === "tool")!;
+    expect(JSON.stringify(toolMsg)).not.toContain("%PDF"); // bytes never enter the log
+  });
+
+  test("replay folds file.attached back from the log, in the live position", async () => {
+    const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), callRender, [render()], noRuntime);
+    s.files = memoryFileStore();
+    const live: TurnEvent[] = [];
+    s.observe((e) => live.push(e));
+    await s.turn({ turnId: "t1", userText: "go" });
+    const replayed: TurnEvent[] = [];
+    s.observe((e) => replayed.push(e), { turnId: "t1", replay: true })();
+    expect(replayed.map((e) => e.type)).toEqual(["action.requested", "action.completed", "file.attached", "message.completed", "turn.completed"]);
+    expect(replayed.find((e) => e.type === "file.attached")).toEqual(live.find((e) => e.type === "file.attached")!);
+  });
+
+  test("a crash after the tool committed replays without re-running it or re-storing the file", async () => {
+    const { store } = memStore();
+    const runs = { n: 0 };
+    const files = memoryFileStore();
+    const s1 = new AgentSession("ops", "s1", store, new MemBroadcaster(), callRender, [render(runs)], noRuntime);
+    s1.files = files;
+    s1.start({ turnId: "t1", userText: "go", crash: { at: "after-tool-commit", step: "tool:1:c1" } });
+    expect(await s1.result("t1")).toMatchObject({ status: "failed" });
+    const s2 = new AgentSession("ops", "s1", store, new MemBroadcaster(), callRender, [render(runs)], noRuntime);
+    s2.files = files;
+    expect(await s2.turn({ turnId: "t1", userText: "go" })).toBe("The report is attached.");
+    expect(runs.n).toBe(1);
+    expect(files.size).toBe(1);
+  });
+
+  test("without a file store, ctx.files.put fails the turn and names the configuration", async () => {
+    const s = new AgentSession("ops", "s1", memStore().store, new MemBroadcaster(), callRender, [render()], noRuntime);
+    s.start({ turnId: "t1", userText: "go" });
+    expect(await s.result("t1")).toMatchObject({ status: "failed", error: { message: expect.stringContaining("no file store") } });
   });
 });
