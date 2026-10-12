@@ -171,7 +171,7 @@
       },
       "peerDependencies": {
         "@anthropic-ai/sdk": ">=0.60.0",
-        "@junejs/core": ">=0.2.0-dev.63",
+        "@junejs/core": ">=0.2.0-dev.65",
         "@libsql/client": "^0.14.0 || ^0.15.0 || ^0.16.0 || ^0.17.0",
         "mysql2": "^3.0.0",
         "pg": "^8.0.0",
@@ -225,6 +225,7 @@
         "marked": "^18.0.14",
       },
       "devDependencies": {
+        "@junejs/server": ">=1.0.0-dev.46",
         "@myriaddreamin/typst-ts-web-compiler": "^0.7.0",
         "@myriaddreamin/typst.ts": "^0.7.0",
       },
