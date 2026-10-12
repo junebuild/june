@@ -7,6 +7,7 @@
 // this module is the pure config layer it produces.
 
 import type { AnyAction } from "./agent";
+import type { FileStore } from "./agent-files";
 import { toolMode, type AuthorizeAnswer, type ChannelPolicy, type InputAnnouncement, type InboundEvent, type ProactiveTrigger, type Tool, type ToolContext, type ToolSpec, type TurnEvent } from "./agent-runtime";
 import type { Principal } from "./context";
 import { connectAll, type Connection, type ConnectionReport } from "./connections";
@@ -133,6 +134,10 @@ export type ChannelContext = {
   // the 200 ACK can be killed when the isolate is reclaimed. Absent on native (Node
   // keeps floating promises alive), so a channel must treat it as optional.
   waitUntil?: (p: Promise<unknown>) => void;
+  // Where the turn's files live (docs/rfc-agent-files.md): a channel reads a file.attached
+  // event's bytes from here to deliver them (a Slack upload). The same store the host gave
+  // the sessions' tools. Absent: the host keeps no files, and a channel skips delivering them.
+  files?: FileStore;
   // The app's resolved services bag — the SAME shape `currentServices()` gives a turn,
   // but reachable from a channel HOOK (onEvent / on[kind]), which runs at the edge OUTSIDE
   // the Durable Object and so can't read the DO's ambient scope. The host resolves it from
@@ -195,12 +200,13 @@ export type Channel = {
   // with the top-level receive() which starts the proactive turn and feeds its stream here.
   // `session` names the turn's session so an HITL prompt can route its resume back to it —
   // a proactive session is caller-chosen and NOT derivable from the target thread.
-  deliver?: (target: DeliveryTarget, events: AsyncIterable<TurnEvent>, opts?: { session?: string }) => Promise<void>;
+  // `files` is the turn's FileStore, as on ChannelContext — host-side delivery has no ctx.
+  deliver?: (target: DeliveryTarget, events: AsyncIterable<TurnEvent>, opts?: { session?: string; files?: FileStore }) => Promise<void>;
   // Render a RESUMED turn's continuation into the Approve/Deny prompt message (progress →
   // outcome / failure / next approval). The sibling of deliver() for the HITL resume leg:
   // the turn's host invokes it (via /resume?deliver=1) so a long continuation runs under
   // the host's lifetime instead of the webhook isolate's post-ACK grace.
-  deliverResume?: (target: ResumeDeliveryTarget, events: AsyncIterable<TurnEvent>, opts?: { session?: string }) => Promise<void>;
+  deliverResume?: (target: ResumeDeliveryTarget, events: AsyncIterable<TurnEvent>, opts?: { session?: string; files?: FileStore }) => Promise<void>;
   // DETERMINISTIC outbound post (#89): send one app-authored message (no LLM, no
   // stream) over the channel's own auth/transport and return its identity, so the
   // app can index it and resolve later reactions/clicks back to it. The dual of

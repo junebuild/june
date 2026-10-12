@@ -96,3 +96,15 @@ describe("memoryFileStore", () => {
     expect(await files.get("missing")).toBeNull();
   });
 });
+
+describe("blobFileStore over a lazily opened blob", () => {
+  test("opens the blob on first use, not at construction", async () => {
+    const blob = memoryBlob();
+    let opened = 0;
+    const files = blobFileStore(async () => { opened++; return blob; });
+    expect(opened).toBe(0);
+    const r = await files.put(enc.encode("x"), PDF);
+    expect(new TextDecoder().decode((await files.get(r.id))!)).toBe("x");
+    expect(opened).toBe(2);
+  });
+});
