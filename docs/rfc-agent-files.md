@@ -43,6 +43,11 @@ user  @bot summarize last week's revenue as a PDF
 - **Content-addressed ids** (SHA-256 of the bytes). A remote tool runs at-least-once; a retry
   that renders the same bytes writes the same key, so a crash-replay never leaves orphans or
   duplicates.
+- **Retention.** A file is needed until its channel delivered it, and after that only to
+  deliver it again. `memoryFileStore` is bounded (64 MiB by default, least recently used files
+  go first). `blobFileStore` never deletes: ids are content addresses that several turns may
+  share, so how long files live is a deployment setting — an R2 lifecycle rule expiring
+  `agent-files/` objects after a few days, or clearing `.june/blob/agent-files/` in dev.
 - **`ctx.files`** is on every `ToolContext`. The host installs the store on the session; a
   session without one hands tools a store whose `put` fails the turn with a message naming the
   missing configuration (a misconfigured deployment, not something the model can fix).

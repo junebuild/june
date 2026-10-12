@@ -97,17 +97,43 @@ export function blobFileStore(blob: JuneBlob | (() => JuneBlob | Promise<JuneBlo
   };
 }
 
-// In-process store for tests and the memory runtime.
-export function memoryFileStore(): FileStore & { readonly size: number } {
-  const files = new Map<string, Uint8Array>();
+// In-process store for tests and the memory runtime. Bounded: past `maxBytes` (default
+// 64 MiB) the least recently used files are dropped, so a long-lived process can't grow
+// without limit. A file is needed until its channel delivered it; one evicted before that
+// is reported by the channel as not attachable. A single file larger than the cap is kept
+// alone.
+export function memoryFileStore(opts: { maxBytes?: number } = {}): FileStore & { readonly size: number; readonly bytes: number } {
+  const maxBytes = opts.maxBytes ?? 64 * 1024 * 1024;
+  const files = new Map<string, Uint8Array>(); // insertion order = recency (oldest first)
+  let bytes = 0;
+  const touch = (id: string, data: Uint8Array) => {
+    files.delete(id);
+    files.set(id, data);
+  };
   return {
     async put(data, meta) {
       const ref = await refFor(data, meta);
-      files.set(ref.id, data.slice());
+      const prior = files.get(ref.id);
+      if (prior) touch(ref.id, prior);
+      else {
+        files.set(ref.id, data.slice());
+        bytes += data.byteLength;
+        for (const [id, old] of files) {
+          if (bytes <= maxBytes || id === ref.id) break;
+          files.delete(id);
+          bytes -= old.byteLength;
+        }
+      }
       return ref;
     },
     async get(id) {
-      return files.get(id)?.slice() ?? null;
+      const data = files.get(id);
+      if (!data) return null;
+      touch(id, data);
+      return data.slice();
+    },
+    get bytes() {
+      return bytes;
     },
     get size() {
       return files.size;
