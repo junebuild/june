@@ -67,9 +67,8 @@ export function pdfTools(opts: PdfToolsOptions): Tool[] {
       },
     },
     mode: "remote",
-    run: async (input: RenderPdfInput, ctx: ToolContext): Promise<RenderPdfResult> => {
-      if (typeof input?.markdown !== "string" || !input.markdown.trim()) throw new Error("render_pdf: `markdown` must be a non-empty string");
-      if (input.markdown.length > max) throw new Error(`render_pdf: the Markdown is ${input.markdown.length} characters; the limit is ${max} — shorten the document`);
+    run: async (raw: unknown, ctx: ToolContext): Promise<RenderPdfResult> => {
+      const input = validateInput(name, raw, max);
       const title = input.title?.trim() || firstHeading(input.markdown);
       const doc: PdfDocument = {
         markdown: input.markdown,
@@ -84,6 +83,35 @@ export function pdfTools(opts: PdfToolsOptions): Tool[] {
   };
   if (opts.requiresPrincipal) tool.requiresPrincipal = true;
   return [tool];
+}
+
+// The engine does not check a call against `spec.input`, and models send malformed optional
+// fields (a number for `title`, "A4" or "letter" for `paper`, a sentence for `lang`). Check
+// every field and report every problem in one message the model can act on; null counts as
+// absent, since models often send it for a field they mean to omit.
+const PAPERS: readonly PdfPaper[] = ["a4", "us-letter"];
+const LANG = /^[A-Za-z]{2,3}(?:[-_][A-Za-z0-9]{1,8})*$/;
+function validateInput(tool: string, raw: unknown, max: number): RenderPdfInput {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error(`${tool}: the input must be an object with a \`markdown\` string`);
+  const i = raw as Record<string, unknown>;
+  const problems: string[] = [];
+  const optionalString = (key: string): string | undefined => {
+    const v = i[key];
+    if (v === undefined || v === null) return undefined;
+    if (typeof v !== "string") { problems.push(`\`${key}\` must be a string`); return undefined; }
+    return v;
+  };
+  const markdown = i.markdown;
+  if (typeof markdown !== "string" || !markdown.trim()) problems.push("`markdown` must be a non-empty string");
+  else if (markdown.length > max) problems.push(`the Markdown is ${markdown.length} characters; the limit is ${max} — shorten the document`);
+  const filename = optionalString("filename");
+  const title = optionalString("title");
+  const lang = optionalString("lang");
+  if (lang !== undefined && !LANG.test(lang)) problems.push(`\`lang\` must be a BCP 47 language tag such as "en" or "zh-TW", not ${JSON.stringify(lang)}`);
+  const paper = optionalString("paper");
+  if (paper !== undefined && !PAPERS.includes(paper as PdfPaper)) problems.push(`\`paper\` must be one of ${PAPERS.map((p) => `"${p}"`).join(", ")}, not ${JSON.stringify(paper)}`);
+  if (problems.length) throw new Error(`${tool}: ${problems.join("; ")}`);
+  return { markdown: markdown as string, ...dropUndefined({ filename, title, lang, paper: paper as PdfPaper | undefined }) };
 }
 
 function dropUndefined<T extends Record<string, unknown>>(o: T): Partial<T> {

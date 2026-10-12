@@ -54,6 +54,24 @@ describe("pdfTools", () => {
     expect(renderer.docs).toEqual([]);
   });
 
+  test("every field is checked, and all problems are reported at once", async () => {
+    const renderer = fakeRenderer();
+    const [tool] = pdfTools({ renderer });
+    await expect(Promise.resolve(tool!.run({ markdown: "# x", title: 42, filename: ["a"], lang: "Traditional Chinese", paper: "A4" }, ctx()))).rejects.toThrow(
+      'render_pdf: `filename` must be a string; `title` must be a string; `lang` must be a BCP 47 language tag such as "en" or "zh-TW", not "Traditional Chinese"; `paper` must be one of "a4", "us-letter", not "A4"',
+    );
+    await expect(Promise.resolve(tool!.run("just text", ctx()))).rejects.toThrow("the input must be an object");
+    expect(renderer.docs).toEqual([]);
+  });
+
+  test("null optional fields count as absent", async () => {
+    const renderer = fakeRenderer();
+    const [tool] = pdfTools({ renderer });
+    const out = (await tool!.run({ markdown: "# Report", title: null, filename: null, lang: null, paper: null }, ctx())) as { file: { name: string } };
+    expect(out.file.name).toBe("Report.pdf");
+    expect(renderer.docs[0]).toEqual({ markdown: "# Report", title: "Report" });
+  });
+
   test("a renderer's error propagates for the engine to hand the model", async () => {
     const [tool] = pdfTools({ renderer: { name: "broken", render: async () => { throw new PdfRenderError("unclosed delimiter at line 3"); } } });
     await expect(Promise.resolve(tool!.run({ markdown: "# x" }, ctx()))).rejects.toThrow("unclosed delimiter at line 3");
