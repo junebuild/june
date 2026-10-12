@@ -925,8 +925,12 @@ export function slackChannel(opts: {
   async function deliverFiles(files: FileStore | undefined, channel: string, thread_ts: string | undefined, refs: FileRef[]): Promise<boolean> {
     if (!refs.length) return false;
     if (!files) {
+      // The reply may already say "attached": tell the thread, not only the logs. Happens when
+      // the turn's host stores files (the Durable Object) but this renderer's host can't read
+      // them (a worker-side surface without `files`).
       opts.onError?.(new Error(`slack: ${refs.length} attached file(s) not delivered — the host gave the channel no file store`));
-      return false;
+      await postMessage(channel, `_(couldn't attach ${refs.map((r) => escapeMrkdwn(r.name)).join(", ")})_`, thread_ts).catch(() => {});
+      return true;
     }
     for (const ref of refs) {
       try {

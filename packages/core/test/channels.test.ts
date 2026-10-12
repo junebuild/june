@@ -2516,14 +2516,17 @@ describe("slackChannel — attached files (docs/rfc-agent-files.md)", () => {
     expect(methods().filter((m) => m === "UPLOAD")).toHaveLength(1);
   });
 
-  test("no file store: nothing uploads and onError says why", async () => {
+  test("no file store: nothing uploads, onError says why, and the thread is told", async () => {
     uploadStub();
     const { file } = await stored();
     const errors: string[] = [];
     const ch = slackChannel({ signingSecret: secret, botToken: "xoxb", apiUrl: "https://slack.test", onError: (e) => errors.push(String((e as Error).message)) });
-    await ch.deliver!({ channelId: "C1" }, turn(file)());
+    await ch.deliver!({ channelId: "C1", threadId: "5.5" }, turn(file)());
     expect(methods()).not.toContain("files.getUploadURLExternal");
     expect(errors).toEqual([expect.stringContaining("no file store")]);
+    // …and the thread says so, under a reply that may claim the file is attached
+    const note = seen.filter((c) => c.url.endsWith("chat.postMessage")).at(-1)!.body as { text: string; thread_ts: string };
+    expect(note).toMatchObject({ text: "_(couldn't attach report.pdf)_", thread_ts: "5.5" });
   });
 
   test("a file the store doesn't hold is noted in the thread and reported, not thrown", async () => {
