@@ -10,9 +10,10 @@ work=$(mktemp -d)
 trap 'pkill -f "june.ts dev" 2>/dev/null; rm -rf "$work"' EXIT
 
 echo "→ packing workspace tarballs"
-# Pack EVERY published package (matches .github/workflows/publish.yml). og, i18n and pdf are published but aren't
-# exercised by the scaffold below, so they're only covered by the protocol-leak check that follows.
-for p in core db june juno cli create-june og i18n pdf; do
+# Pack EVERY published package (matches .github/workflows/publish.yml). og, i18n, pdf and pdf-typst-wasm are
+# published but aren't exercised by the scaffold below, so they're only covered by the protocol-leak check
+# that follows (pdf-typst-wasm packs without its built engine here; CI's pdf-engine job builds and tests it).
+for p in core db june juno cli create-june og i18n pdf pdf-typst-wasm; do
   (cd "packages/$p" && bun pm pack --quiet >/dev/null 2>&1)
   mv packages/$p/*.tgz "$work/"
 done
