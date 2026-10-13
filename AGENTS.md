@@ -43,6 +43,13 @@ bun scripts/smoke-workerd.ts                          # `june build` examples/ba
 bash scripts/smoke-sandbox-image.sh                   # all of the above inside the sandbox image (Linux, Nix, Docker)
 
 cd apps/june.build && bun run gen            # regenerate app/_content.ts after editing content/
+
+# @junejs/pdf-typst-wasm's engine is Rust (packages/pdf-typst-wasm, its own Cargo workspace;
+# rust-toolchain.toml pins the toolchain, rustup installs it). Needs wasm-opt on PATH
+# (bash scripts/install-binaryen.sh). Its Bun tests skip until the module is built.
+cd packages/pdf-typst-wasm && cargo test --release   # the engine's own tests
+cd packages/pdf-typst-wasm && bun run build          # dist/typst.wasm + the JS (what publish.yml runs)
+cd packages/pdf-typst-wasm && bun scripts/smoke-workerd.ts   # the published shape on workerd (CI: pdf-engine)
 ```
 
 Live contract suites are skipped unless their env vars are set: `SLACK_LIVE_BOT_TOKEN` +
@@ -57,8 +64,9 @@ no `node:*`, no `bun`, no `Bun.*`, no literal host dynamic imports. `test/purity
 enforces it, because the worker graph must load on workerd. Host code lives in `packages/june`
 (published as `@junejs/server`; the directory name differs), where `node:*` imports are fine.
 `cli` is the `june` command, `db` the request-scoped `db`/`kv`/`blob`, `juno` the default data
-layer, `og` og:image rendering, `i18n` ICU messages, `create-june` the scaffolder plus the app
-`template/`.
+layer, `og` og:image rendering, `i18n` ICU messages, `pdf` PDF output as an agent tool (the
+`PdfRenderer` seam), `pdf-typst-wasm` a renderer on a Rust Typst engine compiled to WebAssembly
+(its own Cargo crate inside the package), `create-june` the scaffolder plus the app `template/`.
 
 **No build step inside the repo.** Every package export has a `source`/`bun` condition pointing
 at `src/*.ts`, and `tsconfig.base.json` sets `customConditions: ["source"]`, so tests and
