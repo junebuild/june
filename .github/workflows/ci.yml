@@ -98,6 +98,49 @@ jobs:
       - name: Built worker on workerd
         run: bun scripts/smoke-workerd.ts
 
+  # @junejs/pdf-typst-wasm's engine is Rust built for wasm32. The jobs above never build it,
+  # so its Bun tests skip there; here the crate's own tests run, the module is built the way
+  # publish.yml builds it (the toolchain rust-toolchain.toml pins, binaryen's wasm-opt pinned
+  # by scripts/install-binaryen.sh), the JS tests run against it, and the workerd smoke serves
+  # the published shape. A cold build is about a minute; the cargo cache keeps it shorter.
+  pdf-engine:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: packages/pdf-typst-wasm
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && rustup show active-toolchain
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/pdf-typst-wasm
+
+      - name: binaryen (wasm-opt)
+        run: bash ../../scripts/install-binaryen.sh
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Engine tests (cargo)
+        run: cargo test --release --locked
+
+      - name: Build the module and the package
+        run: bun run build
+
+      - name: Renderer tests
+        run: bun test
+
+      - name: On workerd
+        run: SMOKE_SKIP_BUILD=1 bun scripts/smoke-workerd.ts
+
   # The toolchain flake.nix pins, in the form agents get it: the sandbox image, built and
   # loaded on both Linux systems the flake supports, runs every check above from a fresh copy
   # of the tree as its unprivileged user (scripts/smoke-sandbox-image.sh). `nix flake check`
