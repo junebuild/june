@@ -163,25 +163,30 @@ mod ffi {
         ENGINE.with(|cell| f(cell.borrow_mut().get_or_insert_with(Engine::new)))
     }
 
+    // Buffers cross the ABI as boxed slices: a Box<[u8]>'s allocation is exactly `len` bytes,
+    // so the host's (ptr, len) pair is all it takes to rebuild it. A Vec's capacity may exceed
+    // the length it was asked for, and rebuilding one with the wrong capacity is undefined
+    // behavior.
+    fn rebuild(ptr: *mut u8, len: usize) -> *mut [u8] {
+        std::ptr::slice_from_raw_parts_mut(ptr, len)
+    }
+
     /// # Safety
     /// `ptr`/`len` must describe a buffer from `alloc`; ownership moves to the callee.
     unsafe fn take(ptr: *mut u8, len: usize) -> Vec<u8> {
-        unsafe { Vec::from_raw_parts(ptr, len, len) }
+        unsafe { Box::from_raw(rebuild(ptr, len)) }.into_vec()
     }
 
     #[unsafe(no_mangle)]
     pub extern "C" fn alloc(len: usize) -> *mut u8 {
-        let mut buf = Vec::<u8>::with_capacity(len);
-        let ptr = buf.as_mut_ptr();
-        std::mem::forget(buf);
-        ptr
+        Box::into_raw(vec![0u8; len].into_boxed_slice()).cast::<u8>()
     }
 
     /// # Safety
     /// `ptr`/`len` must come from `alloc` and not have been handed over.
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn dealloc(ptr: *mut u8, len: usize) {
-        drop(unsafe { Vec::from_raw_parts(ptr, 0, len) });
+        drop(unsafe { Box::from_raw(rebuild(ptr, len)) });
     }
 
     /// Initialize the engine (embedded fonts) ahead of the first document.
