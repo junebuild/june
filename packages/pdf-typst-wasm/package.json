@@ -27,7 +27,8 @@
     "./typst.wasm": "./dist/typst.wasm"
   },
   "files": [
-    "dist"
+    "dist",
+    "src/*.ts"
   ],
   "scripts": {
     "build:wasm": "bun scripts/build-wasm.ts",
