@@ -3,7 +3,7 @@
 //! Only `typst` + `typst-pdf`: none of typst.ts's IDE features (vector rendering, incremental
 //! compilation, queries), and no wasm-bindgen glue — the module has zero imports, so the same
 //! file instantiates on Node, Bun, Deno and Cloudflare Workers. Measured on the spike
-//! (poc/typst-workers, 2026-10-12): 2 ms Worker startup, 40 ms of CPU for a warm one-page
+//! (docs/rfc-agent-files.md, Appendix A): 2 ms Worker startup, 40 ms of CPU for a warm one-page
 //! render in production.
 //!
 //! Fonts come in two scopes. Typst's own default fonts (Libertinus Serif, New Computer

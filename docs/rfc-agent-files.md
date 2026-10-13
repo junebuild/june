@@ -124,9 +124,9 @@ Consequences:
   read 2026-10-12; there is no compressed limit). What binds is memory: an isolate's
   concurrent requests share 128 MB, and a render takes 13–40 MB of WASM memory. CPU binds
   too: the Free plan allows 10 ms per request, and one page compiles in 12–28 ms. A spike
-  of a PDF-only build without typst.ts's IDE features (poc/typst-workers on
-  spike/typst-workers) is 18.9 MiB and renders a page in 66–98 ms end to end on local
-  workerd. `typstRenderer` itself is not yet verified on workerd.
+  of a PDF-only build without typst.ts's IDE features (Appendix A) is 18.9 MiB and renders a
+  page in 66–98 ms end to end on local workerd. `typstRenderer` itself is not yet verified
+  on workerd.
 - **Fonts are the renderer's job.** typst.ts's bundled CJK asset is a Simplified Chinese
   subset and lacks Traditional characters (週 was missing in the test). `typstRenderer`
   accepts font bytes or URLs; Traditional Chinese needs e.g. Noto Sans TC.
@@ -137,7 +137,7 @@ Consequences:
 
 A second renderer, built for Cloudflare Workers. It is `typst` + `typst-pdf` compiled to
 wasm32 with a raw C ABI, so it has none of typst.ts's editor features and no wasm-bindgen glue.
-The spike that measured it is poc/typst-workers on spike/typst-workers.
+Appendix A has the spike's measurements.
 
 | | |
 | --- | --- |
@@ -169,3 +169,81 @@ Design:
 5. `@junejs/pdf`: `PdfRenderer`, `pdfTools`, `typstRenderer`, the skill.
 6. Example and docs.
 7. `@junejs/pdf-typst-wasm`: the PDF-only engine for Workers, built and published by CI.
+
+## Appendix A. The Workers spike, measured
+
+Before `@junejs/pdf-typst-wasm` existed, a spike measured whether a PDF-only Typst build
+fits Cloudflare Workers. It was `typst` 0.15.1 + `typst-pdf` behind a raw C ABI, with an
+in-memory World and fonts supplied by the host. The spike's code became
+`packages/pdf-typst-wasm`. To reproduce: its `scripts/smoke-workerd.ts` serves the package
+on local workerd, and for production numbers, deploy a Worker around it and read CPU time
+from Workers Logs. All numbers below were verified 2026-10-12 on starship (Ryzen 7 8745HS).
+
+**Cloudflare's limits.** Read from developers.cloudflare.com/workers/platform/limits on
+2026-10-12; the page says it was updated the same day.
+
+| limit | value |
+| --- | --- |
+| Worker size | 64 MiB uncompressed, Free and Paid. There is no compressed limit: wrangler's gzip figure is informational |
+| memory | 128 MB per isolate, shared by its concurrent requests, JS heap and WASM together |
+| CPU per request | Free: 10 ms. Paid: 30 s by default, up to 5 min |
+| startup | the global scope must run within 1 s |
+
+**Size.** Both builds are far below 64 MiB. Of the optimized spike module, about 10.0 MB is
+code and 9.2 MB is data. The shipped package also embeds Typst's default fonts, which
+brings it to 29 MiB.
+
+| build | raw | gzip | brotli |
+| --- | --- | --- | --- |
+| typst.ts 0.7.0 web compiler (typst 0.14.2; `@junejs/pdf/typst`) | 28.3 MB | 10.8 MB | 7.1 MB |
+| spike, cargo `opt-level=z`, LTO, `panic=abort` | 21.3 MB | 7.8 MB | 5.9 MB |
+| + `wasm-opt -Oz` | 19.3 MB | 7.7 MB | 6.0 MB |
+| wrangler `deploy --dry-run` (whole Worker) | 18,894 KiB | 7,528 KiB | — |
+
+**Local workerd** (`wrangler dev` 4.144.0). `subset` means Noto Sans TC cut to the
+document's characters by Google Fonts (1.1 MB of fonts); `full` means the whole 19 MB Noto
+Sans CJK collection (20.6 MB of fonts in total).
+
+| | fonts | instance + fonts | compile | WASM memory | end to end |
+| --- | --- | --- | --- | --- | --- |
+| 1 page, `subset` | 40–73 ms | 4–7 ms | 12–15 ms | 13 MB | 66–98 ms |
+| 1 page, `full` | first request only | ~50 ms | 23–28 ms | 32 MB | 80–124 ms |
+| 18 pages zh-TW + tables, `subset` | 40–170 ms | 3–5 ms | 287–317 ms | 40 MB | 345–497 ms |
+
+- The isolate's first request took 514 ms, including compiling the WASM and fetching fonts.
+- Node 24 shows the same picture: WASM compile 23 ms, instantiate plus 4 fonts 52 ms, first
+  compile 65 ms, then about 2 ms for an unchanged document (comemo memoization).
+- The PDFs embed subset fonts with ToUnicode maps, so text extracts. Traditional Chinese
+  renders (週, 區) with Noto Sans TC or Noto Sans CJK.
+
+**Production.** Deployed with `cf deploy` 1.0.0-beta.13 to workers.dev. Requests came from
+starship and were served by DFW. CPU and wall time come from Workers Logs
+(`cf o11y telemetry query`). The Worker was deleted afterwards.
+
+| | n | CPU min / median / max | wall |
+| --- | --- | --- | --- |
+| 1 page, `subset`, a fresh isolate | 2 | 185–211 ms | 381–516 ms |
+| 1 page, `subset`, a warm isolate | 1 | 40 ms | 73 ms |
+| 1 page, `full` | 14 | 116 / 295 / 644 ms | 0.56–4.2 s |
+| 18 pages zh-TW + tables, `subset` | 15 | 403 / 670 / 1,690 ms | 0.66–2.9 s |
+
+- Startup time was 2 ms. The WASM is compiled at upload, not in the global scope.
+- 12 concurrent `full` renders, then 12 concurrent 18-page renders: all 24 answered 200,
+  and all 35 logged invocations ended `ok`, none over the memory limit. Cloudflare spread
+  them over several isolates, so this does not show that 12 renders fit in one isolate's
+  128 MB.
+- Production CPU was about twice starship's for the same compile, and an isolate's first
+  render cost about 170 ms more, which fits the WASM being compiled on first use.
+- In production `Date.now()` does not advance during CPU work, so a Worker cannot time its
+  own compile. Workers Logs is the source of truth.
+
+**Conclusions,** which `@junejs/pdf-typst-wasm` is built on:
+
+- Size is not the constraint.
+- Memory is: use one engine per isolate, register fonts once, and cut CJK fonts to the
+  document's characters.
+- CPU rules out the Free plan.
+- An isolate's first render is the expensive one, so keep the engine.
+
+**Not measured:** peak memory of one isolate running several renders at once, and what fills
+the 9.2 MB data section.
