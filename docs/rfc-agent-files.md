@@ -133,6 +133,27 @@ Consequences:
 - **Lazy load.** The compiler is imported and initialized on the first render, so an agent
   that never renders a PDF never pays for it.
 
+### The Workers renderer: `@junejs/pdf-typst-wasm`
+
+A second renderer, built for Cloudflare Workers. It is `typst` + `typst-pdf` compiled to
+wasm32 with a raw C ABI, so it has none of typst.ts's editor features and no wasm-bindgen glue.
+The spike that measured it is poc/typst-workers on spike/typst-workers.
+
+| | |
+| --- | --- |
+| module | 29 MiB raw with Typst's default fonts embedded, zero imports |
+| Worker startup (deployed) | 2 ms: the module is imported, so it uploads precompiled |
+| CPU per render (Workers Logs) | ~200 ms for an isolate's first, ~40 ms warm, ~670 ms for 18 pages |
+
+Design:
+
+- One engine per isolate.
+- CJK fonts are per-document Google Fonts subsets. They are document-scoped in the engine, so
+  they never accumulate across requests.
+- The `workerd` export condition imports the module; Node, Bun and Deno read it from disk.
+- CI builds it with the pinned Rust toolchain and binaryen, runs `cargo test` and the JS
+  tests, and serves the published shape on workerd.
+
 ## 5. Non-goals (for now)
 
 - A `.pdf` route projection (`/invoice.pdf`). The `PdfRenderer` seam is reusable for it later.
@@ -147,3 +168,4 @@ Consequences:
 4. Slack: upload attached files into the reply's thread.
 5. `@junejs/pdf`: `PdfRenderer`, `pdfTools`, `typstRenderer`, the skill.
 6. Example and docs.
+7. `@junejs/pdf-typst-wasm`: the PDF-only engine for Workers, built and published by CI.
