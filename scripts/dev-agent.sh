@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# One coding agent per dev container, each with its own clone of June, built from the June dev
+# One coding agent per container, each with its own clone of June, built from the June dev
 # image (nix/dev-image.nix). Claude Code runs in a tmux session inside the container, so you
 # can detach (Ctrl-b d) and the agent keeps working; running the script again re-attaches.
 #
-# A dev container is NOT a June Sandbox: the agent's harness, and the credentials below, run
+# An agent container is NOT a June Sandbox: the agent's harness, and the credentials below, run
 # inside it, so the container limits what the agent can touch on the host, not what it can do
 # with those credentials. Scope them accordingly.
 #
 #   scripts/dev-agent.sh 333        # container june-333: Claude Code starts on issue #333
 #   scripts/dev-agent.sh spike      # container june-spike: Claude Code, no starting prompt
-#   scripts/dev-agent.sh ls         # list dev containers
+#   scripts/dev-agent.sh ls         # list agent containers
 #   scripts/dev-agent.sh rm 333     # remove one (its clone and any unpushed work go with it)
 #
 # Needs Docker on the host. Nothing on the host is mounted in: the container sees its own clone

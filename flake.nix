@@ -1,6 +1,6 @@
 {
   # Optional: `bun install && bun run ci` with your own Bun and Node 24 stays the supported path.
-  # This flake pins that same toolchain for maintainers, dev containers and one CI lane, so a
+  # This flake pins that same toolchain for maintainers, agent containers and one CI lane, so a
   # result from any of them means the same thing.
   description = "June development environment";
 

@@ -1,5 +1,5 @@
 # The June dev image: an OCI image carrying the toolchain `nix develop` gives, plus what a coding
-# agent needs to clone, change, test and push June. It backs the dev container
+# agent needs to clone, change, test and push June. It backs the agent container
 # (scripts/dev-agent.sh) and is not itself a June Sandbox (#348). Nothing in it needs Nix at
 # run time:
 #

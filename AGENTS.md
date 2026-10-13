@@ -18,7 +18,7 @@ aarch64-darwin, x86_64-linux and aarch64-linux. Prefix any command below with
 `nix develop -c` to run it there. `nix flake check` verifies the pinned Bun reports the
 `packageManager` version.
 
-For a dev container on Linux, the flake also builds an OCI image, the dev image, with the same
+For an agent container on Linux, the flake also builds an OCI image, the dev image, with the same
 toolchain plus git, gh, ripgrep and the usual shell tools (`nix/dev-image.nix`). It runs as
 the unprivileged user `agent` in `/workspace` and needs no Nix at run time:
 
@@ -27,11 +27,11 @@ docker run --rm -it ghcr.io/junebuild/june-dev:latest   # published from main, a
 nix build .#dev-image && ./result | docker load          # or build it: june-dev:latest
 ```
 
-`scripts/dev-agent.sh <issue>` runs Claude Code on a GitHub issue in its own dev container: a
+`scripts/dev-agent.sh <issue>` runs Claude Code on a GitHub issue in its own agent container: a
 fresh clone, bypass permissions, inside a tmux session you can detach from. Credentials come in
 by name from `CLAUDE_CODE_OAUTH_TOKEN` and `GH_TOKEN`; the header of the script has the rest.
 
-Two words, two things: a **dev container** is where a coding agent works *on* June, with its
+Two words, two things: an **agent container** is where a coding agent works *on* June, with its
 harness and credentials inside. A **Sandbox** is the framework primitive (#348) where an agent
 built *with* June runs its shell commands, with the harness and secrets kept outside.
 
