@@ -1,5 +1,11 @@
 # @junejs/pdf
 
+## 0.1.0-dev.1
+
+### Minor Changes
+
+- [#363](https://github.com/junebuild/june/pull/363) [`50783bd`](https://github.com/junebuild/june/commit/50783bdb306bc648852197a2319533ff1c05b477) Thanks [@linyiru](https://github.com/linyiru)! - `markdownToTypst` and `typstSource` are exported from `@junejs/pdf`. They are the Markdown → Typst conversion `typstRenderer` uses, so a renderer built on any Typst compiler (your own, or `@junejs/pdf-typst-wasm`) gets the same document from the same Markdown.
+
 ## 0.1.0-dev.0
 
 ### Minor Changes
