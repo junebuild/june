@@ -244,6 +244,9 @@
       "dependencies": {
         "@junejs/pdf": ">=0.1.0-dev.0",
       },
+      "devDependencies": {
+        "@junejs/core": ">=0.2.0-dev.66",
+      },
     },
   },
   "catalog": {

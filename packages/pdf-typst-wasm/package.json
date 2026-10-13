@@ -6,6 +6,24 @@
   "license": "MIT",
   "homepage": "https://june.build",
   "exports": {
+    ".": {
+      "source": {
+        "workerd": "./src/workerd.ts",
+        "default": "./src/node.ts"
+      },
+      "bun": {
+        "workerd": "./src/workerd.ts",
+        "default": "./src/node.ts"
+      },
+      "workerd": {
+        "types": "./dist/workerd.d.ts",
+        "default": "./dist/workerd.js"
+      },
+      "default": {
+        "types": "./dist/node.d.ts",
+        "default": "./dist/node.js"
+      }
+    },
     "./typst.wasm": "./dist/typst.wasm"
   },
   "files": [
@@ -13,11 +31,14 @@
   ],
   "scripts": {
     "build:wasm": "bun scripts/build-wasm.ts",
-    "build": "bun run build:wasm",
+    "build": "bun run build:wasm && tsdown",
     "test": "bun test"
   },
   "dependencies": {
     "@junejs/pdf": ">=0.1.0-dev.0"
+  },
+  "devDependencies": {
+    "@junejs/core": ">=0.2.0-dev.66"
   },
   "keywords": [
     "june",
