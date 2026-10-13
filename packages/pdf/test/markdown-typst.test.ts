@@ -4,7 +4,7 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { markdownToTypst, typstSource } from "../src/markdown-typst";
+import { markdownToTypst, typstSource } from "@junejs/pdf";
 
 const t = (md: string) => markdownToTypst(md).trim();
 
