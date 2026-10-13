@@ -1,0 +1,38 @@
+{
+  "name": "@junejs/pdf-typst-wasm",
+  "version": "0.0.0",
+  "description": "June — a PdfRenderer on a Typst to PDF engine compiled to WebAssembly: no browser, no native binary, and it runs on Cloudflare Workers.",
+  "type": "module",
+  "license": "MIT",
+  "homepage": "https://june.build",
+  "exports": {
+    "./typst.wasm": "./dist/typst.wasm"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build:wasm": "bun scripts/build-wasm.ts",
+    "build": "bun run build:wasm",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@junejs/pdf": ">=0.1.0-dev.0"
+  },
+  "keywords": [
+    "june",
+    "agent",
+    "pdf",
+    "typst",
+    "wasm",
+    "cloudflare-workers"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/junebuild/june.git",
+    "directory": "packages/pdf-typst-wasm"
+  }
+}
