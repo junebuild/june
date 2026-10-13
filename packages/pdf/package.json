@@ -1,6 +1,6 @@
 {
   "name": "@junejs/pdf",
-  "version": "0.1.0-dev.0",
+  "version": "0.1.0-dev.1",
   "description": "June — PDF output as an agent capability: a render_pdf tool over a replaceable PdfRenderer (Typst on WebAssembly by default).",
   "type": "module",
   "license": "MIT",
