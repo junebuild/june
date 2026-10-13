@@ -1,0 +1,7 @@
+// scripts/smoke-workerd.ts serves this with `wrangler dev --local`. The compatibility date is
+// the one `june build` emits, which the pinned wrangler's workerd supports.
+{
+  "name": "pdf-typst-wasm-smoke",
+  "main": "worker.ts",
+  "compatibility_date": "2025-01-01"
+}
