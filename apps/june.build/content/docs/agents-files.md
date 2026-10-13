@@ -5,7 +5,7 @@ description: A tool stores the file it produces with ctx.files and returns the F
 date: 2026-10-12
 section: Agents
 order: "16.35"
-sources: [packages/core/src/agent-files.ts, packages/core/src/agent-runtime.ts, packages/core/src/agent-config.ts, packages/core/src/channels.ts, packages/june/src/agent-native.ts, packages/june/src/agent-durable.ts, packages/june/src/app.ts, packages/pdf/src/tools.ts, packages/pdf/src/renderer.ts, packages/pdf/src/typst.ts, packages/pdf/src/markdown-typst.ts, packages/pdf/skills/pdf-report.md, docs/rfc-agent-files.md]
+sources: [packages/core/src/agent-files.ts, packages/core/src/agent-runtime.ts, packages/core/src/agent-config.ts, packages/core/src/channels.ts, packages/june/src/agent-native.ts, packages/june/src/agent-durable.ts, packages/june/src/app.ts, packages/pdf/src/tools.ts, packages/pdf/src/renderer.ts, packages/pdf/src/typst.ts, packages/pdf/src/markdown-typst.ts, packages/pdf-typst-wasm/src/renderer.ts, packages/pdf-typst-wasm/src/workerd.ts, packages/pdf-typst-wasm/src/lib.rs, packages/pdf/skills/pdf-report.md, docs/rfc-agent-files.md]
 ---
 ## A PDF in a Slack thread
 
@@ -96,14 +96,45 @@ const browserRenderer: PdfRenderer = {
 };
 ```
 
+Two renderers ship with June. Both typeset the same Markdown → Typst source, so the
+PDF looks the same with either.
+
+### On Cloudflare Workers: `@junejs/pdf-typst-wasm`
+
+```ts
+// agent/tools/pdf.ts
+import { pdfTools } from "@junejs/pdf";
+import { typstWasmRenderer } from "@junejs/pdf-typst-wasm";
+
+export default pdfTools({ renderer: typstWasmRenderer() });
+```
+
+The package is a build of Typst and its PDF export only, compiled to WebAssembly (29 MiB,
+zero imports). It runs on Workers as well as Node, Bun and Deno. On Workers the module is
+imported, so it uploads precompiled.
+
+Measured on a deployed Worker: 2 ms startup, about 40 ms of CPU for a warm one-page render,
+and about 670 ms for 18 pages. Use Workers Paid: the Free plan's 10 ms of CPU is not enough.
+
+- **One engine per isolate.** It is created on the first render (about 200 ms of CPU) and
+  serves every later request. An isolate's requests share 128 MB of memory.
+- **Fonts:**
+  - Typst's own fonts are built in.
+  - `fonts: [...]` registers yours once.
+  - Per document, the renderer fetches Noto Sans TC from Google Fonts, cut to that
+    document's non-ASCII characters (a few KB each). This is how Traditional Chinese works
+    with no setup. Change the families with `googleFonts: [{ family, weights }]`, or make
+    no network call at all with `googleFonts: false`.
+  - If a font can't be fetched, its characters render blank and the document still renders.
+
+### Anywhere but Workers: `typstRenderer`
+
 `typstRenderer()` typesets on the Typst compiler built for WebAssembly, in process. It
 loads on the first render (measured: about half a second, once per process), then takes
 tens of milliseconds per page.
 
-- It is verified on Bun and Node. On Cloudflare Workers the 28 MB module fits the 64 MiB
-  Worker size limit, but the renderer is not yet verified on workerd. There, pass the
-  compiled module as `wasm`, keep in mind that an isolate's requests share 128 MB of
-  memory, and use Workers Paid: one page takes more than the Free plan's 10 ms of CPU.
+- It is verified on Bun and Node. On Workers, use `@junejs/pdf-typst-wasm` instead: it is
+  smaller, has no JS glue, and is verified there.
 - Fonts: by default it fetches typst.ts's hosted Latin fonts and a Simplified Chinese
   font. Traditional Chinese, Japanese and Korean need a font that covers them:
   `typstRenderer({ fonts: [notoSansTcBytes], fontFamilies: ["Noto Sans TC"] })`. Pass
