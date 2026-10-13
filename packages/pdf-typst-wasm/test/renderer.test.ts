@@ -75,6 +75,16 @@ describe.skipIf(!built)("typstWasmRenderer", () => {
     expect(calls.length).toBe(before);
   });
 
+  test("renderers don't share subsets: each fetches through its own fetch", async () => {
+    const a = googleStub();
+    const b = googleStub();
+    const doc = { markdown: "# 共用快取" };
+    await typstWasmRenderer({ fetch: a.fetcher }).render(doc);
+    await typstWasmRenderer({ fetch: b.fetcher }).render(doc);
+    expect(a.calls.length).toBeGreaterThan(0);
+    expect(b.calls.length).toBe(a.calls.length); // b fetched for itself, not served from a's cache
+  });
+
   test("an ASCII document fetches nothing; googleFonts: false never fetches", async () => {
     const { calls, fetcher } = googleStub();
     await typstWasmRenderer({ fetch: fetcher }).render({ markdown: "# Plain ASCII" });

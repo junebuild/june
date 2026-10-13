@@ -44,6 +44,9 @@ export function createTypstWasmRenderer(defaultWasm: () => Promise<WasmSource>, 
   const fetcher = opts.fetch ?? fetch;
   const google = opts.googleFonts === false ? [] : (opts.googleFonts ?? DEFAULT_GOOGLE_FONTS);
   let engine: Promise<TypstEngine> | undefined;
+  // Per renderer, not per module: a subset fetched through one renderer's `fetch` must not
+  // answer another renderer that was given a different one.
+  const subsets = subsetCache(fetcher);
 
   const ready = (): Promise<TypstEngine> =>
     (engine ??= (async () => {
@@ -60,7 +63,7 @@ export function createTypstWasmRenderer(defaultWasm: () => Promise<WasmSource>, 
     name: "typst-wasm",
     async render(doc: PdfDocument): Promise<Uint8Array> {
       const source = typstSource(doc, { fonts: opts.fontFamilies });
-      const [e, documentFonts] = await Promise.all([ready(), subsetsFor(doc, google, fetcher)]);
+      const [e, documentFonts] = await Promise.all([ready(), subsetsFor(doc, google, subsets)]);
       // From here on, synchronous: no other render can interleave.
       e.clearDocumentFonts();
       for (const font of documentFonts) e.addFont(font, "document");
@@ -94,13 +97,15 @@ function documentText(doc: PdfDocument): string {
   return [...new Set(doc.markdown.replace(/[\x00-\x7f]/g, ""))].join("");
 }
 
-async function subsetsFor(doc: PdfDocument, families: GoogleFont[], fetcher: typeof fetch): Promise<Uint8Array[]> {
+type SubsetLoader = (family: string, weight: number, text: string) => Promise<Uint8Array>;
+
+async function subsetsFor(doc: PdfDocument, families: GoogleFont[], load: SubsetLoader): Promise<Uint8Array[]> {
   const text = documentText(doc);
   if (!text || families.length === 0) return [];
   const wanted = families.flatMap((f) => (f.weights ?? [400]).map((w) => [f.family, w] as const));
   const fonts = await Promise.all(
     wanted.map(([family, weight]) =>
-      googleSubset(family, weight, text, fetcher).catch((err: unknown) => {
+      load(family, weight, text).catch((err: unknown) => {
         // A font that can't be fetched costs glyphs, not the document: render without it.
         console.warn(`[june] pdf-typst-wasm: ${family} ${weight} for this document could not be fetched (${err instanceof Error ? err.message : String(err)}); its characters may render blank`);
         return undefined;
@@ -111,18 +116,22 @@ async function subsetsFor(doc: PdfDocument, families: GoogleFont[], fetcher: typ
 }
 
 // Google Fonts subsets a family to `text` and answers an old Safari with TTF, which Typst
-// reads (it does not read WOFF2). Cached per isolate, bounded: a re-render of the same
-// document fetches nothing.
+// reads (it does not read WOFF2). Cached, bounded, least recently used out: a re-render of
+// the same document fetches nothing.
 const OLD_SAFARI = "Mozilla/5.0 (Macintosh; U; Intel Mac OS X 10_6_8) AppleWebKit/533.21.1 (KHTML, like Gecko) Version/5.0.5 Safari/533.21.1";
 const SUBSET_CACHE_MAX = 32;
-const subsetCache = new Map<string, Promise<Uint8Array>>();
 
-function googleSubset(family: string, weight: number, text: string, fetcher: typeof fetch): Promise<Uint8Array> {
+function subsetCache(fetcher: typeof fetch): SubsetLoader {
+  const cache = new Map<string, Promise<Uint8Array>>();
+  return (family, weight, text) => googleSubset(cache, family, weight, text, fetcher);
+}
+
+function googleSubset(cache: Map<string, Promise<Uint8Array>>, family: string, weight: number, text: string, fetcher: typeof fetch): Promise<Uint8Array> {
   const css = `https://fonts.googleapis.com/css2?family=${encodeURIComponent(family)}:wght@${weight}&text=${encodeURIComponent(text)}`;
-  const hit = subsetCache.get(css);
+  const hit = cache.get(css);
   if (hit) {
-    subsetCache.delete(css);
-    subsetCache.set(css, hit); // most recently used last
+    cache.delete(css);
+    cache.set(css, hit); // most recently used last
     return hit;
   }
   const load = (async () => {
@@ -134,8 +143,8 @@ function googleSubset(family: string, weight: number, text: string, fetcher: typ
     if (!font.ok) throw new Error(`Google Fonts file: HTTP ${font.status}`);
     return new Uint8Array(await font.arrayBuffer());
   })();
-  load.catch(() => subsetCache.delete(css)); // never cache a failure
-  subsetCache.set(css, load);
-  if (subsetCache.size > SUBSET_CACHE_MAX) subsetCache.delete(subsetCache.keys().next().value!);
+  load.catch(() => cache.delete(css)); // never cache a failure
+  cache.set(css, load);
+  if (cache.size > SUBSET_CACHE_MAX) cache.delete(cache.keys().next().value!);
   return load;
 }
