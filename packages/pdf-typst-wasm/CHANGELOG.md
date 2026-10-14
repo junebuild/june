@@ -1,5 +1,13 @@
 # @junejs/pdf-typst-wasm
 
+## 0.1.0-dev.3
+
+### Patch Changes
+
+- [#376](https://github.com/junebuild/june/pull/376) [`a3d1f45`](https://github.com/junebuild/june/commit/a3d1f45f20ceaf2f617771bdba7b4401c20fd122) Thanks [@linyiru](https://github.com/linyiru)! - `bun build --compile` now embeds the engine, so a single-file binary renders PDFs with no configuration ([#367](https://github.com/junebuild/june/issues/367)). Before, the binary was built without `typst.wasm`, and the first `render_pdf` failed with a message telling you to build the June repo. On Bun the package now imports the module `with { type: "file" }`, which the bundler sees. It is still loaded only on the first render.
+
+  If you worked around this by passing `wasm` yourself, you can remove that option. On Node, the missing-module error now also points single-file builds to the `wasm` option.
+
 ## 0.1.0-dev.2
 
 ### Minor Changes

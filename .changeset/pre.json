@@ -15,7 +15,8 @@
     "@junejs/juno": "0.0.30",
     "@junejs/og": "0.0.6",
     "@junejs/pdf": "0.0.0",
-    "@junejs/pdf-typst-wasm": "0.0.0"
+    "@junejs/pdf-typst-wasm": "0.0.0",
+    "@junejs/pdf-font-noto-sans-tc": "0.0.0"
   },
   "changesets": [
     "action-identity-annotations",
@@ -81,10 +82,12 @@
     "oxc-parser-0151",
     "oxc-parser-0152",
     "pdf-drop-typst-renderer",
+    "pdf-font-noto-sans-tc",
     "pdf-font-providers",
     "pdf-missing-glyphs",
     "pdf-package",
     "pdf-typst-source",
+    "pdf-typst-wasm-bun-compile",
     "pdf-typst-wasm",
     "png-favicons",
     "provider-state",
