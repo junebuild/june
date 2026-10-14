@@ -2,10 +2,10 @@
 // fails when one has drifted from the template and its table, naming the files and the fix.
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
-import { expected, releaseOwned, SPECS } from "../scripts/font-package/generate";
+import { expected, releaseOwned, SPECS, stale } from "../scripts/font-package/generate";
 
 const ROOT = join(import.meta.dir, "..");
 
@@ -13,6 +13,27 @@ describe("font packages", () => {
   test("each package is what the generator writes (run `bun scripts/font-package/generate.ts`)", () => {
     const differing = [...expected()].filter(([rel, text]) => !existsSync(join(ROOT, rel)) || readFileSync(join(ROOT, rel), "utf8") !== text).map(([rel]) => rel);
     expect(differing).toEqual([]);
+  });
+
+  test("no package holds a file the generator no longer writes", () => {
+    expect(stale()).toEqual([]);
+    // A file left behind by a removed template file is found.
+    const stray = join(ROOT, "packages/pdf-font-noto-sans-tc/src/removed.ts");
+    writeFileSync(stray, "export {};\n");
+    try {
+      expect(stale()).toEqual(["packages/pdf-font-noto-sans-tc/src/removed.ts"]);
+    } finally {
+      rmSync(stray);
+    }
+    // Local state git ignores (wrangler's cache) is not output, and is never listed.
+    const local = join(ROOT, "packages/pdf-font-noto-sans-tc/test/workerd/.wrangler/probe");
+    mkdirSync(dirname(local), { recursive: true });
+    writeFileSync(local, "x");
+    try {
+      expect(stale()).toEqual([]);
+    } finally {
+      rmSync(local);
+    }
   });
 
   test("every generated package is published and released with the others", () => {

@@ -1,6 +1,7 @@
 // The package inside `bun build --compile` binaries, run from another directory so nothing on
 // disk can stand in for an embedded file. Needs fonts/ (scripts/fetch-fonts.ts) and the engine
-// and its ref (packages/pdf-typst-wasm: bun run build).
+// and its ref (packages/pdf-typst-wasm: bun run build). CI's pdf-engine job runs it for TC
+// only: every CJK package's loading code is generated from one template.
 //   • test/compile/main.ts, the default entries: engine and fonts embedded.
 //   • test/compile/unbundled.ts: neither embedded, so the binary stays near the runtime's size,
 //     and both load from a directory outside it (#383).

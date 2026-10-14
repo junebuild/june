@@ -3,8 +3,9 @@
 // @junejs/pdf-typst-wasm's dist, served by `wrangler dev --local`. Only this run shows the fonts
 // upload with the Worker and fit next to the engine.
 //
-// Run: bun scripts/smoke-workerd.ts  (from packages/pdf-font-noto-sans-kr; CI: the pdf-engine
-// job). Needs the engine built (packages/pdf-typst-wasm: bun run build) and fonts/ fetched.
+// Run: bun scripts/smoke-workerd.ts  (from packages/pdf-font-noto-sans-kr). CI's pdf-engine
+// job runs it for TC only: every CJK package's loading code is generated from one template.
+// Needs the engine built (packages/pdf-typst-wasm: bun run build) and fonts/ fetched.
 
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";

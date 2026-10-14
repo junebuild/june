@@ -3,8 +3,9 @@
 // test/node/unbundled.mjs on both packages' unbundled entries (#383). Bun tests resolve
 // the Bun entry and the other smokes cover Bun and workerd; only this run covers Node.
 //
-// Needs node on PATH (CI: Node 24), the engine built (packages/pdf-typst-wasm: bun run build)
-// and fonts/ fetched.
+// Needs node on PATH, the engine built (packages/pdf-typst-wasm: bun run build) and fonts/
+// fetched. CI's pdf-engine job runs it on Node 24, for TC only: every CJK package's loading
+// code is generated from one template.
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";

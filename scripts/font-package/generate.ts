@@ -5,8 +5,8 @@
 // template or the table, run this, commit the result. tests/font-packages.test.ts fails when
 // a package differs from what this would write.
 //
-//   bun scripts/font-package/generate.ts          # write packages/pdf-font-noto-sans-*
-//   bun scripts/font-package/generate.ts --check  # exit 1 listing what differs
+//   bun scripts/font-package/generate.ts          # write packages/pdf-font-noto-sans-*, remove stale files
+//   bun scripts/font-package/generate.ts --check  # exit 1 listing what differs or is stale
 //
 // Not generated: CHANGELOG.md, and in package.json the "version" and the ranges on other
 // @junejs packages — changesets rewrites all three on every release (the published packages are
@@ -18,7 +18,8 @@
 // with fontTools against each region's standard character set, counting what Typst's
 // embedded fonts (Libertinus Serif, New Computer Modern, DejaVu Sans Mono) cover as well.
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -199,6 +200,20 @@ export function expected(): Map<string, string> {
   return files;
 }
 
+// Files in a pdf-font-noto-sans-* package that the generator wouldn't write: left behind by a
+// template file or a table row since removed, and still packed by `files` if left. Listed the
+// way git sees the tree (tracked, or new and not ignored), so installs, builds, fetched fonts
+// and local state stay out of it; CHANGELOG.md isn't generated, and *.tgz is pack output.
+export function stale(): string[] {
+  const want = new Set(expected().keys());
+  const listed = spawnSync("git", ["ls-files", "--cached", "--others", "--exclude-standard", "--", "packages/pdf-font-noto-sans-*"], { cwd: ROOT, encoding: "utf8" });
+  if (listed.status !== 0) throw new Error(`git ls-files failed: ${listed.stderr}`);
+  return listed.stdout
+    .split("\n")
+    .filter((rel) => rel && existsSync(join(ROOT, rel)) && !/\/CHANGELOG\.md$|\.tgz$/.test(rel) && !want.has(rel))
+    .sort();
+}
+
 if (import.meta.main) {
   const check = process.argv.includes("--check");
   const differing: string[] = [];
@@ -213,8 +228,15 @@ if (import.meta.main) {
       console.log(`wrote ${rel}`);
     }
   }
-  if (check && differing.length) {
-    console.error(`font packages differ from scripts/font-package/generate.ts — run it and commit:\n  ${differing.join("\n  ")}`);
+  const leftover = stale();
+  if (!check) {
+    for (const rel of leftover) {
+      rmSync(join(ROOT, rel));
+      console.log(`removed ${rel}`);
+    }
+  }
+  if (check && (differing.length || leftover.length)) {
+    console.error(`font packages differ from scripts/font-package/generate.ts — run it and commit:\n  ${[...differing, ...leftover.map((r) => `${r} (stale)`)].join("\n  ")}`);
     process.exit(1);
   }
 }
