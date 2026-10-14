@@ -97,3 +97,36 @@ jobs:
                 || { echo "$out"; exit 1; }
             }
           done
+
+  # A stable tag also gets a GitHub Release, as a DRAFT: the published notes are curated by hand
+  # (see v0.1.0 / v0.2.0), so this only guarantees one exists, seeded from the root CHANGELOG.md
+  # section for the version. Runs after npm publish succeeds; prerelease tags (`-dev.N`) get none.
+  # Never overwrites: a release that already exists (draft or published) is left alone.
+  release:
+    needs: publish
+    if: github.event_name == 'push' && !contains(github.ref_name, '-')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Draft the GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG already exists — leaving it alone"
+            exit 0
+          fi
+          v="${TAG#v}"
+          # The root CHANGELOG's "## [x.y.z] — date" section, up to the next "## " heading.
+          awk -v h="## [$v]" 'index($0, h) == 1 { f = 1; next } /^## / { f = 0 } f' CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "_No root CHANGELOG.md section for $v._" > notes.md
+          printf '\nFull lists, per package: [core](%s) · [server](%s)\n' \
+            "https://github.com/$GITHUB_REPOSITORY/blob/$TAG/packages/core/CHANGELOG.md" \
+            "https://github.com/$GITHUB_REPOSITORY/blob/$TAG/packages/june/CHANGELOG.md" >> notes.md
+          gh release create "$TAG" --draft --verify-tag --title "$TAG" --notes-file notes.md
+          echo "drafted release $TAG — curate the notes and publish it by hand"
