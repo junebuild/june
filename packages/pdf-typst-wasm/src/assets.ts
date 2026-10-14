@@ -28,7 +28,8 @@ export type AssetLoader = (ref: AssetRef) => Promise<Uint8Array | ArrayBuffer>;
 // both digests when they don't match: a wrong engine or font is never used.
 export async function loadVerified(ref: AssetRef, load: AssetLoader): Promise<Uint8Array> {
   const got = await load(ref);
-  const bytes = got instanceof Uint8Array ? got : new Uint8Array(got);
+  // WebCrypto refuses a view on a SharedArrayBuffer: copy one into a plain buffer first.
+  const bytes = got instanceof Uint8Array ? (got.buffer instanceof SharedArrayBuffer ? got.slice() : got) : new Uint8Array(got);
   if (bytes.byteLength !== ref.size) throw new Error(`${ref.name}: the loader returned ${bytes.byteLength} bytes, expected ${ref.size} (sha256 ${ref.sha256})`);
   const digest = await crypto.subtle.digest("SHA-256", bytes as Uint8Array<ArrayBuffer>);
   const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");

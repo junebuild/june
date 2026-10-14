@@ -25,6 +25,12 @@ describe("loadVerified", () => {
     expect(await loadVerified(await ref(), async () => bytes.slice().buffer)).toEqual(bytes);
   });
 
+  test("accepts bytes on a SharedArrayBuffer, which WebCrypto can't hash directly", async () => {
+    const shared = new Uint8Array(new SharedArrayBuffer(bytes.length));
+    shared.set(bytes);
+    expect(await loadVerified(await ref(), async () => shared)).toEqual(bytes);
+  });
+
   test("rejects bytes of the wrong size or digest, naming the file", async () => {
     const r = await ref();
     await expect(loadVerified(r, async () => bytes.slice(1))).rejects.toThrow(/a\.bin: the loader returned 7 bytes, expected 8/);
