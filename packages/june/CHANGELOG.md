@@ -1,5 +1,34 @@
 # @junejs/server
 
+## 0.2.1
+
+### Patch Changes
+
+- [#390](https://github.com/junebuild/june/pull/390) [`f2b1840`](https://github.com/junebuild/june/commit/f2b18400fdb5f2ff71dac794f20e5d4e751d4c42) Thanks [@linyiru](https://github.com/linyiru)! - New `@junejs/server/assets`: `assetCache({ dir })`, a ready loader for the PDF packages' `unbundled` entries ([#383](https://github.com/junebuild/june/issues/383)). It keeps the engine and fonts in a directory you own and downloads each one the first time, so a `bun build --compile` binary stays the size of the Bun runtime and renders offline after first use.
+
+  ```ts
+  import { assetCache } from "@junejs/server/assets";
+
+  const load = assetCache({ dir: "/data/june-assets" });
+  typstWasmRenderer({ load, fonts: [notoSansTC({ load })] }); // from the packages' /unbundled entries
+  ```
+
+  - A file is used only if its size and SHA-256 match the ref, whether it came from disk or the network. A stale or corrupt copy is replaced, and a download stops at the expected size.
+  - Files are written to a temp file and renamed into place. Concurrent requests for a file share one download per cache, so create one `load` and pass it everywhere.
+  - `urls: (ref) => [...]` fetches from your own mirror instead.
+  - `offline: true` never touches the network: copy the files into `dir` first. A missing file fails with its name, hash and where to get it.
+  - `load.egress(refs)` and `load.cached(ref)` report what a first render would still fetch, for a setup check.
+
+- [#384](https://github.com/junebuild/june/pull/384) [`eab7866`](https://github.com/junebuild/june/commit/eab7866854e8f1b6aa5bcf6dafad841dc7fc0da1) Thanks [@linyiru](https://github.com/linyiru)! - `june build` for Workers now gives wrangler a loader for the font and image files your worker imports ([#379](https://github.com/junebuild/june/issues/379)). Before, a worker that imported a `.otf`, such as `@junejs/pdf-font-noto-sans-tc`'s, built fine but failed `wrangler deploy` with `No loader is configured for ".otf" files`. The build already left those files for wrangler to load, but wrangler only loads `.wasm` by default.
+
+  - The generated `wrangler.jsonc` gets one `Data` rule for the extensions the bundle actually imports (`.ttf`, `.otf`, `.woff`, `.woff2`, `.png`, `.jpg`, `.jpeg`, `.avif`, `.webp`). The rule sets `fallthrough: true`, so wrangler's default rules still apply. An app that imports none of these gets the same config as before.
+  - If you keep your own `wrangler.jsonc` / `wrangler.toml`, June still leaves it untouched. It now warns when the config has no rule for an imported extension and prints the rule to add.
+  - If you added the rule by hand for the font package, you can remove it from a June-generated config. Keep it in your own config.
+
+- Updated dependencies []:
+  - @junejs/core@0.2.1
+  - @junejs/db@0.2.1
+
 ## 0.2.0
 
 ### Minor Changes

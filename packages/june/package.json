@@ -1,6 +1,6 @@
 {
   "name": "@junejs/server",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "June host adapters + dev server. Host-coupled; depends on the pure @junejs/core contract layer.",
   "type": "module",
   "license": "MIT",
@@ -138,7 +138,7 @@
     "build": "tsdown"
   },
   "dependencies": {
-    "@junejs/db": "^0.2.0",
+    "@junejs/db": "^0.2.1",
     "@momiji-rs/sparkdown": "^0.0.4",
     "@resvg/resvg-wasm": "^2.6.2",
     "lightningcss": "^1.27.0",
@@ -146,7 +146,7 @@
     "rolldown": "^1.1.0"
   },
   "peerDependencies": {
-    "@junejs/core": "^0.2.0",
+    "@junejs/core": "^0.2.1",
     "react": "catalog:",
     "react-dom": "catalog:",
     "react-server-dom-webpack": "catalog:",
