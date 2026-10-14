@@ -60,6 +60,12 @@
       "types": "./dist/blob.d.ts",
       "default": "./dist/blob.js"
     },
+    "./assets": {
+      "source": "./src/assets.ts",
+      "bun": "./src/assets.ts",
+      "types": "./dist/assets.d.ts",
+      "default": "./dist/assets.js"
+    },
     "./resources": {
       "source": "./src/resources.ts",
       "bun": "./src/resources.ts",

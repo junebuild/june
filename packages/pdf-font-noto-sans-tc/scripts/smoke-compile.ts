@@ -4,9 +4,12 @@
 //   • test/compile/main.ts, the default entries: engine and fonts embedded.
 //   • test/compile/unbundled.ts: neither embedded, so the binary stays near the runtime's size,
 //     and both load from a directory outside it (#383).
+//   • test/compile/cached.ts: the same, through @junejs/server's assetCache — the first run
+//     downloads all three files from a local mirror into an empty directory and checks them,
+//     the second runs offline with the mirror gone (#383).
 
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { copyFileSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -27,6 +30,19 @@ const run = (bin: string, env: Record<string, string> = {}) => {
   assert.match(r.stdout, /NotoSansTC-Regular/, r.stdout);
   assert.match(r.stdout, /NotoSansTC-Bold/, r.stdout);
 };
+// Async, so the mirror served from this process can answer while the binary runs.
+const runAsync = (bin: string, env: Record<string, string>) =>
+  new Promise<void>((resolve, reject) => {
+    const p = spawn(bin, [], { cwd: out, env: { ...process.env, ...env } });
+    let text = "";
+    p.stdout.on("data", (d) => (text += d));
+    p.stderr.on("data", (d) => (text += d));
+    p.on("close", (code) => {
+      if (code !== 0) return reject(new Error(`${bin} failed: ${text}`));
+      if (!/NotoSansTC-Regular/.test(text) || !/NotoSansTC-Bold/.test(text)) return reject(new Error(`${bin}: ${text}`));
+      resolve();
+    });
+  });
 try {
   const empty = join(out, "empty.ts");
   writeFileSync(empty, "console.log(1);\n");
@@ -43,7 +59,33 @@ try {
   for (const f of ["NotoSansTC-Regular.otf", "NotoSansTC-Bold.otf"]) copyFileSync(join(PKG, "fonts", f), join(assets, f));
   run(unbundled.bin, { JUNE_ASSETS: assets });
 
-  console.log(`pdf-font-noto-sans-tc compile smoke: OK (runtime ${runtime.mib.toFixed(1)} MiB; default entries ${bundled.mib.toFixed(1)} MiB; unbundled ${unbundled.mib.toFixed(1)} MiB; both render regular and bold)`);
+  // First use downloads, then offline: a mirror on localhost stands in for the CDNs.
+  const cached = compile("test/compile/cached.ts", "cached");
+  assert.ok(cached.mib - runtime.mib < 5, `assetCache adds no files to the binary: ${cached.mib.toFixed(1)} MiB vs ${runtime.mib.toFixed(1)} MiB runtime`);
+  const files: Record<string, string> = { "typst.wasm": join(PKG, "../pdf-typst-wasm/dist/typst.wasm"), "NotoSansTC-Regular.otf": join(PKG, "fonts/NotoSansTC-Regular.otf"), "NotoSansTC-Bold.otf": join(PKG, "fonts/NotoSansTC-Bold.otf") };
+  const served: string[] = [];
+  const mirror = Bun.serve({
+    port: 0,
+    fetch(req) {
+      const name = new URL(req.url).pathname.slice(1);
+      served.push(name);
+      return files[name] ? new Response(Bun.file(files[name]!)) : new Response("not found", { status: 404 });
+    },
+  });
+  const cacheDir = join(out, "cache");
+  mkdirSync(cacheDir);
+  try {
+    await runAsync(cached.bin, { JUNE_ASSETS: cacheDir, JUNE_MIRROR: `http://127.0.0.1:${mirror.port}` });
+  } finally {
+    mirror.stop(true);
+  }
+  assert.deepEqual(served.sort(), Object.keys(files).sort(), "the first run fetched each file once");
+  await runAsync(cached.bin, { JUNE_ASSETS: cacheDir }); // offline, the mirror gone
+
+  console.log(
+    `pdf-font-noto-sans-tc compile smoke: OK (runtime ${runtime.mib.toFixed(1)} MiB; default entries ${bundled.mib.toFixed(1)} MiB; unbundled ${unbundled.mib.toFixed(1)} MiB; ` +
+      `assetCache ${cached.mib.toFixed(1)} MiB, downloaded ${served.length} files then rendered offline; all render regular and bold)`,
+  );
 } finally {
   rmSync(out, { recursive: true, force: true });
 }

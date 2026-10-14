@@ -48,7 +48,8 @@
   },
   "devDependencies": {
     "@junejs/pdf": "^0.2.0",
-    "@junejs/pdf-typst-wasm": "^0.2.0"
+    "@junejs/pdf-typst-wasm": "^0.2.0",
+    "@junejs/server": "^0.2.0"
   },
   "keywords": [
     "june",
