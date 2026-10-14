@@ -225,6 +225,42 @@
         "marked": "^18.0.14",
       },
     },
+    "packages/pdf-font-noto-sans-jp": {
+      "name": "@junejs/pdf-font-noto-sans-jp",
+      "version": "0.2.0",
+      "devDependencies": {
+        "@junejs/pdf": "^0.2.0",
+        "@junejs/pdf-typst-wasm": "^0.2.0",
+        "@junejs/server": "^0.2.0",
+      },
+      "peerDependencies": {
+        "@junejs/pdf-typst-wasm": "^0.2.0",
+      },
+    },
+    "packages/pdf-font-noto-sans-kr": {
+      "name": "@junejs/pdf-font-noto-sans-kr",
+      "version": "0.2.0",
+      "devDependencies": {
+        "@junejs/pdf": "^0.2.0",
+        "@junejs/pdf-typst-wasm": "^0.2.0",
+        "@junejs/server": "^0.2.0",
+      },
+      "peerDependencies": {
+        "@junejs/pdf-typst-wasm": "^0.2.0",
+      },
+    },
+    "packages/pdf-font-noto-sans-sc": {
+      "name": "@junejs/pdf-font-noto-sans-sc",
+      "version": "0.2.0",
+      "devDependencies": {
+        "@junejs/pdf": "^0.2.0",
+        "@junejs/pdf-typst-wasm": "^0.2.0",
+        "@junejs/server": "^0.2.0",
+      },
+      "peerDependencies": {
+        "@junejs/pdf-typst-wasm": "^0.2.0",
+      },
+    },
     "packages/pdf-font-noto-sans-tc": {
       "name": "@junejs/pdf-font-noto-sans-tc",
       "version": "0.2.0",
@@ -458,6 +494,12 @@
     "@junejs/og": ["@junejs/og@workspace:packages/og"],
 
     "@junejs/pdf": ["@junejs/pdf@workspace:packages/pdf"],
+
+    "@junejs/pdf-font-noto-sans-jp": ["@junejs/pdf-font-noto-sans-jp@workspace:packages/pdf-font-noto-sans-jp"],
+
+    "@junejs/pdf-font-noto-sans-kr": ["@junejs/pdf-font-noto-sans-kr@workspace:packages/pdf-font-noto-sans-kr"],
+
+    "@junejs/pdf-font-noto-sans-sc": ["@junejs/pdf-font-noto-sans-sc@workspace:packages/pdf-font-noto-sans-sc"],
 
     "@junejs/pdf-font-noto-sans-tc": ["@junejs/pdf-font-noto-sans-tc@workspace:packages/pdf-font-noto-sans-tc"],
 

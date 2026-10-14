@@ -75,8 +75,9 @@ enforces it, because the worker graph must load on workerd. Host code lives in `
 `cli` is the `june` command, `db` the request-scoped `db`/`kv`/`blob`, `juno` the default data
 layer, `og` og:image rendering, `i18n` ICU messages, `pdf` PDF output as an agent tool (the
 `PdfRenderer` seam), `pdf-typst-wasm` a renderer on a Rust Typst engine compiled to WebAssembly
-(its own Cargo crate inside the package), `pdf-font-noto-sans-tc` an offline Traditional
-Chinese font for it (its font files are fetched by `scripts/fetch-fonts.ts`, never committed),
+(its own Cargo crate inside the package), `pdf-font-noto-sans-{tc,sc,jp,kr}` offline CJK
+fonts for it (generated from `scripts/font-package/` — edit the template, not the packages;
+their font files are fetched by each one's `scripts/fetch-fonts.ts`, never committed),
 `create-june` the scaffolder plus the app `template/`.
 
 **No build step inside the repo.** Every package export has a `source`/`bun` condition pointing

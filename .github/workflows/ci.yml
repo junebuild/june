@@ -146,9 +146,15 @@ jobs:
 
       # @junejs/pdf-font-noto-sans-tc needs the engine built above and its font files, which
       # are fetched (pinned, checksummed), never committed.
-      - name: Noto Sans TC — fonts, tests
-        working-directory: packages/pdf-font-noto-sans-tc
-        run: bun run fetch-fonts && bun test
+      # The CJK font packages are generated from one template (scripts/font-package): each one's
+      # own tests check its pinned files and render its script; the smokes below exercise the
+      # shared loading paths once, on TC.
+      - name: Noto Sans CJK — fonts, tests (tc, sc, jp, kr)
+        working-directory: packages
+        run: |
+          for c in tc sc jp kr; do
+            (cd "pdf-font-noto-sans-$c" && bun run fetch-fonts && bun test) || exit 1
+          done
 
       - name: Noto Sans TC — on workerd, in a compiled binary
         working-directory: packages/pdf-font-noto-sans-tc
