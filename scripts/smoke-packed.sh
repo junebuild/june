@@ -11,10 +11,10 @@ trap 'pkill -f "june.ts dev" 2>/dev/null; rm -rf "$work"' EXIT
 
 echo "→ packing workspace tarballs"
 # Pack EVERY published package (matches .github/workflows/publish.yml). og, i18n, pdf, pdf-typst-wasm and
-# pdf-font-noto-sans-tc are published but aren't exercised by the scaffold below, so they're only covered by
-# the protocol-leak check that follows (pdf-typst-wasm packs without its built engine here, and
-# pdf-font-noto-sans-tc without its fonts; CI's pdf-engine job builds and tests both).
-for p in core db june juno cli create-june og i18n pdf pdf-typst-wasm pdf-font-noto-sans-tc; do
+# the pdf-font-noto-sans-* packages are published but aren't exercised by the scaffold below, so they're only
+# covered by the protocol-leak check that follows (pdf-typst-wasm packs without its built engine here, and
+# the font packages without their fonts; CI's pdf-engine job builds and tests them).
+for p in core db june juno cli create-june og i18n pdf pdf-typst-wasm pdf-font-noto-sans-tc pdf-font-noto-sans-sc pdf-font-noto-sans-jp pdf-font-noto-sans-kr; do
   (cd "packages/$p" && bun pm pack --quiet >/dev/null 2>&1)
   mv packages/$p/*.tgz "$work/"
 done

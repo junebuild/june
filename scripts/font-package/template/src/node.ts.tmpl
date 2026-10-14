@@ -1,0 +1,22 @@
+// @junejs/pdf-font-noto-sans-{{code}} on Node and Deno: the font files are read from fonts/ next to
+// this file's directory (the same path from src/ in the repo and dist/ in the package), on the
+// renderer's first render.
+//
+//   import { notoSans{{CODE}} } from "@junejs/pdf-font-noto-sans-{{code}}";
+//   typstWasmRenderer({ fonts: [notoSans{{CODE}}()] });
+
+import { readFile } from "node:fs/promises";
+
+import { createNotoSans{{CODE}}, FILES, MISSING, type NotoSans{{CODE}}Options } from "./provider";
+
+export type { NotoSans{{CODE}}Options, NotoSans{{CODE}}Weight } from "./provider";
+
+export function notoSans{{CODE}}(opts: NotoSans{{CODE}}Options = {}) {
+  return createNotoSans{{CODE}}(async (weight) => {
+    try {
+      return new Uint8Array(await readFile(new URL(`../fonts/${FILES[weight]}`, import.meta.url)));
+    } catch (err) {
+      throw new Error(MISSING, { cause: err });
+    }
+  }, opts);
+}

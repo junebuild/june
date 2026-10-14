@@ -5,7 +5,7 @@ description: A tool stores the file it produces with ctx.files and returns the F
 date: 2026-10-12
 section: Agents
 order: "16.35"
-sources: [packages/core/src/agent-files.ts, packages/core/src/agent-runtime.ts, packages/core/src/agent-config.ts, packages/core/src/channels.ts, packages/june/src/agent-native.ts, packages/june/src/agent-durable.ts, packages/june/src/app.ts, packages/pdf/src/tools.ts, packages/pdf/src/renderer.ts, packages/pdf/src/markdown-typst.ts, packages/pdf-typst-wasm/src/renderer.ts, packages/pdf-typst-wasm/src/fonts.ts, packages/pdf-typst-wasm/src/assets.ts, packages/pdf-typst-wasm/src/unbundled.ts, packages/june/src/assets.ts, packages/pdf-typst-wasm/src/workerd.ts, packages/pdf-typst-wasm/src/bun.ts, packages/pdf-font-noto-sans-tc/src/provider.ts, packages/pdf-font-noto-sans-tc/src/unbundled.ts, packages/pdf-font-noto-sans-tc/src/workerd.ts, packages/pdf-typst-wasm/src/lib.rs, packages/pdf/skills/pdf-report.md, docs/rfc-agent-files.md]
+sources: [packages/core/src/agent-files.ts, packages/core/src/agent-runtime.ts, packages/core/src/agent-config.ts, packages/core/src/channels.ts, packages/june/src/agent-native.ts, packages/june/src/agent-durable.ts, packages/june/src/app.ts, packages/pdf/src/tools.ts, packages/pdf/src/renderer.ts, packages/pdf/src/markdown-typst.ts, packages/pdf-typst-wasm/src/renderer.ts, packages/pdf-typst-wasm/src/fonts.ts, packages/pdf-typst-wasm/src/assets.ts, packages/pdf-typst-wasm/src/unbundled.ts, packages/june/src/assets.ts, packages/pdf-typst-wasm/src/workerd.ts, packages/pdf-typst-wasm/src/bun.ts, packages/pdf-font-noto-sans-tc/src/provider.ts, packages/pdf-font-noto-sans-tc/src/unbundled.ts, scripts/font-package/generate.ts, packages/pdf-font-noto-sans-tc/src/workerd.ts, packages/pdf-typst-wasm/src/lib.rs, packages/pdf/skills/pdf-report.md, docs/rfc-agent-files.md]
 ---
 ## A PDF in a Slack thread
 
@@ -138,14 +138,29 @@ call unless you choose a font provider that does:
 | `fonts` | what it costs | network |
 |---|---|---|
 | (none, the default) | Typst's built-in Latin, Greek and Cyrillic fonts only | none |
-| `notoSansTC()` (`@junejs/pdf-font-noto-sans-tc`) | Traditional Chinese, regular and bold: ~11 MB in the package, registered once | none |
+| `notoSansTC()` / `notoSansSC()` / `notoSansJP()` / `notoSansKR()` | Chinese (Traditional, Simplified), Japanese or Korean, regular and bold: 9–16 MiB per package, registered once | none |
 | `localFonts([bytes, url, loader])` | you supply the files (a CJK family is tens of MB) | a URL is fetched once; nothing about documents is sent |
 | `googleFontSubsets({ families })` | a few KB per document | **each document's non-ASCII characters** go to fonts.googleapis.com and fonts.gstatic.com (the subset's URL encodes them) |
 
-`notoSansTC()` covers 17,755 Han characters, including every Big5 one; a rarer character is
-reported like any other missing glyph. On Bun, `bun build --compile` embeds its files. On
-Workers they upload with the Worker (with the engine, about 40 of the 64 MiB a Worker may
-be) as Data modules. `june build` adds the wrangler rule that loads them; if you keep your
+One package per script, each Noto Sans CJK's regional subset (`@junejs/pdf-font-noto-sans-tc`,
+`-sc`, `-jp`, `-kr`). Measured with fontTools, together with Typst's built-in fonts:
+
+| package | size | covers |
+| --- | --- | --- |
+| `notoSansTC()` | 11 MiB | 17,755 Han; every Big5 character except four symbols |
+| `notoSansSC()` | 16 MiB | 27,900 Han; every GBK character |
+| `notoSansJP()` | 9 MiB | 13,742 Han; every JIS X 0213 character |
+| `notoSansKR()` | 9 MiB | all 11,172 Hangul syllables and 8,653 Han; every KS X 1001 character but three hanja |
+
+A rarer character is reported like any other missing glyph. Use the package for the
+document's language: the scripts share Han characters but not their shapes, so a Japanese
+document set in the Chinese font reads as Chinese. With several loaded, `fontFamilies` (say
+`["Noto Sans JP"]`) decides which one Han characters come from.
+
+On Bun, `bun build --compile` embeds the files. On Workers they upload with the Worker as
+Data modules, and the total has to stay under 64 MiB. With the engine's 29 MiB, any two
+packages fit by file size and all four don't; for more scripts, load them through
+`assetCache` (below) or `googleFontSubsets`. `june build` adds the wrangler rule that loads them; if you keep your
 own wrangler config, it warns until you add it, and without it the deploy fails with "No
 loader is configured for .otf files":
 
@@ -179,8 +194,8 @@ keeps what loaded), so you can write your own.
 
 ### Other scripts
 
-June ships an offline font for Traditional Chinese only. Any other script works with a font you
-choose, and the missing glyphs check tells you when one is missing:
+June ships offline fonts for Chinese, Japanese and Korean only. Any other script works with a
+font you choose, and the missing glyphs check tells you when one is missing:
 
 ```ts
 import { googleFontSubsets, localFonts, typstWasmRenderer } from "@junejs/pdf-typst-wasm";

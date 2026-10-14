@@ -1,6 +1,6 @@
 // @junejs/pdf-font-noto-sans-tc/unbundled — the provider without its font files (#383). The
 // default entries embed them (bun.ts as files, workerd.ts as Data modules), so a
-// `bun build --compile` binary carries ~11 MB whether or not it renders Chinese. This entry
+// `bun build --compile` binary carries ~11 MiB whether or not it renders Chinese. This entry
 // never references them: the app passes `load`, called on the first render with each weight's
 // ref, and its bytes are checked against the ref's size and sha256 before they are used.
 //

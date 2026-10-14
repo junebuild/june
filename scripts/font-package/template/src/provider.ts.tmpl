@@ -1,0 +1,59 @@
+// notoSans{{CODE}} — a FontProvider (@junejs/pdf-typst-wasm) for {{SCRIPT}} that needs no
+// network: Noto Sans CJK's {{REGION}} subset, regular and bold, shipped in this package (#371).
+// The offline alternative to googleFontSubsets, which sends each document's characters to
+// Google: here egress is empty and the cost is size instead, ~{{MIB_WEIGHT}} MiB per weight, registered
+// once per renderer.
+//
+{{COVERAGE}}
+// A rare character outside it ({{RARE}}) is reported by the renderer's missing glyphs check
+// like any other.
+//
+// Each runtime finds the files its own way (node.ts, bun.ts, workerd.ts); this module only
+// turns weights into a provider.
+
+import type { FontEgress, FontProvider } from "@junejs/pdf-typst-wasm";
+import type { AssetRef } from "./assets";
+
+// The weights Markdown needs: body text, and bold for **strong** and headings.
+export type NotoSans{{CODE}}Weight = 400 | 700;
+
+export type NotoSans{{CODE}}Options = {
+  // Default [400, 700]. Only the listed weights are read and registered, so [400] halves the
+  // font memory per renderer; Typst synthesizes bold from the regular. It doesn't shrink a
+  // deploy: a Worker upload or a compiled binary carries both files either way.
+  weights?: NotoSans{{CODE}}Weight[];
+};
+
+export type WeightLoader = (weight: NotoSans{{CODE}}Weight) => Promise<Uint8Array>;
+
+// `egress`: what `load` contacts. The bundled entries read files the package ships: none.
+export function createNotoSans{{CODE}}(load: WeightLoader, opts: NotoSans{{CODE}}Options = {}, egress: FontEgress[] = []): FontProvider {
+  const weights = [...new Set<NotoSans{{CODE}}Weight>(opts.weights ?? [400, 700])];
+  for (const w of weights) if (w !== 400 && w !== 700) throw new Error(`notoSans{{CODE}}: no weight ${w as number} (this package ships 400 and 700)`);
+  return {
+    name: "noto-sans-{{code}}",
+    egress,
+    persistent: () => Promise.all(weights.map(load)),
+  };
+}
+
+// The upstream release the files come from: Noto Sans CJK's {{REGION}} subset OTFs.
+export const TAG = "Sans2.004";
+
+const ref = (name: string, sha256: string, size: number): AssetRef => ({
+  name,
+  sha256,
+  size,
+  urls: [`https://raw.githubusercontent.com/notofonts/noto-cjk/${TAG}/Sans/SubsetOTF/{{CODE}}/${name}`, `https://cdn.jsdelivr.net/gh/notofonts/noto-cjk@${TAG}/Sans/SubsetOTF/{{CODE}}/${name}`],
+});
+
+// Each weight's file, pinned: scripts/fetch-fonts.ts fetches and checks these, and the
+// unbundled entry checks an app's loader against them (#383).
+export const NOTO_SANS_{{CODE}}: Record<NotoSans{{CODE}}Weight, AssetRef> = {
+  400: ref("NotoSans{{CODE}}-Regular.otf", "{{SHA_400}}", {{SIZE_400}}),
+  700: ref("NotoSans{{CODE}}-Bold.otf", "{{SHA_700}}", {{SIZE_700}}),
+};
+
+export const FILES: Record<NotoSans{{CODE}}Weight, string> = { 400: NOTO_SANS_{{CODE}}[400].name, 700: NOTO_SANS_{{CODE}}[700].name };
+
+export const MISSING = "@junejs/pdf-font-noto-sans-{{code}}: its font files are missing — in the June repo, run `bun scripts/fetch-fonts.ts` in packages/pdf-font-noto-sans-{{code}}";

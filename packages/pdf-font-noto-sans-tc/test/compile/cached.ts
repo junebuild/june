@@ -10,7 +10,7 @@ import { assetCache } from "@junejs/server/assets";
 const mirror = process.env.JUNE_MIRROR;
 const load = assetCache({ dir: process.env.JUNE_ASSETS!, offline: !mirror, urls: (ref) => [`${mirror}/${ref.name}`] });
 try {
-  const pdf = await typstWasmRenderer({ load, fonts: [notoSansTC({ load })] }).render({ markdown: "# 首次使用時下載\n\n**繁體中文**，之後離線。" });
+  const pdf = await typstWasmRenderer({ load, fonts: [notoSansTC({ load })] }).render({ markdown: "# 季度報告\n\n**營收**成長 12%。臺灣、裏、峯、齉龘爩鬱。" });
   const s = new TextDecoder("latin1").decode(pdf);
   console.log([...new Set([...s.matchAll(/\/BaseFont\s*\/(?:[A-Z]{6}\+)?([\w-]+)/g)].map((m) => m[1]))].join(" "));
 } catch (err) {

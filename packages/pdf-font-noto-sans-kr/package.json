@@ -1,0 +1,70 @@
+{
+  "name": "@junejs/pdf-font-noto-sans-kr",
+  "version": "0.2.0",
+  "description": "June — Noto Sans KR (Korean, regular and bold) as an offline font provider for @junejs/pdf-typst-wasm: no network call, on Node, Bun, Deno and Cloudflare Workers.",
+  "type": "module",
+  "license": "MIT AND OFL-1.1",
+  "homepage": "https://june.build",
+  "exports": {
+    ".": {
+      "source": {
+        "workerd": "./src/workerd.ts",
+        "bun": "./src/bun.ts",
+        "default": "./src/node.ts"
+      },
+      "bun": {
+        "workerd": "./src/workerd.ts",
+        "default": "./src/bun.ts"
+      },
+      "workerd": {
+        "types": "./dist/workerd.d.ts",
+        "default": "./dist/workerd.js"
+      },
+      "default": {
+        "types": "./dist/node.d.ts",
+        "default": "./dist/node.js"
+      }
+    },
+    "./unbundled": {
+      "source": "./src/unbundled.ts",
+      "bun": "./src/unbundled.ts",
+      "types": "./dist/unbundled.d.ts",
+      "default": "./dist/unbundled.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src/*.ts",
+    "fonts/*.otf",
+    "LICENSE"
+  ],
+  "scripts": {
+    "fetch-fonts": "bun scripts/fetch-fonts.ts",
+    "build": "bun scripts/fetch-fonts.ts && tsdown",
+    "test": "bun test"
+  },
+  "peerDependencies": {
+    "@junejs/pdf-typst-wasm": "^0.2.0"
+  },
+  "devDependencies": {
+    "@junejs/pdf": "^0.2.0",
+    "@junejs/pdf-typst-wasm": "^0.2.0",
+    "@junejs/server": "^0.2.0"
+  },
+  "keywords": [
+    "june",
+    "pdf",
+    "typst",
+    "font",
+    "noto",
+    "korean"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/junebuild/june.git",
+    "directory": "packages/pdf-font-noto-sans-kr"
+  }
+}

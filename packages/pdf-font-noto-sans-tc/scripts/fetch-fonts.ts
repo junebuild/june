@@ -1,5 +1,5 @@
 // Fetch the font files this package ships into fonts/, pinned and checksummed. They are not in
-// git: a CJK weight is ~5.7 MB and every update would stay in the history forever. Run by
+// git: a CJK weight is ~5.5 MiB and every update would stay in the history forever. Run by
 // `bun run build` (so by publish.yml) and by CI before the tests that need them; those tests
 // skip, with a pointer here, when fonts/ is empty.
 //

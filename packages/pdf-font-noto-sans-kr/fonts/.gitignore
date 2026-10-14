@@ -1,0 +1,3 @@
+# The font files: fetched by scripts/fetch-fonts.ts (pinned, checksummed), shipped in the npm
+# package, never committed.
+*.otf

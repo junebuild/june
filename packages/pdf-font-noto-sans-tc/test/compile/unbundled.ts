@@ -9,7 +9,7 @@ import { typstWasmRenderer, type AssetRef } from "@junejs/pdf-typst-wasm/unbundl
 
 const load = (ref: AssetRef) => readFile(join(process.env.JUNE_ASSETS!, ref.name));
 try {
-  const pdf = await typstWasmRenderer({ load, fonts: [notoSansTC({ load })] }).render({ markdown: "# 不打包\n\n**繁體中文**，引擎與字型都在執行檔之外。" });
+  const pdf = await typstWasmRenderer({ load, fonts: [notoSansTC({ load })] }).render({ markdown: "# 季度報告\n\n**營收**成長 12%。臺灣、裏、峯、齉龘爩鬱。" });
   const s = new TextDecoder("latin1").decode(pdf);
   console.log([...new Set([...s.matchAll(/\/BaseFont\s*\/(?:[A-Z]{6}\+)?([\w-]+)/g)].map((m) => m[1]))].join(" "));
 } catch (err) {

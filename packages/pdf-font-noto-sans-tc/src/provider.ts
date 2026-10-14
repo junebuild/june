@@ -1,13 +1,13 @@
 // notoSansTC — a FontProvider (@junejs/pdf-typst-wasm) for Traditional Chinese that needs no
 // network: Noto Sans CJK's Taiwan subset, regular and bold, shipped in this package (#371).
 // The offline alternative to googleFontSubsets, which sends each document's characters to
-// Google: here egress is empty and the cost is size instead, ~5.5 MB per weight, registered
+// Google: here egress is empty and the cost is size instead, ~5.5 MiB per weight, registered
 // once per renderer.
 //
 // The subset is not every CJK ideograph. Measured with fontTools: 20,745 code points, 17,755
 // of them Han, and every Big5 character except four symbols (U+02CD, U+203E, U+223C, U+2252).
-// A rare character outside it (靐) is reported by the renderer's missing glyphs check like any
-// other.
+// A rare character outside it (靐) is reported by the renderer's missing glyphs check
+// like any other.
 //
 // Each runtime finds the files its own way (node.ts, bun.ts, workerd.ts); this module only
 // turns weights into a provider.
