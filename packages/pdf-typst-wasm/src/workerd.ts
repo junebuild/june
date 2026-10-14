@@ -5,17 +5,16 @@
 //
 //   import { pdfTools } from "@junejs/pdf";
 //   import { typstWasmRenderer } from "@junejs/pdf-typst-wasm";
-//   export default pdfTools({ renderer: typstWasmRenderer() });
-
-import type { PdfRenderer } from "@junejs/pdf";
+//   export default pdfTools({ renderer: typstWasmRenderer() });   // offline: embedded fonts only
 
 // The same path from src/ (the repo) and from dist/ (the published package).
 import wasm from "../dist/typst.wasm";
-import { createTypstWasmRenderer, type TypstWasmRendererOptions } from "./renderer";
+import { createTypstWasmRenderer, type TypstWasmRenderer, type TypstWasmRendererOptions } from "./renderer";
 
-export { DEFAULT_GOOGLE_FONTS, type FontSource, type GoogleFont, type TypstWasmRendererOptions } from "./renderer";
+export { type TypstWasmRenderer, type TypstWasmRendererOptions } from "./renderer";
+export { googleFontSubsets, localFonts, type FontEgress, type FontProvider, type FontSource, type GoogleFont } from "./fonts";
 export { createEngine, TypstCompileError, type FontScope, type TypstEngine, type TypstOutput, type WasmSource } from "./engine";
 
-export function typstWasmRenderer(opts: TypstWasmRendererOptions = {}): PdfRenderer {
+export function typstWasmRenderer(opts: TypstWasmRendererOptions = {}): TypstWasmRenderer {
   return createTypstWasmRenderer(async () => wasm, opts);
 }
