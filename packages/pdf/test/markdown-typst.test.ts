@@ -98,7 +98,64 @@ describe("typstSource", () => {
     expect(typstSource({ markdown: "![](x.png) Report مرحبا" })).not.toContain("dir:"); // an empty alt renders as [image]
     // With a lang, Typst decides from it; nothing is inferred.
     expect(typstSource({ markdown: "مرحبا", lang: "ar" })).toContain('#set text(size: 10.5pt, lang: "ar")\n');
-    expect(typstSource({ markdown: "مرحبا", lang: "en" })).not.toContain("dir:");
+    expect(typstSource({ markdown: "مرحبا", lang: "en" })).not.toContain("#set text(size: 10.5pt, lang: \"en\", dir:");
+  });
+
+  // Rule P2 per block, like HTML's dir="auto": a block whose first strong character differs from
+  // the direction around it is turned, and only that block.
+  describe("direction per block", () => {
+    const TURN_RTL = "#[#set text(dir: rtl)\n";
+    const TURN_LTR = "#[#set text(dir: ltr)\n";
+    test("an Arabic paragraph in an English document, and the other way round", () => {
+      const en = typstSource({ markdown: "# Report\n\nRevenue grew.\n\nقال المدير: نمت الإيرادات.\n\nThe end.", lang: "en" });
+      expect(en.split(TURN_RTL).length - 1).toBe(1);
+      expect(en).toContain(`${TURN_RTL}#"قال المدير: نمت الإيرادات.";]`);
+      expect(en).not.toContain(TURN_LTR);
+      const ar = typstSource({ markdown: "# تقرير\n\nنمت الإيرادات.\n\nThe CFO said: revenue grew." });
+      expect(ar).toContain("dir: rtl)\n"); // the document
+      expect(ar).toContain(`${TURN_LTR}#"The CFO said: revenue grew.";]`);
+      expect(typstSource({ markdown: "مرحبا\n\nHello", lang: "ar" })).toContain(`${TURN_LTR}#"Hello";]`);
+    });
+
+    test("strong by Unicode Bidi_Class: tatweel is Arabic, RLM forces right to left, digits decide nothing", () => {
+      expect(typstSource({ markdown: "# ـتقرير" })).toContain("dir: rtl)"); // U+0640, Script=Common
+      expect(typstSource({ markdown: "\u200F12 345" })).toContain("dir: rtl)"); // a right-to-left mark
+      const en = typstSource({ markdown: "Hello\n\n١٢٣ 456", lang: "en" });
+      expect(en).not.toContain("dir: rtl"); // Arabic-Indic digits are weak: the block keeps ltr
+    });
+
+    test("isolated text doesn't decide a paragraph's direction (rule P2), even unmatched", () => {
+      expect(typstSource({ markdown: "\u2067שלום\u2069 Report", lang: "en" })).not.toContain(TURN_RTL); // RLI…PDI skipped
+      expect(typstSource({ markdown: "\u2066Report\u2069 שלום", lang: "en" })).toContain(TURN_RTL); // LRI…PDI skipped
+      expect(typstSource({ markdown: "\u2068שלום\u2069 Report", lang: "en" })).not.toContain(TURN_RTL); // FSI too
+      // An isolate left open hides the rest of its own paragraph, not the next one.
+      const open = typstSource({ markdown: "\u2067Report\n\nשלום", lang: "en" });
+      expect(open).toContain(`${TURN_RTL}#"שלום";]`);
+      // The same without a lang, where the document's direction is read across all its blocks.
+      expect(typstSource({ markdown: "\u2067Report\n\nשלום\n\nאחת" })).toContain("#set text(size: 10.5pt, dir: rtl)");
+      // And across a list's items: an isolate left open in the first item ends with it.
+      expect(typstSource({ markdown: "- \u2067one\n- שתיים", lang: "en" })).toContain(`${TURN_RTL}#list(`);
+      // An inline tag doesn't end its paragraph: the isolate around it stays open.
+      expect(typstSource({ markdown: "\u2067<b>שלום</b>\u2069 Report", lang: "en" })).not.toContain(TURN_RTL);
+    });
+
+    test("a code block counts as it renders, verbatim", () => {
+      expect(typstSource({ markdown: "```\n&#x645;\n```\n\n# Report" })).not.toContain("dir: rtl");
+    });
+
+    test("table cells take their own direction; a list takes one for all its items", () => {
+      const t = typstSource({ markdown: "| Name | Note |\n|--|--|\n| Ada | שלום עולם |", lang: "en" });
+      expect(t).toContain(`[${TURN_RTL}#"שלום עולם";]]`);
+      expect(t).toContain('[#"Ada";]');
+      // A list turns as a whole, so markers stay with their items; one item in another script
+      // keeps the list's direction.
+      expect(typstSource({ markdown: "- one\n- שתיים\n- three", lang: "en" })).not.toContain(TURN_RTL);
+      expect(typstSource({ markdown: "- אחת\n- שתיים", lang: "en" })).toContain(`${TURN_RTL}#list(`);
+      // A nested list takes its own direction as a whole, like a top-level one.
+      const nested = typstSource({ markdown: "- English\n  - אחת\n  - שתיים\n- More", lang: "en" });
+      expect(nested).toContain(`${TURN_RTL}#list(`);
+      expect(nested.split(TURN_RTL).length - 1).toBe(1);
+    });
   });
 
   test("defaults: a4, no metadata line, no language for a tag Typst can't take", () => {
