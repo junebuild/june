@@ -1,4 +1,4 @@
-// Markdown → Typst source, for typstRenderer. Pure (no WASM), so it is tested on its own.
+// Markdown → Typst source, for a renderer on a Typst compiler (@junejs/pdf-typst-wasm). Pure (no WASM), so it is tested on its own.
 //
 // Every run of text is emitted as a Typst STRING LITERAL in code mode — `#"text";` — never as
 // markup. Typst markup gives meaning to dozens of characters (`#`, `*`, `_`, `$`, `@`, `<`,

@@ -16,9 +16,12 @@ This RFC adds **files as turn output**, as a primitive every capability can use,
 ```ts
 // agent/tools/pdf.ts
 import { pdfTools } from "@junejs/pdf";
-import { typstRenderer } from "@junejs/pdf/typst";
-export default pdfTools({ renderer: typstRenderer() });
+import { typstWasmRenderer } from "@junejs/pdf-typst-wasm";
+export default pdfTools({ renderer: typstWasmRenderer() });
 ```
+
+(Updated 2026-10-13: the typst.ts-based `typstRenderer` this RFC first shipped was removed in
+favor of `@junejs/pdf-typst-wasm`, which runs on every host. See the note in §4.)
 
 ```
 user  @bot summarize last week's revenue as a PDF
@@ -150,6 +153,13 @@ Design:
 - One engine per isolate.
 - CJK fonts are per-document Google Fonts subsets. They are document-scoped in the engine, so
   they never accumulate across requests.
+
+**Update 2026-10-13 (#368, #371).** This is now June's only renderer: `typstRenderer` was
+removed because typst.ts embeds no fonts (even Latin text needed a jsdelivr fetch, so it could
+not render offline) and exposes no laid-out frames to check glyph coverage on. Fonts became
+providers (`fonts: [localFonts(…), googleFontSubsets(…)]`), each declaring its egress; the
+default is offline with the embedded fonts only, and a character no loaded font covers is a
+`PdfRenderError` instead of a blank.
 - The `workerd` export condition imports the module; Node, Bun and Deno read it from disk.
 - CI builds it with the pinned Rust toolchain and binaryen, runs `cargo test` and the JS
   tests, and serves the published shape on workerd.

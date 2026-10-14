@@ -5,7 +5,7 @@ description: A tool stores the file it produces with ctx.files and returns the F
 date: 2026-10-12
 section: Agents
 order: "16.35"
-sources: [packages/core/src/agent-files.ts, packages/core/src/agent-runtime.ts, packages/core/src/agent-config.ts, packages/core/src/channels.ts, packages/june/src/agent-native.ts, packages/june/src/agent-durable.ts, packages/june/src/app.ts, packages/pdf/src/tools.ts, packages/pdf/src/renderer.ts, packages/pdf/src/typst.ts, packages/pdf/src/markdown-typst.ts, packages/pdf-typst-wasm/src/renderer.ts, packages/pdf-typst-wasm/src/workerd.ts, packages/pdf-typst-wasm/src/lib.rs, packages/pdf/skills/pdf-report.md, docs/rfc-agent-files.md]
+sources: [packages/core/src/agent-files.ts, packages/core/src/agent-runtime.ts, packages/core/src/agent-config.ts, packages/core/src/channels.ts, packages/june/src/agent-native.ts, packages/june/src/agent-durable.ts, packages/june/src/app.ts, packages/pdf/src/tools.ts, packages/pdf/src/renderer.ts, packages/pdf/src/markdown-typst.ts, packages/pdf-typst-wasm/src/renderer.ts, packages/pdf-typst-wasm/src/fonts.ts, packages/pdf-typst-wasm/src/workerd.ts, packages/pdf-typst-wasm/src/lib.rs, packages/pdf/skills/pdf-report.md, docs/rfc-agent-files.md]
 ---
 ## A PDF in a Slack thread
 
@@ -15,13 +15,19 @@ short summary and the PDF attached. Two pieces make that work: a tool and a skil
 ```ts
 // agent/tools/pdf.ts
 import { pdfTools } from "@junejs/pdf";
-import { typstRenderer } from "@junejs/pdf/typst";
+import { googleFontSubsets, typstWasmRenderer } from "@junejs/pdf-typst-wasm";
 
-export default pdfTools({ renderer: typstRenderer() });
+export default pdfTools({
+  renderer: typstWasmRenderer({
+    // Chinese text needs a font. This one sends each document's non-ASCII characters to
+    // Google Fonts for a subset; remove it to render offline (see "Fonts" below).
+    fonts: [googleFontSubsets({ families: [{ family: "Noto Sans TC", weights: [400, 700] }] })],
+  }),
+});
 ```
 
 ```bash
-bun add @junejs/pdf @myriaddreamin/typst.ts @myriaddreamin/typst-ts-web-compiler
+bun add @junejs/pdf @junejs/pdf-typst-wasm
 cp node_modules/@junejs/pdf/skills/pdf-report.md agent/skills/
 ```
 
@@ -96,10 +102,9 @@ const browserRenderer: PdfRenderer = {
 };
 ```
 
-Two renderers ship with June. Both typeset the same Markdown → Typst source, so the
-PDF looks the same with either.
+June's renderer is `@junejs/pdf-typst-wasm`.
 
-### On Cloudflare Workers: `@junejs/pdf-typst-wasm`
+### `@junejs/pdf-typst-wasm`
 
 ```ts
 // agent/tools/pdf.ts
@@ -110,36 +115,44 @@ export default pdfTools({ renderer: typstWasmRenderer() });
 ```
 
 The package is a build of Typst and its PDF export only, compiled to WebAssembly (29 MiB,
-zero imports). It runs on Workers as well as Node, Bun and Deno. On Workers the module is
+zero imports). It runs on Node, Bun, Deno and Cloudflare Workers. On Workers the module is
 imported, so it uploads precompiled.
 
 Measured on a deployed Worker: 2 ms startup, about 40 ms of CPU for a warm one-page render,
 and about 670 ms for 18 pages. Use Workers Paid: the Free plan's 10 ms of CPU is not enough.
 
-- **One engine per isolate.** It is created on the first render (about 200 ms of CPU) and
-  serves every later request. An isolate's requests share 128 MB of memory.
-- **Fonts:**
-  - Typst's own fonts are built in.
-  - `fonts: [...]` registers yours once.
-  - Per document, the renderer fetches Noto Sans TC from Google Fonts, cut to that
-    document's non-ASCII characters (a few KB each). This is how Traditional Chinese works
-    with no setup. Change the families with `googleFonts: [{ family, weights }]`, or make
-    no network call at all with `googleFonts: false`.
-  - A character no loaded font covers (an emoji, or CJK with `googleFonts: false` or a
-    failed fetch) fails the render with a `PdfRenderError` naming it, so the model can drop
-    a decorative symbol or tell the user. `onMissingGlyphs: "warn"` logs it and renders the
-    character blank instead.
+- **One engine per process or isolate.** It is created on the first render (about 200 ms
+  of CPU) and serves every later request. On Workers an isolate's requests share 128 MB of
+  memory.
+- Markdown images render as their alt text: the engine has no file or network access.
 
-### Anywhere but Workers: `typstRenderer`
+### Fonts
 
-`typstRenderer()` typesets on the Typst compiler built for WebAssembly, in process. It
-loads on the first render (measured: about half a second, once per process), then takes
-tens of milliseconds per page.
+Where a PDF's fonts come from decides where its text goes, so the renderer makes no network
+call unless you choose a font provider that does:
 
-- It is verified on Bun and Node. On Workers, use `@junejs/pdf-typst-wasm` instead: it is
-  smaller, has no JS glue, and is verified there.
-- Fonts: by default it fetches typst.ts's hosted Latin fonts and a Simplified Chinese
-  font. Traditional Chinese, Japanese and Korean need a font that covers them:
-  `typstRenderer({ fonts: [notoSansTcBytes], fontFamilies: ["Noto Sans TC"] })`. Pass
-  `fontAssets: false` to make no network call at all.
-- Markdown images render as their alt text: the compiler has no network access.
+| `fonts` | what it costs | network |
+|---|---|---|
+| (none, the default) | Typst's built-in Latin, Greek and Cyrillic fonts only | none |
+| `localFonts([bytes, url, loader])` | you supply the files (a CJK family is tens of MB) | a URL is fetched once; nothing about documents is sent |
+| `googleFontSubsets({ families })` | a few KB per document | **each document's non-ASCII characters** go to fonts.googleapis.com |
+
+Providers combine, in order of preference: `fonts: [localFonts([brandFont]), googleFontSubsets(…)]`.
+`fontFamilies: ["Noto Sans TC"]` sets which family Typst tries first.
+
+A character no loaded font covers (an emoji, or CJK with no CJK font) fails the render with
+a `PdfRenderError` naming it, along with any provider that failed to load. `render_pdf`
+hands it to the model, which can drop a decorative symbol or tell the user. Pass
+`onMissingGlyphs: "warn"` to render those characters blank and log them instead.
+
+`renderer.egress` lists every host the configured providers contact and what each is sent,
+for a setup check or your own docs:
+
+```ts
+const renderer = typstWasmRenderer({ fonts });
+renderer.egress; // [] when offline, or [{ host: "fonts.googleapis.com", sends: "document-characters" }, …]
+```
+
+The providers declare it themselves; it is not a network policy. A provider is an object
+with `name`, `egress`, and `persistent()` (fonts for every document) and/or
+`forDocument(text)` (fonts for one document), so you can write your own.

@@ -1,7 +1,7 @@
 {
   "name": "@junejs/pdf",
   "version": "0.1.0-dev.1",
-  "description": "June — PDF output as an agent capability: a render_pdf tool over a replaceable PdfRenderer (Typst on WebAssembly by default).",
+  "description": "June — PDF output as an agent capability: a render_pdf tool over a replaceable PdfRenderer (@junejs/pdf-typst-wasm is June's).",
   "type": "module",
   "license": "MIT",
   "homepage": "https://june.build",
@@ -11,12 +11,6 @@
       "bun": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
-    },
-    "./typst": {
-      "source": "./src/typst.ts",
-      "bun": "./src/typst.ts",
-      "types": "./dist/typst.d.ts",
-      "default": "./dist/typst.js"
     }
   },
   "files": [
@@ -33,29 +27,11 @@
     "@junejs/core": ">=0.2.0-dev.66",
     "marked": "^18.0.14"
   },
-  "peerDependencies": {
-    "@myriaddreamin/typst.ts": "^0.7.0",
-    "@myriaddreamin/typst-ts-web-compiler": "^0.7.0"
-  },
-  "peerDependenciesMeta": {
-    "@myriaddreamin/typst.ts": {
-      "optional": true
-    },
-    "@myriaddreamin/typst-ts-web-compiler": {
-      "optional": true
-    }
-  },
-  "devDependencies": {
-    "@junejs/server": ">=1.0.0-dev.47",
-    "@myriaddreamin/typst.ts": "^0.7.0",
-    "@myriaddreamin/typst-ts-web-compiler": "^0.7.0"
-  },
   "keywords": [
     "june",
     "agent",
     "pdf",
-    "typst",
-    "wasm"
+    "typst"
   ],
   "publishConfig": {
     "access": "public"

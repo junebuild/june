@@ -39,7 +39,8 @@
     "@junejs/pdf": ">=0.1.0-dev.1"
   },
   "devDependencies": {
-    "@junejs/core": ">=0.2.0-dev.66"
+    "@junejs/core": ">=0.2.0-dev.66",
+    "@junejs/server": ">=1.0.0-dev.47"
   },
   "keywords": [
     "june",
