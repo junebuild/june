@@ -1,9 +1,10 @@
 // @junejs/pdf-font-noto-sans-tc on Cloudflare Workers (the `workerd` export condition): the
 // files are imported as Data modules, so wrangler uploads them with the Worker. The two weights
 // add ~11 MiB to the Worker, next to the engine's 29 MiB, under the 64 MiB limit. Wrangler
-// needs a rule for the extension in the app's wrangler config:
+// needs a rule for the extension; `june build` emits it (#379), and an app running wrangler
+// on its own config adds it:
 //
-//   "rules": [{ "type": "Data", "globs": ["**/*.otf"] }]
+//   "rules": [{ "type": "Data", "globs": ["**/*.otf"], "fallthrough": true }]
 
 import bold from "../fonts/NotoSansTC-Bold.otf";
 import regular from "../fonts/NotoSansTC-Regular.otf";

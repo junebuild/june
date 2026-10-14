@@ -62,6 +62,9 @@ export type AdapterEmitContext = {
   // copied into outDir/assets. Adapters that build a separate static tier (vercel)
   // place these there; whole-assets targets (workers/static/deno) ignore it.
   publicFiles?: string[];
+  // Extensions (lowercase, no dot: "wasm", "otf") of the binary files the worker bundle
+  // imports and leaves external for the platform's bundler to load.
+  binaryImports?: string[];
 };
 
 export interface JuneAdapter {
@@ -97,16 +100,7 @@ export interface JuneAdapter {
 // (advisory) warning, never a suppressed one. Pure — unit-tested directly.
 export function hasDurableBinding(text: string, file: string, binding: string, className: string): boolean {
   if (file.endsWith(".toml")) {
-    // Strip comments: '#' to end of line, unless inside a double-quoted string.
-    const lines = text.split("\n").map((line) => {
-      let inString = false;
-      for (let i = 0; i < line.length; i++) {
-        const ch = line[i];
-        if (ch === '"' && line[i - 1] !== "\\") inString = !inString;
-        else if (ch === "#" && !inString) return line.slice(0, i);
-      }
-      return line;
-    });
+    const lines = stripTomlComments(text).split("\n");
     let inBindings = false;
     let name: string | undefined;
     let cls: string | undefined;
@@ -133,6 +127,51 @@ export function hasDurableBinding(text: string, file: string, binding: string, c
   }
 }
 
+// Does an app-owned wrangler config give `.ext` files a loader? Any rule with a glob ending in
+// the extension (`**/*.otf`, `**/*.{otf,ttf}`) counts, whatever its type. The warning this
+// feeds is advisory, so a glob it can't read may draw a spurious warning, never suppress one;
+// comments are stripped first, so a commented-out rule doesn't count. Pure — unit-tested.
+export function hasLoaderRule(text: string, file: string, ext: string): boolean {
+  const names = (glob: string) => new RegExp(`\\.(${ext}|\\{[^}]*\\b${ext}\\b[^}]*\\})$`, "i").test(glob);
+  if (file.endsWith(".toml")) {
+    // The globs = [...] arrays of [[rules]] tables, with '#' comments removed.
+    const body = stripTomlComments(text);
+    let inRules = false;
+    for (const line of body.split("\n")) {
+      const t = line.trim();
+      if (t.startsWith("[")) {
+        inRules = /^\[\[\s*rules\s*\]\]$/.test(t);
+        continue;
+      }
+      const globs = inRules ? t.match(/^globs\s*=\s*\[(.*)\]/) : null;
+      if (globs && [...globs[1]!.matchAll(/"([^"]*)"/g)].some((m) => names(m[1]!))) return true;
+    }
+    return false;
+  }
+  try {
+    const parsed = JSON.parse(stripJsonc(text)) as { rules?: { globs?: string[] }[] };
+    return (parsed.rules ?? []).some((r) => (r.globs ?? []).some(names));
+  } catch {
+    return text.includes(`.${ext}`); // unparsable — loose fallback, never crash the build
+  }
+}
+
+// '#' to end of line, unless inside a double-quoted string.
+function stripTomlComments(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => {
+      let inString = false;
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (ch === '"' && line[i - 1] !== "\\") inString = !inString;
+        else if (ch === "#" && !inString) return line.slice(0, i);
+      }
+      return line;
+    })
+    .join("\n");
+}
+
 // The built-in default. Reproduces exactly what build.ts emitted inline:
 // withAssets(pipeline) as the entry, and a wrangler.jsonc with the assets
 // binding (run_worker_first) + optional custom domain.
@@ -154,7 +193,13 @@ export function workers(opts?: { name?: string; domain?: string }): JuneAdapter 
       };
     },
 
-    async emit({ appRoot, outDir, hasAssets, config, plan, defaultName }) {
+    async emit({ appRoot, outDir, hasAssets, config, plan, defaultName, binaryImports }) {
+      // Wrangler loads .wasm by default (CompiledWasm) and has no loader for the other
+      // binaries build.ts leaves external, so a font package's .otf failed the deploy with
+      // "No loader is configured" (#379). Each one the bundle imports gets a Data rule: the
+      // module is the file's bytes, which is what a font or image package's workerd entry
+      // expects.
+      const dataExts = (binaryImports ?? []).filter((e) => e !== "wasm");
       // An app that manages its own wrangler config wins — don't overwrite it.
       // But a durable agent NEEDS its DO binding: warn when the app-owned config
       // doesn't BIND the generated class under the name createWorker reads
@@ -172,6 +217,15 @@ export function workers(opts?: { name?: string; domain?: string }): JuneAdapter 
               : `"durable_objects": { "bindings": [{ "name": "${plan.agent.binding}", "class_name": "${cls}" }] },\n"migrations": [{ "tag": "v1", "new_sqlite_classes": ["${cls}"] }]`;
             console.warn(`[june build] durable agent built, but ${basename(own)} doesn't bind it — add:\n${snippet}`);
           }
+        }
+        const text = dataExts.length ? await readFile(own, "utf8") : "";
+        const unloaded = dataExts.filter((ext) => !hasLoaderRule(text, own, ext));
+        if (unloaded.length) {
+          const globs = unloaded.map((e) => `"**/*.${e}"`).join(", ");
+          const snippet = own.endsWith(".toml")
+            ? `[[rules]]\ntype = "Data"\nglobs = [${globs}]\nfallthrough = true`
+            : `"rules": [{ "type": "Data", "globs": [${globs}], "fallthrough": true }]`;
+          console.warn(`[june build] the worker imports ${unloaded.map((e) => `.${e}`).join(", ")} files, but ${basename(own)} has no rule to load them (the deploy will fail with "No loader is configured") — add:\n${snippet}`);
         }
         return;
       }
@@ -214,6 +268,9 @@ export function workers(opts?: { name?: string; domain?: string }): JuneAdapter 
                   migrations: [{ tag: "v1", new_sqlite_classes: [plan.agent.className] }],
                 }
               : {}),
+            // Binary files the bundle imports that wrangler has no default loader for.
+            // fallthrough: without it wrangler drops its own default Data rule (**/*.bin).
+            ...(dataExts.length ? { rules: [{ type: "Data", globs: dataExts.map((e) => `**/*.${e}`), fallthrough: true }] } : {}),
             // config deploy.domain → a Workers custom domain; without it the
             // regenerated file would silently drop a hand-attached domain.
             ...(opts?.domain ?? deployCfg?.domain
