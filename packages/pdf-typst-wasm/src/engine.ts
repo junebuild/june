@@ -5,13 +5,20 @@
 
 export type FontScope = "persistent" | "document";
 
+export type TypstOutput = {
+  pdf: Uint8Array;
+  // Characters no loaded font covers, each once, in document order: they render blank or go
+  // missing from the PDF's text. Empty when every character has a glyph.
+  missingGlyphs: string[];
+};
+
 export interface TypstEngine {
   // Register a font file; returns the number of faces it held (0: not a font).
   addFont(data: Uint8Array, scope: FontScope): number;
   // Drop the document-scoped fonts.
   clearDocumentFonts(): void;
   // Typst source → PDF bytes. Throws TypstCompileError with the document's diagnostics.
-  compile(source: string): Uint8Array;
+  compile(source: string): TypstOutput;
   // The engine's linear memory, in bytes (it only grows).
   memoryBytes(): number;
 }
@@ -32,6 +39,8 @@ type Exports = {
   compile(ptr: number, len: number): number;
   output_ptr(): number;
   output_len(): number;
+  missing_glyphs_ptr(): number;
+  missing_glyphs_len(): number;
 };
 
 export type WasmSource = WebAssembly.Module | BufferSource;
@@ -52,6 +61,7 @@ export async function createEngine(wasm: WasmSource): Promise<TypstEngine> {
   };
   const output = (): Uint8Array => new Uint8Array(x.memory.buffer, x.output_ptr(), x.output_len()).slice();
   const utf8 = new TextEncoder();
+  const text = new TextDecoder();
 
   return {
     addFont(data, scope) {
@@ -64,8 +74,9 @@ export async function createEngine(wasm: WasmSource): Promise<TypstEngine> {
       const bytes = utf8.encode(source);
       const status = x.compile(put(bytes), bytes.length);
       const out = output();
-      if (status !== 0) throw new TypstCompileError(new TextDecoder().decode(out));
-      return out;
+      if (status !== 0) throw new TypstCompileError(text.decode(out));
+      const missing = text.decode(new Uint8Array(x.memory.buffer, x.missing_glyphs_ptr(), x.missing_glyphs_len()));
+      return { pdf: out, missingGlyphs: [...missing] };
     },
     memoryBytes() {
       return x.memory.buffer.byteLength;

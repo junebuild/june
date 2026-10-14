@@ -13,11 +13,17 @@
 //! document's characters) — one engine per isolate serves every request, and fonts must not
 //! pile up in it.
 //!
+//! A character no loaded font covers is laid out as a tofu (glyph 0) and comes out blank or
+//! missing from the PDF's text: a wrong document that looks right (#368). `compile` reports
+//! those characters next to the PDF, read off the laid-out pages, so the host decides whether
+//! that is an error — it knows which fonts it could have added.
+//!
 //! `Engine` is the safe API (tests use it); `ffi` is the C ABI the JS host calls.
 
 use typst::diag::{FileError, FileResult, Severity, SourceDiagnostic};
 use typst::foundations::{Bytes, Datetime, Duration};
 use typst::syntax::{FileId, RootedPath, Source, VirtualPath, VirtualRoot};
+use typst::layout::{Frame, FrameItem};
 use typst::text::{Font, FontBook};
 use typst::utils::LazyHash;
 use typst::{Library, LibraryExt, World};
@@ -26,6 +32,15 @@ use typst_layout::PagedDocument;
 /// How long a memoized result survives unused, in compilations. Bounds the memo cache of an
 /// engine that serves many different documents.
 const MEMO_MAX_AGE: usize = 10;
+
+/// A typeset document.
+#[derive(Debug)]
+pub struct Compiled {
+    pub pdf: Vec<u8>,
+    /// Characters no loaded font covers, each once, in document order. Empty when every
+    /// character has a glyph.
+    pub missing_glyphs: String,
+}
 
 pub struct Engine {
     library: LazyHash<Library>,
@@ -86,9 +101,15 @@ impl Engine {
 
     /// Typeset a Typst source into a PDF. The error is the document's error diagnostics, one
     /// per line, with their hints.
-    pub fn compile(&mut self, source: String) -> Result<Vec<u8>, String> {
+    pub fn compile(&mut self, source: String) -> Result<Compiled, String> {
         self.source = Some(Source::new(self.main, source));
-        let result = typst::compile::<PagedDocument>(&*self).output.and_then(|doc| typst_pdf::pdf(&doc, &typst_pdf::PdfOptions::default()));
+        let result = typst::compile::<PagedDocument>(&*self).output.and_then(|doc| {
+            let mut missing_glyphs = String::new();
+            for page in doc.pages() {
+                collect_tofus(&page.frame, &mut missing_glyphs);
+            }
+            typst_pdf::pdf(&doc, &typst_pdf::PdfOptions::default()).map(|pdf| Compiled { pdf, missing_glyphs })
+        });
         self.source = None;
         comemo::evict(MEMO_MAX_AGE);
         result.map_err(|diags| describe(&diags))
@@ -97,6 +118,34 @@ impl Engine {
     fn rebuild_book(&mut self) {
         self.book = LazyHash::new(FontBook::from_fonts(self.persistent.iter().chain(&self.document)));
     }
+}
+
+/// Typst shapes a character no font covers as glyph 0 of the last font it tried; the glyph's
+/// range points back at the character in the run's text.
+fn collect_tofus(frame: &Frame, out: &mut String) {
+    for (_, item) in frame.items() {
+        match item {
+            FrameItem::Group(group) => collect_tofus(&group.frame, out),
+            FrameItem::Text(text) => {
+                for glyph in text.glyphs.iter().filter(|g| g.id == 0) {
+                    for c in text.text[glyph.range()].chars() {
+                        if !invisible(c) && !out.contains(c) {
+                            out.push(c);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Characters that draw nothing, so a font lacking them loses nothing: whitespace, controls,
+/// joiners, variation selectors, the soft hyphen and the byte order mark.
+fn invisible(c: char) -> bool {
+    c.is_whitespace()
+        || c.is_control()
+        || matches!(c, '\u{00AD}' | '\u{200B}'..='\u{200F}' | '\u{2060}' | '\u{FEFF}' | '\u{FE00}'..='\u{FE0F}' | '\u{E0100}'..='\u{E01EF}')
 }
 
 fn describe(diags: &[SourceDiagnostic]) -> String {
@@ -157,6 +206,7 @@ mod ffi {
     thread_local! {
         static ENGINE: RefCell<Option<Engine>> = const { RefCell::new(None) };
         static OUTPUT: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+        static MISSING: RefCell<String> = const { RefCell::new(String::new()) };
     }
 
     fn with_engine<T>(f: impl FnOnce(&mut Engine) -> T) -> T {
@@ -209,19 +259,20 @@ mod ffi {
     }
 
     /// # Safety
-    /// See `take`; the buffer holds UTF-8. Returns 0 with the PDF as output, or 1 with the
-    /// error text as output.
+    /// See `take`; the buffer holds UTF-8. Returns 0 with the PDF as output and the characters
+    /// no font covers in `missing_glyphs_*`, or 1 with the error text as output.
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn compile(ptr: *mut u8, len: usize) -> u32 {
         let bytes = unsafe { take(ptr, len) };
-        let (status, out) = match String::from_utf8(bytes) {
-            Err(_) => (1, b"the source is not UTF-8".to_vec()),
+        let (status, out, missing) = match String::from_utf8(bytes) {
+            Err(_) => (1, b"the source is not UTF-8".to_vec(), String::new()),
             Ok(source) => match with_engine(|e| e.compile(source)) {
-                Ok(pdf) => (0, pdf),
-                Err(msg) => (1, msg.into_bytes()),
+                Ok(c) => (0, c.pdf, c.missing_glyphs),
+                Err(msg) => (1, msg.into_bytes(), String::new()),
             },
         };
         OUTPUT.with(|o| *o.borrow_mut() = out);
+        MISSING.with(|m| *m.borrow_mut() = missing);
         status
     }
 
@@ -233,5 +284,16 @@ mod ffi {
     #[unsafe(no_mangle)]
     pub extern "C" fn output_len() -> usize {
         OUTPUT.with(|o| o.borrow().len())
+    }
+
+    /// The characters the last successful `compile` found no glyph for, as UTF-8.
+    #[unsafe(no_mangle)]
+    pub extern "C" fn missing_glyphs_ptr() -> *const u8 {
+        MISSING.with(|m| m.borrow().as_ptr())
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn missing_glyphs_len() -> usize {
+        MISSING.with(|m| m.borrow().len())
     }
 }

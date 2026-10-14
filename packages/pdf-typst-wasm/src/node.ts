@@ -12,7 +12,7 @@ import type { WasmSource } from "./engine";
 import { createTypstWasmRenderer, type TypstWasmRendererOptions } from "./renderer";
 
 export { DEFAULT_GOOGLE_FONTS, type FontSource, type GoogleFont, type TypstWasmRendererOptions } from "./renderer";
-export { createEngine, TypstCompileError, type FontScope, type TypstEngine, type WasmSource } from "./engine";
+export { createEngine, TypstCompileError, type FontScope, type TypstEngine, type TypstOutput, type WasmSource } from "./engine";
 
 export const WASM_URL = new URL("../dist/typst.wasm", import.meta.url);
 
