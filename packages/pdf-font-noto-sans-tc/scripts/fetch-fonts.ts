@@ -3,28 +3,25 @@
 // `bun run build` (so by publish.yml) and by CI before the tests that need them; those tests
 // skip, with a pointer here, when fonts/ is empty.
 //
-// Source: Noto Sans CJK's region-specific subset OTFs (Traditional Chinese, Taiwan), release
-// Sans2.004, SIL Open Font License 1.1 (LICENSE, next to this package's package.json).
+// Source: Noto Sans CJK's region-specific subset OTFs (Traditional Chinese, Taiwan), SIL Open
+// Font License 1.1 (LICENSE, next to this package's package.json). The release, names, sizes
+// and hashes are NOTO_SANS_TC in src/provider.ts, which the unbundled entry checks too.
 
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const TAG = "Sans2.004";
-const FILES: Record<string, string> = {
-  "NotoSansTC-Regular.otf": "5bab0cb3c1cf89dde07c4a95a4054b195afbcfe784d69d75c340780712237537",
-  "NotoSansTC-Bold.otf": "55420b259eb119bf5f2a0aadba10cf9d736c12d64ab93e78546d69ef5f43558b",
-};
+import { NOTO_SANS_TC } from "../src/provider.ts";
 
 const dir = join(dirname(fileURLToPath(import.meta.url)), "../fonts");
 mkdirSync(dir, { recursive: true });
 const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 
-for (const [name, want] of Object.entries(FILES)) {
+for (const { name, sha256: want, urls } of Object.values(NOTO_SANS_TC)) {
   const path = join(dir, name);
   if (existsSync(path) && sha256(readFileSync(path)) === want) continue;
-  const url = `https://raw.githubusercontent.com/notofonts/noto-cjk/${TAG}/Sans/SubsetOTF/TC/${name}`;
+  const url = urls[0]!;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
   const bytes = new Uint8Array(await res.arrayBuffer());

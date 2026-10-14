@@ -5,7 +5,7 @@ description: A tool stores the file it produces with ctx.files and returns the F
 date: 2026-10-12
 section: Agents
 order: "16.35"
-sources: [packages/core/src/agent-files.ts, packages/core/src/agent-runtime.ts, packages/core/src/agent-config.ts, packages/core/src/channels.ts, packages/june/src/agent-native.ts, packages/june/src/agent-durable.ts, packages/june/src/app.ts, packages/pdf/src/tools.ts, packages/pdf/src/renderer.ts, packages/pdf/src/markdown-typst.ts, packages/pdf-typst-wasm/src/renderer.ts, packages/pdf-typst-wasm/src/fonts.ts, packages/pdf-typst-wasm/src/workerd.ts, packages/pdf-typst-wasm/src/bun.ts, packages/pdf-font-noto-sans-tc/src/provider.ts, packages/pdf-font-noto-sans-tc/src/workerd.ts, packages/pdf-typst-wasm/src/lib.rs, packages/pdf/skills/pdf-report.md, docs/rfc-agent-files.md]
+sources: [packages/core/src/agent-files.ts, packages/core/src/agent-runtime.ts, packages/core/src/agent-config.ts, packages/core/src/channels.ts, packages/june/src/agent-native.ts, packages/june/src/agent-durable.ts, packages/june/src/app.ts, packages/pdf/src/tools.ts, packages/pdf/src/renderer.ts, packages/pdf/src/markdown-typst.ts, packages/pdf-typst-wasm/src/renderer.ts, packages/pdf-typst-wasm/src/fonts.ts, packages/pdf-typst-wasm/src/assets.ts, packages/pdf-typst-wasm/src/unbundled.ts, packages/pdf-typst-wasm/src/workerd.ts, packages/pdf-typst-wasm/src/bun.ts, packages/pdf-font-noto-sans-tc/src/provider.ts, packages/pdf-font-noto-sans-tc/src/workerd.ts, packages/pdf-typst-wasm/src/lib.rs, packages/pdf/skills/pdf-report.md, docs/rfc-agent-files.md]
 ---
 ## A PDF in a Slack thread
 
@@ -175,3 +175,55 @@ The providers declare it themselves; it is not a network policy. A provider is a
 with `name`, `egress`, and `persistent()` (fonts for every document) and/or
 `forDocument(text)` (fonts for one document, as `{ fonts, failed? }` so a partial failure
 keeps what loaded), so you can write your own.
+
+### Other scripts
+
+June ships an offline font for Traditional Chinese only. Any other script works with a font you
+choose, and the missing glyphs check tells you when one is missing:
+
+```ts
+import { googleFontSubsets, localFonts, typstWasmRenderer } from "@junejs/pdf-typst-wasm";
+
+// A file you ship or download yourself: bytes, a URL fetched once, or a loader.
+typstWasmRenderer({ fonts: [localFonts(["https://fonts.example.com/NotoSansThai-Regular.ttf"])] });
+
+// Or per-document subsets from Google Fonts, which sends each document's characters there.
+typstWasmRenderer({ fonts: [googleFontSubsets({ families: [{ family: "Noto Sans Thai" }] })] });
+```
+
+To check a file you fetch at runtime, pin it the way June pins its own: give `loadVerified` a
+ref with its size and SHA-256, and it rejects any other bytes.
+
+```ts
+import { loadVerified, localFonts, type AssetRef } from "@junejs/pdf-typst-wasm";
+
+// The file's byte size and hex SHA-256, recorded when you chose it.
+const thai: AssetRef = { name: "NotoSansThai-Regular.ttf", size: THAI_SIZE, sha256: THAI_SHA256, urls: [THAI_URL] };
+localFonts([() => loadVerified(thai, (ref) => fetch(ref.urls[0]!).then((r) => r.arrayBuffer()))]);
+```
+
+### Keeping the engine and fonts out of a single binary
+
+`bun build --compile` embeds the engine (29 MiB) and `notoSansTC()`'s files (~11 MiB) as soon
+as the app imports them, whether or not it ever renders a PDF. When PDF output is optional,
+import the `unbundled` entries instead. They reference no files: you pass `load`, which is
+called on the first render with each file's ref (`{ name, size, sha256, urls }`), and the
+bytes are checked against the ref before they are used.
+
+```ts
+import { readFile } from "node:fs/promises";
+import { notoSansTC } from "@junejs/pdf-font-noto-sans-tc/unbundled";
+import { typstWasmRenderer, type AssetRef } from "@junejs/pdf-typst-wasm/unbundled";
+
+// Here, files you put in /data/june-assets; a loader may also download from ref.urls.
+const load = (ref: AssetRef) => readFile(`/data/june-assets/${ref.name}`);
+const renderer = typstWasmRenderer({ load, fonts: [notoSansTC({ load })] });
+```
+
+Measured on Bun 1.4.2, macOS arm64: such a binary is 59.4 MiB, against 59.3 MiB for the Bun
+runtime alone and 99.8 MiB with the default entries. `ref.urls` point at the release's own
+files (the engine on jsDelivr and unpkg, the fonts at their upstream tag). The sha256 is what
+is trusted, so any copy that matches will do. Until you say otherwise, `renderer.egress` lists
+those hosts with `sends: "nothing"`; pass `engineEgress: []` and `egress: []` when the files are
+pre-seeded and never fetched.
+
