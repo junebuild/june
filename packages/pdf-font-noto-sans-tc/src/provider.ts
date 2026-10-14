@@ -13,7 +13,7 @@
 // turns weights into a provider.
 
 import type { FontEgress, FontProvider } from "@junejs/pdf-typst-wasm";
-import type { AssetRef } from "@junejs/pdf-typst-wasm/unbundled";
+import type { AssetRef } from "./assets";
 
 // The weights Markdown needs: body text, and bold for **strong** and headings.
 export type NotoSansTCWeight = 400 | 700;

@@ -10,10 +10,10 @@
 // Runtime-neutral: no host imports.
 
 import type { FontEgress } from "@junejs/pdf-typst-wasm";
-import { loadVerified, type AssetLoader } from "@junejs/pdf-typst-wasm/unbundled";
-
+import { loadVerified, type AssetLoader } from "./assets";
 import { createNotoSansTC, NOTO_SANS_TC, type NotoSansTCOptions } from "./provider";
 
+export { loadVerified, type AssetLoader, type AssetRef } from "./assets";
 export { NOTO_SANS_TC, type NotoSansTCOptions, type NotoSansTCWeight } from "./provider";
 
 export type UnbundledNotoSansTCOptions = NotoSansTCOptions & {

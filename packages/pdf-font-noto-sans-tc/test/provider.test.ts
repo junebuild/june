@@ -61,6 +61,11 @@ describe("notoSansTC (unbundled)", () => {
     expect(unbundledNotoSansTC({ load, egress: [] }).egress).toEqual([]);
   });
 
+  test("needs nothing from @junejs/pdf-typst-wasm's unbundled entry, which 0.2.0 doesn't have", async () => {
+    const { readFile: read } = await import("node:fs/promises");
+    for (const f of ["provider.ts", "unbundled.ts", "assets.ts"]) expect(await read(new URL(`../src/${f}`, import.meta.url), "utf8")).not.toMatch(/from "@junejs\/pdf-typst-wasm\/unbundled"/);
+  });
+
   test("a file that doesn't match its pinned ref is never registered", async () => {
     await expect(unbundledNotoSansTC({ load: async () => new Uint8Array(10), weights: [400] }).persistent!()).rejects.toThrow(/NotoSansTC-Regular\.otf: the loader returned 10 bytes/);
   });
