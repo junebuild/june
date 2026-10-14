@@ -23,7 +23,7 @@ async function loadWasm(): Promise<WasmSource> {
     try {
       bytes = await readFile(fileURLToPath(WASM_URL));
     } catch (err) {
-      throw new Error(`@junejs/pdf-typst-wasm: ${fileURLToPath(WASM_URL)} is missing — in the June repo, run \`bun run build\` in packages/pdf-typst-wasm`, { cause: err });
+      throw new Error(`@junejs/pdf-typst-wasm: ${fileURLToPath(WASM_URL)} is missing — in the June repo, run \`bun run build\` in packages/pdf-typst-wasm; in a bundled or single-file build, pass the module through the \`wasm\` option`, { cause: err });
     }
     return WebAssembly.compile(bytes as Uint8Array<ArrayBuffer>);
   })().catch((err: unknown) => {
