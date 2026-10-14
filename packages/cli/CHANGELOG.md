@@ -1,5 +1,13 @@
 # @junejs/cli
 
+## 0.2.2
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @junejs/core@0.2.2
+  - @junejs/server@0.2.2
+
 ## 0.2.1
 
 ### Patch Changes

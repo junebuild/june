@@ -1,5 +1,12 @@
 # @junejs/pdf-font-noto-sans-tc
 
+## 0.2.2
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @junejs/pdf-typst-wasm@0.2.2
+
 ## 0.2.1
 
 ### Patch Changes
