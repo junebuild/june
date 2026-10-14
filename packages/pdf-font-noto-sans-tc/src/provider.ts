@@ -18,8 +18,9 @@ import type { FontProvider } from "@junejs/pdf-typst-wasm";
 export type NotoSansTCWeight = 400 | 700;
 
 export type NotoSansTCOptions = {
-  // Default [400, 700]. A weight that isn't loaded is synthesized from another by Typst, so
-  // [400] halves the size at the cost of faux bold.
+  // Default [400, 700]. Only the listed weights are read and registered, so [400] halves the
+  // font memory per renderer; Typst synthesizes bold from the regular. It doesn't shrink a
+  // deploy: a Worker upload or a compiled binary carries both files either way.
   weights?: NotoSansTCWeight[];
 };
 
