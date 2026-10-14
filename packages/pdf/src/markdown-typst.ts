@@ -159,12 +159,11 @@ function turned(content: string, dir: Dir): string {
 // break would loosen the list; a single newline is a space in Typst markup, and the
 // block-level calls that follow (a nested list) start their own line regardless.
 // Each block in its own direction (its first strong character), turned where that differs
-// from `dir`, the direction around it. `turn: false` keeps them in `dir`: a list item's marker
-// follows the list, so turning one item's content alone would split the marker from its text.
-function blocks(tokens: Token[], sep = "\n\n", dir: Dir = "ltr", turn = true): string {
+// from `dir`, the direction around it — for the blocks `turns` accepts; the rest keep `dir`.
+function blocks(tokens: Token[], sep = "\n\n", dir: Dir = "ltr", turns: (t: Token) => boolean = () => true): string {
   return tokens
     .map((t) => {
-      const own = turn ? (firstStrong([t]) ?? dir) : dir;
+      const own = turns(t) ? (firstStrong([t]) ?? dir) : dir;
       const out = block(t, own);
       return own === dir ? out : turned(out, own);
     })
@@ -215,9 +214,10 @@ function list(l: Tokens.List, dir: Dir): string {
   const items = l.items.map((item) => {
     const body = item.tokens.filter((x) => x.type !== "checkbox");
     const box = item.task ? `#${str(item.checked ? "☑ " : "☐ ")};` : "";
-    // The whole list takes one direction (blocks() turned it by its first strong character);
-    // an item in another script still reads in its own order inside the line.
-    return `[${box}${blocks(body, l.loose ? "\n\n" : "\n", dir, false)}]`;
+    // An item's own text keeps the list's direction (blocks() turned the list as a whole):
+    // turning it alone would part it from its marker, and it still reads in its own order
+    // within the line. A nested list chooses its own direction, as a whole, like any list.
+    return `[${box}${blocks(body, l.loose ? "\n\n" : "\n", dir, (x) => x.type === "list")}]`;
   });
   const args = [`tight: ${!l.loose}`];
   if (l.ordered) {

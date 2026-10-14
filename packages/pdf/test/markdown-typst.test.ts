@@ -145,6 +145,10 @@ describe("typstSource", () => {
       // keeps the list's direction.
       expect(typstSource({ markdown: "- one\n- שתיים\n- three", lang: "en" })).not.toContain(TURN_RTL);
       expect(typstSource({ markdown: "- אחת\n- שתיים", lang: "en" })).toContain(`${TURN_RTL}#list(`);
+      // A nested list takes its own direction as a whole, like a top-level one.
+      const nested = typstSource({ markdown: "- English\n  - אחת\n  - שתיים\n- More", lang: "en" });
+      expect(nested).toContain(`${TURN_RTL}#list(`);
+      expect(nested.split(TURN_RTL).length - 1).toBe(1);
     });
   });
 
