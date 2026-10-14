@@ -5,6 +5,17 @@ of truth; this file summarizes what matters per release.
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-10-14
+
+The first release out of the `dev` prereleases, and the first where every published package
+shares one version: `@junejs/core`, `server`, `cli`, `db`, `juno`, `i18n`, `og`, `pdf`,
+`pdf-typst-wasm`, `pdf-font-noto-sans-tc` and `create-june` are all 0.2.0, and move together
+through 0.2.x. Each package's `CHANGELOG.md` has the full list of changes since its last
+stable release; `create-june`'s template now depends on `^0.2.0`.
+
+Upgrading from a `dev` prerelease: `@junejs/server` goes from `1.0.0-dev.*` to `0.2.0`, so
+replace a `^1.0.0-dev…` range with `^0.2.0`.
+
 ## [0.0.38]
 
 ### Added

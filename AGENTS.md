@@ -4,7 +4,8 @@ Guidance for coding agents (Claude Code, Codex, Copilot, Cursor, and others) wor
 
 June is a React framework where one route definition serves humans (streamed HTML) and agents
 (`.md`, `.json`, MCP at `/mcp`), and an `agent/` directory turns an app into an agent. It is a
-pre-1.0 preview (packages publish under the `dev` tag): APIs change between releases.
+pre-1.0 release: every published package shares one version (0.2.x) on npm's `latest` tag,
+and APIs can still change between minor versions.
 
 ## Commands
 
@@ -126,9 +127,11 @@ host, and serves both protocol eras: 2026-07-28 first, 2025 as fallback.
   often citing the PoC bug it prevents. Keep these accurate when changing the module.
 - Commit subjects follow `type(scope): summary (#issue)`, e.g. `fix(server): …`, `docs(mcp): …`,
   `test(core): …`.
-- A change to a published package ships with a changeset in `.changeset/*.md`. Changesets is in
-  pre mode (tag `dev`). Write the changeset for app authors: what changed and, for a breaking
-  change, how to migrate. Merging the "Version Packages" PR bumps versions; publishing happens
+- A change to a published package ships with a changeset in `.changeset/*.md`. The published
+  packages are one `fixed` group in `.changeset/config.json`: they always release together under
+  one version. So the bump type moves every package: use `patch` within 0.2.x, and `minor` only
+  for the release that should become 0.3.0 (pre-1.0, a minor is where breaking changes go).
+  Write the changeset for app authors: what changed and, for a breaking change, how to migrate. Merging the "Version Packages" PR bumps versions; publishing happens
   separately, triggered by a tag (`publish.yml`).
 - Docs pages in `apps/june.build/content/docs/*.md` list the code they describe in `sources:`
   frontmatter. On PRs that touch `packages/**`, the Kura Curator bot commits doc updates onto the

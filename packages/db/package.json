@@ -1,6 +1,6 @@
 {
   "name": "@junejs/db",
-  "version": "0.1.0-dev.2",
+  "version": "0.2.0",
   "description": "June — the agent-native React framework. Ambient data resources (db/kv/blob).",
   "type": "module",
   "license": "MIT",
@@ -23,7 +23,7 @@
     "build": "tsdown"
   },
   "dependencies": {
-    "@junejs/core": ">=0.2.0-dev.26"
+    "@junejs/core": "^0.2.0"
   },
   "repository": {
     "type": "git",
