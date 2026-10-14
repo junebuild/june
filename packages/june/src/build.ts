@@ -460,6 +460,9 @@ ${doClass}`;
 
   // ---- bundle (Rolldown; self-contained ESM for workerd) -------------------
   const { rolldown } = await import("rolldown");
+  // Extensions of the binary files the graph imports and leaves to the platform's bundler
+  // (below): the adapter needs them to give each a loader (workers() → wrangler rules, #379).
+  const binaryImports = new Set<string>();
   const bundle = await rolldown({
     input: entryFile,
     cwd: appRoot,
@@ -483,8 +486,13 @@ ${doClass}`;
       if (isBunSpecifier(id)) return true;
       // workerd runtime modules (the durable-agent entry imports cloudflare:workers).
       if (id.startsWith("cloudflare:")) return true;
-      // Binary assets stay external — wrangler's CompiledWasm/Data rules own them.
-      if (/\.(wasm|ttf|otf|woff2?|png|jpe?g|avif|webp)$/.test(id)) return true;
+      // Binary assets stay external — the platform's bundler loads them (wrangler: a
+      // CompiledWasm or Data rule, which workers() emits for what is recorded here).
+      const binary = /\.(wasm|ttf|otf|woff2?|png|jpe?g|avif|webp)$/i.exec(id);
+      if (binary) {
+        binaryImports.add(binary[1]!.toLowerCase());
+        return true;
+      }
       // Merge: adapter.buildExternal (target-specific, e.g. workers-og for the
       // Workers adapter) + config build.external (user additions). User config
       // wins additions but can never REMOVE the adapter's own required externals.
@@ -754,7 +762,7 @@ ${doClass}`;
     // and the class the generated entry exports.
     ...(agentModule ? { agent: { binding: "AGENT", className: "JuneAgentDO" } } : {}),
   };
-  await adapter.emit({ appRoot, outDir, hasAssets, linkHeader, config: fullConfig, plan, defaultName, publicFiles });
+  await adapter.emit({ appRoot, outDir, hasAssets, linkHeader, config: fullConfig, plan, defaultName, publicFiles, binaryImports: [...binaryImports].sort() });
   if (plan.db) {
     console.log(
       `  ↳ d1 binding "${plan.db.binding}" emitted — set database_id in wrangler.jsonc (wrangler d1 create ${plan.db.databaseName})`,

@@ -145,12 +145,13 @@ call unless you choose a font provider that does:
 `notoSansTC()` covers 17,755 Han characters, including every Big5 one; a rarer character is
 reported like any other missing glyph. On Bun, `bun build --compile` embeds its files. On
 Workers they upload with the Worker (with the engine, about 40 of the 64 MiB a Worker may
-be), and wrangler needs a rule for them, or the deploy fails with "No loader is configured
-for .otf files":
+be) as Data modules. `june build` adds the wrangler rule that loads them; if you keep your
+own wrangler config, it warns until you add it, and without it the deploy fails with "No
+loader is configured for .otf files":
 
 ```jsonc
 // wrangler.jsonc
-"rules": [{ "type": "Data", "globs": ["**/*.otf"] }]
+"rules": [{ "type": "Data", "globs": ["**/*.otf"], "fallthrough": true }]
 ```
 
 Providers combine: `fonts: [localFonts([brandFont]), googleFontSubsets(…)]`. Their order

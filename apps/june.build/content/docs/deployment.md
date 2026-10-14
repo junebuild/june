@@ -50,7 +50,10 @@ export default defineJune({
 **Workers** — the default. `june build` emits `worker.js` + `wrangler.jsonc`;
 `june deploy` runs `wrangler`. A declared `db` becomes a D1 binding and pending
 migrations apply *before* the new worker ships (a destructive migration halts
-the deploy until you re-run with `--allow-destructive`).
+the deploy until you re-run with `--allow-destructive`). Font and image files the
+worker imports (a font package's `.otf`, say) get a `Data` rule so wrangler can
+load them. With your own `wrangler.jsonc` / `wrangler.toml`, June leaves it as is
+and warns with the rule to add.
 
 **Vercel** — `vercel()`. Defaults to a **Node Function on Fluid compute** (no
 1–4 MB code cap, full API); pass `vercel({ runtime: "edge" })` for an Edge

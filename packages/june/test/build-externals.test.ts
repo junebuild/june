@@ -2,7 +2,7 @@
 // guards a Bun-only module behind `const x = "bun"; await import(x)`; rolldown constant-folds that and
 // would warn UNRESOLVED_IMPORT (and could try to pull a Bun-only module into the workerd graph) unless
 // the build declares `bun`/`bun:*` external. isBunSpecifier is that rule.
-import { describe, expect, test, beforeAll } from "bun:test";
+import { afterEach, describe, expect, test, beforeAll } from "bun:test";
 import { isBunSpecifier, resolveDeployAdapter } from "../src/build";
 import { workers, vercel, deno } from "../src/adapter";
 import { mkdtemp, rm, readFile, writeFile, mkdir } from "node:fs/promises";
@@ -103,5 +103,31 @@ describe("juneBuild() — adapter externals applied without user config", () => 
     // base64 literals if bundled. workers-og is only in the bundle if rolldown
     // tries to inline it; being external leaves no trace in the source.
     expect(code).not.toContain("workers-og/dist");
+    // No binary imports, so the generated config gains no rules (#379).
+    const w = JSON.parse(await readFile(join(result.outFile, "../wrangler.jsonc"), "utf8"));
+    expect(w.rules).toBeUndefined();
   });
 });
+
+// ── binary imports get a loader (#379) ──────────────────────────────────────────
+// A worker importing a font failed `wrangler deploy` with "No loader is configured": the
+// build leaves the file external, and wrangler only loads .wasm by default. workers() now
+// emits a Data rule for each such extension the bundle imports, and nothing otherwise.
+describe("juneBuild() — binary imports get a wrangler loader", () => {
+  const ROOT = fileURLToPath(new URL("./fixtures/font-app", import.meta.url));
+  let outDir: string | undefined;
+  afterEach(async () => {
+    if (outDir) await rm(outDir, { recursive: true, force: true });
+    await rm(join(ROOT, ".june"), { recursive: true, force: true });
+    outDir = undefined;
+  });
+
+  test("a worker importing a .ttf gets a Data rule for it in the generated wrangler.jsonc", async () => {
+    outDir = await mkdtemp(join(tmpdir(), "june-font-app-"));
+    const result = await juneBuild(ROOT, { outDir });
+    expect(await readFile(result.outFile, "utf8")).toMatch(/import \w+ from "[^"]*icon-latin\.ttf"/);
+    const w = JSON.parse(await readFile(join(outDir, "wrangler.jsonc"), "utf8"));
+    expect(w.rules).toEqual([{ type: "Data", globs: ["**/*.ttf"], fallthrough: true }]);
+  });
+});
+
