@@ -21,7 +21,7 @@ import { sqlite } from "@junejs/server/db";
 
 export default defineJune({
   resources: {
-    db: sqlite(), // dev: ./.june/dev.sqlite · deploy: D1 / Turso
+    db: sqlite(), // dev: .june/dev.sqlite · deploy: D1 / Turso
   },
 });
 ```
