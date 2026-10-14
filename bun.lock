@@ -227,7 +227,7 @@
     },
     "packages/pdf-font-noto-sans-tc": {
       "name": "@junejs/pdf-font-noto-sans-tc",
-      "version": "0.0.0",
+      "version": "0.1.0-dev.0",
       "devDependencies": {
         "@junejs/pdf": ">=0.1.0-dev.2",
         "@junejs/pdf-typst-wasm": ">=0.1.0-dev.2",
@@ -238,7 +238,7 @@
     },
     "packages/pdf-typst-wasm": {
       "name": "@junejs/pdf-typst-wasm",
-      "version": "0.1.0-dev.2",
+      "version": "0.1.0-dev.3",
       "dependencies": {
         "@junejs/pdf": ">=0.1.0-dev.2",
       },
