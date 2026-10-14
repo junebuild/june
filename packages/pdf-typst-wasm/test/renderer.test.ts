@@ -184,6 +184,19 @@ describe.skipIf(!built)("typstWasmRenderer", () => {
     expect((err as Error).message).toContain("google-font-subsets failed (Noto Sans JP 400: Google Fonts CSS: HTTP 503)");
   });
 
+  test("one weight failing keeps the weights that loaded", async () => {
+    const { fetcher } = googleStub();
+    const boldFails = (async (input: RequestInfo | URL, init?: RequestInit) =>
+      String(input).includes("wght@700") ? new Response("no", { status: 503 }) : fetcher(input, init)) as typeof fetch;
+    const subsets = googleFontSubsets({ families: [{ family: "Inter", weights: [400, 700] }], fetch: boldFails });
+    const got = await subsets.forDocument!("é");
+    expect(got.fonts.length).toBe(1);
+    expect(got.failed).toEqual(["Inter 700: Google Fonts CSS: HTTP 503"]);
+    // The regular subset still typesets the document.
+    const pdf = await typstWasmRenderer({ fonts: [subsets], fontFamilies: ["Inter"] }).render({ markdown: "Café" });
+    expect(fonts(pdf)).toEqual(expect.arrayContaining([expect.stringMatching(/^Inter/)]));
+  });
+
   test('onMissingGlyphs: "warn" returns the PDF and logs the characters', async () => {
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     try {

@@ -156,4 +156,5 @@ renderer.egress; // [] when offline, or [{ host: "fonts.googleapis.com", sends: 
 
 The providers declare it themselves; it is not a network policy. A provider is an object
 with `name`, `egress`, and `persistent()` (fonts for every document) and/or
-`forDocument(text)` (fonts for one document), so you can write your own.
+`forDocument(text)` (fonts for one document, as `{ fonts, failed? }` so a partial failure
+keeps what loaded), so you can write your own.

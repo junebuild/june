@@ -118,9 +118,12 @@ async function fontsFor(doc: PdfDocument, providers: FontProvider[]): Promise<{ 
   const loaders = providers.filter((p) => p.forDocument);
   if (!text || loaders.length === 0) return { fonts: [], failed: [] };
   const settled = await Promise.allSettled(loaders.map((p) => p.forDocument!(text)));
+  const failure = (i: number, why: string) => `${loaders[i]!.name} failed (${why})`;
   return {
-    fonts: settled.flatMap((s) => (s.status === "fulfilled" ? s.value : [])),
-    failed: settled.flatMap((s, i) => (s.status === "rejected" ? [`${loaders[i]!.name} failed (${s.reason instanceof Error ? s.reason.message : String(s.reason)})`] : [])),
+    fonts: settled.flatMap((s) => (s.status === "fulfilled" ? s.value.fonts : [])),
+    failed: settled.flatMap((s, i) =>
+      s.status === "rejected" ? [failure(i, s.reason instanceof Error ? s.reason.message : String(s.reason))] : (s.value.failed ?? []).map((why) => failure(i, why)),
+    ),
   };
 }
 

@@ -27,9 +27,12 @@ export interface FontProvider {
   // is retried by the next one.
   persistent?(): Promise<Uint8Array[]>;
   // Font files for one document, given its non-ASCII characters; dropped after it. A failure
-  // costs only the characters nothing else covers, and the missing glyphs error names it.
-  forDocument?(text: string): Promise<Uint8Array[]>;
+  // costs only the characters nothing else covers, and the missing glyphs error names it:
+  // report a partial one in `failed` and keep the fonts that loaded; a throw loses them all.
+  forDocument?(text: string): Promise<DocumentFonts>;
 }
+
+export type DocumentFonts = { fonts: Uint8Array[]; failed?: string[] };
 
 // A font file: bytes, a URL fetched once, or a loader.
 export type FontSource = Uint8Array | ArrayBuffer | string | (() => Promise<Uint8Array | ArrayBuffer>);
@@ -78,12 +81,12 @@ export function googleFontSubsets(opts: { families: GoogleFont[]; fetch?: typeof
       { host: "fonts.gstatic.com", sends: "document-characters" },
     ],
     async forDocument(text) {
-      // All settle before any failure is reported, so a failed weight never leaves another
-      // weight's fetch running unobserved.
+      // Each weight on its own: a bold that fails costs only the bold, never the regular.
       const settled = await Promise.allSettled(wanted.map(([family, weight]) => googleSubset(cache, family, weight, text, fetcher)));
-      const failed = settled.flatMap((s, i) => (s.status === "rejected" ? [`${wanted[i]![0]} ${wanted[i]![1]}: ${message(s.reason)}`] : []));
-      if (failed.length) throw new Error(failed.join("; "));
-      return settled.map((s) => (s as PromiseFulfilledResult<Uint8Array>).value);
+      return {
+        fonts: settled.flatMap((s) => (s.status === "fulfilled" ? [s.value] : [])),
+        failed: settled.flatMap((s, i) => (s.status === "rejected" ? [`${wanted[i]![0]} ${wanted[i]![1]}: ${message(s.reason)}`] : [])),
+      };
     },
   };
 }
