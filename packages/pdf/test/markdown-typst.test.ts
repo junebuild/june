@@ -124,6 +124,15 @@ describe("typstSource", () => {
       expect(en).not.toContain("dir: rtl"); // Arabic-Indic digits are weak: the block keeps ltr
     });
 
+    test("isolated text doesn't decide a paragraph's direction (rule P2), even unmatched", () => {
+      expect(typstSource({ markdown: "\u2067שלום\u2069 Report", lang: "en" })).not.toContain(TURN_RTL); // RLI…PDI skipped
+      expect(typstSource({ markdown: "\u2066Report\u2069 שלום", lang: "en" })).toContain(TURN_RTL); // LRI…PDI skipped
+      expect(typstSource({ markdown: "\u2068שלום\u2069 Report", lang: "en" })).not.toContain(TURN_RTL); // FSI too
+      // An isolate left open hides the rest of its own paragraph, not the next one.
+      const open = typstSource({ markdown: "\u2067Report\n\nשלום", lang: "en" });
+      expect(open).toContain(`${TURN_RTL}#"שלום";]`);
+    });
+
     test("a code block counts as it renders, verbatim", () => {
       expect(typstSource({ markdown: "```\n&#x645;\n```\n\n# Report" })).not.toContain("dir: rtl");
     });

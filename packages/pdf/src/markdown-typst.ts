@@ -89,12 +89,20 @@ function strong(cp: number): Dir | undefined {
 }
 
 // The direction of the first strong character the tokens put on the page (rule P2); undefined
-// when there is none, and the block keeps the direction around it.
+// when there is none, and the block keeps the direction around it. As P2 says, text between an
+// isolate initiator (LRI, RLI, FSI) and its matching PDI is skipped, and an isolate left open
+// skips the rest of this block only: each call is one block.
 function firstStrong(tokens: Token[]): Dir | undefined {
+  let isolated = 0;
   for (const run of rendered(tokens)) {
     for (const ch of run) {
-      const dir = strong(ch.codePointAt(0)!);
-      if (dir) return dir;
+      const cp = ch.codePointAt(0)!;
+      if (cp >= 0x2066 && cp <= 0x2068) isolated++;
+      else if (cp === 0x2069) isolated = Math.max(0, isolated - 1);
+      else if (!isolated) {
+        const dir = strong(cp);
+        if (dir) return dir;
+      }
     }
   }
   return undefined;
