@@ -132,6 +132,11 @@ describe("hasLoaderRule", () => {
     expect(hasLoaderRule(`{ "rules": [{ "type": "Data", "globs": ["**/*.otfx"] }] }`, "wrangler.jsonc", "otf")).toBe(false);
   });
 
+  test("jsonc it can't parse warns: the extension appearing elsewhere is not a rule", () => {
+    // stripJsonc takes the // inside this string for a comment, so the parse fails.
+    expect(hasLoaderRule(`{ "name": "app", "note": "uses .otf // data" }`, "wrangler.jsonc", "otf")).toBe(false);
+  });
+
   test("toml: a [[rules]] table's globs count; a commented one or another table's does not", () => {
     expect(hasLoaderRule(`[[rules]]\ntype = "Data"\nglobs = ["**/*.ttf", "**/*.otf"]\n`, "wrangler.toml", "otf")).toBe(true);
     expect(hasLoaderRule(`# [[rules]]\n# type = "Data"\n# globs = ["**/*.otf"]\n`, "wrangler.toml", "otf")).toBe(false);

@@ -152,7 +152,7 @@ export function hasLoaderRule(text: string, file: string, ext: string): boolean 
     const parsed = JSON.parse(stripJsonc(text)) as { rules?: { globs?: string[] }[] };
     return (parsed.rules ?? []).some((r) => (r.globs ?? []).some(names));
   } catch {
-    return text.includes(`.${ext}`); // unparsable — loose fallback, never crash the build
+    return false; // unparsable — warn (advisory), never crash the build
   }
 }
 
