@@ -91,6 +91,8 @@ describe("typstSource", () => {
     // Only what renders counts: tags, comments and link targets don't; entities are decoded.
     expect(typstSource({ markdown: "# <b>تقرير</b>" })).toContain("dir: rtl");
     expect(typstSource({ markdown: "<!-- שלום -->\n\n# Report" })).not.toContain("dir:");
+    expect(typstSource({ markdown: "# <!-- שלום -->Report" })).not.toContain("dir:"); // a comment inside a heading
+    expect(typstSource({ markdown: "&#x645;رحبا" })).toContain("dir: rtl"); // a hex entity
     expect(typstSource({ markdown: "&#1605;&#1585;&#1581;&#1576;&#1575;" })).toContain("dir: rtl");
     expect(typstSource({ markdown: "[مرحبا](https://example.com)" })).toContain("dir: rtl");
     expect(typstSource({ markdown: "![](x.png) Report مرحبا" })).not.toContain("dir:"); // an empty alt renders as [image]
