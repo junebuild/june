@@ -49,7 +49,9 @@ export interface TypstWasmRenderer extends PdfRenderer {
 // How many missing characters a message names before it counts the rest.
 const MISSING_SHOWN = 10;
 
-export function createTypstWasmRenderer(defaultWasm: () => Promise<WasmSource>, opts: TypstWasmRendererOptions = {}): TypstWasmRenderer {
+// `engineEgress`: what getting the engine itself contacts, for an entry whose engine is fetched
+// (unbundled.ts); the bundled entries read it from the package and contact nothing.
+export function createTypstWasmRenderer(defaultWasm: () => Promise<WasmSource>, opts: TypstWasmRendererOptions = {}, engineEgress: readonly FontEgress[] = []): TypstWasmRenderer {
   const providers = [...(opts.fonts ?? [])];
   let engine: Promise<TypstEngine> | undefined;
 
@@ -67,7 +69,7 @@ export function createTypstWasmRenderer(defaultWasm: () => Promise<WasmSource>, 
 
   return {
     name: "typst-wasm",
-    egress: uniqueEgress(providers),
+    egress: uniqueEgress([...engineEgress, ...providers.flatMap((p) => p.egress)]),
     async render(doc: PdfDocument): Promise<Uint8Array> {
       const source = typstSource(doc, { fonts: opts.fontFamilies });
       const [e, documentFonts] = await Promise.all([ready(), fontsFor(doc, providers)]);
@@ -94,9 +96,9 @@ export function createTypstWasmRenderer(defaultWasm: () => Promise<WasmSource>, 
   };
 }
 
-function uniqueEgress(providers: FontProvider[]): FontEgress[] {
+function uniqueEgress(all: readonly FontEgress[]): FontEgress[] {
   const seen = new Map<string, FontEgress>();
-  for (const e of providers.flatMap((p) => p.egress)) {
+  for (const e of all) {
     const prior = seen.get(e.host);
     // A host sent the document's characters by any provider is sent them, full stop.
     if (!prior || e.sends === "document-characters") seen.set(e.host, { host: e.host, sends: e.sends });
