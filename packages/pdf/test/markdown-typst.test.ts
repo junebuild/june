@@ -83,6 +83,24 @@ describe("typstSource", () => {
     expect(src.endsWith('#heading(level: 1)[#"Hi";]\n')).toBe(true);
   });
 
+  test("without a lang, a document that starts in a right-to-left script is set right to left", () => {
+    expect(typstSource({ markdown: "# تقرير الربع\n\nنمت الإيرادات." })).toContain("#set text(size: 10.5pt, dir: rtl)");
+    expect(typstSource({ markdown: "| # | שם |\n|--|--|\n| 1 | שלום |" })).toContain("dir: rtl"); // syntax and digits first
+    expect(typstSource({ markdown: "# Report\n\nThe word مرحبا means hello." })).toContain("#set text(size: 10.5pt)\n");
+    expect(typstSource({ markdown: "12% — 34" })).toContain("#set text(size: 10.5pt)\n"); // no letter: no direction
+    // Only what renders counts: tags, comments and link targets don't; entities are decoded.
+    expect(typstSource({ markdown: "# <b>تقرير</b>" })).toContain("dir: rtl");
+    expect(typstSource({ markdown: "<!-- שלום -->\n\n# Report" })).not.toContain("dir:");
+    expect(typstSource({ markdown: "# <!-- שלום -->Report" })).not.toContain("dir:"); // a comment inside a heading
+    expect(typstSource({ markdown: "&#x645;رحبا" })).toContain("dir: rtl"); // a hex entity
+    expect(typstSource({ markdown: "&#1605;&#1585;&#1581;&#1576;&#1575;" })).toContain("dir: rtl");
+    expect(typstSource({ markdown: "[مرحبا](https://example.com)" })).toContain("dir: rtl");
+    expect(typstSource({ markdown: "![](x.png) Report مرحبا" })).not.toContain("dir:"); // an empty alt renders as [image]
+    // With a lang, Typst decides from it; nothing is inferred.
+    expect(typstSource({ markdown: "مرحبا", lang: "ar" })).toContain('#set text(size: 10.5pt, lang: "ar")\n');
+    expect(typstSource({ markdown: "مرحبا", lang: "en" })).not.toContain("dir:");
+  });
+
   test("defaults: a4, no metadata line, no language for a tag Typst can't take", () => {
     const src = typstSource({ markdown: "x", lang: "Hant" });
     expect(src).not.toContain("#set document");

@@ -218,6 +218,15 @@ const thai: AssetRef = { name: "NotoSansThai-Regular.ttf", size: THAI_SIZE, sha2
 localFonts([() => loadVerified(thai, (ref) => fetch(ref.urls[0]!).then((r) => r.arrayBuffer()))]);
 ```
 
+Right-to-left scripts and complex shaping work: Arabic joins, Indic conjuncts form, Thai
+wraps at word boundaries, and an Arabic or Hebrew phrase inside an English sentence reads
+right to left in place. A document is set right to left when `render_pdf` is given its
+`lang` (`ar`, `he`, …) or, without one, when its first letter is in a right-to-left script.
+
+One limit comes from Typst's PDF export (typst/typst#4225): in scripts with heavy shaping
+(Arabic, Bengali, Thai and others), text copied or searched in the PDF can come out garbled
+even though the page renders correctly.
+
 ### Keeping the engine and fonts out of a single binary
 
 `bun build --compile` embeds the engine (29 MiB) and `notoSansTC()`'s files (~11 MiB) as soon
