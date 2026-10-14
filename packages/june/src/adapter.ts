@@ -130,8 +130,9 @@ export function hasDurableBinding(text: string, file: string, binding: string, c
 // Does an app-owned wrangler config give `.ext` files a loader? Any rule with a glob ending in
 // the extension (`**/*.otf`, `**/*.{otf,ttf}`) counts, whatever its type. The warning this
 // feeds is advisory, so a glob it can't read may draw a spurious warning, never suppress one;
-// comments are stripped first, so a commented-out rule doesn't count. Pure — unit-tested.
-export function hasLoaderRule(text: string, file: string, ext: string): boolean {
+// comments are stripped first, so a commented-out rule doesn't count. undefined: the JSONC
+// couldn't be parsed, so the answer is unknown. Pure — unit-tested.
+export function hasLoaderRule(text: string, file: string, ext: string): boolean | undefined {
   const names = (glob: string) => new RegExp(`\\.(${ext}|\\{[^}]*\\b${ext}\\b[^}]*\\})$`, "i").test(glob);
   if (file.endsWith(".toml")) {
     // The globs = [...] arrays of [[rules]] tables, with '#' comments removed.
@@ -152,7 +153,7 @@ export function hasLoaderRule(text: string, file: string, ext: string): boolean 
     const parsed = JSON.parse(stripJsonc(text)) as { rules?: { globs?: string[] }[] };
     return (parsed.rules ?? []).some((r) => (r.globs ?? []).some(names));
   } catch {
-    return false; // unparsable — warn (advisory), never crash the build
+    return undefined; // unparsable — the caller warns that it couldn't check, never crashes the build
   }
 }
 
@@ -219,7 +220,13 @@ export function workers(opts?: { name?: string; domain?: string }): JuneAdapter 
           }
         }
         const text = dataExts.length ? await readFile(own, "utf8") : "";
-        const unloaded = dataExts.filter((ext) => !hasLoaderRule(text, own, ext));
+        const found = dataExts.map((ext) => [ext, hasLoaderRule(text, own, ext)] as const);
+        const unloaded = found.filter(([, has]) => has === false).map(([ext]) => ext);
+        const unknown = found.filter(([, has]) => has === undefined).map(([ext]) => ext);
+        if (unknown.length) {
+          const globs = unknown.map((e) => `"**/*.${e}"`).join(", ");
+          console.warn(`[june build] the worker imports ${unknown.map((e) => `.${e}`).join(", ")} files, and ${basename(own)} couldn't be parsed to check for a rule that loads them — make sure it has one, or the deploy fails with "No loader is configured":\n"rules": [{ "type": "Data", "globs": [${globs}], "fallthrough": true }]`);
+        }
         if (unloaded.length) {
           const globs = unloaded.map((e) => `"**/*.${e}"`).join(", ");
           const snippet = own.endsWith(".toml")
