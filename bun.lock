@@ -240,7 +240,7 @@
     },
     "packages/pdf-typst-wasm": {
       "name": "@junejs/pdf-typst-wasm",
-      "version": "0.1.0-dev.0",
+      "version": "0.1.0-dev.1",
       "dependencies": {
         "@junejs/pdf": ">=0.1.0-dev.0",
       },
