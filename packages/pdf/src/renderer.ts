@@ -3,7 +3,7 @@
 // process but costs a 28 MB module and tens of MB of memory per document; a headless
 // browser renders HTML/CSS faithfully but needs one; a remote service needs none of it
 // locally. So the tool depends on this interface only, and every
-// engine — the bundled typstRenderer, or one an app writes — implements it.
+// engine — @junejs/pdf-typst-wasm's, or one an app writes — implements it.
 
 // What a renderer is asked to produce. Markdown is the input because it is what a model
 // writes best and what a skill can teach in a page; layout stays the renderer's job.

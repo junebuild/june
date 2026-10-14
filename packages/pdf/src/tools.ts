@@ -2,8 +2,8 @@
 //
 //   // agent/tools/pdf.ts
 //   import { pdfTools } from "@junejs/pdf";
-//   import { typstRenderer } from "@junejs/pdf/typst";
-//   export default pdfTools({ renderer: typstRenderer() });
+//   import { typstWasmRenderer } from "@junejs/pdf-typst-wasm";
+//   export default pdfTools({ renderer: typstWasmRenderer() });
 //
 // One tool, render_pdf: Markdown in, a FileRef out. The bytes go to ctx.files (the host's
 // FileStore), the ref goes back to the model and into the durable log, and the engine's

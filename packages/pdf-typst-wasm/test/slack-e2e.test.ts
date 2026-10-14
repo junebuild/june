@@ -1,10 +1,12 @@
 // The scenario the capability exists for (docs/rfc-agent-files.md): someone asks the agent
 // in Slack for a PDF and gets the answer with the PDF attached in the thread. Everything is
-// real — the native runtime, the durable turn, render_pdf on the Typst WASM compiler, the
+// real — the native runtime, the durable turn, render_pdf on this package's engine, the
 // file store, the Slack channel — except the model (scripted) and Slack itself (fetch stub).
 
 import { afterEach, describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 
 import { memoryFileStore } from "@junejs/core/agent-files";
 import { defineAgent, parseSkill } from "@junejs/core/agent-config";
@@ -12,9 +14,9 @@ import { replyStream, type Model, type Msg } from "@junejs/core/agent-runtime";
 import { slackChannel } from "@junejs/core/channels";
 import { createAgentRuntime, mountAgent, toAgentDef } from "@junejs/server/agent-native";
 import { pdfTools } from "@junejs/pdf";
-import { typstRenderer } from "@junejs/pdf/typst";
+import { typstWasmRenderer, WASM_URL } from "@junejs/pdf-typst-wasm";
 
-const inter = new Uint8Array(await readFile(new URL("../../june/assets/icon-latin.ttf", import.meta.url)));
+const built = existsSync(fileURLToPath(WASM_URL)); // renderer.test.ts says how to build it
 const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; });
 
@@ -38,7 +40,7 @@ const model: Model = (msgs: Msg[]) => {
   return replyStream({ text: "The weekly revenue report is attached: revenue grew 12%.", toolCalls: [] });
 };
 
-describe("Slack → agent → PDF attachment", () => {
+describe.skipIf(!built)("Slack → agent → PDF attachment", () => {
   test("the reply posts in the thread, then the rendered PDF uploads into it", async () => {
     const calls: { method: string; body?: unknown; bytes?: Uint8Array }[] = [];
     globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
@@ -56,10 +58,10 @@ describe("Slack → agent → PDF attachment", () => {
     }) as typeof fetch;
 
     const slack = slackChannel({ signingSecret: "s3cret", botToken: "xoxb-test", apiUrl: "https://slack.test" });
-    const skill = parseSkill("pdf-report", await readFile(new URL("../skills/pdf-report.md", import.meta.url), "utf8"));
+    const skill = parseSkill("pdf-report", await readFile(new URL("../../pdf/skills/pdf-report.md", import.meta.url), "utf8"));
     const agent = defineAgent({
       name: "analyst",
-      tools: [pdfTools({ renderer: typstRenderer({ fonts: [inter], fontAssets: false }) })],
+      tools: [pdfTools({ renderer: typstWasmRenderer() })],
       skills: [skill],
       channels: [slack],
     });
