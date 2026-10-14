@@ -1,6 +1,6 @@
 {
   "name": "@junejs/pdf-font-noto-sans-tc",
-  "version": "0.1.0-dev.0",
+  "version": "0.2.0",
   "description": "June — Noto Sans TC (Traditional Chinese, regular and bold) as an offline font provider for @junejs/pdf-typst-wasm: no network call, on Node, Bun, Deno and Cloudflare Workers.",
   "type": "module",
   "license": "MIT AND OFL-1.1",
@@ -38,11 +38,11 @@
     "test": "bun test"
   },
   "peerDependencies": {
-    "@junejs/pdf-typst-wasm": ">=0.1.0-dev.3"
+    "@junejs/pdf-typst-wasm": "^0.2.0"
   },
   "devDependencies": {
-    "@junejs/pdf": ">=0.1.0-dev.2",
-    "@junejs/pdf-typst-wasm": ">=0.1.0-dev.3"
+    "@junejs/pdf": "^0.2.0",
+    "@junejs/pdf-typst-wasm": "^0.2.0"
   },
   "keywords": [
     "june",

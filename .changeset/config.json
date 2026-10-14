@@ -7,7 +7,21 @@
     }
   ],
   "commit": false,
-  "fixed": [],
+  "fixed": [
+    [
+      "@junejs/cli",
+      "@junejs/core",
+      "@junejs/db",
+      "@junejs/i18n",
+      "@junejs/juno",
+      "@junejs/og",
+      "@junejs/pdf",
+      "@junejs/pdf-font-noto-sans-tc",
+      "@junejs/pdf-typst-wasm",
+      "@junejs/server",
+      "create-june"
+    ]
+  ],
   "linked": [],
   "access": "public",
   "baseBranch": "main",

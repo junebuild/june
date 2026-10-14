@@ -11,14 +11,14 @@
     "info": "june info"
   },
   "dependencies": {
-    "@junejs/core": "^0.0.25",
-    "@junejs/db": "^0.0.25",
+    "@junejs/core": "^0.2.0",
+    "@junejs/db": "^0.2.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },
   "devDependencies": {
-    "@junejs/cli": "^0.0.25",
-    "@junejs/server": "^0.0.25",
+    "@junejs/cli": "^0.2.0",
+    "@junejs/server": "^0.2.0",
     "@tailwindcss/node": "^4.0.0",
     "@tailwindcss/oxide": "^4.0.0",
     "@types/react": "^19.2.0",
