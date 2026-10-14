@@ -1,10 +1,10 @@
 // The smoke Worker (scripts/smoke-workerd.ts): the package as an app installs it, resolved
 // through the `workerd` export condition to dist/workerd.js, which imports the engine module
-// for wrangler to upload precompiled. No network: googleFonts is off.
+// for wrangler to upload precompiled. No network: the default renderer is offline.
 import { pdfTools } from "@junejs/pdf";
 import { typstWasmRenderer } from "@junejs/pdf-typst-wasm";
 
-const renderer = typstWasmRenderer({ googleFonts: false });
+const renderer = typstWasmRenderer();
 let renders = 0;
 
 export default {

@@ -4,14 +4,13 @@
 //
 //   import { pdfTools } from "@junejs/pdf";
 //   import { typstWasmRenderer } from "@junejs/pdf-typst-wasm";
-//   export default pdfTools({ renderer: typstWasmRenderer() });
-
-import type { PdfRenderer } from "@junejs/pdf";
+//   export default pdfTools({ renderer: typstWasmRenderer() });   // offline: embedded fonts only
 
 import type { WasmSource } from "./engine";
-import { createTypstWasmRenderer, type TypstWasmRendererOptions } from "./renderer";
+import { createTypstWasmRenderer, type TypstWasmRenderer, type TypstWasmRendererOptions } from "./renderer";
 
-export { DEFAULT_GOOGLE_FONTS, type FontSource, type GoogleFont, type TypstWasmRendererOptions } from "./renderer";
+export { type TypstWasmRenderer, type TypstWasmRendererOptions } from "./renderer";
+export { googleFontSubsets, localFonts, type FontEgress, type FontProvider, type FontSource, type GoogleFont } from "./fonts";
 export { createEngine, TypstCompileError, type FontScope, type TypstEngine, type TypstOutput, type WasmSource } from "./engine";
 
 export const WASM_URL = new URL("../dist/typst.wasm", import.meta.url);
@@ -33,6 +32,6 @@ async function loadWasm(): Promise<WasmSource> {
   }));
 }
 
-export function typstWasmRenderer(opts: TypstWasmRendererOptions = {}): PdfRenderer {
+export function typstWasmRenderer(opts: TypstWasmRendererOptions = {}): TypstWasmRenderer {
   return createTypstWasmRenderer(loadWasm, opts);
 }

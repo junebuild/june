@@ -1,5 +1,5 @@
-// typstWasmRenderer against the built engine (dist/typst.wasm). Google Fonts goes through a
-// stubbed fetch, so the suite makes no network call; the stub serves a Latin font file, which
+// typstWasmRenderer against the built engine (dist/typst.wasm). Font providers fetch through a
+// stub, so the suite makes no network call; the stub serves a Latin font file, which
 // is enough to prove the plumbing — which characters are asked for, that subsets are cached
 // and scoped to one document. A Latin font leaves CJK uncovered, so those tests accept the
 // gaps (`onMissingGlyphs: "warn"`, logged quietly); the missing glyphs tests make the same
@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { memoryFileStore } from "@junejs/core/agent-files";
 import type { ToolContext } from "@junejs/core/agent-runtime";
 import { PdfRenderError, pdfTools } from "@junejs/pdf";
-import { createEngine, TypstCompileError, typstWasmRenderer, WASM_URL } from "@junejs/pdf-typst-wasm";
+import { createEngine, googleFontSubsets, localFonts, TypstCompileError, typstWasmRenderer, WASM_URL } from "@junejs/pdf-typst-wasm";
 
 const built = existsSync(fileURLToPath(WASM_URL));
 if (!built) console.warn("[pdf-typst-wasm] dist/typst.wasm is missing — run `bun run build:wasm` in packages/pdf-typst-wasm to run these tests");
@@ -22,6 +22,8 @@ const latinFont = new Uint8Array(await readFile(new URL("../../june/assets/icon-
 const latin1 = new TextDecoder("latin1");
 const pages = (pdf: Uint8Array) => Number(/\/Type\s*\/Pages[^>]*?\/Count\s+(\d+)/.exec(latin1.decode(pdf))?.[1] ?? NaN);
 const fonts = (pdf: Uint8Array) => [...new Set([...latin1.decode(pdf).matchAll(/\/BaseFont\s*\/(?:[A-Z]{6}\+)?([\w-]+)/g)].map((m) => m[1]!))];
+
+const TC = { family: "Noto Sans TC", weights: [400, 700] };
 
 // The stand-in font lacks CJK glyphs: accept the gaps, and keep their warning out of the output.
 const ACCEPT_GAPS = { onMissingGlyphs: "warn" } as const;
@@ -47,37 +49,75 @@ function googleStub() {
   return { calls, fetcher };
 }
 
-
 describe.skipIf(!built)("typstWasmRenderer", () => {
-  test("Markdown to PDF with the embedded fonts alone", async () => {
-    const r = typstWasmRenderer({ googleFonts: false });
+  test("Markdown to PDF with the embedded fonts alone, offline by default", async () => {
+    const r = typstWasmRenderer();
     expect(r.name).toBe("typst-wasm");
-    const pdf = await r.render({ title: "Weekly revenue", markdown: "# Weekly revenue\n\nRevenue grew **12%** — `revenue.sql`.\n\n| a | b |\n|--|--:|\n| 1 | 2 |" });
+    expect(r.egress).toEqual([]);
+    const markdown = [
+      "# Weekly revenue",
+      "",
+      "Revenue grew **12%** to $48,200 — see [the dashboard](https://example.com/d?x=1&y=2).",
+      "",
+      "| Region | Revenue |",
+      "|:--|--:|",
+      "| North | 21,000 |",
+      "",
+      "- email ops@example.com",
+      "- `#hashtag` and // slashes",
+      "",
+      "```ts",
+      'const total = 21_000 + 27_200; // "48,200"',
+      "```",
+    ].join("\n");
+    const pdf = await r.render({ title: "Weekly revenue", markdown });
     expect(latin1.decode(pdf.slice(0, 5))).toBe("%PDF-");
     expect(pages(pdf)).toBe(1);
     expect(fonts(pdf)).toEqual(expect.arrayContaining([expect.stringMatching(/^LibertinusSerif/), expect.stringMatching(/^DejaVuSansMono/)]));
   });
 
+  test("the default makes no network call, even for text it can't cover", async () => {
+    const fetchSpy = spyOn(globalThis, "fetch");
+    try {
+      await quietly(() => typstWasmRenderer(ACCEPT_GAPS).render({ markdown: "# 中文 😀" }));
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
   test("one engine for every render: the module loads once", async () => {
     let loads = 0;
     const bytes = await readFile(WASM_URL);
-    const r = typstWasmRenderer({ googleFonts: false, wasm: async () => { loads++; return bytes; } });
+    const r = typstWasmRenderer({ wasm: async () => { loads++; return bytes; } });
     await Promise.all([r.render({ markdown: "# A" }), r.render({ markdown: "# B" })]);
     await r.render({ markdown: "# C" });
     expect(loads).toBe(1);
   });
 
   test("concurrent renders each get their own document", async () => {
-    const r = typstWasmRenderer({ googleFonts: false });
+    const r = typstWasmRenderer();
     const long = Array.from({ length: 60 }, (_, i) => `## Section ${i + 1}\n\nParagraph ${i + 1}.`).join("\n\n");
     const [a, b] = await Promise.all([r.render({ markdown: "# Short" }), r.render({ markdown: long })]);
     expect(pages(a)).toBe(1);
     expect(pages(b)).toBeGreaterThan(2);
   });
 
-  test("non-ASCII text fetches a Google Fonts subset for exactly its characters, cached", async () => {
+  test("egress is the union the providers declare, a host's strongest claim winning", () => {
+    const r = typstWasmRenderer({
+      fonts: [localFonts([latinFont, "https://fonts.gstatic.com/s/inter.ttf", "https://cdn.example/a.ttf"]), googleFontSubsets({ families: [TC] })],
+    });
+    expect(r.egress).toEqual([
+      { host: "fonts.gstatic.com", sends: "document-characters" },
+      { host: "cdn.example", sends: "nothing" },
+      { host: "fonts.googleapis.com", sends: "document-characters" },
+    ]);
+    expect(localFonts([latinFont]).egress).toEqual([]);
+  });
+
+  test("googleFontSubsets fetches a subset for exactly the document's characters, cached", async () => {
     const { calls, fetcher } = googleStub();
-    const r = typstWasmRenderer({ fetch: fetcher, ...ACCEPT_GAPS });
+    const r = typstWasmRenderer({ fonts: [googleFontSubsets({ families: [TC], fetch: fetcher })], ...ACCEPT_GAPS });
     await quietly(() => r.render({ markdown: "# 營收週報\n\nRevenue 成長 12%。" }));
     const css = calls.filter((c) => c.url.startsWith("https://fonts.googleapis.com/css2"));
     expect(css.map((c) => new URL(c.url).searchParams.get("family"))).toEqual(["Noto Sans TC:wght@400", "Noto Sans TC:wght@700"]);
@@ -88,51 +128,51 @@ describe.skipIf(!built)("typstWasmRenderer", () => {
     expect(calls.length).toBe(before);
   });
 
-  test("renderers don't share subsets: each fetches through its own fetch", async () => {
+  test("providers don't share subsets: each fetches through its own fetch", async () => {
     const a = googleStub();
     const b = googleStub();
     const doc = { markdown: "# 共用快取" };
-    await quietly(() => typstWasmRenderer({ fetch: a.fetcher, ...ACCEPT_GAPS }).render(doc));
-    await quietly(() => typstWasmRenderer({ fetch: b.fetcher, ...ACCEPT_GAPS }).render(doc));
+    await quietly(() => typstWasmRenderer({ fonts: [googleFontSubsets({ families: [TC], fetch: a.fetcher })], ...ACCEPT_GAPS }).render(doc));
+    await quietly(() => typstWasmRenderer({ fonts: [googleFontSubsets({ families: [TC], fetch: b.fetcher })], ...ACCEPT_GAPS }).render(doc));
     expect(a.calls.length).toBeGreaterThan(0);
     expect(b.calls.length).toBe(a.calls.length); // b fetched for itself, not served from a's cache
   });
 
-  test("an ASCII document fetches nothing; googleFonts: false never fetches", async () => {
+  test("an ASCII document fetches no subset", async () => {
     const { calls, fetcher } = googleStub();
-    await typstWasmRenderer({ fetch: fetcher }).render({ markdown: "# Plain ASCII" });
-    await quietly(() => typstWasmRenderer({ fetch: fetcher, googleFonts: false, ...ACCEPT_GAPS }).render({ markdown: "# 中文" }));
+    await typstWasmRenderer({ fonts: [googleFontSubsets({ families: [TC], fetch: fetcher })] }).render({ markdown: "# Plain ASCII" });
     expect(calls).toEqual([]);
   });
 
   test("characters no font covers are a PdfRenderError naming them, not a PDF with blanks", async () => {
-    const r = typstWasmRenderer({ googleFonts: false });
+    const r = typstWasmRenderer();
     const err = await r.render({ markdown: "# 報告 Report\n\nHello from Scout. 中文測試。" }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(PdfRenderError);
     expect((err as Error).message).toContain("covers 報 告 中 文 測 試 。,");
-    expect((err as Error).message).toContain("`fonts` or `googleFonts`");
+    expect((err as Error).message).toContain("`fonts` (localFonts or googleFontSubsets)");
     // Many characters: the first ten, then a count.
     const many = await r.render({ markdown: "一二三四五六七八九十百千萬" }).catch((e: unknown) => e);
     expect((many as Error).message).toContain("covers 一 二 三 四 五 六 七 八 九 十 (and 3 more),");
   });
 
   test("covered non-ASCII text and invisible characters render without complaint", async () => {
-    const pdf = await typstWasmRenderer({ googleFonts: false }).render({ markdown: "# Café — “Ελληνικά”, Русский\u200B\uFE0F" });
+    const pdf = await typstWasmRenderer().render({ markdown: "# Café — “Ελληνικά”, Русский\u200B\uFE0F" });
     expect(pages(pdf)).toBe(1);
   });
 
-  test("a font that can't be fetched, leaving characters uncovered, is an error that says why", async () => {
+  test("a provider that fails, leaving characters uncovered, is an error that says why", async () => {
     const failing = (async () => new Response("no", { status: 503 })) as unknown as typeof fetch;
-    const err = await typstWasmRenderer({ fetch: failing, googleFonts: [{ family: "Noto Sans JP" }] }).render({ markdown: "# 日本語のテキスト" }).catch((e: unknown) => e);
+    const subsets = googleFontSubsets({ families: [{ family: "Noto Sans JP" }], fetch: failing });
+    const err = await typstWasmRenderer({ fonts: [subsets] }).render({ markdown: "# 日本語のテキスト" }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(PdfRenderError);
     expect((err as Error).message).toContain("covers 日 本 語");
-    expect((err as Error).message).toContain("Noto Sans JP 400 could not be fetched from Google Fonts (Google Fonts CSS: HTTP 503)");
+    expect((err as Error).message).toContain("google-font-subsets failed (Noto Sans JP 400: Google Fonts CSS: HTTP 503)");
   });
 
   test('onMissingGlyphs: "warn" returns the PDF and logs the characters', async () => {
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     try {
-      const pdf = await typstWasmRenderer({ googleFonts: false, onMissingGlyphs: "warn" }).render({ markdown: "# Done 😀" });
+      const pdf = await typstWasmRenderer({ onMissingGlyphs: "warn" }).render({ markdown: "# Done 😀" });
       expect(pages(pdf)).toBe(1);
       expect(warn).toHaveBeenCalledTimes(1);
       expect(String(warn.mock.calls[0]![0])).toContain("covers 😀,");
@@ -141,13 +181,23 @@ describe.skipIf(!built)("typstWasmRenderer", () => {
     }
   });
 
-  test("app fonts register once and serve every document", async () => {
-    const r = typstWasmRenderer({ googleFonts: false, fonts: [latinFont], fontFamilies: ["Inter"] });
+  test("localFonts register once and serve every document; a URL is fetched once", async () => {
+    const { calls, fetcher } = googleStub();
+    const r = typstWasmRenderer({ fonts: [localFonts(["https://fonts.gstatic.test/inter.ttf"], { fetch: fetcher })], fontFamilies: ["Inter"] });
     for (const markdown of ["# One", "# Two"]) expect(fonts(await r.render({ markdown }))).toEqual(expect.arrayContaining([expect.stringMatching(/^Inter/)]));
+    expect(calls.map((c) => c.url)).toEqual(["https://fonts.gstatic.test/inter.ttf"]);
+  });
+
+  test("a local font that can't be read fails the render, and the next render retries", async () => {
+    let attempts = 0;
+    const flaky = localFonts([async () => (++attempts === 1 ? Promise.reject(new Error("disk")) : latinFont)]);
+    const r = typstWasmRenderer({ fonts: [flaky] });
+    await expect(r.render({ markdown: "# A" })).rejects.toThrow("disk");
+    expect(pages(await r.render({ markdown: "# A" }))).toBe(1);
   });
 
   test("render_pdf on this renderer stores the PDF and returns the ref", async () => {
-    const [tool] = pdfTools({ renderer: typstWasmRenderer({ googleFonts: false }) });
+    const [tool] = pdfTools({ renderer: typstWasmRenderer() });
     const files = memoryFileStore();
     const out = (await tool!.run({ markdown: "# Q3 report\n\nAll good.", filename: "q3.pdf" }, { files } as unknown as ToolContext)) as { file: { id: string; name: string } };
     expect(out.file.name).toBe("q3.pdf");
@@ -155,7 +205,7 @@ describe.skipIf(!built)("typstWasmRenderer", () => {
   });
 
   test("render_pdf fails with the missing glyphs error, so the model sees it", async () => {
-    const [tool] = pdfTools({ renderer: typstWasmRenderer({ googleFonts: false }) });
+    const [tool] = pdfTools({ renderer: typstWasmRenderer() });
     const files = memoryFileStore();
     await expect(tool!.run({ markdown: "# 季報" }, { files } as unknown as ToolContext)).rejects.toThrow(/covers 季 報/);
   });
