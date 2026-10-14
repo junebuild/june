@@ -22,9 +22,11 @@ export type TypstSourceOptions = {
 };
 
 export function markdownToTypst(markdown: string): string {
-  const tokens = new Lexer({ gfm: true }).lex(markdown);
-  return blocks(tokens).trim() + "\n";
+  return body(lex(markdown));
 }
+
+const lex = (markdown: string) => new Lexer({ gfm: true }).lex(markdown);
+const body = (tokens: Token[]) => blocks(tokens).trim() + "\n";
 
 // The whole document: page and text setup, then the body.
 export function typstSource(doc: PdfDocument, opts: TypstSourceOptions = {}): string {
@@ -32,12 +34,13 @@ export function typstSource(doc: PdfDocument, opts: TypstSourceOptions = {}): st
   const meta = [doc.title ? `title: ${str(doc.title)}` : "", doc.author ? `author: ${str(doc.author)}` : ""].filter(Boolean);
   if (meta.length) lines.push(`#set document(${meta.join(", ")})`);
   lines.push(`#set page(paper: ${str(doc.paper === "us-letter" ? "us-letter" : "a4")}, margin: (x: 2.2cm, y: 2.4cm), numbering: "1")`);
+  const tokens = lex(doc.markdown);
   const lang = langArgs(doc.lang);
   // Typst takes the direction from `lang`; without one, an Arabic or Hebrew document would be
   // laid out left to right (its letters still join, but alignment and punctuation land on the
-  // wrong side). So with no usable lang, the first letter decides, as Unicode's bidi rule P2
-  // does for a paragraph (#392).
-  const text = ["size: 10.5pt", ...lang, ...(lang.length === 0 && rightToLeft(doc.markdown) ? ["dir: rtl"] : [])];
+  // wrong side). So with no usable lang, the first letter that renders decides, as Unicode's
+  // bidi rule P2 does for a paragraph (#392).
+  const text = ["size: 10.5pt", ...lang, ...(lang.length === 0 && rightToLeft(tokens) ? ["dir: rtl"] : [])];
   if (opts.fonts?.length) text.push(`font: (${opts.fonts.map(str).join(", ")},)`);
   lines.push(`#set text(${text.join(", ")})`);
   lines.push(
@@ -48,7 +51,7 @@ export function typstSource(doc: PdfDocument, opts: TypstSourceOptions = {}): st
     "#show raw.where(block: true): block.with(fill: luma(245), inset: 8pt, radius: 3pt, width: 100%)",
     "",
   );
-  return lines.join("\n") + markdownToTypst(doc.markdown);
+  return lines.join("\n") + body(tokens);
 }
 
 // BCP 47 → Typst's `lang` (ISO 639) and `region` (ISO 3166-1 alpha-2). A tag Typst can't take
@@ -61,12 +64,51 @@ function langArgs(tag: string | undefined): string[] {
   return [`lang: ${str(lang)}`, ...(region ? [`region: ${str(region)}`] : [])];
 }
 
-// Whether the first letter of the text belongs to a right-to-left script. Markdown syntax
-// (`#`, `*`, `|`, digits) is not a letter, so a heading or a table doesn't hide it.
+// Whether the first letter that renders belongs to a right-to-left script. Only rendered text
+// counts, by the converter's own rules: not Markdown syntax, link targets, dropped tags or
+// comments; entities decoded; an image as its alt text.
 const RTL_SCRIPT = /\p{Script=Arabic}|\p{Script=Hebrew}|\p{Script=Syriac}|\p{Script=Thaana}|\p{Script=Nko}|\p{Script=Samaritan}|\p{Script=Mandaic}|\p{Script=Adlam}|\p{Script=Hanifi_Rohingya}/u;
-function rightToLeft(text: string): boolean {
-  const first = /\p{L}/u.exec(text)?.[0];
-  return first !== undefined && RTL_SCRIPT.test(first);
+function rightToLeft(tokens: Token[]): boolean {
+  for (const run of rendered(tokens)) {
+    const first = /\p{L}/u.exec(decodeEntities(run))?.[0];
+    if (first !== undefined) return RTL_SCRIPT.test(first);
+  }
+  return false;
+}
+
+// The text runs block() and inline() put on the page, in order.
+function* rendered(tokens: Token[]): Generator<string> {
+  for (const t of tokens) {
+    const x = t as { type: string; text?: string; tokens?: Token[] };
+    switch (t.type) {
+      case "html":
+        yield htmlText(x.text ?? "");
+        break;
+      case "image":
+        yield (t as Tokens.Image).text || "[image]";
+        break;
+      case "link":
+        yield* rendered((t as Tokens.Link).tokens);
+        break;
+      case "list":
+        for (const item of (t as Tokens.List).items) yield* rendered(item.tokens);
+        break;
+      case "table": {
+        const tb = t as Tokens.Table;
+        for (const c of tb.header) yield* rendered(c.tokens);
+        for (const row of tb.rows) for (const c of row) yield* rendered(c.tokens);
+        break;
+      }
+      case "space":
+      case "def":
+      case "hr":
+      case "checkbox":
+        break;
+      default:
+        if (x.tokens) yield* rendered(x.tokens);
+        else if (x.text) yield x.text;
+    }
+  }
 }
 
 // ── blocks ──────────────────────────────────────────────────────────────────

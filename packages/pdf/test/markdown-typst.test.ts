@@ -88,6 +88,12 @@ describe("typstSource", () => {
     expect(typstSource({ markdown: "| # | שם |\n|--|--|\n| 1 | שלום |" })).toContain("dir: rtl"); // syntax and digits first
     expect(typstSource({ markdown: "# Report\n\nThe word مرحبا means hello." })).toContain("#set text(size: 10.5pt)\n");
     expect(typstSource({ markdown: "12% — 34" })).toContain("#set text(size: 10.5pt)\n"); // no letter: no direction
+    // Only what renders counts: tags, comments and link targets don't; entities are decoded.
+    expect(typstSource({ markdown: "# <b>تقرير</b>" })).toContain("dir: rtl");
+    expect(typstSource({ markdown: "<!-- שלום -->\n\n# Report" })).not.toContain("dir:");
+    expect(typstSource({ markdown: "&#1605;&#1585;&#1581;&#1576;&#1575;" })).toContain("dir: rtl");
+    expect(typstSource({ markdown: "[مرحبا](https://example.com)" })).toContain("dir: rtl");
+    expect(typstSource({ markdown: "![](x.png) Report مرحبا" })).not.toContain("dir:"); // an empty alt renders as [image]
     // With a lang, Typst decides from it; nothing is inferred.
     expect(typstSource({ markdown: "مرحبا", lang: "ar" })).toContain('#set text(size: 10.5pt, lang: "ar")\n');
     expect(typstSource({ markdown: "مرحبا", lang: "en" })).not.toContain("dir:");
