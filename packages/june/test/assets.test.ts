@@ -2,7 +2,7 @@
 // Every fetch goes through a stub; files land in a temp directory.
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -12,7 +12,10 @@ let dir: string;
 afterEach(async () => {
   if (dir) await rm(dir, { recursive: true, force: true });
 });
-const fresh = async () => (dir = await mkdtemp(join(tmpdir(), "june-assets-")));
+const fresh = async () => {
+  if (dir) await rm(dir, { recursive: true, force: true }); // a test may start over
+  return (dir = await mkdtemp(join(tmpdir(), "june-assets-")));
+};
 
 const hex = async (b: Uint8Array) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", b as Uint8Array<ArrayBuffer>))].map((x) => x.toString(16).padStart(2, "0")).join("");
 const BYTES = new TextEncoder().encode("the engine, more or less");
@@ -122,11 +125,32 @@ describe("assetCache", () => {
     expect(await assetCache({ dir, offline: true }).egress([{ ...ref, sha256: "0".repeat(64) }])).toEqual([]);
   });
 
-  test("a name that would leave the directory is refused", async () => {
+  test("a name that would leave the directory is refused before anything is fetched", async () => {
     await fresh();
+    const { calls, fetcher } = server({ "https://a.test/engine.wasm": () => new Response(BYTES) });
     for (const name of ["../escape", "a/b", "..", ""]) {
-      expect(String(await assetCache({ dir, offline: true })({ ...(await refOf()), name }).catch((e) => e))).toContain("unsafe asset name");
+      for (const offline of [true, false]) {
+        expect(String(await assetCache({ dir, offline, fetch: fetcher })({ ...(await refOf()), name }).catch((e) => e))).toContain("unsafe asset name");
+      }
     }
+    expect(calls).toEqual([]);
+  });
+
+  test("a read error other than a missing file is reported, not taken for a miss", async () => {
+    await fresh();
+    await mkdir(join(dir, "engine.wasm")); // a directory where the file should be
+    const { calls, fetcher } = server({ "https://a.test/engine.wasm": () => new Response(BYTES) });
+    await expect(assetCache({ dir, fetch: fetcher })(await refOf())).rejects.toThrow(/engine\.wasm/);
+    expect(calls).toEqual([]);
+  });
+
+  test("two names with the same content each get their file", async () => {
+    await fresh();
+    const { fetcher } = server({ "https://a.test/engine.wasm": () => new Response(BYTES) });
+    const load = assetCache({ dir, fetch: fetcher });
+    const ref = await refOf(BYTES, ["https://a.test/engine.wasm"]);
+    await Promise.all([load(ref), load({ ...ref, name: "copy.wasm" })]);
+    expect((await readdir(dir)).sort()).toEqual(["copy.wasm", "engine.wasm"]);
   });
 
   test("temp files from a crashed download are swept once stale; a young one is left alone", async () => {

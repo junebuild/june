@@ -62,17 +62,26 @@ export function assetCache(opts: AssetCacheOptions): AssetCache {
 
   const pathOf = (ref: AssetRef) => join(opts.dir, safeName(ref.name));
 
+  // The file at dir/<name> when it matches the ref; undefined when it's missing or doesn't.
+  // Sized first, so a large wrong file is never read; a read error other than "missing" (a
+  // directory in its place, no permission) is the caller's problem, not a cache miss.
   async function readMatching(ref: AssetRef): Promise<Uint8Array | undefined> {
-    let bytes: Uint8Array;
+    const path = pathOf(ref);
+    let info: Awaited<ReturnType<typeof stat>>;
     try {
-      bytes = new Uint8Array(await readFile(pathOf(ref)));
-    } catch {
-      return undefined; // not there
+      info = await stat(path);
+    } catch (err) {
+      if ((err as { code?: string }).code === "ENOENT") return undefined;
+      throw err;
     }
-    return bytes.length === ref.size && (await sha256(bytes)) === ref.sha256 ? bytes : undefined;
+    if (!info.isFile()) throw new Error(`${path} is in the way of ${ref.name}: it isn't a file`);
+    if (info.size !== ref.size) return undefined;
+    const bytes = new Uint8Array(await readFile(path));
+    return (await sha256(bytes)) === ref.sha256 ? bytes : undefined;
   }
 
   async function get(ref: AssetRef): Promise<Uint8Array> {
+    pathOf(ref); // an unsafe name fails here, before any read or fetch
     const hit = await readMatching(ref);
     if (hit) return hit;
     if (opts.offline) {
@@ -92,11 +101,13 @@ export function assetCache(opts: AssetCacheOptions): AssetCache {
     return bytes;
   }
 
+  // Keyed by name and content: two names for the same bytes each get their file.
   const cache = ((ref: AssetRef) => {
-    const running = inflight.get(ref.sha256);
+    const key = `${ref.name}\0${ref.sha256}`;
+    const running = inflight.get(key);
     if (running) return running;
-    const p = get(ref).finally(() => inflight.delete(ref.sha256));
-    inflight.set(ref.sha256, p);
+    const p = get(ref).finally(() => inflight.delete(key));
+    inflight.set(key, p);
     return p;
   }) as AssetCache;
   cache.cached = async (ref) => (await readMatching(ref)) !== undefined;
