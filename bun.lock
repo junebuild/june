@@ -225,11 +225,22 @@
         "marked": "^18.0.14",
       },
     },
+    "packages/pdf-font-noto-sans-tc": {
+      "name": "@junejs/pdf-font-noto-sans-tc",
+      "version": "0.0.0",
+      "devDependencies": {
+        "@junejs/pdf": ">=0.1.0-dev.2",
+        "@junejs/pdf-typst-wasm": ">=0.1.0-dev.2",
+      },
+      "peerDependencies": {
+        "@junejs/pdf-typst-wasm": ">=0.1.0-dev.2",
+      },
+    },
     "packages/pdf-typst-wasm": {
       "name": "@junejs/pdf-typst-wasm",
       "version": "0.1.0-dev.2",
       "dependencies": {
-        "@junejs/pdf": ">=0.1.0-dev.1",
+        "@junejs/pdf": ">=0.1.0-dev.2",
       },
       "devDependencies": {
         "@junejs/core": ">=0.2.0-dev.66",
@@ -446,6 +457,8 @@
     "@junejs/og": ["@junejs/og@workspace:packages/og"],
 
     "@junejs/pdf": ["@junejs/pdf@workspace:packages/pdf"],
+
+    "@junejs/pdf-font-noto-sans-tc": ["@junejs/pdf-font-noto-sans-tc@workspace:packages/pdf-font-noto-sans-tc"],
 
     "@junejs/pdf-typst-wasm": ["@junejs/pdf-typst-wasm@workspace:packages/pdf-typst-wasm"],
 
