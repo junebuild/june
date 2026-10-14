@@ -5,7 +5,7 @@ description: A tool stores the file it produces with ctx.files and returns the F
 date: 2026-10-12
 section: Agents
 order: "16.35"
-sources: [packages/core/src/agent-files.ts, packages/core/src/agent-runtime.ts, packages/core/src/agent-config.ts, packages/core/src/channels.ts, packages/june/src/agent-native.ts, packages/june/src/agent-durable.ts, packages/june/src/app.ts, packages/pdf/src/tools.ts, packages/pdf/src/renderer.ts, packages/pdf/src/markdown-typst.ts, packages/pdf-typst-wasm/src/renderer.ts, packages/pdf-typst-wasm/src/fonts.ts, packages/pdf-typst-wasm/src/assets.ts, packages/pdf-typst-wasm/src/unbundled.ts, packages/pdf-typst-wasm/src/workerd.ts, packages/pdf-typst-wasm/src/bun.ts, packages/pdf-font-noto-sans-tc/src/provider.ts, packages/pdf-font-noto-sans-tc/src/workerd.ts, packages/pdf-typst-wasm/src/lib.rs, packages/pdf/skills/pdf-report.md, docs/rfc-agent-files.md]
+sources: [packages/core/src/agent-files.ts, packages/core/src/agent-runtime.ts, packages/core/src/agent-config.ts, packages/core/src/channels.ts, packages/june/src/agent-native.ts, packages/june/src/agent-durable.ts, packages/june/src/app.ts, packages/pdf/src/tools.ts, packages/pdf/src/renderer.ts, packages/pdf/src/markdown-typst.ts, packages/pdf-typst-wasm/src/renderer.ts, packages/pdf-typst-wasm/src/fonts.ts, packages/pdf-typst-wasm/src/assets.ts, packages/pdf-typst-wasm/src/unbundled.ts, packages/pdf-typst-wasm/src/workerd.ts, packages/pdf-typst-wasm/src/bun.ts, packages/pdf-font-noto-sans-tc/src/provider.ts, packages/pdf-font-noto-sans-tc/src/unbundled.ts, packages/pdf-font-noto-sans-tc/src/workerd.ts, packages/pdf-typst-wasm/src/lib.rs, packages/pdf/skills/pdf-report.md, docs/rfc-agent-files.md]
 ---
 ## A PDF in a Slack thread
 
