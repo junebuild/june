@@ -53,6 +53,8 @@ export interface AssetCache {
 
 // A temp file older than this is a crashed download; younger ones may be another process's.
 const STALE_TEMP_MS = 60 * 60 * 1000;
+// Temp files carry this prefix, and no asset may: the sweep removes nothing else.
+const TEMP_PREFIX = ".june-tmp-";
 
 export function assetCache(opts: AssetCacheOptions): AssetCache {
   const fetcher = opts.fetch ?? fetch;
@@ -96,7 +98,7 @@ export function assetCache(opts: AssetCacheOptions): AssetCache {
     await (swept ??= sweepTemps(opts.dir).catch(() => {}));
     const bytes = await download(ref, urlsFor(ref), fetcher);
     await mkdir(opts.dir, { recursive: true });
-    const temp = join(opts.dir, `.${safeName(ref.name)}.${crypto.randomUUID()}.tmp`);
+    const temp = join(opts.dir, `${TEMP_PREFIX}${crypto.randomUUID()}-${safeName(ref.name)}`);
     try {
       await writeFile(temp, bytes);
       await rename(temp, pathOf(ref)); // atomic on one filesystem: never a half-written file
@@ -107,9 +109,10 @@ export function assetCache(opts: AssetCacheOptions): AssetCache {
     return bytes;
   }
 
-  // Keyed by name and content: two names for the same bytes each get their file.
+  // Keyed by the ref's whole identity (name, content, size): only identical refs share a
+  // download, so each call gets bytes that match its own ref.
   const cache = ((ref: AssetRef) => {
-    const key = `${ref.name}\0${ref.sha256}`;
+    const key = `${ref.name}\0${ref.sha256}\0${ref.size}`;
     const running = inflight.get(key);
     if (running) return running;
     const p = get(ref).finally(() => inflight.delete(key));
@@ -154,7 +157,7 @@ async function readCapped(res: Response, size: number): Promise<Uint8Array> {
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
-    if (length + value.length > out.length) {
+    if (length + value.length >= out.length) {
       out.set(value.subarray(0, out.length - length), length);
       length = out.length;
       await reader.cancel();
@@ -173,7 +176,7 @@ async function sha256(bytes: Uint8Array): Promise<string> {
 
 // A ref's name becomes a file name: one path segment, nothing that climbs out of `dir`.
 function safeName(name: string): string {
-  if (!name || name === "." || name === ".." || /[\\/]/.test(name)) throw new Error(`unsafe asset name: ${JSON.stringify(name)}`);
+  if (!name || name === "." || name === ".." || /[\\/]/.test(name) || name.startsWith(TEMP_PREFIX)) throw new Error(`unsafe asset name: ${JSON.stringify(name)}`);
   return name;
 }
 
@@ -188,7 +191,7 @@ async function sweepTemps(dir: string): Promise<void> {
   const now = Date.now();
   await Promise.all(
     names
-      .filter((n) => n.startsWith(".") && n.endsWith(".tmp"))
+      .filter((n) => n.startsWith(TEMP_PREFIX))
       .map(async (n) => {
         const s = await stat(join(dir, n)).catch(() => undefined);
         if (s && now - s.mtimeMs > STALE_TEMP_MS) await rm(join(dir, n), { force: true });

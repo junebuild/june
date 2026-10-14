@@ -91,6 +91,28 @@ describe("assetCache", () => {
     expect(pulled).toBeLessThan(5);
   });
 
+  test("a body that reaches the cap and then stalls is cancelled, not waited on", async () => {
+    await fresh();
+    // Exactly size + 1 bytes, then the stream stays open forever.
+    const stalls = () => new Response(new ReadableStream({ start: (c) => c.enqueue(new Uint8Array(BYTES.length + 1)) }));
+    const { fetcher } = server({ "https://a.test/engine.wasm": stalls });
+    const outcome = await Promise.race([
+      assetCache({ dir, fetch: fetcher })(await refOf(BYTES, ["https://a.test/engine.wasm"])).catch((e) => String(e)),
+      new Promise((r) => setTimeout(() => r("hung"), 1000)),
+    ]);
+    expect(outcome).toContain(`got ${BYTES.length + 1} bytes`);
+  });
+
+  test("refs that differ only in size don't share a download", async () => {
+    await fresh();
+    const { fetcher } = server({ "https://a.test/engine.wasm": () => new Response(BYTES) });
+    const load = assetCache({ dir, fetch: fetcher });
+    const ref = await refOf(BYTES, ["https://a.test/engine.wasm"]);
+    const [good, wrong] = await Promise.allSettled([load(ref), load({ ...ref, size: ref.size + 1 })]);
+    expect(good.status).toBe("fulfilled");
+    expect(wrong.status).toBe("rejected");
+  });
+
   test("offline: serves what was copied in, never fetches, and says what to copy", async () => {
     await fresh();
     const { calls, fetcher } = server({});
@@ -156,7 +178,7 @@ describe("assetCache", () => {
   test("a sweep that fails doesn't fail the download, then or later", async () => {
     await fresh();
     // A stale ".tmp" the sweep can't remove: a non-empty directory.
-    const stuck = join(dir, ".stuck.tmp");
+    const stuck = join(dir, ".june-tmp-stuck");
     await mkdir(stuck);
     await writeFile(join(stuck, "inside"), "x");
     const hourAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
@@ -167,10 +189,23 @@ describe("assetCache", () => {
     expect(await load({ ...(await refOf(BYTES, ["https://a.test/copy.wasm"])), name: "copy.wasm" })).toEqual(BYTES);
   });
 
+  test("the sweep removes only the cache's own temp files, never an asset", async () => {
+    await fresh();
+    const asset = join(dir, ".model.tmp"); // a legitimate asset name that merely looks temporary
+    await writeFile(asset, "a model");
+    const hourAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    await utimes(asset, hourAgo, hourAgo);
+    const { fetcher } = server({ "https://a.test/engine.wasm": () => new Response(BYTES) });
+    await assetCache({ dir, fetch: fetcher })(await refOf());
+    expect(await readFile(asset, "utf8")).toBe("a model");
+    // The temp prefix is reserved, so no asset can be mistaken for one.
+    expect(String(await assetCache({ dir, offline: true })({ ...(await refOf()), name: ".june-tmp-x" }).catch((e) => e))).toContain("unsafe asset name");
+  });
+
   test("temp files from a crashed download are swept once stale; a young one is left alone", async () => {
     await fresh();
-    const stale = join(dir, ".engine.wasm.old.tmp");
-    const young = join(dir, ".engine.wasm.young.tmp");
+    const stale = join(dir, ".june-tmp-old-engine.wasm");
+    const young = join(dir, ".june-tmp-young-engine.wasm");
     await writeFile(stale, "half");
     await writeFile(young, "in progress elsewhere");
     const hourAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
