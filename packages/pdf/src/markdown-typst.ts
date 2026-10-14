@@ -32,7 +32,12 @@ export function typstSource(doc: PdfDocument, opts: TypstSourceOptions = {}): st
   const meta = [doc.title ? `title: ${str(doc.title)}` : "", doc.author ? `author: ${str(doc.author)}` : ""].filter(Boolean);
   if (meta.length) lines.push(`#set document(${meta.join(", ")})`);
   lines.push(`#set page(paper: ${str(doc.paper === "us-letter" ? "us-letter" : "a4")}, margin: (x: 2.2cm, y: 2.4cm), numbering: "1")`);
-  const text = ["size: 10.5pt", ...langArgs(doc.lang)];
+  const lang = langArgs(doc.lang);
+  // Typst takes the direction from `lang`; without one, an Arabic or Hebrew document would be
+  // laid out left to right (its letters still join, but alignment and punctuation land on the
+  // wrong side). So with no usable lang, the first letter decides, as Unicode's bidi rule P2
+  // does for a paragraph (#392).
+  const text = ["size: 10.5pt", ...lang, ...(lang.length === 0 && rightToLeft(doc.markdown) ? ["dir: rtl"] : [])];
   if (opts.fonts?.length) text.push(`font: (${opts.fonts.map(str).join(", ")},)`);
   lines.push(`#set text(${text.join(", ")})`);
   lines.push(
@@ -54,6 +59,14 @@ function langArgs(tag: string | undefined): string[] {
   if (!lang || !/^[a-z]{2,3}$/.test(lang)) return [];
   const region = rest.find((p) => /^[a-z]{2}$/.test(p));
   return [`lang: ${str(lang)}`, ...(region ? [`region: ${str(region)}`] : [])];
+}
+
+// Whether the first letter of the text belongs to a right-to-left script. Markdown syntax
+// (`#`, `*`, `|`, digits) is not a letter, so a heading or a table doesn't hide it.
+const RTL_SCRIPT = /\p{Script=Arabic}|\p{Script=Hebrew}|\p{Script=Syriac}|\p{Script=Thaana}|\p{Script=Nko}|\p{Script=Samaritan}|\p{Script=Mandaic}|\p{Script=Adlam}|\p{Script=Hanifi_Rohingya}/u;
+function rightToLeft(text: string): boolean {
+  const first = /\p{L}/u.exec(text)?.[0];
+  return first !== undefined && RTL_SCRIPT.test(first);
 }
 
 // ── blocks ──────────────────────────────────────────────────────────────────

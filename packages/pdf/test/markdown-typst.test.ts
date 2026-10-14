@@ -83,6 +83,16 @@ describe("typstSource", () => {
     expect(src.endsWith('#heading(level: 1)[#"Hi";]\n')).toBe(true);
   });
 
+  test("without a lang, a document that starts in a right-to-left script is set right to left", () => {
+    expect(typstSource({ markdown: "# تقرير الربع\n\nنمت الإيرادات." })).toContain("#set text(size: 10.5pt, dir: rtl)");
+    expect(typstSource({ markdown: "| # | שם |\n|--|--|\n| 1 | שלום |" })).toContain("dir: rtl"); // syntax and digits first
+    expect(typstSource({ markdown: "# Report\n\nThe word مرحبا means hello." })).toContain("#set text(size: 10.5pt)\n");
+    expect(typstSource({ markdown: "12% — 34" })).toContain("#set text(size: 10.5pt)\n"); // no letter: no direction
+    // With a lang, Typst decides from it; nothing is inferred.
+    expect(typstSource({ markdown: "مرحبا", lang: "ar" })).toContain('#set text(size: 10.5pt, lang: "ar")\n');
+    expect(typstSource({ markdown: "مرحبا", lang: "en" })).not.toContain("dir:");
+  });
+
   test("defaults: a4, no metadata line, no language for a tag Typst can't take", () => {
     const src = typstSource({ markdown: "x", lang: "Hant" });
     expect(src).not.toContain("#set document");
