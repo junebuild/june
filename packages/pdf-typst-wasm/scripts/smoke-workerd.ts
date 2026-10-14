@@ -1,6 +1,6 @@
 // Proves @junejs/pdf-typst-wasm on workerd, as an app gets it: the published dist (the
 // `workerd` export condition → dist/workerd.js importing dist/typst.wasm), bundled and
-// served by `wrangler dev --local`, rendering over real HTTP. Bun tests use the Node entry;
+// served by `wrangler dev --local`, rendering over real HTTP. Bun tests use the Bun entry;
 // only this run shows the module import, the precompiled upload path and the engine inside
 // a Worker isolate work.
 //

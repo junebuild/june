@@ -5,7 +5,7 @@ description: A tool stores the file it produces with ctx.files and returns the F
 date: 2026-10-12
 section: Agents
 order: "16.35"
-sources: [packages/core/src/agent-files.ts, packages/core/src/agent-runtime.ts, packages/core/src/agent-config.ts, packages/core/src/channels.ts, packages/june/src/agent-native.ts, packages/june/src/agent-durable.ts, packages/june/src/app.ts, packages/pdf/src/tools.ts, packages/pdf/src/renderer.ts, packages/pdf/src/markdown-typst.ts, packages/pdf-typst-wasm/src/renderer.ts, packages/pdf-typst-wasm/src/fonts.ts, packages/pdf-typst-wasm/src/workerd.ts, packages/pdf-typst-wasm/src/lib.rs, packages/pdf/skills/pdf-report.md, docs/rfc-agent-files.md]
+sources: [packages/core/src/agent-files.ts, packages/core/src/agent-runtime.ts, packages/core/src/agent-config.ts, packages/core/src/channels.ts, packages/june/src/agent-native.ts, packages/june/src/agent-durable.ts, packages/june/src/app.ts, packages/pdf/src/tools.ts, packages/pdf/src/renderer.ts, packages/pdf/src/markdown-typst.ts, packages/pdf-typst-wasm/src/renderer.ts, packages/pdf-typst-wasm/src/fonts.ts, packages/pdf-typst-wasm/src/workerd.ts, packages/pdf-typst-wasm/src/bun.ts, packages/pdf-typst-wasm/src/lib.rs, packages/pdf/skills/pdf-report.md, docs/rfc-agent-files.md]
 ---
 ## A PDF in a Slack thread
 
@@ -116,7 +116,9 @@ export default pdfTools({ renderer: typstWasmRenderer() });
 
 The package is a build of Typst and its PDF export only, compiled to WebAssembly (29 MiB,
 zero imports). It runs on Node, Bun, Deno and Cloudflare Workers. On Workers the module is
-imported, so it uploads precompiled.
+imported, so it uploads precompiled. On Bun it is imported as a file, so `bun build --compile`
+embeds it in the binary with no configuration. Other bundlers that produce a single file need
+the module passed in: `typstWasmRenderer({ wasm: () => loadTheModule() })`.
 
 Measured on a deployed Worker: 2 ms startup, about 40 ms of CPU for a warm one-page render,
 and about 670 ms for 18 pages. Use Workers Paid: the Free plan's 10 ms of CPU is not enough.

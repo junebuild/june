@@ -141,6 +141,9 @@ jobs:
       - name: On workerd
         run: SMOKE_SKIP_BUILD=1 bun scripts/smoke-workerd.ts
 
+      - name: In a bun build --compile binary
+        run: bun scripts/smoke-compile.ts
+
   # The toolchain flake.nix pins, in the form agents get it: the dev image, built and
   # loaded on both Linux systems the flake supports, runs every check above from a fresh copy
   # of the tree as its unprivileged user (scripts/smoke-dev-image.sh). `nix flake check`

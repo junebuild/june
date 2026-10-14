@@ -9,11 +9,12 @@
     ".": {
       "source": {
         "workerd": "./src/workerd.ts",
+        "bun": "./src/bun.ts",
         "default": "./src/node.ts"
       },
       "bun": {
         "workerd": "./src/workerd.ts",
-        "default": "./src/node.ts"
+        "default": "./src/bun.ts"
       },
       "workerd": {
         "types": "./dist/workerd.d.ts",
