@@ -1,6 +1,6 @@
 // Proves @junejs/pdf-font-noto-sans-tc on workerd, as an app gets it: the published dist (the
 // `workerd` export condition → dist/workerd.js importing ../fonts/*.otf as Data modules) with
-// @junejs/pdf-typst-wasm's, served by `wrangler dev --local`. Only this run shows the fonts
+// @junejs/pdf-typst-wasm's dist, served by `wrangler dev --local`. Only this run shows the fonts
 // upload with the Worker and fit next to the engine.
 //
 // Run: bun scripts/smoke-workerd.ts  (from packages/pdf-font-noto-sans-tc; CI: the pdf-engine

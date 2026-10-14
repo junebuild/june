@@ -154,6 +154,14 @@ jobs:
         working-directory: packages/pdf-font-noto-sans-tc
         run: bun scripts/smoke-workerd.ts && bun scripts/smoke-compile.ts
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Noto Sans TC — on Node, from dist
+        working-directory: packages/pdf-font-noto-sans-tc
+        run: bun scripts/smoke-node.ts
+
   # The toolchain flake.nix pins, in the form agents get it: the dev image, built and
   # loaded on both Linux systems the flake supports, runs every check above from a fresh copy
   # of the tree as its unprivileged user (scripts/smoke-dev-image.sh). `nix flake check`
