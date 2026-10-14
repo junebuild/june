@@ -115,6 +115,21 @@ describe.skipIf(!built)("typstWasmRenderer", () => {
     expect(localFonts([latinFont]).egress).toEqual([]);
   });
 
+  test("the configuration is read once: arrays changed later don't change what renders or egress", async () => {
+    const { calls, fetcher } = googleStub();
+    const providers = [localFonts([latinFont])];
+    const sources: (Uint8Array | string)[] = [latinFont];
+    const local = localFonts(sources, { fetch: fetcher });
+    const r = typstWasmRenderer({ fonts: providers, ...ACCEPT_GAPS });
+    providers.push(googleFontSubsets({ families: [TC], fetch: fetcher }));
+    sources.push("https://fonts.gstatic.test/late.ttf");
+    expect(r.egress).toEqual([]);
+    expect(local.egress).toEqual([]);
+    await quietly(() => r.render({ markdown: "# 中文" }));
+    await local.persistent!();
+    expect(calls).toEqual([]);
+  });
+
   test("googleFontSubsets fetches a subset for exactly the document's characters, cached", async () => {
     const { calls, fetcher } = googleStub();
     const r = typstWasmRenderer({ fonts: [googleFontSubsets({ families: [TC], fetch: fetcher })], ...ACCEPT_GAPS });
