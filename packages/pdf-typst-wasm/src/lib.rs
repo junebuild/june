@@ -24,7 +24,9 @@ use typst::diag::{FileError, FileResult, Severity, SourceDiagnostic};
 use typst::foundations::{Bytes, Datetime, Duration};
 use typst::syntax::{FileId, RootedPath, Source, VirtualPath, VirtualRoot};
 use typst::layout::{Frame, FrameItem};
-use typst::text::{Font, FontBook};
+use std::collections::HashSet;
+
+use typst::text::{Font, FontBook, is_default_ignorable};
 use typst::utils::LazyHash;
 use typst::{Library, LibraryExt, World};
 use typst_layout::PagedDocument;
@@ -104,9 +106,9 @@ impl Engine {
     pub fn compile(&mut self, source: String) -> Result<Compiled, String> {
         self.source = Some(Source::new(self.main, source));
         let result = typst::compile::<PagedDocument>(&*self).output.and_then(|doc| {
-            let mut missing_glyphs = String::new();
+            let (mut missing_glyphs, mut seen) = (String::new(), HashSet::new());
             for page in doc.pages() {
-                collect_tofus(&page.frame, &mut missing_glyphs);
+                collect_tofus(&page.frame, &mut missing_glyphs, &mut seen);
             }
             typst_pdf::pdf(&doc, &typst_pdf::PdfOptions::default()).map(|pdf| Compiled { pdf, missing_glyphs })
         });
@@ -121,15 +123,16 @@ impl Engine {
 }
 
 /// Typst shapes a character no font covers as glyph 0 of the last font it tried; the glyph's
-/// range points back at the character in the run's text.
-fn collect_tofus(frame: &Frame, out: &mut String) {
+/// range points back at the character in the run's text. `seen` keeps the scan linear: a
+/// document can have thousands of distinct uncovered characters.
+fn collect_tofus(frame: &Frame, out: &mut String, seen: &mut HashSet<char>) {
     for (_, item) in frame.items() {
         match item {
-            FrameItem::Group(group) => collect_tofus(&group.frame, out),
+            FrameItem::Group(group) => collect_tofus(&group.frame, out, seen),
             FrameItem::Text(text) => {
                 for glyph in text.glyphs.iter().filter(|g| g.id == 0) {
                     for c in text.text[glyph.range()].chars() {
-                        if !invisible(c) && !out.contains(c) {
+                        if !invisible(c) && seen.insert(c) {
                             out.push(c);
                         }
                     }
@@ -141,11 +144,10 @@ fn collect_tofus(frame: &Frame, out: &mut String) {
 }
 
 /// Characters that draw nothing, so a font lacking them loses nothing: whitespace, controls,
-/// joiners, variation selectors, the soft hyphen and the byte order mark.
+/// and Unicode's Default_Ignorable set (joiners, bidi and invisible math controls, variation
+/// selectors, the soft hyphen), by the predicate Typst's own shaper uses.
 fn invisible(c: char) -> bool {
-    c.is_whitespace()
-        || c.is_control()
-        || matches!(c, '\u{00AD}' | '\u{200B}'..='\u{200F}' | '\u{2060}' | '\u{FEFF}' | '\u{FE00}'..='\u{FE0F}' | '\u{E0100}'..='\u{E01EF}')
+    c.is_whitespace() || c.is_control() || is_default_ignorable(c)
 }
 
 fn describe(diags: &[SourceDiagnostic]) -> String {

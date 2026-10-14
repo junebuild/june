@@ -72,6 +72,15 @@ fn covered_text_and_invisible_characters_report_nothing() {
 }
 
 #[test]
+fn invisible_controls_inside_an_uncovered_run_are_not_reported() {
+    // An uncovered run is shaped as tofus character by character, controls included; they draw
+    // nothing either way, so only the visible characters are missing.
+    let mut engine = Engine::new();
+    let out = engine.compile("中\u{2061}文\u{2063}字\u{206F}".into()).unwrap();
+    assert_eq!(out.missing_glyphs, "中文字");
+}
+
+#[test]
 fn bytes_that_are_not_a_font_add_nothing() {
     let mut engine = Engine::new();
     let base = engine.font_count();
