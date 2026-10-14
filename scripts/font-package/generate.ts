@@ -8,8 +8,10 @@
 //   bun scripts/font-package/generate.ts          # write packages/pdf-font-noto-sans-*
 //   bun scripts/font-package/generate.ts --check  # exit 1 listing what differs
 //
-// Not generated: CHANGELOG.md (changesets owns it) and package.json's "version" (the release
-// owns it; a new package starts at the published packages' shared version).
+// Not generated: CHANGELOG.md, and in package.json the "version" and the ranges on other
+// @junejs packages — changesets rewrites all three on every release (the published packages are
+// one fixed group with updateInternalDependencies), so the generator keeps what is there. A new
+// package starts at the published packages' shared version and the template's ranges.
 //
 // The files and their hashes are Noto Sans CJK's region subsets at release Sans2.004, pinned
 // here and fetched by each package's scripts/fetch-fonts.ts. The coverage notes were measured
@@ -159,6 +161,24 @@ function render(text: string, v: Record<string, string>, file: string): string {
   return out;
 }
 
+type PackageJson = { version: string } & Partial<Record<(typeof DEP_FIELDS)[number], Record<string, string>>>;
+const DEP_FIELDS = ["dependencies", "peerDependencies", "devDependencies"] as const;
+
+// The rendered package.json with what the release owns taken from the package as it is: its
+// version, and its range on each @junejs dependency the template also declares.
+export function releaseOwned(rendered: string, existing: string | undefined, sharedVersion: string): string {
+  const pkg = JSON.parse(rendered) as PackageJson;
+  const now = existing ? (JSON.parse(existing) as PackageJson) : undefined;
+  pkg.version = now?.version ?? sharedVersion;
+  for (const field of DEP_FIELDS) {
+    for (const name of Object.keys(pkg[field] ?? {})) {
+      const kept = now?.[field]?.[name];
+      if (name.startsWith("@junejs/") && kept) pkg[field]![name] = kept;
+    }
+  }
+  return JSON.stringify(pkg, null, 2) + "\n";
+}
+
 // What each package's files should be: path relative to the repo → contents.
 export function expected(): Map<string, string> {
   const files = new Map<string, string>();
@@ -170,9 +190,8 @@ export function expected(): Map<string, string> {
       const rel = relative(TEMPLATE, t).replace(/\.tmpl$/, "");
       let text = render(readFileSync(t, "utf8"), v, rel);
       if (rel === "package.json") {
-        const existing = join(ROOT, pkg, "package.json");
-        const version = existsSync(existing) ? (JSON.parse(readFileSync(existing, "utf8")) as { version: string }).version : shared.version;
-        text = text.replace(/"version": "[^"]*"/, `"version": "${version}"`);
+        const path = join(ROOT, pkg, "package.json");
+        text = releaseOwned(text, existsSync(path) ? readFileSync(path, "utf8") : undefined, shared.version);
       }
       files.set(join(pkg, rel), text);
     }
