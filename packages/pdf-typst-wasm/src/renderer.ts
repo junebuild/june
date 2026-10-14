@@ -6,7 +6,8 @@
 // requests share 128 MB on Workers, so a render must not cost a fresh instance. Fonts:
 //   • embedded — Typst's defaults (Libertinus Serif, New Computer Modern, DejaVu Sans Mono),
 //     always there, so a Latin document needs nothing and the default makes no network call;
-//   • `fonts` — the app's providers (fonts.ts), in order of preference. A provider's
+//   • `fonts` — the app's providers (fonts.ts). Their order is not a preference: Typst picks
+//     by `fontFamilies`, then falls back to the most similar font that has the glyph. A provider's
 //     persistent fonts are registered once; its per-document fonts (a CJK subset cut to one
 //     document's characters) are dropped after the document, so they never pile up.
 // Each render fetches what it needs first, then clears the previous document's fonts, adds
@@ -29,7 +30,8 @@ export type TypstWasmRendererOptions = {
   // host runtime needs (see node.ts / workerd.ts).
   wasm?: WasmSource | (() => Promise<WasmSource>);
   // Where fonts beyond the embedded ones come from (default: none, so no network call):
-  // localFonts([...]), googleFontSubsets({ families }), or a provider the app writes.
+  // localFonts([...]), googleFontSubsets({ families }), or a provider the app writes. Read
+  // once, here: `egress` must describe the providers that actually render.
   fonts?: FontProvider[];
   // Font families in order of preference; Typst falls back to any loaded font with the glyph.
   fontFamilies?: string[];
@@ -48,7 +50,7 @@ export interface TypstWasmRenderer extends PdfRenderer {
 const MISSING_SHOWN = 10;
 
 export function createTypstWasmRenderer(defaultWasm: () => Promise<WasmSource>, opts: TypstWasmRendererOptions = {}): TypstWasmRenderer {
-  const providers = opts.fonts ?? [];
+  const providers = [...(opts.fonts ?? [])];
   let engine: Promise<TypstEngine> | undefined;
 
   const ready = (): Promise<TypstEngine> =>

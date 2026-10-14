@@ -135,10 +135,11 @@ call unless you choose a font provider that does:
 |---|---|---|
 | (none, the default) | Typst's built-in Latin, Greek and Cyrillic fonts only | none |
 | `localFonts([bytes, url, loader])` | you supply the files (a CJK family is tens of MB) | a URL is fetched once; nothing about documents is sent |
-| `googleFontSubsets({ families })` | a few KB per document | **each document's non-ASCII characters** go to fonts.googleapis.com |
+| `googleFontSubsets({ families })` | a few KB per document | **each document's non-ASCII characters** go to fonts.googleapis.com and fonts.gstatic.com (the subset's URL encodes them) |
 
-Providers combine, in order of preference: `fonts: [localFonts([brandFont]), googleFontSubsets(…)]`.
-`fontFamilies: ["Noto Sans TC"]` sets which family Typst tries first.
+Providers combine: `fonts: [localFonts([brandFont]), googleFontSubsets(…)]`. Their order
+doesn't set preference: `fontFamilies: ["Noto Sans TC"]` does, and for a character those
+families lack, Typst falls back to the most similar loaded font that has it.
 
 A character no loaded font covers (an emoji, or CJK with no CJK font) fails the render with
 a `PdfRenderError` naming it, along with any provider that failed to load. `render_pdf`

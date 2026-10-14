@@ -36,7 +36,9 @@ export type FontSource = Uint8Array | ArrayBuffer | string | (() => Promise<Uint
 
 // The app's own font files, read once. Offline unless a source is a URL, which is fetched once
 // at startup and sends nothing about any document.
-export function localFonts(sources: FontSource[], opts: { fetch?: typeof fetch } = {}): FontProvider {
+// `sources` is copied, so `egress` always names what `persistent` fetches.
+export function localFonts(input: FontSource[], opts: { fetch?: typeof fetch } = {}): FontProvider {
+  const sources = [...input];
   const fetcher = opts.fetch ?? fetch;
   const hosts = [...new Set(sources.filter((s): s is string => typeof s === "string").map((url) => new URL(url).host))];
   return {
