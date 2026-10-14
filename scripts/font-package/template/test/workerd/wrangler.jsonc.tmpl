@@ -1,0 +1,9 @@
+// scripts/smoke-workerd.ts serves this with `wrangler dev --local`. The rule is the one
+// `june build` emits for this package, and that an app with its own wrangler config adds:
+// wrangler has no default loader for .otf.
+{
+  "name": "pdf-font-noto-sans-{{code}}-smoke",
+  "main": "worker.ts",
+  "compatibility_date": "2025-01-01",
+  "rules": [{ "type": "Data", "globs": ["**/*.otf"], "fallthrough": true }]
+}

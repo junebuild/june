@@ -8,7 +8,7 @@ const renderer = typstWasmRenderer({ fonts: [notoSansTC()] });
 
 export default {
   async fetch(req: Request): Promise<Response> {
-    const markdown = req.method === "POST" ? await req.text() : "# 季度報告\n\n**營收**成長 12%。臺灣、裏、峯。";
+    const markdown = req.method === "POST" ? await req.text() : "# 季度報告\n\n**營收**成長 12%。臺灣、裏、峯、齉龘爩鬱。";
     try {
       const pdf = await renderer.render({ markdown, lang: "zh-TW" });
       return new Response(pdf.slice(), { headers: { "content-type": "application/pdf" } });

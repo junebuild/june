@@ -10,7 +10,7 @@ import { typstWasmRenderer } from "@junejs/pdf-typst-wasm/unbundled";
 const engine = new URL("../../../pdf-typst-wasm/dist/typst.wasm", import.meta.url);
 const load = (ref) => readFile(ref.name === "typst.wasm" ? engine : new URL(`../../fonts/${ref.name}`, import.meta.url));
 try {
-  const pdf = await typstWasmRenderer({ load, fonts: [notoSansTC({ load })] }).render({ markdown: "# 在 Node 上\n\n**不打包**的引擎與字型。" });
+  const pdf = await typstWasmRenderer({ load, fonts: [notoSansTC({ load })] }).render({ markdown: "# 季度報告\n\n**營收**成長 12%。臺灣、裏、峯、齉龘爩鬱。" });
   const s = new TextDecoder("latin1").decode(pdf);
   console.log(import.meta.resolve("@junejs/pdf-typst-wasm/unbundled"));
   console.log([...new Set([...s.matchAll(/\/BaseFont\s*\/(?:[A-Z]{6}\+)?([\w-]+)/g)].map((m) => m[1]))].join(" "));

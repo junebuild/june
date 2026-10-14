@@ -1,0 +1,144 @@
+// The Noto Sans CJK font packages (@junejs/pdf-font-noto-sans-{tc,sc,jp,kr}, #381), generated
+// from one template (scripts/font-package/template, each file with a .tmpl suffix so no tool
+// mistakes it for code) and the table below. Each package stays self-contained — no runtime
+// dependency between them — and the generator keeps them from drifting apart: edit the
+// template or the table, run this, commit the result. tests/font-packages.test.ts fails when
+// a package differs from what this would write.
+//
+//   bun scripts/font-package/generate.ts          # write packages/pdf-font-noto-sans-*
+//   bun scripts/font-package/generate.ts --check  # exit 1 listing what differs
+//
+// Not generated: CHANGELOG.md (changesets owns it) and package.json's "version" (the release
+// owns it; a new package starts at the published packages' shared version).
+//
+// The files and their hashes are Noto Sans CJK's region subsets at release Sans2.004, pinned
+// here and fetched by each package's scripts/fetch-fonts.ts. The coverage notes were measured
+// with fontTools against each region's standard character set, counting what Typst's
+// embedded fonts (Libertinus Serif, New Computer Modern, DejaVu Sans Mono) cover as well.
+
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
+
+type Spec = {
+  code: string; // "tc"
+  script: string; // what the provider renders: "Traditional Chinese"
+  language: string; // in prose: "renders Chinese"
+  region: string; // the Noto subset's region
+  lang: string; // BCP 47 for the test documents
+  keyword: string; // npm keyword
+  files: { 400: [sha256: string, size: number]; 700: [sha256: string, size: number] };
+  coverage: string[]; // comment lines, measured
+  docFull: string; // a heading and bold text: both weights
+  docTitleBody: string;
+  plain: string; // regular weight only
+  rare: string; // a character the subset doesn't cover
+  rareDoc: string; // a document whose only uncovered character is `rare`
+};
+
+export const SPECS: Spec[] = [
+  {
+    code: "tc",
+    script: "Traditional Chinese",
+    language: "Chinese",
+    region: "Taiwan",
+    lang: "zh-TW",
+    keyword: "traditional-chinese",
+    files: { 400: ["5bab0cb3c1cf89dde07c4a95a4054b195afbcfe784d69d75c340780712237537", 5683368], 700: ["55420b259eb119bf5f2a0aadba10cf9d736c12d64ab93e78546d69ef5f43558b", 5839972] },
+    coverage: [
+      "The subset is not every CJK ideograph. Measured with fontTools: 20,745 code points, 17,755",
+      "of them Han, and every Big5 character except four symbols (U+02CD, U+203E, U+223C, U+2252).",
+    ],
+    docFull: "# 季度報告\\n\\n**營收**成長 12%。臺灣、裏、峯、齉龘爩鬱。",
+    docTitleBody: "# 標題\\n\\n內文。",
+    plain: "繁體中文",
+    rare: "靐",
+    rareDoc: "雷聲：靐",
+  },
+];
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "../..");
+const TEMPLATE = join(dirname(fileURLToPath(import.meta.url)), "template");
+const MiB = 1048576;
+
+function walk(dir: string): string[] {
+  return readdirSync(dir).flatMap((n) => {
+    const p = join(dir, n);
+    return statSync(p).isDirectory() ? walk(p) : [p];
+  });
+}
+
+function values(s: Spec): Record<string, string> {
+  const [sha400, size400] = s.files[400];
+  const [sha700, size700] = s.files[700];
+  return {
+    CODE: s.code.toUpperCase(),
+    code: s.code,
+    SCRIPT: s.script,
+    LANGUAGE: s.language,
+    REGION: s.region,
+    LANG: s.lang,
+    KEYWORD: s.keyword,
+    SHA_400: sha400,
+    SIZE_400: String(size400),
+    SHA_700: sha700,
+    SIZE_700: String(size700),
+    MIB_WEIGHT: ((size400 + size700) / 2 / MiB).toFixed(1),
+    MIB_TOTAL: ((size400 + size700) / MiB).toFixed(0),
+    COVERAGE: s.coverage.map((l) => `// ${l}`).join("\n"),
+    DOC_FULL: s.docFull,
+    DOC_TITLE_BODY: s.docTitleBody,
+    PLAIN: s.plain,
+    RARE: s.rare,
+    RARE_DOC: s.rareDoc,
+  };
+}
+
+function render(text: string, v: Record<string, string>, file: string): string {
+  const out = text.replace(/\{\{(\w+)\}\}/g, (_, k: string) => {
+    if (!(k in v)) throw new Error(`${file}: unknown placeholder {{${k}}}`);
+    return v[k]!;
+  });
+  return out;
+}
+
+// What each package's files should be: path relative to the repo → contents.
+export function expected(): Map<string, string> {
+  const files = new Map<string, string>();
+  const shared = JSON.parse(readFileSync(join(ROOT, "packages/pdf-font-noto-sans-tc/package.json"), "utf8")) as { version: string };
+  for (const spec of SPECS) {
+    const v = values(spec);
+    const pkg = `packages/pdf-font-noto-sans-${spec.code}`;
+    for (const t of walk(TEMPLATE)) {
+      const rel = relative(TEMPLATE, t).replace(/\.tmpl$/, "");
+      let text = render(readFileSync(t, "utf8"), v, rel);
+      if (rel === "package.json") {
+        const existing = join(ROOT, pkg, "package.json");
+        const version = existsSync(existing) ? (JSON.parse(readFileSync(existing, "utf8")) as { version: string }).version : shared.version;
+        text = text.replace(/"version": "[^"]*"/, `"version": "${version}"`);
+      }
+      files.set(join(pkg, rel), text);
+    }
+  }
+  return files;
+}
+
+if (import.meta.main) {
+  const check = process.argv.includes("--check");
+  const differing: string[] = [];
+  for (const [rel, text] of expected()) {
+    const path = join(ROOT, rel);
+    const current = existsSync(path) ? readFileSync(path, "utf8") : undefined;
+    if (current === text) continue;
+    if (check) differing.push(rel);
+    else {
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, text);
+      console.log(`wrote ${rel}`);
+    }
+  }
+  if (check && differing.length) {
+    console.error(`font packages differ from scripts/font-package/generate.ts — run it and commit:\n  ${differing.join("\n  ")}`);
+    process.exit(1);
+  }
+}
