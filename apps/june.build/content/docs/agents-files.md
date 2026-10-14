@@ -125,7 +125,10 @@ and about 670 ms for 18 pages. Use Workers Paid: the Free plan's 10 ms of CPU is
     document's non-ASCII characters (a few KB each). This is how Traditional Chinese works
     with no setup. Change the families with `googleFonts: [{ family, weights }]`, or make
     no network call at all with `googleFonts: false`.
-  - If a font can't be fetched, its characters render blank and the document still renders.
+  - A character no loaded font covers (an emoji, or CJK with `googleFonts: false` or a
+    failed fetch) fails the render with a `PdfRenderError` naming it, so the model can drop
+    a decorative symbol or tell the user. `onMissingGlyphs: "warn"` logs it and renders the
+    character blank instead.
 
 ### Anywhere but Workers: `typstRenderer`
 

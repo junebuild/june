@@ -13,6 +13,12 @@
 // Each render fetches what it needs first, then clears the previous document's fonts, adds
 // its own and compiles with no await in between — concurrent renders can't see each other's
 // fonts.
+//
+// A character none of those fonts covers would come out blank: a wrong document that looks
+// right, which an agent would hand to its user as if it were right (#368). So it is a
+// PdfRenderError by default, naming the characters and any font that failed to load; the
+// model reads it and can drop a decorative emoji or tell the user. `onMissingGlyphs: "warn"`
+// is for an app that accepts the gaps.
 
 import { PdfRenderError, typstSource, type PdfDocument, type PdfRenderer } from "@junejs/pdf";
 
@@ -36,7 +42,13 @@ export type TypstWasmRendererOptions = {
   googleFonts?: GoogleFont[] | false;
   // How fonts are fetched (default: global fetch).
   fetch?: typeof fetch;
+  // Characters no loaded font covers: "error" (default) throws a PdfRenderError naming them;
+  // "warn" logs them and returns the PDF with those characters blank.
+  onMissingGlyphs?: "error" | "warn";
 };
+
+// How many missing characters a message names before it counts the rest.
+const MISSING_SHOWN = 10;
 
 export const DEFAULT_GOOGLE_FONTS: GoogleFont[] = [{ family: "Noto Sans TC", weights: [400, 700] }];
 
@@ -66,15 +78,23 @@ export function createTypstWasmRenderer(defaultWasm: () => Promise<WasmSource>, 
       const [e, documentFonts] = await Promise.all([ready(), subsetsFor(doc, google, subsets)]);
       // From here on, synchronous: no other render can interleave.
       e.clearDocumentFonts();
-      for (const font of documentFonts) e.addFont(font, "document");
+      for (const font of documentFonts.fonts) e.addFont(font, "document");
+      let out;
       try {
-        return e.compile(source);
+        out = e.compile(source);
       } catch (err) {
         if (err instanceof TypstCompileError) throw new PdfRenderError(`the document could not be typeset: ${err.message}`, { cause: err });
         throw err;
       } finally {
         e.clearDocumentFonts();
       }
+      if (out.missingGlyphs.length === 0) return out.pdf;
+      const message = missingGlyphsMessage(out.missingGlyphs, documentFonts.failed);
+      if (opts.onMissingGlyphs === "warn") {
+        console.warn(`[june] pdf-typst-wasm: ${message}`);
+        return out.pdf;
+      }
+      throw new PdfRenderError(message);
     },
   };
 }
@@ -99,20 +119,35 @@ function documentText(doc: PdfDocument): string {
 
 type SubsetLoader = (family: string, weight: number, text: string) => Promise<Uint8Array>;
 
-async function subsetsFor(doc: PdfDocument, families: GoogleFont[], load: SubsetLoader): Promise<Uint8Array[]> {
+// The subsets that loaded, and a line for each that didn't. A failed fetch doesn't fail the
+// render by itself: another font may cover the characters, and if none does, the missing
+// glyphs check reports it with this line as the reason.
+async function subsetsFor(doc: PdfDocument, families: GoogleFont[], load: SubsetLoader): Promise<{ fonts: Uint8Array[]; failed: string[] }> {
   const text = documentText(doc);
-  if (!text || families.length === 0) return [];
+  if (!text || families.length === 0) return { fonts: [], failed: [] };
   const wanted = families.flatMap((f) => (f.weights ?? [400]).map((w) => [f.family, w] as const));
+  const failed: string[] = [];
   const fonts = await Promise.all(
     wanted.map(([family, weight]) =>
       load(family, weight, text).catch((err: unknown) => {
-        // A font that can't be fetched costs glyphs, not the document: render without it.
-        console.warn(`[june] pdf-typst-wasm: ${family} ${weight} for this document could not be fetched (${err instanceof Error ? err.message : String(err)}); its characters may render blank`);
+        failed.push(`${family} ${weight} could not be fetched from Google Fonts (${err instanceof Error ? err.message : String(err)})`);
         return undefined;
       }),
     ),
   );
-  return fonts.filter((f): f is Uint8Array => f !== undefined);
+  return { fonts: fonts.filter((f): f is Uint8Array => f !== undefined), failed };
+}
+
+// Written for the model, which reads it as render_pdf's error, and for the app's logs.
+function missingGlyphsMessage(missing: string[], failed: string[]): string {
+  const shown = missing.slice(0, MISSING_SHOWN).join(" ");
+  const more = missing.length > MISSING_SHOWN ? ` (and ${missing.length - MISSING_SHOWN} more)` : "";
+  return (
+    `no font available to the PDF renderer covers ${shown}${more}, so they would be missing from the document. ` +
+    (failed.length ? `${failed.join("; ")}. ` : "") +
+    "Remove them from the Markdown if they are decorative (emoji, symbols); otherwise tell the user the PDF can't include them " +
+    "until the app adds a font that covers them (typstWasmRenderer's `fonts` or `googleFonts`)."
+  );
 }
 
 // Google Fonts subsets a family to `text` and answers an old Safari with TTF, which Typst
