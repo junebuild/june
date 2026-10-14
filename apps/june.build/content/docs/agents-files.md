@@ -163,8 +163,9 @@ a `PdfRenderError` naming it, along with any provider that failed to load. `rend
 hands it to the model, which can drop a decorative symbol or tell the user. Pass
 `onMissingGlyphs: "warn"` to render those characters blank and log them instead.
 
-`renderer.egress` lists every host the configured providers contact and what each is sent,
-for a setup check or your own docs:
+`renderer.egress` lists every host the configured providers contact and what each is sent
+(with the unbundled entry, the engine's hosts too; see below), for a setup check or your own
+docs:
 
 ```ts
 const renderer = typstWasmRenderer({ fonts });

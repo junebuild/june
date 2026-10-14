@@ -41,8 +41,9 @@ export type TypstWasmRendererOptions = {
 };
 
 export interface TypstWasmRenderer extends PdfRenderer {
-  // Every host the configured fonts contact, and what each is sent; empty means the renderer
-  // works offline. Declared by the providers, not observed (see fonts.ts).
+  // Every host the renderer may contact, and what each is sent: the font providers', plus,
+  // with the unbundled entry, where loading the engine goes (`engineEgress`). Empty means it
+  // works offline. Declared, not observed (see fonts.ts).
   readonly egress: readonly FontEgress[];
 }
 
