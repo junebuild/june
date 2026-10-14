@@ -90,14 +90,15 @@ function strong(cp: number): Dir | undefined {
 
 // The direction of the first strong character the tokens put on the page (rule P2); undefined
 // when there is none, and the block keeps the direction around it. As P2 says, text between an
-// isolate initiator (LRI, RLI, FSI) and its matching PDI is skipped, and an isolate left open
-// skips the rest of this block only: each call is one block.
+// isolate initiator (LRI, RLI, FSI) and its matching PDI is skipped; an isolate left open ends
+// with its paragraph, which rendered() marks with U+2029 (Bidi_Class B, the paragraph separator).
 function firstStrong(tokens: Token[]): Dir | undefined {
   let isolated = 0;
   for (const run of rendered(tokens)) {
     for (const ch of run) {
       const cp = ch.codePointAt(0)!;
-      if (cp >= 0x2066 && cp <= 0x2068) isolated++;
+      if (cp === PARAGRAPH_END) isolated = 0;
+      else if (cp >= 0x2066 && cp <= 0x2068) isolated++;
       else if (cp === 0x2069) isolated = Math.max(0, isolated - 1);
       else if (!isolated) {
         const dir = strong(cp);
@@ -110,41 +111,56 @@ function firstStrong(tokens: Token[]): Dir | undefined {
 
 // The text runs block() and inline() put on the page, in order, as rendered: HTML through
 // htmlText, entities decoded, a link as its text, an image as its alt text, a code block
-// verbatim.
+// verbatim. Each paragraph — a block, a list item, a table cell — ends with PARAGRAPH_END.
+const PARAGRAPH_END = 0x2029;
+const END = String.fromCodePoint(PARAGRAPH_END);
+// Marked uses "html" for an inline tag too; only a block of HTML ends a paragraph.
+const BLOCK_TYPES = new Set(["paragraph", "heading", "code", "blockquote", "list", "table"]);
+const endsParagraph = (t: Token) => BLOCK_TYPES.has(t.type) || (t.type === "html" && (t as Tokens.HTML).block);
 function* rendered(tokens: Token[]): Generator<string> {
   for (const t of tokens) {
-    const x = t as { type: string; text?: string; tokens?: Token[] };
-    switch (t.type) {
-      case "code":
-        yield (t as Tokens.Code).text;
-        break;
-      case "html":
-        yield decodeEntities(htmlText(x.text ?? ""));
-        break;
-      case "image":
-        yield decodeEntities((t as Tokens.Image).text || "[image]");
-        break;
-      case "link":
-        yield* rendered((t as Tokens.Link).tokens);
-        break;
-      case "list":
-        for (const item of (t as Tokens.List).items) yield* rendered(item.tokens);
-        break;
-      case "table": {
-        const tb = t as Tokens.Table;
-        for (const c of tb.header) yield* rendered(c.tokens);
-        for (const row of tb.rows) for (const c of row) yield* rendered(c.tokens);
-        break;
+    yield* renderedToken(t);
+    if (endsParagraph(t)) yield END;
+  }
+}
+
+function* renderedToken(t: Token): Generator<string> {
+  const x = t as { type: string; text?: string; tokens?: Token[] };
+  switch (t.type) {
+    case "code":
+      yield (t as Tokens.Code).text;
+      break;
+    case "html":
+      yield decodeEntities(htmlText(x.text ?? ""));
+      break;
+    case "image":
+      yield decodeEntities((t as Tokens.Image).text || "[image]");
+      break;
+    case "link":
+      yield* rendered((t as Tokens.Link).tokens);
+      break;
+    case "list":
+      for (const item of (t as Tokens.List).items) {
+        yield* rendered(item.tokens);
+        yield END;
       }
-      case "space":
-      case "def":
-      case "hr":
-      case "checkbox":
-        break;
-      default:
-        if (x.tokens) yield* rendered(x.tokens);
-        else if (x.text) yield decodeEntities(x.text);
+      break;
+    case "table": {
+      const tb = t as Tokens.Table;
+      for (const c of [...tb.header, ...tb.rows.flat()]) {
+        yield* rendered(c.tokens);
+        yield END;
+      }
+      break;
     }
+    case "space":
+    case "def":
+    case "hr":
+    case "checkbox":
+      break;
+    default:
+      if (x.tokens) yield* rendered(x.tokens);
+      else if (x.text) yield decodeEntities(x.text);
   }
 }
 

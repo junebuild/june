@@ -131,6 +131,12 @@ describe("typstSource", () => {
       // An isolate left open hides the rest of its own paragraph, not the next one.
       const open = typstSource({ markdown: "\u2067Report\n\nשלום", lang: "en" });
       expect(open).toContain(`${TURN_RTL}#"שלום";]`);
+      // The same without a lang, where the document's direction is read across all its blocks.
+      expect(typstSource({ markdown: "\u2067Report\n\nשלום\n\nאחת" })).toContain("#set text(size: 10.5pt, dir: rtl)");
+      // And across a list's items: an isolate left open in the first item ends with it.
+      expect(typstSource({ markdown: "- \u2067one\n- שתיים", lang: "en" })).toContain(`${TURN_RTL}#list(`);
+      // An inline tag doesn't end its paragraph: the isolate around it stays open.
+      expect(typstSource({ markdown: "\u2067<b>שלום</b>\u2069 Report", lang: "en" })).not.toContain(TURN_RTL);
     });
 
     test("a code block counts as it renders, verbatim", () => {
