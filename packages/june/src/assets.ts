@@ -92,12 +92,18 @@ export function assetCache(opts: AssetCacheOptions): AssetCache {
           `copy the file with sha256 ${ref.sha256} (${ref.size} bytes) to ${pathOf(ref)} — it is at ${ref.urls.join(" or ")}`,
       );
     }
-    await (swept ??= sweepTemps(opts.dir));
+    // Housekeeping, best effort: a temp it can't remove must not fail this download or any later.
+    await (swept ??= sweepTemps(opts.dir).catch(() => {}));
     const bytes = await download(ref, urlsFor(ref), fetcher);
     await mkdir(opts.dir, { recursive: true });
     const temp = join(opts.dir, `.${safeName(ref.name)}.${crypto.randomUUID()}.tmp`);
-    await writeFile(temp, bytes);
-    await rename(temp, pathOf(ref)); // atomic on one filesystem: never a half-written file
+    try {
+      await writeFile(temp, bytes);
+      await rename(temp, pathOf(ref)); // atomic on one filesystem: never a half-written file
+    } catch (err) {
+      await rm(temp, { force: true }).catch(() => {}); // don't leave it for the next sweep
+      throw err;
+    }
     return bytes;
   }
 

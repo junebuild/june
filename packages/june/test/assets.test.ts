@@ -153,6 +153,20 @@ describe("assetCache", () => {
     expect((await readdir(dir)).sort()).toEqual(["copy.wasm", "engine.wasm"]);
   });
 
+  test("a sweep that fails doesn't fail the download, then or later", async () => {
+    await fresh();
+    // A stale ".tmp" the sweep can't remove: a non-empty directory.
+    const stuck = join(dir, ".stuck.tmp");
+    await mkdir(stuck);
+    await writeFile(join(stuck, "inside"), "x");
+    const hourAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    await utimes(stuck, hourAgo, hourAgo);
+    const { fetcher } = server({ "https://a.test/engine.wasm": () => new Response(BYTES), "https://a.test/copy.wasm": () => new Response(BYTES) });
+    const load = assetCache({ dir, fetch: fetcher });
+    expect(await load(await refOf(BYTES, ["https://a.test/engine.wasm"]))).toEqual(BYTES);
+    expect(await load({ ...(await refOf(BYTES, ["https://a.test/copy.wasm"])), name: "copy.wasm" })).toEqual(BYTES);
+  });
+
   test("temp files from a crashed download are swept once stale; a young one is left alone", async () => {
     await fresh();
     const stale = join(dir, ".engine.wasm.old.tmp");
