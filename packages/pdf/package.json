@@ -1,6 +1,6 @@
 {
   "name": "@junejs/pdf",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "June — PDF output as an agent capability: a render_pdf tool over a replaceable PdfRenderer (@junejs/pdf-typst-wasm is June's).",
   "type": "module",
   "license": "MIT",
@@ -24,7 +24,7 @@
     "build": "tsdown"
   },
   "dependencies": {
-    "@junejs/core": "^0.2.0",
+    "@junejs/core": "^0.2.1",
     "marked": "^18.0.14"
   },
   "keywords": [

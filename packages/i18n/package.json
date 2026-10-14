@@ -1,6 +1,6 @@
 {
   "name": "@junejs/i18n",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "June — the agent-native React framework. ICU messages (typed t()).",
   "type": "module",
   "license": "MIT",
@@ -30,7 +30,7 @@
   },
   "dependencies": {
     "@formatjs/icu-messageformat-parser": "^2.7.0",
-    "@junejs/db": "^0.2.0"
+    "@junejs/db": "^0.2.1"
   },
   "peerDependencies": {
     "react": "catalog:"

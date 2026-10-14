@@ -1,5 +1,13 @@
 # @june-examples/i18n
 
+## 0.0.6
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @junejs/core@0.2.1
+  - @junejs/i18n@0.2.1
+
 ## 0.0.5
 
 ### Patch Changes
