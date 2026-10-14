@@ -5,7 +5,7 @@ description: A tool stores the file it produces with ctx.files and returns the F
 date: 2026-10-12
 section: Agents
 order: "16.35"
-sources: [packages/core/src/agent-files.ts, packages/core/src/agent-runtime.ts, packages/core/src/agent-config.ts, packages/core/src/channels.ts, packages/june/src/agent-native.ts, packages/june/src/agent-durable.ts, packages/june/src/app.ts, packages/pdf/src/tools.ts, packages/pdf/src/renderer.ts, packages/pdf/src/markdown-typst.ts, packages/pdf-typst-wasm/src/renderer.ts, packages/pdf-typst-wasm/src/fonts.ts, packages/pdf-typst-wasm/src/assets.ts, packages/pdf-typst-wasm/src/unbundled.ts, packages/pdf-typst-wasm/src/workerd.ts, packages/pdf-typst-wasm/src/bun.ts, packages/pdf-font-noto-sans-tc/src/provider.ts, packages/pdf-font-noto-sans-tc/src/unbundled.ts, packages/pdf-font-noto-sans-tc/src/workerd.ts, packages/pdf-typst-wasm/src/lib.rs, packages/pdf/skills/pdf-report.md, docs/rfc-agent-files.md]
+sources: [packages/core/src/agent-files.ts, packages/core/src/agent-runtime.ts, packages/core/src/agent-config.ts, packages/core/src/channels.ts, packages/june/src/agent-native.ts, packages/june/src/agent-durable.ts, packages/june/src/app.ts, packages/pdf/src/tools.ts, packages/pdf/src/renderer.ts, packages/pdf/src/markdown-typst.ts, packages/pdf-typst-wasm/src/renderer.ts, packages/pdf-typst-wasm/src/fonts.ts, packages/pdf-typst-wasm/src/assets.ts, packages/pdf-typst-wasm/src/unbundled.ts, packages/june/src/assets.ts, packages/pdf-typst-wasm/src/workerd.ts, packages/pdf-typst-wasm/src/bun.ts, packages/pdf-font-noto-sans-tc/src/provider.ts, packages/pdf-font-noto-sans-tc/src/unbundled.ts, packages/pdf-font-noto-sans-tc/src/workerd.ts, packages/pdf-typst-wasm/src/lib.rs, packages/pdf/skills/pdf-report.md, docs/rfc-agent-files.md]
 ---
 ## A PDF in a Slack thread
 
@@ -211,20 +211,40 @@ import the `unbundled` entries instead. They reference no files: you pass `load`
 called on the first render with each file's ref (`{ name, size, sha256, urls }`), and the
 bytes are checked against the ref before they are used.
 
-```ts
-import { readFile } from "node:fs/promises";
-import { notoSansTC } from "@junejs/pdf-font-noto-sans-tc/unbundled";
-import { typstWasmRenderer, type AssetRef } from "@junejs/pdf-typst-wasm/unbundled";
+`assetCache` from `@junejs/server/assets` is a ready `load`: it keeps the files in a directory
+you own, and downloads each one the first time.
 
-// Here, files you put in /data/june-assets; a loader may also download from ref.urls.
-const load = (ref: AssetRef) => readFile(`/data/june-assets/${ref.name}`);
+```ts
+import { notoSansTC } from "@junejs/pdf-font-noto-sans-tc/unbundled";
+import { typstWasmRenderer } from "@junejs/pdf-typst-wasm/unbundled";
+import { assetCache } from "@junejs/server/assets";
+
+const load = assetCache({ dir: "/data/june-assets" });
 const renderer = typstWasmRenderer({ load, fonts: [notoSansTC({ load })] });
 ```
 
-Measured on Bun 1.4.2, macOS arm64: such a binary is 59.4 MiB, against 59.3 MiB for the Bun
-runtime alone and 99.8 MiB with the default entries. `ref.urls` point at the release's own
-files (the engine on jsDelivr and unpkg, the fonts at their upstream tag). The sha256 is what
-is trusted, so any copy that matches will do. Until you say otherwise, `renderer.egress` lists
-those hosts with `sends: "nothing"`; pass `engineEgress: []` and `egress: []` when the files are
-pre-seeded and never fetched.
+- A file is used only when its size and SHA-256 match the ref, whether it came from disk or
+  the network. A stale or corrupt copy is replaced, and a download stops at the expected size.
+- Files land by rename from a temp file, so a crash never leaves a half-written one. Each
+  file is downloaded once per process, however many renders ask.
+- `ref.urls` point at the release's own files: the engine on jsDelivr and unpkg, the fonts at
+  their upstream tag. To fetch from a mirror you run, pass `urls: (ref) => [...]`. Since the
+  sha256 is what is trusted, any copy that matches will do.
+- **No network at all:** copy the files into the directory (`/data/june-assets/typst.wasm`,
+  `/data/june-assets/NotoSansTC-Regular.otf`, …) and pass `offline: true`. A missing file then
+  fails with its name, hash and where to get it.
+- `load.egress(refs)` lists the hosts a call would still contact, `[]` once everything is
+  cached, for a setup check. Until you say otherwise, `renderer.egress` lists the files' hosts
+  with `sends: "nothing"`; pass `engineEgress: []` and `egress: []` when the files are
+  pre-seeded and never fetched.
 
+Measured on Bun 1.4.2, macOS arm64:
+
+| `bun build --compile` | size |
+| --- | --- |
+| the Bun runtime alone | 59.3 MiB |
+| default entries | 99.8 MiB |
+| unbundled entries with `assetCache` | 59.4 MiB |
+
+On first use the 40 MiB arrive once; after that the app renders offline. Any other `load` works
+too: `` (ref) => readFile(`/opt/app/${ref.name}`) `` for files shipped beside the binary.
