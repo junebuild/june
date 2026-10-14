@@ -39,7 +39,9 @@ describe("font packages", () => {
   test("every generated package is published and released with the others", () => {
     const publish = readFileSync(join(ROOT, ".github/workflows/publish.yml"), "utf8");
     const packed = readFileSync(join(ROOT, "scripts/smoke-packed.sh"), "utf8");
-    const fixed = (JSON.parse(readFileSync(join(ROOT, ".changeset/config.json"), "utf8")) as { fixed: string[][] }).fixed.flat();
+    // The group the rest of June releases in, not merely some fixed group.
+    const groups = (JSON.parse(readFileSync(join(ROOT, ".changeset/config.json"), "utf8")) as { fixed: string[][] }).fixed;
+    const fixed = groups.find((g) => g.includes("@junejs/core")) ?? [];
     for (const { code } of SPECS) {
       expect(publish).toContain(`pdf-font-noto-sans-${code}`);
       expect(packed).toContain(`pdf-font-noto-sans-${code}`);
