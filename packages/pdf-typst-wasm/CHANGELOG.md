@@ -1,5 +1,47 @@
 # @junejs/pdf-typst-wasm
 
+## 0.1.0-dev.2
+
+### Minor Changes
+
+- [#374](https://github.com/junebuild/june/pull/374) [`dbc95ff`](https://github.com/junebuild/june/commit/dbc95ffd548b0e4ea66bf5e86a14feff3e3c138a) Thanks [@linyiru](https://github.com/linyiru)! - Fonts are now providers, and the default renders offline ([#371](https://github.com/junebuild/june/issues/371)). Before, every document with non-ASCII text sent those characters to fonts.googleapis.com unless you knew to turn it off. Now the renderer makes no network call unless you add a provider that does, and each provider declares what it sends where.
+
+  ```ts
+  import {
+    googleFontSubsets,
+    localFonts,
+    typstWasmRenderer,
+  } from "@junejs/pdf-typst-wasm";
+
+  typstWasmRenderer(); // offline: Typst's built-in fonts
+  typstWasmRenderer({ fonts: [localFonts([notoSansTcBytes])] }); // offline, with your CJK font
+  typstWasmRenderer({
+    fonts: [
+      googleFontSubsets({
+        families: [{ family: "Noto Sans TC", weights: [400, 700] }],
+      }),
+    ],
+  });
+  ```
+
+  - `renderer.egress` lists each host the configured fonts contact and whether it receives the document's characters. It is `[]` when the renderer works offline. Show it in a setup check or your docs.
+  - A character no font covers fails the render with a `PdfRenderError` (see the previous change), so going offline can't silently produce blank text.
+  - Write your own provider: `{ name, egress, persistent?(), forDocument?(text) }`. `persistent()` returns font files; `forDocument(text)` returns `{ fonts, failed? }`, so a partial failure keeps the fonts that loaded.
+
+  **Migrating:**
+
+  - **You relied on the default for Chinese.** Add `fonts: [googleFontSubsets({ families: [{ family: "Noto Sans TC", weights: [400, 700] }] })]` to keep the old behavior. Otherwise a CJK document now fails with an error naming the missing characters.
+  - `googleFonts: [...]` → `fonts: [googleFontSubsets({ families: [...] })]`.
+  - `googleFonts: false` → remove it; offline is the default.
+  - `fonts: [bytes, url, loader]` → `fonts: [localFonts([bytes, url, loader])]`.
+  - `fetch` moved from the renderer to the provider that fetches: `googleFontSubsets({ families, fetch })`, `localFonts(sources, { fetch })`.
+  - `DEFAULT_GOOGLE_FONTS` is removed.
+
+### Patch Changes
+
+- Updated dependencies [[`3b94181`](https://github.com/junebuild/june/commit/3b94181c9af4e1054dddff7343f9267807ffa65e)]:
+  - @junejs/pdf@0.1.0-dev.2
+
 ## 0.1.0-dev.1
 
 ### Minor Changes

@@ -1,6 +1,6 @@
 {
   "name": "@junejs/pdf-typst-wasm",
-  "version": "0.1.0-dev.1",
+  "version": "0.1.0-dev.2",
   "description": "June — a PdfRenderer on a Typst to PDF engine compiled to WebAssembly: no browser, no native binary, and it runs on Cloudflare Workers.",
   "type": "module",
   "license": "MIT",
@@ -36,7 +36,7 @@
     "test": "bun test"
   },
   "dependencies": {
-    "@junejs/pdf": ">=0.1.0-dev.1"
+    "@junejs/pdf": ">=0.1.0-dev.2"
   },
   "devDependencies": {
     "@junejs/core": ">=0.2.0-dev.66",

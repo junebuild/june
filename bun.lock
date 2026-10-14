@@ -219,7 +219,7 @@
     },
     "packages/pdf": {
       "name": "@junejs/pdf",
-      "version": "0.1.0-dev.1",
+      "version": "0.1.0-dev.2",
       "dependencies": {
         "@junejs/core": ">=0.2.0-dev.66",
         "marked": "^18.0.14",
@@ -227,7 +227,7 @@
     },
     "packages/pdf-typst-wasm": {
       "name": "@junejs/pdf-typst-wasm",
-      "version": "0.1.0-dev.1",
+      "version": "0.1.0-dev.2",
       "dependencies": {
         "@junejs/pdf": ">=0.1.0-dev.1",
       },
