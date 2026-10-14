@@ -220,8 +220,12 @@ localFonts([() => loadVerified(thai, (ref) => fetch(ref.urls[0]!).then((r) => r.
 
 Right-to-left scripts and complex shaping work: Arabic joins, Indic conjuncts form, Thai
 wraps at word boundaries, and an Arabic or Hebrew phrase inside an English sentence reads
-right to left in place. A document is set right to left when `render_pdf` is given its
-`lang` (`ar`, `he`, …) or, without one, when its first letter is in a right-to-left script.
+right to left in place. A document takes its direction from `render_pdf`'s `lang` (`ar`,
+`he`, …) or, without one, from its first strong character, as Unicode's bidi algorithm
+does. Each paragraph, heading, table cell and list then takes its own the same way, like HTML's
+`dir="auto"`: an Arabic quotation in an English report reads right to left, a list of
+Hebrew items has its bullets on the right. A right-to-left mark (U+200F) at the start of
+a block forces it.
 
 One limit comes from Typst's PDF export (typst/typst#4225): in scripts with heavy shaping
 (Arabic, Bengali, Thai and others), text copied or searched in the PDF can come out garbled

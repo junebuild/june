@@ -60,7 +60,7 @@ export function pdfTools(opts: PdfToolsOptions): Tool[] {
           markdown: { type: "string", description: "The whole document, in Markdown. Start with a # heading for the title." },
           filename: { type: "string", description: 'The attachment\'s filename, e.g. "revenue-2026-w41.pdf". Defaults to the title.' },
           title: { type: "string", description: "The document title (PDF metadata). Defaults to the first heading." },
-          lang: { type: "string", description: 'The document language as a BCP 47 tag, e.g. "en", "zh-TW", "ja".' },
+          lang: { type: "string", description: 'The document language as a BCP 47 tag, e.g. "en", "zh-TW", "ja", "ar". It sets hyphenation, quotes, CJK line breaking and the page direction, right to left for Arabic, Hebrew, Persian or Urdu; pass it.' },
           paper: { type: "string", enum: ["a4", "us-letter"], description: "Paper size (default a4)." },
         },
         required: ["markdown"],

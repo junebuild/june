@@ -13,6 +13,7 @@
 
 import { Lexer, type Token, type Tokens } from "marked";
 
+import { STRONG } from "./bidi-classes";
 import type { PdfDocument } from "./renderer";
 
 export type TypstSourceOptions = {
@@ -26,7 +27,7 @@ export function markdownToTypst(markdown: string): string {
 }
 
 const lex = (markdown: string) => new Lexer({ gfm: true }).lex(markdown);
-const body = (tokens: Token[]) => blocks(tokens).trim() + "\n";
+const body = (tokens: Token[], base: Dir = "ltr") => blocks(tokens, "\n\n", base).trim() + "\n";
 
 // The whole document: page and text setup, then the body.
 export function typstSource(doc: PdfDocument, opts: TypstSourceOptions = {}): string {
@@ -36,11 +37,13 @@ export function typstSource(doc: PdfDocument, opts: TypstSourceOptions = {}): st
   lines.push(`#set page(paper: ${str(doc.paper === "us-letter" ? "us-letter" : "a4")}, margin: (x: 2.2cm, y: 2.4cm), numbering: "1")`);
   const tokens = lex(doc.markdown);
   const lang = langArgs(doc.lang);
-  // Typst takes the direction from `lang`; without one, an Arabic or Hebrew document would be
-  // laid out left to right (its letters still join, but alignment and punctuation land on the
-  // wrong side). So with no usable lang, the first letter that renders decides, as Unicode's
-  // bidi rule P2 does for a paragraph (#392).
-  const text = ["size: 10.5pt", ...lang, ...(lang.length === 0 && rightToLeft(tokens) ? ["dir: rtl"] : [])];
+  // The document's direction: Typst takes it from `lang` (its own table, mirrored in
+  // RTL_LANGS); without a lang, from the first strong character that renders, as Unicode's bidi
+  // rule P2 does for a paragraph (#392). Each block then takes its own the same way and is
+  // turned only where it differs, like HTML's dir="auto": an Arabic paragraph in an English
+  // report reads right to left, and the other way round.
+  const base: Dir = lang.length ? (RTL_LANGS.has(doc.lang!.toLowerCase().split(/[-_]/)[0]!) ? "rtl" : "ltr") : (firstStrong(tokens) ?? "ltr");
+  const text = ["size: 10.5pt", ...lang, ...(lang.length === 0 && base === "rtl" ? ["dir: rtl"] : [])];
   if (opts.fonts?.length) text.push(`font: (${opts.fonts.map(str).join(", ")},)`);
   lines.push(`#set text(${text.join(", ")})`);
   lines.push(
@@ -51,7 +54,7 @@ export function typstSource(doc: PdfDocument, opts: TypstSourceOptions = {}): st
     "#show raw.where(block: true): block.with(fill: luma(245), inset: 8pt, radius: 3pt, width: 100%)",
     "",
   );
-  return lines.join("\n") + body(tokens);
+  return lines.join("\n") + body(tokens, base);
 }
 
 // BCP 47 → Typst's `lang` (ISO 639) and `region` (ISO 3166-1 alpha-2). A tag Typst can't take
@@ -64,28 +67,54 @@ function langArgs(tag: string | undefined): string[] {
   return [`lang: ${str(lang)}`, ...(region ? [`region: ${str(region)}`] : [])];
 }
 
-// Whether the first letter that renders belongs to a right-to-left script. Only rendered text
-// counts, by the converter's own rules: not Markdown syntax, link targets, dropped tags or
-// comments; entities decoded; an image as its alt text.
-const RTL_SCRIPT = /\p{Script=Arabic}|\p{Script=Hebrew}|\p{Script=Syriac}|\p{Script=Thaana}|\p{Script=Nko}|\p{Script=Samaritan}|\p{Script=Mandaic}|\p{Script=Adlam}|\p{Script=Hanifi_Rohingya}/u;
-function rightToLeft(tokens: Token[]): boolean {
-  for (const run of rendered(tokens)) {
-    const first = /\p{L}/u.exec(decodeEntities(run))?.[0];
-    if (first !== undefined) return RTL_SCRIPT.test(first);
+type Dir = "ltr" | "rtl";
+
+// The languages Typst sets right to left (typst-library's Lang::dir), so a block is compared
+// with the direction Typst actually gives the document.
+const RTL_LANGS = new Set(["ar", "dv", "fa", "he", "ks", "pa", "ps", "sd", "ug", "ur", "yi"]);
+
+// A code point's strong direction by its Unicode Bidi_Class (bidi-classes.ts): L is ltr, R and
+// AL are rtl, anything else (digits, punctuation, marks, spaces) is not strong.
+function strong(cp: number): Dir | undefined {
+  let lo = 0;
+  let hi = STRONG.length / 3 - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const start = STRONG[mid * 3]!;
+    if (cp < start) hi = mid - 1;
+    else if (cp > STRONG[mid * 3 + 1]!) lo = mid + 1;
+    else return STRONG[mid * 3 + 2] ? "rtl" : "ltr";
   }
-  return false;
+  return undefined;
 }
 
-// The text runs block() and inline() put on the page, in order.
+// The direction of the first strong character the tokens put on the page (rule P2); undefined
+// when there is none, and the block keeps the direction around it.
+function firstStrong(tokens: Token[]): Dir | undefined {
+  for (const run of rendered(tokens)) {
+    for (const ch of run) {
+      const dir = strong(ch.codePointAt(0)!);
+      if (dir) return dir;
+    }
+  }
+  return undefined;
+}
+
+// The text runs block() and inline() put on the page, in order, as rendered: HTML through
+// htmlText, entities decoded, a link as its text, an image as its alt text, a code block
+// verbatim.
 function* rendered(tokens: Token[]): Generator<string> {
   for (const t of tokens) {
     const x = t as { type: string; text?: string; tokens?: Token[] };
     switch (t.type) {
+      case "code":
+        yield (t as Tokens.Code).text;
+        break;
       case "html":
-        yield htmlText(x.text ?? "");
+        yield decodeEntities(htmlText(x.text ?? ""));
         break;
       case "image":
-        yield (t as Tokens.Image).text || "[image]";
+        yield decodeEntities((t as Tokens.Image).text || "[image]");
         break;
       case "link":
         yield* rendered((t as Tokens.Link).tokens);
@@ -106,9 +135,14 @@ function* rendered(tokens: Token[]): Generator<string> {
         break;
       default:
         if (x.tokens) yield* rendered(x.tokens);
-        else if (x.text) yield x.text;
+        else if (x.text) yield decodeEntities(x.text);
     }
   }
+}
+
+// Content set in `dir`, for a block whose direction differs from the one around it.
+function turned(content: string, dir: Dir): string {
+  return content ? `#[#set text(dir: ${dir})\n${content}]` : content;
 }
 
 // ── blocks ──────────────────────────────────────────────────────────────────
@@ -116,11 +150,21 @@ function* rendered(tokens: Token[]): Generator<string> {
 // Blocks are separated by a paragraph break — except inside a tight list item, where a
 // break would loosen the list; a single newline is a space in Typst markup, and the
 // block-level calls that follow (a nested list) start their own line regardless.
-function blocks(tokens: Token[], sep = "\n\n"): string {
-  return tokens.map(block).filter((s) => s !== "").join(sep);
+// Each block in its own direction (its first strong character), turned where that differs
+// from `dir`, the direction around it. `turn: false` keeps them in `dir`: a list item's marker
+// follows the list, so turning one item's content alone would split the marker from its text.
+function blocks(tokens: Token[], sep = "\n\n", dir: Dir = "ltr", turn = true): string {
+  return tokens
+    .map((t) => {
+      const own = turn ? (firstStrong([t]) ?? dir) : dir;
+      const out = block(t, own);
+      return own === dir ? out : turned(out, own);
+    })
+    .filter((s) => s !== "")
+    .join(sep);
 }
 
-function block(t: Token): string {
+function block(t: Token, dir: Dir): string {
   switch (t.type) {
     case "heading": {
       const h = t as Tokens.Heading;
@@ -139,11 +183,11 @@ function block(t: Token): string {
       return `#raw(block: true, ${lang ? `lang: ${str(lang)}, ` : ""}${str(c.text)})`;
     }
     case "blockquote":
-      return `#quote(block: true)[${blocks((t as Tokens.Blockquote).tokens)}]`;
+      return `#quote(block: true)[${blocks((t as Tokens.Blockquote).tokens, "\n\n", dir)}]`;
     case "list":
-      return list(t as Tokens.List);
+      return list(t as Tokens.List, dir);
     case "table":
-      return table(t as Tokens.Table);
+      return table(t as Tokens.Table, dir);
     case "hr":
       return "#line(length: 100%, stroke: 0.5pt + luma(170))";
     case "html":
@@ -159,11 +203,13 @@ function block(t: Token): string {
   }
 }
 
-function list(l: Tokens.List): string {
+function list(l: Tokens.List, dir: Dir): string {
   const items = l.items.map((item) => {
     const body = item.tokens.filter((x) => x.type !== "checkbox");
     const box = item.task ? `#${str(item.checked ? "☑ " : "☐ ")};` : "";
-    return `[${box}${blocks(body, l.loose ? "\n\n" : "\n")}]`;
+    // The whole list takes one direction (blocks() turned it by its first strong character);
+    // an item in another script still reads in its own order inside the line.
+    return `[${box}${blocks(body, l.loose ? "\n\n" : "\n", dir, false)}]`;
   });
   const args = [`tight: ${!l.loose}`];
   if (l.ordered) {
@@ -173,10 +219,15 @@ function list(l: Tokens.List): string {
   return `#${l.ordered ? "enum" : "list"}(${args.join(", ")}, ${items.join(", ")})`;
 }
 
-function table(t: Tokens.Table): string {
+function table(t: Tokens.Table, dir: Dir): string {
   const align = t.align.map((a) => a ?? "auto");
-  const header = t.header.map((c) => `[#strong[${inlines(c.tokens)}]]`);
-  const rows = t.rows.flatMap((row) => t.header.map((_, i) => `[${row[i] ? inlines(row[i]!.tokens) : ""}]`));
+  // A cell in its own direction, like a block.
+  const cell = (tokens: Token[], content: string) => {
+    const own = firstStrong(tokens) ?? dir;
+    return `[${own === dir ? content : turned(content, own)}]`;
+  };
+  const header = t.header.map((c) => cell(c.tokens, `#strong[${inlines(c.tokens)}]`));
+  const rows = t.rows.flatMap((row) => t.header.map((_, i) => (row[i] ? cell(row[i]!.tokens, inlines(row[i]!.tokens)) : "[]")));
   return [
     "#table(",
     `  columns: ${t.header.length},`,
