@@ -7,7 +7,8 @@
 // on PATH (binaryen; CI pins its version).
 
 import { spawnSync } from "node:child_process";
-import { mkdirSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -37,3 +38,12 @@ run("wasm-opt", [
   out,
 ]);
 console.log(`dist/typst.wasm: ${(statSync(out).size / 1048576).toFixed(1)} MiB`);
+
+// The ref the unbundled entry checks a loaded engine against (#383): computed from these bytes,
+// the ones this build publishes, since builds on different machines differ.
+const { engineUrls } = await import("../src/unbundled.ts");
+const version = (JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")) as { version: string }).version;
+const bytes = readFileSync(out);
+const ref = { name: "typst.wasm", sha256: createHash("sha256").update(bytes).digest("hex"), size: bytes.length, urls: engineUrls(version) };
+writeFileSync(join(pkg, "dist/typst.wasm.ref.json"), JSON.stringify(ref, null, 2) + "\n");
+console.log(`dist/typst.wasm.ref.json: sha256 ${ref.sha256.slice(0, 12)}…, ${version}`);

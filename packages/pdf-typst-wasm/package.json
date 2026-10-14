@@ -25,6 +25,12 @@
         "default": "./dist/node.js"
       }
     },
+    "./unbundled": {
+      "source": "./src/unbundled.ts",
+      "bun": "./src/unbundled.ts",
+      "types": "./dist/unbundled.d.ts",
+      "default": "./dist/unbundled.js"
+    },
     "./typst.wasm": "./dist/typst.wasm"
   },
   "files": [

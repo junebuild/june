@@ -4,7 +4,7 @@ import { defineConfig } from "tsdown";
 // engine module stays a file next to the JS: workerd.js imports ../dist/typst.wasm (wrangler
 // uploads it as a compiled module), node.js reads it from disk. Never bundled, never inlined.
 export default defineConfig({
-  entry: ["src/node.ts", "src/workerd.ts"],
+  entry: ["src/node.ts", "src/workerd.ts", "src/unbundled.ts"],
   format: "esm",
   dts: true,
   // ./typst.wasm is a binary export (for bundlers that import the module themselves), not a
@@ -14,5 +14,5 @@ export default defineConfig({
   outDir: "dist",
   clean: false, // dist/typst.wasm is built first (build:wasm)
   platform: "neutral",
-  deps: { neverBundle: [/^[^./]/, /\.wasm$/] },
+  deps: { neverBundle: [/^[^./]/, /\.wasm$/, /\.ref\.json$/] },
 });
