@@ -14,7 +14,7 @@ typstWasmRenderer({ fonts: [googleFontSubsets({ families: [{ family: "Noto Sans 
 
 - `renderer.egress` lists each host the configured fonts contact and whether it receives the document's characters. It is `[]` when the renderer works offline. Show it in a setup check or your docs.
 - A character no font covers fails the render with a `PdfRenderError` (see the previous change), so going offline can't silently produce blank text.
-- Write your own provider: `{ name, egress, persistent?(), forDocument?(text) }`.
+- Write your own provider: `{ name, egress, persistent?(), forDocument?(text) }`. `persistent()` returns font files; `forDocument(text)` returns `{ fonts, failed? }`, so a partial failure keeps the fonts that loaded.
 
 **Migrating:**
 
