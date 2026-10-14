@@ -1,5 +1,12 @@
 # @junejs/pdf-typst-wasm
 
+## 0.2.2
+
+### Patch Changes
+
+- Updated dependencies [[`82151c4`](https://github.com/junebuild/june/commit/82151c44af4d38fbcf09e668360267a9aa68bb65)]:
+  - @junejs/pdf@0.2.2
+
 ## 0.2.1
 
 ### Patch Changes

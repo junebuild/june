@@ -1,5 +1,14 @@
 # @junejs/pdf
 
+## 0.2.2
+
+### Patch Changes
+
+- [#394](https://github.com/junebuild/june/pull/394) [`82151c4`](https://github.com/junebuild/june/commit/82151c44af4d38fbcf09e668360267a9aa68bb65) Thanks [@linyiru](https://github.com/linyiru)! - A right-to-left document is laid out right to left even without a `lang` ([#392](https://github.com/junebuild/june/issues/392)). Before, an Arabic or Hebrew document rendered with no `lang` came out left to right: the letters still joined, but headings and last lines sat on the left and closing punctuation landed on the wrong side. With no usable `lang`, the document's first letter now decides, the way Unicode's bidi rule P2 decides for a paragraph. If a `lang` is given, Typst still takes the direction from it.
+
+- Updated dependencies []:
+  - @junejs/core@0.2.2
+
 ## 0.2.1
 
 ### Patch Changes
