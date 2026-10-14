@@ -7,7 +7,7 @@
 //     runtime, and it renders with the engine loaded from outside (#383).
 
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { copyFileSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -32,7 +32,7 @@ try {
   const engineMiB = statSync(join(PKG, "dist/typst.wasm")).size / MiB;
   // The Bun runtime alone, to measure the others against: its size varies by platform.
   const empty = join(out, "empty.ts");
-  spawnSync("sh", ["-c", `echo 'console.log(1)' > ${empty}`]);
+  writeFileSync(empty, "console.log(1);\n");
   const runtime = compile(empty, "empty");
 
   const bundled = compile("test/compile/main.ts", "app");
