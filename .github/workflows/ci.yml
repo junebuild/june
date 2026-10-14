@@ -144,6 +144,16 @@ jobs:
       - name: In a bun build --compile binary
         run: bun scripts/smoke-compile.ts
 
+      # @junejs/pdf-font-noto-sans-tc needs the engine built above and its font files, which
+      # are fetched (pinned, checksummed), never committed.
+      - name: Noto Sans TC — fonts, tests
+        working-directory: packages/pdf-font-noto-sans-tc
+        run: bun run fetch-fonts && bun test
+
+      - name: Noto Sans TC — on workerd, in a compiled binary
+        working-directory: packages/pdf-font-noto-sans-tc
+        run: bun scripts/smoke-workerd.ts && bun scripts/smoke-compile.ts
+
   # The toolchain flake.nix pins, in the form agents get it: the dev image, built and
   # loaded on both Linux systems the flake supports, runs every check above from a fresh copy
   # of the tree as its unprivileged user (scripts/smoke-dev-image.sh). `nix flake check`

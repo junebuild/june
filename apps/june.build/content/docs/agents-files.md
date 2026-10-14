@@ -5,7 +5,7 @@ description: A tool stores the file it produces with ctx.files and returns the F
 date: 2026-10-12
 section: Agents
 order: "16.35"
-sources: [packages/core/src/agent-files.ts, packages/core/src/agent-runtime.ts, packages/core/src/agent-config.ts, packages/core/src/channels.ts, packages/june/src/agent-native.ts, packages/june/src/agent-durable.ts, packages/june/src/app.ts, packages/pdf/src/tools.ts, packages/pdf/src/renderer.ts, packages/pdf/src/markdown-typst.ts, packages/pdf-typst-wasm/src/renderer.ts, packages/pdf-typst-wasm/src/fonts.ts, packages/pdf-typst-wasm/src/workerd.ts, packages/pdf-typst-wasm/src/bun.ts, packages/pdf-typst-wasm/src/lib.rs, packages/pdf/skills/pdf-report.md, docs/rfc-agent-files.md]
+sources: [packages/core/src/agent-files.ts, packages/core/src/agent-runtime.ts, packages/core/src/agent-config.ts, packages/core/src/channels.ts, packages/june/src/agent-native.ts, packages/june/src/agent-durable.ts, packages/june/src/app.ts, packages/pdf/src/tools.ts, packages/pdf/src/renderer.ts, packages/pdf/src/markdown-typst.ts, packages/pdf-typst-wasm/src/renderer.ts, packages/pdf-typst-wasm/src/fonts.ts, packages/pdf-typst-wasm/src/workerd.ts, packages/pdf-typst-wasm/src/bun.ts, packages/pdf-font-noto-sans-tc/src/provider.ts, packages/pdf-font-noto-sans-tc/src/workerd.ts, packages/pdf-typst-wasm/src/lib.rs, packages/pdf/skills/pdf-report.md, docs/rfc-agent-files.md]
 ---
 ## A PDF in a Slack thread
 
@@ -15,19 +15,21 @@ short summary and the PDF attached. Two pieces make that work: a tool and a skil
 ```ts
 // agent/tools/pdf.ts
 import { pdfTools } from "@junejs/pdf";
-import { googleFontSubsets, typstWasmRenderer } from "@junejs/pdf-typst-wasm";
+import { notoSansTC } from "@junejs/pdf-font-noto-sans-tc";
+import { typstWasmRenderer } from "@junejs/pdf-typst-wasm";
 
 export default pdfTools({
   renderer: typstWasmRenderer({
-    // Chinese text needs a font. This one sends each document's non-ASCII characters to
-    // Google Fonts for a subset; remove it to render offline (see "Fonts" below).
-    fonts: [googleFontSubsets({ families: [{ family: "Noto Sans TC", weights: [400, 700] }] })],
+    // Chinese text needs a font. This one ships in the package (~11 MB) and renders offline;
+    // googleFontSubsets is a few KB per document instead, but sends each document's
+    // characters to Google (see "Fonts" below).
+    fonts: [notoSansTC()],
   }),
 });
 ```
 
 ```bash
-bun add @junejs/pdf @junejs/pdf-typst-wasm
+bun add @junejs/pdf @junejs/pdf-typst-wasm @junejs/pdf-font-noto-sans-tc
 cp node_modules/@junejs/pdf/skills/pdf-report.md agent/skills/
 ```
 
@@ -136,8 +138,20 @@ call unless you choose a font provider that does:
 | `fonts` | what it costs | network |
 |---|---|---|
 | (none, the default) | Typst's built-in Latin, Greek and Cyrillic fonts only | none |
+| `notoSansTC()` (`@junejs/pdf-font-noto-sans-tc`) | Traditional Chinese, regular and bold: ~11 MB in the package, registered once | none |
 | `localFonts([bytes, url, loader])` | you supply the files (a CJK family is tens of MB) | a URL is fetched once; nothing about documents is sent |
 | `googleFontSubsets({ families })` | a few KB per document | **each document's non-ASCII characters** go to fonts.googleapis.com and fonts.gstatic.com (the subset's URL encodes them) |
+
+`notoSansTC()` covers 17,755 Han characters, including every Big5 one; a rarer character is
+reported like any other missing glyph. On Bun, `bun build --compile` embeds its files. On
+Workers they upload with the Worker (with the engine, about 40 of the 64 MiB a Worker may
+be), and wrangler needs a rule for them, or the deploy fails with "No loader is configured
+for .otf files":
+
+```jsonc
+// wrangler.jsonc
+"rules": [{ "type": "Data", "globs": ["**/*.otf"] }]
+```
 
 Providers combine: `fonts: [localFonts([brandFont]), googleFontSubsets(…)]`. Their order
 doesn't set preference: `fontFamilies: ["Noto Sans TC"]` does, and for a character those
