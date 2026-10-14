@@ -13,7 +13,8 @@
 //   • a download stops at the ref's size, so a wrong URL can't fill the disk;
 //   • the file lands by rename from a temp file in the same directory, so a crash leaves no
 //     half-written file under the real name;
-//   • one download per file per process, however many renders ask at once;
+//   • one download per file per cache, however many renders ask at once (share one `load`;
+//     two caches over the same dir each download, and the rename keeps that safe);
 //   • `offline: true` never touches the network: for hosts without egress, the files are
 //     copied in beforehand (`dir/<name>`, e.g. dir/typst.wasm), and a missing one is an error
 //     that says so.

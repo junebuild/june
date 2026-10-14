@@ -12,7 +12,7 @@ typstWasmRenderer({ load, fonts: [notoSansTC({ load })] }); // from the packages
 ```
 
 - A file is used only if its size and SHA-256 match the ref, whether it came from disk or the network. A stale or corrupt copy is replaced, and a download stops at the expected size.
-- Files are written to a temp file and renamed into place. Each file is downloaded at most once per process.
+- Files are written to a temp file and renamed into place. Concurrent requests for a file share one download per cache, so create one `load` and pass it everywhere.
 - `urls: (ref) => [...]` fetches from your own mirror instead.
 - `offline: true` never touches the network: copy the files into `dir` first. A missing file fails with its name, hash and where to get it.
 - `load.egress(refs)` and `load.cached(ref)` report what a first render would still fetch, for a setup check.

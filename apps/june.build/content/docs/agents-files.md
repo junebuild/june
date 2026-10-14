@@ -226,7 +226,8 @@ const renderer = typstWasmRenderer({ load, fonts: [notoSansTC({ load })] });
 - A file is used only when its size and SHA-256 match the ref, whether it came from disk or
   the network. A stale or corrupt copy is replaced, and a download stops at the expected size.
 - Files land by rename from a temp file, so a crash never leaves a half-written one. Each
-  file is downloaded once per process, however many renders ask.
+  file is downloaded once per cache, however many renders ask: create one `load` and pass it
+  everywhere.
 - `ref.urls` point at the release's own files: the engine on jsDelivr and unpkg, the fonts at
   their upstream tag. To fetch from a mirror you run, pass `urls: (ref) => [...]`. Since the
   sha256 is what is trusted, any copy that matches will do.
