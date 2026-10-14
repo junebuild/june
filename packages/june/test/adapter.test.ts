@@ -118,6 +118,11 @@ describe("workers() — loaders for binary imports", () => {
       await writeFile(own, `{ "name": "mine", "rules": [{ "type": "Data", "globs": ["**/*.otf"] }] }`);
       await workers().emit(ctx(dir, ["otf"]));
       expect(warn).not.toHaveBeenCalled();
+      // Unparsable: it can't tell, so it says so rather than claiming the rule is missing.
+      await writeFile(own, `{ "note": "see a // b", "rules": [{ "type": "Data", "globs": ["**/*.otf"] }] }`);
+      await workers().emit(ctx(dir, ["otf"]));
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0]![0])).toContain("couldn't be parsed to check");
     } finally {
       warn.mockRestore();
     }
@@ -132,9 +137,9 @@ describe("hasLoaderRule", () => {
     expect(hasLoaderRule(`{ "rules": [{ "type": "Data", "globs": ["**/*.otfx"] }] }`, "wrangler.jsonc", "otf")).toBe(false);
   });
 
-  test("jsonc it can't parse warns: the extension appearing elsewhere is not a rule", () => {
+  test("jsonc it can't parse is unknown, not found: the extension appearing elsewhere is not a rule", () => {
     // stripJsonc takes the // inside this string for a comment, so the parse fails.
-    expect(hasLoaderRule(`{ "name": "app", "note": "uses .otf // data" }`, "wrangler.jsonc", "otf")).toBe(false);
+    expect(hasLoaderRule(`{ "name": "app", "note": "uses .otf // data" }`, "wrangler.jsonc", "otf")).toBeUndefined();
   });
 
   test("toml: a [[rules]] table's globs count; a commented one or another table's does not", () => {
