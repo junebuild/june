@@ -8,10 +8,12 @@
 import Database from "better-sqlite3-multiple-ciphers";
 import { createNativeRuntime, fromPrepare } from "@junejs/server/agent-native";
 
-const runtime = await createNativeRuntime(agents, `./tenants/${tenant}.db`, {
+// tenantId is your own validated id (never raw request input): it names a file.
+const runtime = await createNativeRuntime(agents, `./tenants/${tenantId}.db`, {
   open: (path) => {
     const db = new Database(path);
-    db.pragma(`key = '${keyFor(tenant)}'`);
+    // A raw 32-byte key as 64 hex digits: nothing in it can break the quoting.
+    db.pragma(`key = "x'${keyHexFor(tenantId)}'"`);
     return fromPrepare(db);
   },
 });
