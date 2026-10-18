@@ -474,17 +474,18 @@ export type AgentBackend = "native" | "memory" | "durable";
 
 // Build an in-process runtime for the chosen backend. Throws for `durable` (that
 // target is the DO the worker constructs, not an in-process object) — so the
-// choice is explicit and a mis-selection fails loudly.
+// choice is explicit and a mis-selection fails loudly. `open` is the native
+// backend's (#399); the memory backend has no file to open.
 // An in-process runtime: a Runtime the host owns, so it can shut it down (#317).
 export type InProcessRuntime = Runtime & { close(): Promise<void>; readonly files?: FileStore };
 
 export async function createAgentRuntime(
   agents: Record<string, AgentDef>,
-  opts: { backend?: AgentBackend; path?: string; maxSessions?: number; files?: FileStore } = {},
+  opts: { backend?: AgentBackend; path?: string; maxSessions?: number; files?: FileStore; open?: CreateNativeRuntimeOptions["open"] } = {},
 ): Promise<InProcessRuntime> {
   const backend = opts.backend ?? "native";
   if (backend === "memory") return new MemoryRuntime(agents, { files: opts.files });
-  if (backend === "native") return createNativeRuntime(agents, opts.path, { maxSessions: opts.maxSessions, files: opts.files });
+  if (backend === "native") return createNativeRuntime(agents, opts.path, { maxSessions: opts.maxSessions, files: opts.files, open: opts.open });
   throw new Error("backend 'durable' is the Cloudflare Durable Object target — construct AgentDurableObject in your worker, not via createAgentRuntime");
 }
 

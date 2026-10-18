@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { InputAnnouncement, Model, ModelDelta, Tool } from "@junejs/core/agent-runtime";
-import { createNativeRuntime, type AgentDef } from "../src/agent-native";
+import { createAgentRuntime, createNativeRuntime, type AgentDef } from "../src/agent-native";
 import { fromPrepare, type SyncSqlite } from "../src/sqlite-driver";
 
 // Parks on the first call (a tool that asks for input), answers on the continuation.
@@ -157,6 +157,19 @@ describe("createNativeRuntime({ open }) (#399)", () => {
     } finally {
       prepared.close();
     }
+  });
+
+  test("createAgentRuntime hands open() to the native backend, and the memory backend never calls it", async () => {
+    const path = dbPath();
+    const handle = tracked(path);
+    const native = await createAgentRuntime({ ops: def() }, { path, open: () => handle.db });
+    await native.close();
+    expect(handle.closes).toBe(1);
+
+    let called = false;
+    const memory = await createAgentRuntime({ ops: def() }, { backend: "memory", open: () => { called = true; return tracked(":memory:").db; } });
+    await memory.close();
+    expect(called).toBe(false);
   });
 
   test("a prepare()-shaped driver wrapped with fromPrepare runs a turn end to end", async () => {
