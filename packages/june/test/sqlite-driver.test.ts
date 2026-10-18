@@ -11,6 +11,7 @@ import {
   openLocalSqlite,
   openLocalSqliteSync,
   useDurableJournal,
+  fromPrepare,
   nodeSqliteHelp,
   NODE_SQLITE_MIN_LTS,
   NODE_SQLITE_MIN_ODD,
@@ -114,6 +115,33 @@ describe("durable journal on file databases", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("fromPrepare (a prepare()-shaped handle as SyncSqlite, #399)", () => {
+  test("query() prepares, exec() and close() pass through", () => {
+    const calls: string[] = [];
+    const stmt = { all: () => [], get: () => undefined, run: () => ({ changes: 0 }) };
+    const db = fromPrepare({
+      prepare: (sql) => { calls.push(`prepare ${sql}`); return stmt; },
+      exec: (sql) => { calls.push(`exec ${sql}`); return "chained"; }, // better-sqlite3 returns the db
+      close: () => { calls.push("close"); },
+    });
+    expect(db.query("SELECT 1")).toBe(stmt);
+    expect(db.exec("PRAGMA x")).toBeUndefined();
+    db.close();
+    expect(calls).toEqual(["prepare SELECT 1", "exec PRAGMA x", "close"]);
+  });
+
+  test("a real prepare()-shaped driver round-trips through the adapter", async () => {
+    // bun:sqlite has prepare() too (under Node, openLocalSqliteSync goes through fromPrepare).
+    const specifier = "bun:sqlite";
+    const { Database } = (await import(specifier)) as { Database: new (p: string) => Parameters<typeof fromPrepare>[0] };
+    const db = fromPrepare(new Database(":memory:"));
+    db.exec("CREATE TABLE t (v TEXT)");
+    expect(Number(db.query("INSERT INTO t (v) VALUES (?)").run("hi").changes)).toBe(1);
+    expect(db.query("SELECT v FROM t").all()).toEqual([{ v: "hi" }]);
+    db.close();
   });
 });
 
