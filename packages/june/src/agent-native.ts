@@ -23,7 +23,11 @@ import {
 } from "@junejs/core/agent-runtime";
 import { buildSystemPrompt, channelFetch, type AgentDefinition, type ChannelContext } from "@junejs/core/agent-config";
 import type { FileStore } from "@junejs/core/agent-files";
-import { openLocalSqliteSync, type SyncSqlite } from "./sqlite-driver";
+import { openLocalSqliteSync, useDurableJournal, type SyncSqlite } from "./sqlite-driver";
+
+// What a host needs to open the sessions file itself (#399): the handle shape the store
+// runs on, and the adapter for prepare()-shaped drivers.
+export { fromPrepare, type PreparedSqlite, type SyncSqlite, type SyncStatement } from "./sqlite-driver";
 import { assertCoreRuntimeVersion } from "./core-version";
 import { observeTurnEvents } from "./turn-events";
 
@@ -337,19 +341,50 @@ export class NativeRuntime implements Runtime {
   }
 }
 
-// Open the sync SQLite handle (bun:sqlite / node:sqlite) and build a NativeRuntime
-// over it. `path` defaults to ":memory:"; pass a file path for durability across
-// restarts.
+export type CreateNativeRuntimeOptions = NativeRuntimeOptions & {
+  // Open the sessions file yourself (#399): a store keyed per tenant (SQLCipher or
+  // similar), a driver other than the built-in one. Called once with `path`; return a
+  // fresh, ready handle (keyed already: PRAGMA key must be its first statement). The
+  // runtime owns what it returns exactly as it owns what it opens by default: it sets the
+  // durable journal on it, recovers its undelivered announcements, and close() closes it.
+  // A prepare()-shaped driver (node:sqlite, better-sqlite3) goes through fromPrepare().
+  open?: (path: string) => SyncSqlite | Promise<SyncSqlite>;
+};
+
+async function openSessionsDb(path: string, open: CreateNativeRuntimeOptions["open"]): Promise<SyncSqlite> {
+  if (!open) return openLocalSqliteSync(path);
+  const db = await open(path);
+  if (!db || typeof db.query !== "function" || typeof db.exec !== "function" || typeof db.close !== "function") {
+    // Most likely a raw prepare()-shaped driver: it is still a connection, and the runtime
+    // owns what open() returned, so close it before failing the start.
+    const stray = db as { close?: unknown } | null | undefined;
+    try {
+      if (typeof stray?.close === "function") stray.close();
+    } catch {
+      // the shape error is the one worth reporting
+    }
+    throw new TypeError(
+      "createNativeRuntime: open() must return a SyncSqlite handle (query, exec, close)" +
+        " — wrap a prepare()-shaped driver with fromPrepare()",
+    );
+  }
+  return useDurableJournal(db, path); // a failing PRAGMA closes db before it rethrows
+}
+
+// Open the sync SQLite handle (bun:sqlite / node:sqlite, or opts.open) and build a
+// NativeRuntime over it. `path` defaults to ":memory:"; pass a file path for durability
+// across restarts.
 export async function createNativeRuntime(
   agents: Record<string, AgentDef>,
   path = ":memory:",
-  opts: NativeRuntimeOptions = {},
+  opts: CreateNativeRuntimeOptions = {},
 ): Promise<NativeRuntime> {
-  const db = await openLocalSqliteSync(path);
+  const { open, ...runtimeOpts } = opts;
+  const db = await openSessionsDb(path, open);
   ownedDbs.add(db);
   let runtime: NativeRuntime | undefined;
   try {
-    runtime = new NativeRuntime(agents, db, opts);
+    runtime = new NativeRuntime(agents, db, runtimeOpts);
     runtime.recoverAnnouncements(); // #260
     return runtime;
   } catch (err) {
@@ -451,17 +486,18 @@ export type AgentBackend = "native" | "memory" | "durable";
 
 // Build an in-process runtime for the chosen backend. Throws for `durable` (that
 // target is the DO the worker constructs, not an in-process object) — so the
-// choice is explicit and a mis-selection fails loudly.
+// choice is explicit and a mis-selection fails loudly. `open` is the native
+// backend's (#399); the memory backend has no file to open.
 // An in-process runtime: a Runtime the host owns, so it can shut it down (#317).
 export type InProcessRuntime = Runtime & { close(): Promise<void>; readonly files?: FileStore };
 
 export async function createAgentRuntime(
   agents: Record<string, AgentDef>,
-  opts: { backend?: AgentBackend; path?: string; maxSessions?: number; files?: FileStore } = {},
+  opts: { backend?: AgentBackend; path?: string; maxSessions?: number; files?: FileStore; open?: CreateNativeRuntimeOptions["open"] } = {},
 ): Promise<InProcessRuntime> {
   const backend = opts.backend ?? "native";
   if (backend === "memory") return new MemoryRuntime(agents, { files: opts.files });
-  if (backend === "native") return createNativeRuntime(agents, opts.path, { maxSessions: opts.maxSessions, files: opts.files });
+  if (backend === "native") return createNativeRuntime(agents, opts.path, { maxSessions: opts.maxSessions, files: opts.files, open: opts.open });
   throw new Error("backend 'durable' is the Cloudflare Durable Object target — construct AgentDurableObject in your worker, not via createAgentRuntime");
 }
 

@@ -76,16 +76,17 @@ Bun.serve({ fetch: async (req) => (await mounted.surface(req)) ?? new Response("
   `runDelivered` / `resumeDelivered`, because those exist to escape the edge
   `waitUntil` limit and a native host doesn't have one. Channels fall back to the
   streaming variants.
-- **`createAgentRuntime(agents, { backend, path, maxSessions })`** picks
-  `"native"` (the default) or `"memory"`, and throws for `"durable"`.
+- **`createAgentRuntime(agents, { backend, path, maxSessions, open })`** picks
+  `"native"` (the default) or `"memory"`, and throws for `"durable"`. `open` is
+  passed to the native backend (see below); the memory backend ignores it.
 - **`await runtime.close()`** shuts an in-process runtime down (the factories
   return an `InProcessRuntime`, which has it). It cancels pending announcement
   retries and opens no new session right away. What happens next depends on the
   backend:
   - **`NativeRuntime`** waits for running turns and announcement deliveries to
     finish, drops the actors, and closes the SQLite database
-    `createNativeRuntime` opened (a database you passed to `new NativeRuntime`
-    stays open).
+    `createNativeRuntime` opened, including one its `open` hook returned (a
+    database you passed to `new NativeRuntime` stays open).
   - **`MemoryRuntime`** drops its actors at once and does not wait. Work still
     in flight finishes against its own in-memory store.
 
@@ -93,6 +94,49 @@ Bun.serve({ fetch: async (req) => (await mounted.surface(req)) ?? new Response("
   a test suite. Otherwise a retry timer fires later against a closed or deleted
   database. The runtime `createApp` builds for an `agent/` directory is closed
   by the app's `close()`, which the dev server's `stop()` awaits.
+
+### Opening the store yourself
+
+By default `createNativeRuntime` opens `path` with the runtime's built-in
+SQLite. To open it another way, pass `open(path)`. Use it for a store encrypted
+with a key per tenant (SQLCipher or similar), or for a different driver. Return
+a handle that is ready to use. If the store needs a key, set it before you
+return the handle, because `PRAGMA key` must be the first statement on it.
+
+```ts
+import Database from "better-sqlite3-multiple-ciphers";
+import { createNativeRuntime, fromPrepare } from "@junejs/server/agent-native";
+
+// tenantId is your own validated id (never raw request input): it names a file.
+const runtime = await createNativeRuntime(agents, `./tenants/${tenantId}.db`, {
+  open: (path) => {
+    const db = new Database(path);
+    // A raw 32-byte key as 64 hex digits: nothing in it can break the quoting.
+    db.pragma(`key = "x'${keyHexFor(tenantId)}'"`);
+    return fromPrepare(db);
+  },
+});
+```
+
+`PRAGMA key` takes no bound parameters, so the key is part of the SQL text. Pass
+it as hex, as above, or escape any `'` in a passphrase.
+
+The runtime owns the handle `open` returns, as it owns the one it opens itself:
+
+- it switches a file database to the durable journal (WAL, `synchronous=FULL`);
+- it delivers input announcements the previous run recorded but never sent;
+- `close()` closes the handle, and so does a start that fails. A wrong key
+  usually shows up here, as SQLite's "file is not a database" on the first read.
+
+The store is a `SyncSqlite`: `query(sql)` returning a statement with `all`,
+`get` and `run`, plus `exec` and `close`. `bun:sqlite` has that shape.
+`node:sqlite`, `better-sqlite3` and its cipher builds have `prepare()` instead,
+and `fromPrepare(db)` adapts them. Both are exported from
+`@junejs/server/agent-native`, along with `SyncStatement` and `PreparedSqlite`.
+
+`new NativeRuntime(agents, db)` still takes a handle you keep: the runtime
+never closes it, does not change its journal, and recovers announcements only
+when you call `runtime.recoverAnnouncements()`.
 
 ### Session actors and eviction
 

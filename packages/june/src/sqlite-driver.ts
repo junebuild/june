@@ -183,7 +183,7 @@ export async function openLocalSqliteSync(path: string): Promise<SyncSqlite> {
   // instead of letting ERR_UNKNOWN_BUILTIN_MODULE / "needs --experimental-sqlite"
   // surface raw.
   const specifier = "node:sqlite";
-  let mod: { DatabaseSync: new (p: string) => { prepare(sql: string): SyncStatement; exec(sql: string): void; close(): void } };
+  let mod: { DatabaseSync: new (p: string) => PreparedSqlite };
   // Drop the SQLite ExperimentalWarning that fires during this import, restoring
   // the original handler immediately after so no other warning is affected.
   const originalEmitWarning = process.emitWarning;
@@ -197,16 +197,25 @@ export async function openLocalSqliteSync(path: string): Promise<SyncSqlite> {
   } finally {
     process.emitWarning = originalEmitWarning;
   }
-  const db = new mod.DatabaseSync(path);
-  // Adapt node:sqlite (prepare()) to the query()-shaped SyncSqlite surface.
-  return useDurableJournal(
-    {
-      query: (sql) => db.prepare(sql),
-      exec: (sql) => db.exec(sql),
-      close: () => db.close(),
-    },
-    path,
-  );
+  return useDurableJournal(fromPrepare(new mod.DatabaseSync(path)), path);
+}
+
+// The prepare()-shaped handle node:sqlite exposes, and so do better-sqlite3 and its
+// SQLCipher builds (better-sqlite3-multiple-ciphers) — what a host that opens its own
+// store, keyed or encrypted, usually has in hand (#399).
+export type PreparedSqlite = {
+  prepare(sql: string): SyncStatement;
+  exec(sql: string): unknown;
+  close(): unknown;
+};
+
+// Adapt a prepare()-shaped handle to the query()-shaped SyncSqlite surface.
+export function fromPrepare(db: PreparedSqlite): SyncSqlite {
+  return {
+    query: (sql) => db.prepare(sql),
+    exec: (sql) => { db.exec(sql); },
+    close: () => { db.close(); },
+  };
 }
 
 // Open a LOCAL sqlite file (or ":memory:") as the async JuneDb — the single seam
