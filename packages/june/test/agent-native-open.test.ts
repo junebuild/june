@@ -152,17 +152,20 @@ describe("createNativeRuntime({ open }) (#399)", () => {
     await expect(createNativeRuntime({ ops: def() }, ":memory:", { open: async () => { throw boom; } })).rejects.toBe(boom);
   });
 
-  test("an open() that returns something other than a SyncSqlite fails naming fromPrepare", async () => {
+  test("an open() that returns something other than a SyncSqlite fails naming fromPrepare, and closes it", async () => {
+    // A raw prepare()-shaped driver, the likeliest mistake: still a connection to close.
     const prepared = new Database(":memory:");
-    const notASyncSqlite = { prepare: prepared.prepare.bind(prepared), exec: prepared.exec.bind(prepared), close: prepared.close.bind(prepared) };
-    try {
-      await expect(
-        createNativeRuntime({ ops: def() }, ":memory:", { open: () => notASyncSqlite as unknown as SyncSqlite }),
-      ).rejects.toThrow(/fromPrepare/);
-      await expect(createNativeRuntime({ ops: def() }, ":memory:", { open: () => undefined as unknown as SyncSqlite })).rejects.toThrow(TypeError);
-    } finally {
-      prepared.close();
-    }
+    let closes = 0;
+    const notASyncSqlite = { prepare: prepared.prepare.bind(prepared), exec: prepared.exec.bind(prepared), close: () => { closes++; prepared.close(); } };
+    await expect(
+      createNativeRuntime({ ops: def() }, ":memory:", { open: () => notASyncSqlite as unknown as SyncSqlite }),
+    ).rejects.toThrow(/fromPrepare/);
+    expect(closes).toBe(1);
+
+    await expect(createNativeRuntime({ ops: def() }, ":memory:", { open: () => undefined as unknown as SyncSqlite })).rejects.toThrow(TypeError);
+    // A close() that throws doesn't mask the shape error.
+    const badClose = { close: () => { throw new Error("close failed"); } };
+    await expect(createNativeRuntime({ ops: def() }, ":memory:", { open: () => badClose as unknown as SyncSqlite })).rejects.toThrow(/fromPrepare/);
   });
 
   test("createAgentRuntime hands open() to the native backend, and the memory backend never calls it", async () => {

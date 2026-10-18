@@ -355,6 +355,14 @@ async function openSessionsDb(path: string, open: CreateNativeRuntimeOptions["op
   if (!open) return openLocalSqliteSync(path);
   const db = await open(path);
   if (!db || typeof db.query !== "function" || typeof db.exec !== "function" || typeof db.close !== "function") {
+    // Most likely a raw prepare()-shaped driver: it is still a connection, and the runtime
+    // owns what open() returned, so close it before failing the start.
+    const stray = db as { close?: unknown } | null | undefined;
+    try {
+      if (typeof stray?.close === "function") stray.close();
+    } catch {
+      // the shape error is the one worth reporting
+    }
     throw new TypeError(
       "createNativeRuntime: open() must return a SyncSqlite handle (query, exec, close)" +
         " — wrap a prepare()-shaped driver with fromPrepare()",
