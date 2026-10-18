@@ -14,6 +14,12 @@ import { join } from "node:path";
 import type { InputAnnouncement, Model, ModelDelta, Tool } from "@junejs/core/agent-runtime";
 import { createAgentRuntime, createNativeRuntime, type AgentDef } from "../src/agent-native";
 import { fromPrepare, type SyncSqlite } from "../src/sqlite-driver";
+import type {
+  CreateNativeRuntimeOptions,
+  PreparedSqlite,
+  SyncSqlite as PublicSyncSqlite,
+  SyncStatement,
+} from "@junejs/server/agent-native";
 
 // Parks on the first call (a tool that asks for input), answers on the continuation.
 const model: Model = (msgs) =>
@@ -170,6 +176,19 @@ describe("createNativeRuntime({ open }) (#399)", () => {
     const memory = await createAgentRuntime({ ops: def() }, { backend: "memory", open: () => { called = true; return tracked(":memory:").db; } });
     await memory.close();
     expect(called).toBe(false);
+  });
+
+  test("the package entry exports what a host needs to open its own store", async () => {
+    const pub = await import("@junejs/server/agent-native");
+    expect(pub.fromPrepare).toBe(fromPrepare);
+    // Type-level: the published names compile against a host's own opener.
+    const driver: PreparedSqlite = new Database(":memory:");
+    const opener: (path: string) => PublicSyncSqlite = () => pub.fromPrepare(driver);
+    const stmt: SyncStatement = opener(":memory:").query("SELECT 1 AS one");
+    expect(stmt.get()).toEqual({ one: 1 });
+    const opts: CreateNativeRuntimeOptions = { open: opener };
+    expect(typeof opts.open).toBe("function");
+    driver.close();
   });
 
   test("a prepare()-shaped driver wrapped with fromPrepare runs a turn end to end", async () => {

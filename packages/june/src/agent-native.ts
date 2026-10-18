@@ -24,6 +24,10 @@ import {
 import { buildSystemPrompt, channelFetch, type AgentDefinition, type ChannelContext } from "@junejs/core/agent-config";
 import type { FileStore } from "@junejs/core/agent-files";
 import { openLocalSqliteSync, useDurableJournal, type SyncSqlite } from "./sqlite-driver";
+
+// What a host needs to open the sessions file itself (#399): the handle shape the store
+// runs on, and the adapter for prepare()-shaped drivers.
+export { fromPrepare, type PreparedSqlite, type SyncSqlite, type SyncStatement } from "./sqlite-driver";
 import { assertCoreRuntimeVersion } from "./core-version";
 import { observeTurnEvents } from "./turn-events";
 
