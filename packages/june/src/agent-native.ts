@@ -23,7 +23,7 @@ import {
 } from "@junejs/core/agent-runtime";
 import { buildSystemPrompt, channelFetch, type AgentDefinition, type ChannelContext } from "@junejs/core/agent-config";
 import type { FileStore } from "@junejs/core/agent-files";
-import { openLocalSqliteSync, type SyncSqlite } from "./sqlite-driver";
+import { openLocalSqliteSync, useDurableJournal, type SyncSqlite } from "./sqlite-driver";
 import { assertCoreRuntimeVersion } from "./core-version";
 import { observeTurnEvents } from "./turn-events";
 
@@ -337,19 +337,42 @@ export class NativeRuntime implements Runtime {
   }
 }
 
-// Open the sync SQLite handle (bun:sqlite / node:sqlite) and build a NativeRuntime
-// over it. `path` defaults to ":memory:"; pass a file path for durability across
-// restarts.
+export type CreateNativeRuntimeOptions = NativeRuntimeOptions & {
+  // Open the sessions file yourself (#399): a store keyed per tenant (SQLCipher or
+  // similar), a driver other than the built-in one. Called once with `path`; return a
+  // fresh, ready handle (keyed already: PRAGMA key must be its first statement). The
+  // runtime owns what it returns exactly as it owns what it opens by default: it sets the
+  // durable journal on it, recovers its undelivered announcements, and close() closes it.
+  // A prepare()-shaped driver (node:sqlite, better-sqlite3) goes through fromPrepare().
+  open?: (path: string) => SyncSqlite | Promise<SyncSqlite>;
+};
+
+async function openSessionsDb(path: string, open: CreateNativeRuntimeOptions["open"]): Promise<SyncSqlite> {
+  if (!open) return openLocalSqliteSync(path);
+  const db = await open(path);
+  if (!db || typeof db.query !== "function" || typeof db.exec !== "function" || typeof db.close !== "function") {
+    throw new TypeError(
+      "createNativeRuntime: open() must return a SyncSqlite handle (query, exec, close)" +
+        " — wrap a prepare()-shaped driver with fromPrepare()",
+    );
+  }
+  return useDurableJournal(db, path); // a failing PRAGMA closes db before it rethrows
+}
+
+// Open the sync SQLite handle (bun:sqlite / node:sqlite, or opts.open) and build a
+// NativeRuntime over it. `path` defaults to ":memory:"; pass a file path for durability
+// across restarts.
 export async function createNativeRuntime(
   agents: Record<string, AgentDef>,
   path = ":memory:",
-  opts: NativeRuntimeOptions = {},
+  opts: CreateNativeRuntimeOptions = {},
 ): Promise<NativeRuntime> {
-  const db = await openLocalSqliteSync(path);
+  const { open, ...runtimeOpts } = opts;
+  const db = await openSessionsDb(path, open);
   ownedDbs.add(db);
   let runtime: NativeRuntime | undefined;
   try {
-    runtime = new NativeRuntime(agents, db, opts);
+    runtime = new NativeRuntime(agents, db, runtimeOpts);
     runtime.recoverAnnouncements(); // #260
     return runtime;
   } catch (err) {
