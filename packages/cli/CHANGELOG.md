@@ -1,5 +1,13 @@
 # @junejs/cli
 
+## 0.2.2
+
+### Patch Changes
+
+- Updated dependencies [[`47591e9`](https://github.com/junebuild/june/commit/47591e91e5170f07d64af35ea69d61de29728e79)]:
+  - @junejs/server@0.2.2
+  - @junejs/core@0.2.2
+
 ## 0.2.1
 
 ### Patch Changes
