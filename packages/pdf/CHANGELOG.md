@@ -1,5 +1,23 @@
 # @junejs/pdf
 
+## 0.2.2
+
+### Patch Changes
+
+- [#396](https://github.com/junebuild/june/pull/396) [`a2687b3`](https://github.com/junebuild/june/commit/a2687b316597949fd04588d31ef5a9dd8c6a1865) Thanks [@linyiru](https://github.com/linyiru)! - PDF text direction now follows Unicode's bidi rules, and each block picks its own ([#392](https://github.com/junebuild/june/issues/392)). Before, the whole document took one direction, from `lang` or from the first letter's script. That missed text such as an Arabic heading starting with tatweel, and an Arabic quotation inside an English report stayed left to right.
+
+  - **Document direction.** It comes from `lang`, using the same language list Typst does. Without a `lang`, the first strong character by Unicode `Bidi_Class` decides (Unicode 17 data, generated and pinned by sha256).
+  - **Each block** — paragraph, heading, table cell, list — picks its own direction the same way, like HTML's `dir="auto"`, and is set right to left (or left to right) only where it differs.
+    - A list turns as a whole, so the bullets stay with their items.
+    - A right-to-left mark (U+200F) at the start of a block forces right to left.
+  - **Code blocks** count as they render: their HTML entities are not decoded when deciding direction.
+  - `render_pdf`'s `lang` description now says that it also sets the page direction.
+
+- [#394](https://github.com/junebuild/june/pull/394) [`82151c4`](https://github.com/junebuild/june/commit/82151c44af4d38fbcf09e668360267a9aa68bb65) Thanks [@linyiru](https://github.com/linyiru)! - A right-to-left document is laid out right to left even without a `lang` ([#392](https://github.com/junebuild/june/issues/392)). Before, an Arabic or Hebrew document rendered with no `lang` came out left to right: the letters still joined, but headings and last lines sat on the left and closing punctuation landed on the wrong side. With no usable `lang`, the document's first letter now decides, the way Unicode's bidi rule P2 decides for a paragraph. If a `lang` is given, Typst still takes the direction from it.
+
+- Updated dependencies []:
+  - @junejs/core@0.2.2
+
 ## 0.2.1
 
 ### Patch Changes
